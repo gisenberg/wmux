@@ -39,12 +39,13 @@ export const buildSpawnSpec = (
     env[key] = value;
   }
 
-  const cwd = machine.cwd ?? os.homedir();
+  const configuredCwd = machine.cwd ?? os.homedir();
+  const startCwd = sanitizeCwd(extraEnv.WMUX_START_CWD) ?? configuredCwd;
   if (machine.command?.length) {
     return {
       file: machine.command[0],
       args: machine.command.slice(1),
-      cwd,
+      cwd: startCwd,
       env,
       title: machine.name,
       trackProcessTitle: true,
@@ -70,7 +71,7 @@ export const buildSpawnSpec = (
       durableShellScript({
         backend: machine.sessionBackend ?? "auto",
         sessionName,
-        cwd: machine.cwd,
+        cwd: startCwd,
         cols,
         rows,
         shellCommand: `exec "\${SHELL:-/bin/sh}" -i`,
@@ -79,7 +80,7 @@ export const buildSpawnSpec = (
         useSystemdScope: false,
       });
     args.push(`/bin/sh -lc ${shellQuote(remoteCommand)}`);
-    return { file: "ssh", args, cwd, env, title: machine.name, trackProcessTitle: false };
+    return { file: "ssh", args, cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
   }
 
   if (machine.kind === "powershell") {
@@ -91,7 +92,7 @@ export const buildSpawnSpec = (
       "-Command",
       `Enter-PSSession -ComputerName ${JSON.stringify(machine.host)}`,
     ];
-    return { file: shell, args, cwd, env, title: machine.name, trackProcessTitle: true };
+    return { file: shell, args, cwd: configuredCwd, env, title: machine.name, trackProcessTitle: true };
   }
 
   if (machine.kind === "service") {
@@ -104,7 +105,7 @@ export const buildSpawnSpec = (
     const innerScript = durableShellScript({
       backend,
       sessionName,
-      cwd,
+      cwd: startCwd,
       cols,
       rows,
       shellCommand: `exec ${shellQuote(machine.shell ?? defaultShell())} -i`,
@@ -116,7 +117,7 @@ export const buildSpawnSpec = (
     return {
       file: "/bin/sh",
       args: ["-lc", launchScript],
-      cwd,
+      cwd: startCwd,
       env,
       title: machine.name,
       trackProcessTitle: false,
@@ -126,7 +127,7 @@ export const buildSpawnSpec = (
   return {
     file: machine.shell ?? defaultShell(),
     args: [],
-    cwd,
+    cwd: startCwd,
     env,
     title: path.basename(machine.shell ?? defaultShell()),
     trackProcessTitle: true,
@@ -136,6 +137,42 @@ export const buildSpawnSpec = (
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
 const durableSessionName = (paneId?: string): string => `wmux_${(paneId || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")}`;
+
+export const readDurableSessionCwd = (machine: MachineConfig, paneId: string): string | undefined => {
+  const backend = machine.sessionBackend ?? "auto";
+  if (backend === "screen" || backend === "pty" || machine.command?.length) return undefined;
+  if (machine.kind !== "local" && machine.kind !== "ssh") return undefined;
+  const sessionName = durableSessionName(paneId);
+  const query = `command -v tmux >/dev/null 2>&1 && tmux display-message -p -t ${shellQuote(sessionName)} '#{pane_current_path}' 2>/dev/null`;
+
+  const result =
+    machine.kind === "local"
+      ? spawnSync("/bin/sh", ["-lc", query], { encoding: "utf8", timeout: 1500 })
+      : readRemoteDurableSessionCwd(machine, query);
+
+  if (!result || result.status !== 0) return undefined;
+  return sanitizeCwd(result.stdout.split(/\r?\n/)[0]);
+};
+
+const readRemoteDurableSessionCwd = (
+  machine: MachineConfig,
+  query: string,
+): { status: number | null; stdout: string } | undefined => {
+  if (!machine.host) return undefined;
+  const target = machine.user ? `${machine.user}@${machine.host}` : machine.host;
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3"];
+  if (machine.port) args.push("-p", String(machine.port));
+  args.push(target, query);
+  return spawnSync("ssh", args, { encoding: "utf8", timeout: 4000 });
+};
+
+const sanitizeCwd = (value?: string): string | undefined => {
+  const cwd = value?.trim();
+  if (!cwd || cwd.length > 4096) return undefined;
+  if (/[\x00-\x1f\x7f]/.test(cwd)) return undefined;
+  if (!cwd.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(cwd)) return undefined;
+  return cwd;
+};
 
 interface DurableShellInput {
   backend: SessionBackend;

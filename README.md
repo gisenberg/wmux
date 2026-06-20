@@ -194,6 +194,10 @@ Workspace rows and tab pills are real navigation links. A specific workspace and
 
 The link button in the top bar copies the active workspace/tab URL when the browser allows clipboard access.
 
+## Current Directory Preservation
+
+When you create a new workspace, tab, or split on the same host as the source pane, wmux starts the new pane in that source pane's current working directory. With the default durable backend this is resolved from tmux's live `pane_current_path`, so it follows normal `cd` usage without requiring a shell helper. If tmux is unavailable, wmux falls back to the last cwd reported by shell OSC 7 integration or the machine's configured `cwd`.
+
 ## Command Palette
 
 Open the command palette with `Cmd+K` or `Ctrl+K`, or use the command icon in the top bar. It searches common actions, workspace and tab navigation, host-scoped session creation, pane splits, settings, and session audit entry points.

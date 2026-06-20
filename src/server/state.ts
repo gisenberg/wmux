@@ -97,8 +97,8 @@ export class StateStore extends EventEmitter {
     this.emit("change");
   }
 
-  createWorkspace(machineId = "local"): Workspace {
-    const pane = this.createPane(machineId);
+  createWorkspace(machineId = "local", cwd?: string): Workspace {
+    const pane = this.createPane(machineId, cwd);
     const tab: SurfaceTab = {
       id: createId("tab"),
       title: "Shell",
@@ -126,9 +126,9 @@ export class StateStore extends EventEmitter {
     return workspace;
   }
 
-  createTab(workspaceId: string, machineId?: string): SurfaceTab {
+  createTab(workspaceId: string, machineId?: string, cwd?: string): SurfaceTab {
     const workspace = this.requireWorkspace(workspaceId);
-    const pane = this.createPane(machineId ?? workspace.machineId);
+    const pane = this.createPane(machineId ?? workspace.machineId, cwd);
     const tab: SurfaceTab = {
       id: createId("tab"),
       title: "Shell",
@@ -145,10 +145,10 @@ export class StateStore extends EventEmitter {
     return tab;
   }
 
-  splitPane(tabId: string, paneId: string, direction: "horizontal" | "vertical", machineId?: string): SurfaceTab {
+  splitPane(tabId: string, paneId: string, direction: "horizontal" | "vertical", machineId?: string, cwd?: string): SurfaceTab {
     const { workspace, tab } = this.requireTab(tabId);
     const sourcePane = tab.panes.find((pane) => pane.id === paneId);
-    const pane = this.createPane(machineId ?? sourcePane?.machineId ?? workspace.machineId);
+    const pane = this.createPane(machineId ?? sourcePane?.machineId ?? workspace.machineId, cwd);
     tab.panes.push(pane);
     tab.layout = replacePane(tab.layout, paneId, {
       type: "split",
@@ -593,11 +593,12 @@ export class StateStore extends EventEmitter {
     return { ...state, activeWorkspaceId: workspace.id };
   }
 
-  private createPane(machineId: string): PaneState {
+  private createPane(machineId: string, cwd?: string): PaneState {
     return {
       id: createId("pane"),
       machineId,
       title: "Shell",
+      cwd,
       status: "idle",
       createdAt: now(),
     };

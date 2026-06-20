@@ -20,6 +20,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
   private replayBytes = 0;
   private exited = false;
   private title: string;
+  private cwd = "";
 
   constructor(
     readonly pane: PaneState,
@@ -42,6 +43,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
 
     this.pty.onData((data) => {
       this.appendReplay(data);
+      this.captureCwd(data);
       this.emit("output", data);
       if (!trackProcessTitle) return;
       const processTitle = this.pty.process?.trim();
@@ -99,6 +101,31 @@ export class PtySession extends EventEmitter<PtyEvents> {
       this.replayBytes -= Buffer.byteLength(removed);
     }
   }
+
+  private captureCwd(data: string): void {
+    const pattern = /\x1b]7;file:\/\/([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+    for (const match of data.matchAll(pattern)) {
+      const cwd = cwdFromFileUri(match[1]);
+      if (!cwd || cwd === this.cwd) continue;
+      this.cwd = cwd;
+      this.emit("cwd", cwd);
+    }
+  }
 }
 
 export const describeLocalCwd = (): string => path.basename(process.cwd()) || os.hostname();
+
+const cwdFromFileUri = (value: string): string | undefined => {
+  const slash = value.indexOf("/");
+  if (slash === -1) return undefined;
+  const pathPart = value.slice(slash);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathPart);
+  } catch {
+    decoded = pathPart;
+  }
+  if (!decoded.startsWith("/") || decoded.length > 4096) return undefined;
+  if (/[\x00-\x1f\x7f]/.test(decoded)) return undefined;
+  return decoded;
+};

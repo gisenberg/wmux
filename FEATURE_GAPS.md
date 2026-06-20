@@ -46,3 +46,7 @@
 11. Browser clipboard writes can require a user gesture.
 
    `wmux-copy` posts clipboard text to the wmux browser event stream. The open browser attempts `navigator.clipboard.writeText` immediately and keeps the text in a top-bar fallback buffer. Some browsers block clipboard writes that are not triggered by a user gesture, especially on plain HTTP origins, so the user may need to click the fallback clipboard button.
+
+12. Cwd preservation is best-effort outside tmux.
+
+   Same-machine workspaces, tabs, and splits preserve cwd by querying tmux `pane_current_path` for the source pane. Raw PTY, PowerShell, and screen-backed panes can only preserve cwd if the shell emits OSC 7 cwd sequences or if a stored/configured cwd is available.

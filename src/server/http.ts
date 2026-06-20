@@ -4,9 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
-import { resolveMachineStatuses } from "./machines.js";
+import { readDurableSessionCwd, resolveMachineStatuses } from "./machines.js";
 import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
-import type { MachineConfig } from "./types.js";
+import type { MachineConfig, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsStore } from "./settings.js";
@@ -91,7 +91,8 @@ export const createHttpServer = (
 
       if (url.pathname === "/api/workspaces" && request.method === "POST") {
         const body = (await readBody(request)) as { machineId?: string };
-        const workspace = state.createWorkspace(body.machineId ?? "local");
+        const machineId = body.machineId ?? "local";
+        const workspace = state.createWorkspace(machineId, cwdForActivePane(state, machines, machineId));
         sendJson(response, 201, { workspace });
         return;
       }
@@ -279,7 +280,12 @@ export const createHttpServer = (
       const tabs = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs$/);
       if (tabs && request.method === "POST") {
         const body = (await readBody(request)) as { machineId?: string };
-        const tab = state.createTab(tabs[1], body.machineId);
+        const snapshot = state.snapshot();
+        const workspace = snapshot.workspaces.find((candidate) => candidate.id === tabs[1]);
+        const activeTab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId);
+        const activePane = activeTab?.panes.find((candidate) => candidate.id === activeTab.activePaneId);
+        const machineId = body.machineId ?? workspace?.machineId ?? "local";
+        const tab = state.createTab(tabs[1], machineId, cwdForSourcePane(state, machines, activePane, machineId));
         sendJson(response, 201, { tab, state: await bootstrap() });
         return;
       }
@@ -317,7 +323,19 @@ export const createHttpServer = (
           sendJson(response, 400, { error: "invalid_split" });
           return;
         }
-        const tab = state.splitPane(split[1], body.paneId, body.direction, body.machineId);
+        const snapshot = state.snapshot();
+        const sourcePane = snapshot.workspaces
+          .flatMap((workspace) => workspace.tabs)
+          .flatMap((tab) => tab.panes)
+          .find((pane) => pane.id === body.paneId);
+        const machineId = body.machineId ?? sourcePane?.machineId ?? "local";
+        const tab = state.splitPane(
+          split[1],
+          body.paneId,
+          body.direction,
+          machineId,
+          cwdForSourcePane(state, machines, sourcePane, machineId),
+        );
         sendJson(response, 201, { tab, state: await bootstrap() });
         return;
       }
@@ -429,6 +447,27 @@ export const createHttpServer = (
   });
 
   return server;
+};
+
+const cwdForActivePane = (state: StateStore, machines: MachineConfig[], targetMachineId: string): string | undefined => {
+  const snapshot = state.snapshot();
+  const workspace = snapshot.workspaces.find((candidate) => candidate.id === snapshot.activeWorkspaceId);
+  const tab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId);
+  const pane = tab?.panes.find((candidate) => candidate.id === tab.activePaneId);
+  return cwdForSourcePane(state, machines, pane, targetMachineId);
+};
+
+const cwdForSourcePane = (
+  state: StateStore,
+  machines: MachineConfig[],
+  sourcePane: PaneState | undefined,
+  targetMachineId: string,
+): string | undefined => {
+  if (!sourcePane || sourcePane.machineId !== targetMachineId) return undefined;
+  const machine = machines.find((candidate) => candidate.id === sourcePane.machineId);
+  const cwd = machine ? readDurableSessionCwd(machine, sourcePane.id) : undefined;
+  if (cwd && cwd !== sourcePane.cwd) state.updatePane(sourcePane.id, { cwd });
+  return cwd ?? sourcePane.cwd;
 };
 
 const contentType = (filePath: string): string => {

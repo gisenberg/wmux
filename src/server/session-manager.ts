@@ -83,6 +83,7 @@ export class SessionManager {
       WMUX_TAB_ID: context?.tab.id ?? "",
       WMUX_TAB_TITLE: context?.tab.title ?? "",
       WMUX_PANE_ID: pane.id,
+      WMUX_START_CWD: pane.cwd ?? "",
       KITTY_WINDOW_ID: `wmux-${pane.id}`,
     });
     this.sessions.set(pane.id, session);
@@ -92,6 +93,9 @@ export class SessionManager {
     session.on("title", (title) => {
       this.state.updatePane(pane.id, { title });
       this.broadcast(pane.id, { type: "title", title });
+    });
+    session.on("cwd", (cwd) => {
+      this.state.updatePane(pane.id, { cwd });
     });
     session.on("exit", (code) => {
       this.broadcast(pane.id, { type: "exit", code });
