@@ -86,7 +86,41 @@ curl -fsS \
 
 Unread notifications light the workspace, tab, and pane. The browser notification button in the top bar requests browser notification permission.
 
-SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, and `wmux-media` available on hosts like Away-Team without manually copying this repo there.
+SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, and `wmux-media` available on hosts like Away-Team without manually copying this repo there.
+
+## Agent Events
+
+wmux can update workspace names/descriptors and send completion notifications from agent hooks:
+
+```bash
+wmux-agent-event --agent codex --status completed --title "Remote helpers" --summary "Fixed Away-Team helper staging"
+```
+
+The helper posts to `POST /api/agent-events`. It uses the pane environment variables when available and exits without changing state if it is run outside a wmux pane.
+
+Install agent hooks on this machine with:
+
+```bash
+wmux-hooks install claude
+wmux-hooks install codex
+```
+
+This merges `Stop` and `Notification` hooks into `~/.claude/settings.json`. Claude Stop hooks read the transcript path from hook input, derive a short workspace title from the latest user prompt, derive the descriptor from the latest assistant text, and create a completion notification. Restart Claude Code after installing hooks.
+
+The Codex installer merges `UserPromptSubmit` and `Stop` hooks into `~/.codex/hooks.json`. Codex requires you to run `/hooks` inside Codex and trust the new command hook before it will run. Start a new Codex session after installing or trusting hooks if an existing session does not pick up the config.
+
+OpenCode wrappers can call `wmux-agent-event` manually until wmux has verified a stable hook config surface for that tool.
+
+## Activity And Run Metadata
+
+The activity drawer in the top bar shows recent agent events and tracked command runs with workspace, tab, host, duration, and exit status context. Use `wmux-run` when you want a command to appear there:
+
+```bash
+wmux-run -- npm test
+wmux-run -- ./scripts/deploy-staging.sh
+```
+
+The originating pane toolbar shows the latest tracked run outside the terminal canvas, with copy and rerun controls. SSH panes stage `wmux-run` on new launches the same way they stage the other helpers.
 
 ## Browser Media
 
@@ -127,10 +161,38 @@ Workspace rows and tab pills are real navigation links. A specific workspace and
 
 The link button in the top bar copies the active workspace/tab URL when the browser allows clipboard access.
 
+## Command Palette
+
+Open the command palette with `Cmd+K` or `Ctrl+K`, or use the command icon in the top bar. It searches common actions, workspace and tab navigation, host-scoped session creation, pane splits, settings, and session audit entry points.
+
+The workspace rail has a host filter for narrowing the left navigation without changing the target host used for new workspaces, tabs, and splits.
+
+## Durable Session Audit
+
+wmux durable sessions are named from pane ids, for example `wmux_pane_804cafba`. If a backend changes from `screen` to `tmux`, or a service restart loses track of a pane, old multiplexer sessions can remain alive.
+
+Check local wmux-managed `tmux` and `screen` sessions with:
+
+```bash
+npm run audit:sessions
+```
+
+The audit reports:
+
+- `active`: a multiplexer session matching a pane in `~/.wmux/state.json`.
+- `duplicate`: more than one backend exists for the same active pane, usually an old fallback session after switching to tmux.
+- `orphan`: a wmux-named multiplexer session whose pane id is no longer in state.
+- `missing`: a pane in state without a local durable multiplexer session.
+
+Use `npm run audit:sessions -- --json` for machine-readable output.
+
+The settings modal can quit local duplicate/orphan `tmux` or `screen` sessions after confirmation. It refuses to quit active sessions and refuses non-`wmux_` session names.
+
 ## Splits
 
 - `Cmd+D` / `Ctrl+D` splits the active pane to the right.
 - `Cmd+Shift+D` / `Ctrl+Shift+D` splits the active pane below.
+- Drag the divider between split panes to resize the split. Ratios persist with the tab layout.
 - The close button on a split pane removes that pane and collapses the layout.
 - Exiting a shell in a split pane removes that pane.
 - Exiting the last pane in a tab closes the tab.

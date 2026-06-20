@@ -1,16 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bell, BellRing, CheckCheck, CirclePlus, Link2, PanelLeft, Plus, Server, Settings, TerminalSquare, X } from "lucide-react";
+import { Activity, Bell, BellRing, CheckCheck, CirclePlus, Clipboard, Command as CommandIcon, Link2, PanelLeft, Plus, Search, Server, Settings, TerminalSquare, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { LayoutView } from "./LayoutView";
 import type {
+  AgentActivity,
   BootstrapPayload,
+  DurableSessionAudit,
   LayoutNode,
   MachineStatus,
   SplitDirection,
   TerminalMedia,
   TerminalNotification,
+  TerminalRun,
   WmuxSettings,
 } from "./types";
+
+type ServiceConnection = "connecting" | "online" | "offline";
+
+interface PaletteCommand {
+  id: string;
+  title: string;
+  subtitle?: string;
+  section: string;
+  shortcut?: string;
+  keywords?: string[];
+  disabled?: boolean;
+  run: () => void | Promise<void>;
+}
 
 const defaultSettings: WmuxSettings = {
   terminalFontSize: 14,
@@ -24,7 +40,12 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mediaItems, setMediaItems] = useState<TerminalMedia[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
   const [previewSettings, setPreviewSettings] = useState<WmuxSettings | null>(null);
+  const [serviceConnection, setServiceConnection] = useState<ServiceConnection>("connecting");
+  const [workspaceHostFilter, setWorkspaceHostFilter] = useState("all");
+  const [activityOpen, setActivityOpen] = useState(false);
   const seenNotificationIds = useRef(new Set<string>());
   const lastSyncedPath = useRef("");
 
@@ -45,8 +66,10 @@ export function App() {
     let socket: WebSocket | null = null;
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      setServiceConnection("connecting");
       const ws = new WebSocket(`${protocol}//${window.location.host}/ws/events`);
       socket = ws;
+      ws.onopen = () => setServiceConnection("online");
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === "notification") {
@@ -63,8 +86,12 @@ export function App() {
         }
       };
       ws.onclose = () => {
-        if (!closed) reconnectTimer = window.setTimeout(connect, 1500);
+        if (!closed) {
+          setServiceConnection("offline");
+          reconnectTimer = window.setTimeout(connect, 1500);
+        }
       };
+      ws.onerror = () => setServiceConnection("offline");
     };
     connect();
     return () => {
@@ -90,6 +117,17 @@ export function App() {
   const unreadByWorkspaceId = useMemo(() => countUnreadBy(notifications, "workspaceId"), [notifications]);
   const latestUnreadByWorkspaceId = useMemo(() => latestUnreadByWorkspace(notifications), [notifications]);
   const mediaByPaneId = useMemo(() => groupMediaByPane(mediaItems), [mediaItems]);
+  const agentEvents = state?.agentEvents ?? [];
+  const runs = state?.runs ?? [];
+  const latestAgentByWorkspaceId = useMemo(() => latestAgentByWorkspace(agentEvents), [agentEvents]);
+  const latestRunByPaneId = useMemo(() => latestRunByPane(runs), [runs]);
+  const visibleWorkspaces = useMemo(
+    () =>
+      state?.workspaces.filter(
+        (workspace) => workspaceHostFilter === "all" || workspace.machineId === workspaceHostFilter,
+      ) ?? [],
+    [state, workspaceHostFilter],
+  );
 
   const refresh = async (nextState?: BootstrapPayload) => {
     setState(nextState ?? (await api.bootstrap()));
@@ -165,6 +203,12 @@ export function App() {
     await refresh(response.state);
   };
 
+  const resizeSplit = async (path: string, ratio: number) => {
+    if (!activeTab) return;
+    const response = await api.updateSplitRatio(activeTab.id, path, ratio);
+    await refresh(response.state);
+  };
+
   const closePane = async (paneId: string) => {
     if (!activeTab || activeTab.panes.length <= 1) return;
     const response = await api.closePane(activeTab.id, paneId);
@@ -230,11 +274,7 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (settingsOpen) return;
-      const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       const key = event.key.toLowerCase();
-      const digit = /^[1-9]$/.test(key) ? Number(key) : null;
       const primary = event.metaKey || event.ctrlKey;
       const primaryOnly = primary && !event.altKey && !(event.metaKey && event.ctrlKey);
       const primaryWithAlt = primary && event.altKey && !(event.metaKey && event.ctrlKey);
@@ -244,6 +284,16 @@ export function App() {
         event.stopPropagation();
         void action();
       };
+
+      if (!settingsOpen && !commandPaletteOpen && primaryOnly && key === "k") {
+        run(openCommandPalette);
+        return;
+      }
+
+      if (settingsOpen || commandPaletteOpen) return;
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      const digit = /^[1-9]$/.test(key) ? Number(key) : null;
 
       if (primaryOnly && key === "b") {
         run(() => setSidebarCollapsed((value) => !value));
@@ -310,7 +360,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [activeTab, activeWorkspace, state, newMachineId, notifications, settingsOpen]);
+  }, [activeTab, activeWorkspace, state, newMachineId, notifications, settingsOpen, commandPaletteOpen]);
 
   const enableBrowserNotifications = async () => {
     if (!("Notification" in window) || Notification.permission !== "default") return;
@@ -321,6 +371,253 @@ export function App() {
     if (!activeWorkspace) return;
     await refresh(await api.markWorkspaceNotificationsRead(activeWorkspace.id));
   };
+
+  const openCommandPalette = () => {
+    setCommandPaletteQuery("");
+    setCommandPaletteOpen(true);
+  };
+
+  const commands = useMemo<PaletteCommand[]>(() => {
+    const activePane = activeTab?.panes.find((pane) => pane.id === activeTab.activePaneId);
+    const activePaneCount = activeTab?.panes.length ?? 0;
+    const workspaceUnreadCount = activeWorkspace ? unreadByWorkspaceId.get(activeWorkspace.id) ?? 0 : 0;
+    const base: PaletteCommand[] = [
+      {
+        id: "open-settings",
+        title: "Open settings",
+        subtitle: "Ghostty settings, host aliases, durable session audit",
+        section: "System",
+        shortcut: "Cmd+,",
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: "audit-sessions",
+        title: "Open session audit",
+        subtitle: "Review local tmux/screen durable sessions",
+        section: "System",
+        run: () => setSettingsOpen(true),
+        keywords: ["tmux", "screen", "durable", "orphan", "duplicate"],
+      },
+      {
+        id: "open-activity",
+        title: "Open activity",
+        subtitle: "Agent events and tracked terminal runs",
+        section: "View",
+        run: () => setActivityOpen(true),
+        keywords: ["timeline", "agent", "runs", "history"],
+      },
+      {
+        id: "copy-link",
+        title: "Copy active session link",
+        subtitle: activeWorkspace && activeTab ? `${activeWorkspace.name} / ${activeTab.title}` : undefined,
+        section: "Actions",
+        disabled: !navigator.clipboard || !activeWorkspace || !activeTab,
+        run: copyActiveLink,
+        keywords: ["url", "share", "link"],
+      },
+      {
+        id: "toggle-sidebar",
+        title: sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
+        subtitle: "Toggle workspace and host navigation",
+        section: "View",
+        shortcut: "Cmd+B",
+        run: () => setSidebarCollapsed((value) => !value),
+        keywords: ["left", "navigation", "panel"],
+      },
+      {
+        id: "mark-read",
+        title: "Mark workspace notifications read",
+        subtitle: `${workspaceUnreadCount} unread in current workspace`,
+        section: "Actions",
+        disabled: workspaceUnreadCount === 0 || !activeWorkspace,
+        run: markWorkspaceRead,
+        keywords: ["notification", "inbox", "unread"],
+      },
+      {
+        id: "enable-notifications",
+        title: "Enable browser notifications",
+        subtitle: "Request notification permission",
+        section: "System",
+        disabled: !("Notification" in window) || Notification.permission !== "default",
+        run: enableBrowserNotifications,
+        keywords: ["alerts"],
+      },
+      {
+        id: "new-workspace-selected",
+        title: `New workspace on ${selectedMachine?.name ?? newMachineId}`,
+        subtitle: "Create a new workspace on the target host",
+        section: "Create",
+        shortcut: "Cmd+N",
+        disabled: !selectedMachine?.reachable,
+        run: () => createWorkspace(newMachineId),
+        keywords: ["session"],
+      },
+      {
+        id: "new-tab-selected",
+        title: `New tab on ${selectedMachine?.name ?? newMachineId}`,
+        subtitle: activeWorkspace?.name,
+        section: "Create",
+        shortcut: "Cmd+T",
+        disabled: !selectedMachine?.reachable || !activeWorkspace,
+        run: () => createTab(newMachineId),
+        keywords: ["session"],
+      },
+      {
+        id: "split-right",
+        title: `Split right on ${selectedMachine?.name ?? newMachineId}`,
+        subtitle: activeTab?.title,
+        section: "Pane",
+        shortcut: "Cmd+D",
+        disabled: !activePane || !selectedMachine?.reachable,
+        run: () => activePane && splitPane(activePane.id, "vertical", newMachineId),
+        keywords: ["vertical", "pane"],
+      },
+      {
+        id: "split-down",
+        title: `Split down on ${selectedMachine?.name ?? newMachineId}`,
+        subtitle: activeTab?.title,
+        section: "Pane",
+        shortcut: "Shift+Cmd+D",
+        disabled: !activePane || !selectedMachine?.reachable,
+        run: () => activePane && splitPane(activePane.id, "horizontal", newMachineId),
+        keywords: ["horizontal", "pane"],
+      },
+      {
+        id: "focus-next-pane",
+        title: "Focus next pane",
+        section: "Pane",
+        disabled: activePaneCount < 2,
+        run: () => focusPaneRelative(1),
+        keywords: ["navigate"],
+      },
+      {
+        id: "focus-prev-pane",
+        title: "Focus previous pane",
+        section: "Pane",
+        disabled: activePaneCount < 2,
+        run: () => focusPaneRelative(-1),
+        keywords: ["navigate"],
+      },
+      {
+        id: "close-tab",
+        title: "Close current tab",
+        subtitle: activeTab?.title,
+        section: "Close",
+        shortcut: "Cmd+W",
+        disabled: !activeWorkspace || !activeTab || activeWorkspace.tabs.length <= 1,
+        run: closeActiveTab,
+      },
+      {
+        id: "close-workspace",
+        title: "Close current workspace",
+        subtitle: activeWorkspace?.name,
+        section: "Close",
+        shortcut: "Shift+Cmd+W",
+        disabled: !state || !activeWorkspace || state.workspaces.length <= 1,
+        run: closeActiveWorkspace,
+      },
+      {
+        id: "latest-unread",
+        title: "Jump to latest unread",
+        subtitle: `${unreadNotifications.length} unread notifications`,
+        section: "Navigate",
+        shortcut: "Shift+Cmd+U",
+        disabled: unreadNotifications.length === 0,
+        run: jumpLatestUnread,
+        keywords: ["notification"],
+      },
+    ];
+
+    const hostCommands = displayMachines.flatMap((machine): PaletteCommand[] => [
+      {
+        id: `target-host:${machine.id}`,
+        title: `Set target host: ${machine.name}`,
+        subtitle: machine.reachable ? machine.kind : machine.reason ?? "Offline",
+        section: "Hosts",
+        disabled: !machine.reachable,
+        run: () => setNewMachineId(machine.id),
+        keywords: [machine.id, machine.host ?? ""],
+      },
+      {
+        id: `filter-host:${machine.id}`,
+        title: `Filter workspaces: ${machine.name}`,
+        subtitle: "Show only workspaces with this host affinity",
+        section: "Hosts",
+        run: () => setWorkspaceHostFilter(machine.id),
+        keywords: [machine.id, machine.host ?? "", "filter"],
+      },
+      {
+        id: `workspace-host:${machine.id}`,
+        title: `New workspace on ${machine.name}`,
+        subtitle: machine.reachable ? machine.kind : machine.reason ?? "Offline",
+        section: "Hosts",
+        disabled: !machine.reachable,
+        run: () => createWorkspace(machine.id),
+        keywords: [machine.id, machine.host ?? ""],
+      },
+    ]);
+
+    hostCommands.unshift({
+      id: "filter-host:all",
+      title: "Filter workspaces: all hosts",
+      subtitle: "Show every workspace",
+      section: "Hosts",
+      run: () => setWorkspaceHostFilter("all"),
+      keywords: ["filter", "hosts", "all"],
+    });
+
+    const workspaceCommands =
+      state?.workspaces.flatMap((workspace): PaletteCommand[] => {
+        const host = displayWorkspaceHost(
+          machineFor(displayMachines, workspace.machineId),
+          machineFor(machines, workspace.machineId),
+          workspace.machineId,
+        );
+        const activeWorkspaceTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
+        const workspaceCommand: PaletteCommand[] = activeWorkspaceTab
+          ? [
+              {
+                id: `workspace:${workspace.id}`,
+                title: `Open workspace: ${workspace.name}`,
+                subtitle: host,
+                section: "Workspaces",
+                run: async () => {
+                  window.history.pushState(null, "", workspaceTabPath(workspace.id, activeWorkspaceTab.id));
+                  lastSyncedPath.current = window.location.pathname;
+                  await refresh(await activateRouteTarget(await api.bootstrap()));
+                },
+                keywords: [host, workspace.descriptor ?? ""],
+              },
+            ]
+          : [];
+        const tabCommands = workspace.tabs.map((tab): PaletteCommand => ({
+          id: `tab:${workspace.id}:${tab.id}`,
+          title: `Open tab: ${tab.title}`,
+          subtitle: workspace.name,
+          section: "Tabs",
+          run: async () => {
+            window.history.pushState(null, "", workspaceTabPath(workspace.id, tab.id));
+            lastSyncedPath.current = window.location.pathname;
+            await refresh(await activateRouteTarget(await api.bootstrap()));
+          },
+          keywords: [host],
+        }));
+        return [...workspaceCommand, ...tabCommands];
+      }) ?? [];
+
+    return [...base, ...hostCommands, ...workspaceCommands];
+  }, [
+    activeTab,
+    activeWorkspace,
+    displayMachines,
+    machines,
+    newMachineId,
+    selectedMachine,
+    sidebarCollapsed,
+    state,
+    unreadByWorkspaceId,
+    unreadNotifications.length,
+  ]);
 
   if (error) return <div className="load-state">wmux failed to load: {error}</div>;
   if (!state || !activeWorkspace || !activeTab) return <div className="load-state">Loading wmux...</div>;
@@ -354,23 +651,46 @@ export function App() {
             </button>
           </div>
         </div>
-        <div className="sidebar-label">Workspaces</div>
+        <div className="sidebar-label workspace-toolbar">
+          <span>Workspaces</span>
+          <select
+            title="Filter workspace list by host"
+            value={workspaceHostFilter}
+            onChange={(event) => setWorkspaceHostFilter(event.target.value)}
+          >
+            <option value="all">All hosts</option>
+            {displayMachines.map((machine) => (
+              <option key={machine.id} value={machine.id}>
+                {machine.name}
+              </option>
+            ))}
+          </select>
+        </div>
         <nav className="workspace-list">
-            {state.workspaces.map((workspace) => {
+            {visibleWorkspaces.length === 0 ? <div className="workspace-empty">No workspaces</div> : null}
+            {visibleWorkspaces.map((workspace) => {
               const machine = machineFor(displayMachines, workspace.machineId);
               const sourceMachine = machineFor(machines, workspace.machineId);
               const unreadCount = unreadByWorkspaceId.get(workspace.id) ?? 0;
               const latestUnread = latestUnreadByWorkspaceId.get(workspace.id);
+              const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
               const descriptor =
                 latestUnread?.body ||
                 latestUnread?.subtitle ||
+                latestAgent?.summary ||
                 displayWorkspaceDescriptor(workspace.descriptor, machine, sourceMachine, workspace.machineId);
+              const host = displayWorkspaceHost(machine, sourceMachine, workspace.machineId);
+              const visibleDescriptor = compactWorkspaceDescription(descriptor, 72);
+              const tooltipDescriptor = compactWorkspaceDescription(descriptor, 200);
+              const showDescriptor = visibleDescriptor && visibleDescriptor !== host;
+              const tooltip = [workspace.name, showDescriptor ? tooltipDescriptor : "", host].filter(Boolean).join(" / ");
               const tab = workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace.tabs[0];
               if (!tab) return null;
               return (
               <a
                 key={workspace.id}
                 href={workspaceTabPath(workspace.id, tab.id)}
+                title={tooltip}
                 className={`workspace-item ${workspace.id === activeWorkspace.id ? "active" : ""} ${
                   machine?.reachable ? "" : "disabled"
                 }`}
@@ -379,7 +699,11 @@ export function App() {
                   <span className={`reach-dot ${machine?.reachable ? "on" : ""}`} />
                   <span className="workspace-title">{workspace.name}</span>
                   {unreadCount > 0 ? <span className="badge workspace-badge">{unreadCount}</span> : null}
-                  <span className="workspace-meta">{descriptor}</span>
+                  <span className="workspace-meta">
+                    {latestAgent ? <span className={`agent-pill ${agentStatusClass(latestAgent.status)}`}>{latestAgent.agent} {latestAgent.status}</span> : null}
+                    {showDescriptor ? <span className="workspace-descriptor">{visibleDescriptor}</span> : null}
+                    <span className="workspace-host">{host}</span>
+                  </span>
                 </a>
               );
             })}
@@ -387,10 +711,15 @@ export function App() {
         <div className="sidebar-label host-label">Host status</div>
         <div className="machine-list">
           {displayMachines.map((machine) => (
-            <div key={machine.id} className="machine-row" title={machine.reason ?? machine.kind}>
+            <div
+              key={machine.id}
+              className={`machine-row ${machine.reachable ? "" : "offline"}`}
+              title={[machine.reason, machine.backendDetail, machine.endpoint].filter(Boolean).join(" / ") || machine.kind}
+            >
               <Server size={14} />
-              <span>{machine.name}</span>
+              <span className="machine-name">{machine.name}</span>
               <span className={`reach-dot ${machine.reachable ? "on" : ""}`} />
+              <span className="machine-detail">{machineStatusDetail(machine)}</span>
             </div>
           ))}
         </div>
@@ -420,11 +749,28 @@ export function App() {
             </button>
           </div>
           <div className="machine-picker">
+            <div className={`service-status ${serviceConnection}`} title={`wmux service ${serviceConnection}`}>
+              <span className={`status-dot ${serviceConnection === "online" ? "on" : ""}`} />
+              <span>wmux {serviceConnection}</span>
+            </div>
+            <button
+              title="Open command palette"
+              onClick={openCommandPalette}
+            >
+              <CommandIcon size={16} />
+            </button>
             <button
               title="Settings"
               onClick={() => setSettingsOpen(true)}
             >
               <Settings size={16} />
+            </button>
+            <button
+              className={activityOpen ? "active-tool" : ""}
+              title="Activity"
+              onClick={() => setActivityOpen((value) => !value)}
+            >
+              <Activity size={16} />
             </button>
             <button
               title="Copy active session link"
@@ -458,10 +804,19 @@ export function App() {
           mediaByPaneId={mediaByPaneId}
           onActivatePane={async (paneId) => refresh(await api.activatePane(activeTab.id, paneId))}
           onSplit={splitPane}
+          onResizeSplit={resizeSplit}
           onClosePane={closePane}
           onDismissMedia={(mediaId) => setMediaItems((items) => items.filter((item) => item.id !== mediaId))}
+          runsByPaneId={latestRunByPaneId}
         />
       </section>
+      {activityOpen ? (
+        <ActivityPanel
+          state={state}
+          machines={displayMachines}
+          onClose={() => setActivityOpen(false)}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsModal
           machines={machines}
@@ -469,6 +824,14 @@ export function App() {
           onPreview={setPreviewSettings}
           onSave={updateSettings}
           onCancel={cancelSettings}
+        />
+      ) : null}
+      {commandPaletteOpen ? (
+        <CommandPalette
+          commands={commands}
+          query={commandPaletteQuery}
+          onQueryChange={setCommandPaletteQuery}
+          onClose={() => setCommandPaletteOpen(false)}
         />
       ) : null}
     </main>
@@ -497,6 +860,319 @@ const displayWorkspaceDescriptor = (
   return raw;
 };
 
+const displayWorkspaceHost = (
+  displayMachine: MachineStatus | undefined,
+  sourceMachine: MachineStatus | undefined,
+  machineId: string,
+): string => displayMachine?.name ?? sourceMachine?.name ?? machineId;
+
+const compactWorkspaceDescription = (value: string | undefined, limit: number): string => {
+  const cleaned = stripMarkdown(value ?? "");
+  if (cleaned.length <= limit) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, limit - 1)).trimEnd()}...`;
+};
+
+const stripMarkdown = (value: string): string =>
+  value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^[\s>*+-]+/gm, "")
+    .replace(/[*_~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const latestAgentByWorkspace = (events: AgentActivity[]): Map<string, AgentActivity> => {
+  const latest = new Map<string, AgentActivity>();
+  for (const event of events) {
+    if (!latest.has(event.workspaceId)) latest.set(event.workspaceId, event);
+  }
+  return latest;
+};
+
+const latestRunByPane = (runs: TerminalRun[]): Map<string, TerminalRun> => {
+  const latest = new Map<string, TerminalRun>();
+  for (const run of runs) {
+    if (!latest.has(run.paneId)) latest.set(run.paneId, run);
+  }
+  return latest;
+};
+
+const agentStatusClass = (status: string): string => {
+  const normalized = status.toLowerCase();
+  if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
+  if (["completed", "done", "success"].includes(normalized)) return "completed";
+  if (["running", "started", "working"].includes(normalized)) return "running";
+  return "updated";
+};
+
+const machineStatusDetail = (machine: MachineStatus): string => {
+  const endpoint = machine.endpoint ?? machine.host ?? machine.kind;
+  const checked = machine.checkedAt ? `checked ${formatRelativeTime(machine.checkedAt)}` : "";
+  return [machine.reachable ? endpoint : machine.reason ?? endpoint, machine.backendDetail, checked]
+    .filter(Boolean)
+    .join(" / ");
+};
+
+const formatRelativeTime = (iso: string): string => {
+  const elapsedMs = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(elapsedMs)) return "";
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+};
+
+const formatDuration = (startedAt: string, completedAt: string): string => {
+  const elapsedMs = Date.parse(completedAt) - Date.parse(startedAt);
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return "unknown";
+  if (elapsedMs < 1000) return `${elapsedMs}ms`;
+  return `${(elapsedMs / 1000).toFixed(elapsedMs < 10_000 ? 1 : 0)}s`;
+};
+
+function CommandPalette({
+  commands,
+  query,
+  onQueryChange,
+  onClose,
+}: {
+  commands: PaletteCommand[];
+  query: string;
+  onQueryChange: (query: string) => void;
+  onClose: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
+  const selectableCommands = filteredCommands.filter((command) => !command.disabled);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const firstEnabled = filteredCommands.findIndex((command) => !command.disabled);
+    setSelectedIndex(firstEnabled === -1 ? 0 : firstEnabled);
+  }, [filteredCommands]);
+
+  const runCommand = async (command: PaletteCommand | undefined) => {
+    if (!command || command.disabled) return;
+    onClose();
+    await command.run();
+  };
+
+  const moveSelection = (delta: number) => {
+    if (!filteredCommands.length) return;
+    let next = selectedIndex;
+    for (let step = 0; step < filteredCommands.length; step += 1) {
+      next = modulo(next + delta, filteredCommands.length);
+      if (!filteredCommands[next].disabled) {
+        setSelectedIndex(next);
+        return;
+      }
+    }
+  };
+
+  return (
+    <div className="command-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+      <div
+        className="command-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+            return;
+          }
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            moveSelection(1);
+            return;
+          }
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            moveSelection(-1);
+            return;
+          }
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void runCommand(filteredCommands[selectedIndex] ?? selectableCommands[0]);
+          }
+        }}
+      >
+        <div className="command-input-row">
+          <Search size={17} />
+          <input
+            ref={inputRef}
+            value={query}
+            placeholder="Search commands, workspaces, tabs, hosts"
+            onChange={(event) => onQueryChange(event.target.value)}
+          />
+        </div>
+        <div className="command-list">
+          {filteredCommands.length ? (
+            filteredCommands.map((command, index) => (
+              <button
+                key={command.id}
+                type="button"
+                className={`command-item ${index === selectedIndex ? "selected" : ""}`}
+                disabled={command.disabled}
+                onMouseEnter={() => setSelectedIndex(index)}
+                onClick={() => void runCommand(command)}
+              >
+                <span className="command-section">{command.section}</span>
+                <span className="command-text">
+                  <span className="command-title">{command.title}</span>
+                  {command.subtitle ? <span className="command-subtitle">{command.subtitle}</span> : null}
+                </span>
+                {command.shortcut ? <span className="command-shortcut">{command.shortcut}</span> : null}
+              </button>
+            ))
+          ) : (
+            <div className="command-empty">No commands</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const filterCommands = (commands: PaletteCommand[], query: string): PaletteCommand[] => {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return commands;
+  return commands.filter((command) => {
+    const haystack = [command.title, command.subtitle, command.section, command.shortcut, ...(command.keywords ?? [])]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+};
+
+type ActivityItem =
+  | { kind: "agent"; id: string; createdAt: string; event: AgentActivity }
+  | { kind: "run"; id: string; createdAt: string; run: TerminalRun };
+
+function ActivityPanel({
+  state,
+  machines,
+  onClose,
+}: {
+  state: BootstrapPayload;
+  machines: MachineStatus[];
+  onClose: () => void;
+}) {
+  const items = useMemo(() => buildActivityItems(state.agentEvents, state.runs).slice(0, 100), [state.agentEvents, state.runs]);
+  return (
+    <aside className="activity-panel" aria-label="Activity">
+      <div className="activity-header">
+        <h2>Activity</h2>
+        <button title="Close activity" onClick={onClose}>
+          <X size={16} />
+        </button>
+      </div>
+      <div className="activity-list">
+        {items.length ? (
+          items.map((item) =>
+            item.kind === "agent" ? (
+              <AgentActivityRow key={item.id} event={item.event} state={state} machines={machines} />
+            ) : (
+              <RunActivityRow key={item.id} run={item.run} state={state} machines={machines} />
+            ),
+          )
+        ) : (
+          <div className="activity-empty">No activity yet</div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function AgentActivityRow({
+  event,
+  state,
+  machines,
+}: {
+  event: AgentActivity;
+  state: BootstrapPayload;
+  machines: MachineStatus[];
+}) {
+  const workspace = state.workspaces.find((candidate) => candidate.id === event.workspaceId);
+  const machine = workspace ? machineFor(machines, workspace.machineId) : undefined;
+  const title = event.title || workspace?.name || event.agent;
+  const summary = compactWorkspaceDescription(event.summary, 160);
+  return (
+    <div className={`activity-row agent ${agentStatusClass(event.status)}`} title={event.summary || title}>
+      <div className="activity-row-main">
+        <span className="activity-kind">{event.agent}</span>
+        <span className="activity-title">{title}</span>
+        {summary ? <span className="activity-summary">{summary}</span> : null}
+      </div>
+      <div className="activity-row-meta">
+        <span>{event.status}</span>
+        <span>{workspace?.name ?? "workspace removed"}</span>
+        <span>{machine?.name ?? workspace?.machineId ?? "host unknown"}</span>
+        <span>{formatRelativeTime(event.createdAt)}</span>
+      </div>
+    </div>
+  );
+}
+
+function RunActivityRow({
+  run,
+  state,
+  machines,
+}: {
+  run: TerminalRun;
+  state: BootstrapPayload;
+  machines: MachineStatus[];
+}) {
+  const workspace = state.workspaces.find((candidate) => candidate.id === run.workspaceId);
+  const tab = workspace?.tabs.find((candidate) => candidate.id === run.tabId);
+  const machine = workspace ? machineFor(machines, workspace.machineId) : undefined;
+  return (
+    <div className={`activity-row run ${run.status}`} title={run.command}>
+      <div className="activity-row-main">
+        <span className="activity-kind">run</span>
+        <span className="activity-title">{run.command}</span>
+        <span className="activity-summary">
+          {run.status === "started" ? "running" : `exit ${run.exitCode ?? "?"}`}
+          {run.completedAt ? ` / ${formatDuration(run.startedAt, run.completedAt)}` : ""}
+        </span>
+      </div>
+      <div className="activity-row-meta">
+        <span>{workspace?.name ?? "workspace removed"}</span>
+        <span>{tab?.title ?? "tab removed"}</span>
+        <span>{machine?.name ?? workspace?.machineId ?? "host unknown"}</span>
+        <span>{formatRelativeTime(run.completedAt ?? run.startedAt)}</span>
+        <button
+          title="Copy command"
+          disabled={!navigator.clipboard}
+          onClick={() => void navigator.clipboard?.writeText(run.command)}
+        >
+          <Clipboard size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const buildActivityItems = (agentEvents: AgentActivity[], runs: TerminalRun[]): ActivityItem[] =>
+  [
+    ...agentEvents.map((event) => ({ kind: "agent" as const, id: `agent:${event.id}`, createdAt: event.createdAt, event })),
+    ...runs.map((run) => ({ kind: "run" as const, id: `run:${run.id}`, createdAt: run.completedAt ?? run.startedAt, run })),
+  ].sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt));
+
 function SettingsModal({
   machines,
   settings,
@@ -512,6 +1188,9 @@ function SettingsModal({
 }) {
   const [draft, setDraft] = useState<WmuxSettings>(() => normalizeSettings(settings));
   const [saving, setSaving] = useState(false);
+  const [sessionAudit, setSessionAudit] = useState<DurableSessionAudit | null>(null);
+  const [sessionAuditError, setSessionAuditError] = useState("");
+  const [sessionAuditLoading, setSessionAuditLoading] = useState(false);
 
   useEffect(() => {
     setDraft(normalizeSettings(settings));
@@ -548,6 +1227,32 @@ function SettingsModal({
       await onSave(normalizeSettings(draft));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runSessionAudit = async () => {
+    setSessionAuditLoading(true);
+    setSessionAuditError("");
+    try {
+      setSessionAudit(await api.auditSessions());
+    } catch (error) {
+      setSessionAudit(null);
+      setSessionAuditError(error instanceof Error ? error.message : "Session audit failed");
+    } finally {
+      setSessionAuditLoading(false);
+    }
+  };
+
+  const cleanupSession = async (backend: "tmux" | "screen", name: string) => {
+    if (!window.confirm(`Quit ${backend} session ${name}?`)) return;
+    setSessionAuditLoading(true);
+    setSessionAuditError("");
+    try {
+      setSessionAudit(await api.cleanupSession(backend, name));
+    } catch (error) {
+      setSessionAuditError(error instanceof Error ? error.message : "Session cleanup failed");
+    } finally {
+      setSessionAuditLoading(false);
     }
   };
 
@@ -615,6 +1320,58 @@ function SettingsModal({
                 />
               </label>
             ))}
+          </section>
+          <section className="settings-section">
+            <h3>Durable sessions</h3>
+            <div className="settings-command-row">
+              <button type="button" onClick={runSessionAudit} disabled={sessionAuditLoading}>
+                {sessionAuditLoading ? "Auditing" : "Audit sessions"}
+              </button>
+              {sessionAudit ? (
+                <span>
+                  {sessionAudit.summary.orphanCount} orphan / {sessionAudit.summary.duplicateCount} duplicate / {sessionAudit.summary.missingCount} missing
+                </span>
+              ) : (
+                <span>Read-only local tmux/screen check</span>
+              )}
+            </div>
+            {sessionAuditError ? <div className="settings-error">{sessionAuditError}</div> : null}
+            {sessionAudit ? (
+              <div className="session-audit">
+                <div className="session-audit-summary">
+                  {sessionAudit.summary.activePaneCount} panes, {sessionAudit.summary.sessionCount} sessions
+                </div>
+                {sessionAudit.sessions.map((row) => (
+                  <div key={`${row.backend}:${row.name}`} className={`session-audit-row ${row.status}`}>
+                    <span>{row.status}</span>
+                    <span>{row.backend}</span>
+                    <span title={row.name}>{row.name}</span>
+                    <span>{row.detail}</span>
+                    <span>
+                      {row.cleanupAllowed ? (
+                        <button
+                          type="button"
+                          title={`Quit ${row.backend} session`}
+                          disabled={sessionAuditLoading}
+                          onClick={() => void cleanupSession(row.backend, row.name)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      ) : null}
+                    </span>
+                  </div>
+                ))}
+                {sessionAudit.missing.map((row) => (
+                  <div key={`missing:${row.name}`} className="session-audit-row missing">
+                    <span>missing</span>
+                    <span>none</span>
+                    <span title={row.name}>{row.name}</span>
+                    <span>{row.paneId}</span>
+                    <span />
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
         </div>
         <div className="settings-actions">

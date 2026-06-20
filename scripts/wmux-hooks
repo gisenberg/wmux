@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const eventScript = path.join(repoRoot, "scripts", "wmux-agent-event");
+const claudeHookCommand = `${eventScript} --agent claude --claude-hook`;
+const codexHookCommand = `${eventScript} --agent codex --codex-hook`;
+
+const usage = () => {
+  console.error(`Usage:
+  wmux-hooks install claude
+  wmux-hooks install codex
+  wmux-hooks status
+
+OpenCode does not have a supported hook installer in wmux yet; use wmux-agent-event manually from wrapper scripts.`);
+};
+
+const readJson = (filePath) => {
+  if (!fs.existsSync(filePath)) return {};
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+};
+
+const writeJson = (filePath, data) => {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
+};
+
+const hasCommand = (items, command) =>
+  items.some((entry) => entry?.hooks?.some((hook) => hook?.type === "command" && hook?.command === command));
+
+const addHook = (settings, eventName, command, options = {}) => {
+  settings.hooks ??= {};
+  settings.hooks[eventName] ??= [];
+  if (hasCommand(settings.hooks[eventName], command)) return false;
+  settings.hooks[eventName].push({
+    hooks: [
+      {
+        type: "command",
+        command,
+        timeout: 30,
+        ...options,
+      },
+    ],
+  });
+  return true;
+};
+
+const installClaude = () => {
+  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+  const settings = readJson(settingsPath);
+  const changed = [
+    addHook(settings, "Stop", claudeHookCommand),
+    addHook(settings, "Notification", claudeHookCommand),
+  ].some(Boolean);
+  if (changed) writeJson(settingsPath, settings);
+  console.log(`${changed ? "Installed" : "Already installed"} Claude hooks in ${settingsPath}`);
+  console.log(`Hook command: ${claudeHookCommand}`);
+};
+
+const installCodex = () => {
+  const settingsPath = path.join(os.homedir(), ".codex", "hooks.json");
+  const settings = readJson(settingsPath);
+  const changed = [
+    addHook(settings, "UserPromptSubmit", codexHookCommand, {
+      statusMessage: "Updating wmux workspace",
+    }),
+    addHook(settings, "Stop", codexHookCommand, {
+      statusMessage: "Summarizing wmux workspace",
+    }),
+  ].some(Boolean);
+  if (changed) writeJson(settingsPath, settings);
+  console.log(`${changed ? "Installed" : "Already installed"} Codex hooks in ${settingsPath}`);
+  console.log(`Hook command: ${codexHookCommand}`);
+  console.log("Run /hooks inside Codex to review and trust this hook before expecting it to run.");
+};
+
+const status = () => {
+  const claudePath = path.join(os.homedir(), ".claude", "settings.json");
+  const claudeSettings = readJson(claudePath);
+  const claudeInstalled = ["Stop", "Notification"].every((eventName) =>
+    hasCommand(claudeSettings.hooks?.[eventName] ?? [], claudeHookCommand),
+  );
+  const codexPath = path.join(os.homedir(), ".codex", "hooks.json");
+  const codexSettings = readJson(codexPath);
+  const codexInstalled = ["UserPromptSubmit", "Stop"].every((eventName) =>
+    hasCommand(codexSettings.hooks?.[eventName] ?? [], codexHookCommand),
+  );
+  console.log(
+    JSON.stringify(
+      {
+        claude: claudeInstalled ? "installed" : "not_installed",
+        codex: codexInstalled ? "installed" : "not_installed",
+        claudeHookCommand,
+        codexHookCommand,
+      },
+      null,
+      2,
+    ),
+  );
+};
+
+const [command, target] = process.argv.slice(2);
+if (command === "install" && target === "claude") {
+  installClaude();
+} else if (command === "install" && target === "codex") {
+  installCodex();
+} else if (command === "install" && target === "opencode") {
+  console.error(`${target} hook installation is not implemented because wmux has not verified a stable hook config surface for it.`);
+  console.error(`Use this manually from a wrapper when the run completes: ${eventScript} --agent ${target} --status completed --title "..." --summary "..."`);
+  process.exitCode = 2;
+} else if (command === "status") {
+  status();
+} else {
+  usage();
+  process.exitCode = 2;
+}

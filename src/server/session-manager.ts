@@ -24,6 +24,7 @@ export class SessionManager {
       return;
     }
     const session = this.ensureSession(pane, cols, rows);
+    session.resize(cols, rows);
     if (!this.sockets.has(paneId)) this.sockets.set(paneId, new Set());
     this.sockets.get(paneId)?.add(socket);
 
@@ -35,7 +36,6 @@ export class SessionManager {
       status: pane.status,
       replay: session.replayOutput,
     });
-    session.resize(cols, rows);
 
     socket.on("message", (raw) => {
       const message = this.parse(raw.toString());

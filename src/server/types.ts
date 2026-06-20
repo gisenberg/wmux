@@ -17,6 +17,9 @@ export interface MachineConfig {
 export interface MachineStatus extends MachineConfig {
   reachable: boolean;
   reason?: string;
+  checkedAt: string;
+  endpoint?: string;
+  backendDetail?: string;
 }
 
 export interface PaneState {
@@ -83,11 +86,37 @@ export interface TerminalMedia {
   createdAt: string;
 }
 
+export interface AgentActivity {
+  id: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  agent: string;
+  status: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface TerminalRun {
+  id: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  command: string;
+  status: "started" | "completed" | "failed";
+  exitCode?: number | null;
+  startedAt: string;
+  completedAt?: string;
+}
+
 export interface PersistedState {
   machines: MachineConfig[];
   workspaces: Workspace[];
   activeWorkspaceId: string;
   notifications: TerminalNotification[];
+  agentEvents: AgentActivity[];
+  runs: TerminalRun[];
 }
 
 export interface WmuxSettings {
@@ -100,6 +129,8 @@ export interface BootstrapPayload {
   workspaces: Workspace[];
   activeWorkspaceId: string;
   notifications: TerminalNotification[];
+  agentEvents: AgentActivity[];
+  runs: TerminalRun[];
   settings: WmuxSettings;
 }
 

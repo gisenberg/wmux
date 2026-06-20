@@ -4,6 +4,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { createId } from "./id.js";
 import type {
+  AgentActivity,
   LayoutNode,
   MachineConfig,
   PaneState,
@@ -11,6 +12,7 @@ import type {
   SurfaceTab,
   TerminalMedia,
   TerminalNotification,
+  TerminalRun,
   TitleSource,
   Workspace,
 } from "./types.js";
@@ -41,6 +43,23 @@ interface CreateMediaInput extends TargetInput {
   name: string;
   mimeType: string;
   data: string;
+}
+
+interface RecordAgentEventInput extends TargetInput {
+  agent?: string;
+  status?: string;
+  title?: string;
+  summary?: string;
+  body?: string;
+}
+
+interface RecordRunEventInput extends TargetInput {
+  runId?: string;
+  command?: string;
+  status?: "started" | "completed" | "failed";
+  exitCode?: number | null;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 interface SetAutoTitleInput {
@@ -139,6 +158,16 @@ export class StateStore extends EventEmitter {
     return tab;
   }
 
+  setSplitRatio(tabId: string, path: string, ratio: number): SurfaceTab {
+    const { workspace, tab } = this.requireTab(tabId);
+    const split = splitAtPath(tab.layout, path);
+    if (!split) throw new Error("split not found");
+    split.ratio = clampSplitRatio(ratio);
+    workspace.updatedAt = now();
+    this.save();
+    return structuredClone(tab);
+  }
+
   removePane(paneId: string): boolean {
     const context = this.findPaneContext(paneId);
     if (!context) return false;
@@ -152,6 +181,8 @@ export class StateStore extends EventEmitter {
     this.state.notifications = this.state.notifications.filter(
       (notification) => notification.paneId !== paneId,
     );
+    this.state.agentEvents = this.state.agentEvents.filter((event) => event.paneId !== paneId);
+    this.state.runs = this.state.runs.filter((run) => run.paneId !== paneId);
     if (tab.activePaneId === paneId) {
       tab.activePaneId = firstPaneId(tab.layout) ?? tab.panes[0]?.id ?? "";
     }
@@ -173,6 +204,8 @@ export class StateStore extends EventEmitter {
     this.state.notifications = this.state.notifications.filter(
       (notification) => notification.tabId !== tabId,
     );
+    this.state.agentEvents = this.state.agentEvents.filter((event) => event.tabId !== tabId);
+    this.state.runs = this.state.runs.filter((run) => run.tabId !== tabId);
     workspace.updatedAt = now();
     this.save();
     return paneIds;
@@ -187,6 +220,8 @@ export class StateStore extends EventEmitter {
     this.state.notifications = this.state.notifications.filter(
       (notification) => notification.workspaceId !== workspaceId,
     );
+    this.state.agentEvents = this.state.agentEvents.filter((event) => event.workspaceId !== workspaceId);
+    this.state.runs = this.state.runs.filter((run) => run.workspaceId !== workspaceId);
     if (this.state.activeWorkspaceId === workspaceId) {
       this.state.activeWorkspaceId = this.state.workspaces[0]?.id ?? "";
     }
@@ -203,6 +238,8 @@ export class StateStore extends EventEmitter {
         this.state.notifications = this.state.notifications.filter(
           (notification) => notification.workspaceId !== workspaceId,
         );
+        this.state.agentEvents = this.state.agentEvents.filter((event) => event.workspaceId !== workspaceId);
+        this.state.runs = this.state.runs.filter((run) => run.workspaceId !== workspaceId);
       }
     }
     if (this.state.workspaces.length === 0) {
@@ -376,6 +413,120 @@ export class StateStore extends EventEmitter {
     return structuredClone(media);
   }
 
+  recordAgentEvent(input: RecordAgentEventInput): { workspace: Workspace; notification?: TerminalNotification; agentEvent: AgentActivity } {
+    const target = this.resolveNotificationTarget(input);
+    const agent = cleanTitle(input.agent ?? "agent", "agent");
+    const status = cleanTitle(input.status ?? "updated", "updated").toLowerCase();
+    const title = cleanTitle(input.title ?? "", "");
+    const summary = cleanDescriptor(input.summary ?? input.body ?? "", "");
+    const createdAt = now();
+    const agentEvent: AgentActivity = {
+      id: createId("agent"),
+      workspaceId: target.workspace.id,
+      tabId: target.tab.id,
+      paneId: target.pane.id,
+      agent,
+      status,
+      title,
+      summary,
+      createdAt,
+    };
+    this.state.agentEvents.unshift(agentEvent);
+    this.state.agentEvents = this.state.agentEvents.slice(0, 300);
+
+    let workspaceChanged = false;
+    if (title && target.workspace.nameSource !== "user") {
+      target.workspace.name = title;
+      target.workspace.nameSource = "auto";
+      workspaceChanged = true;
+    }
+
+    const descriptor = summary || `${agent} ${status}`;
+    if (descriptor && target.workspace.descriptorSource !== "user") {
+      target.workspace.descriptor = descriptor;
+      target.workspace.descriptorSource = "auto";
+      workspaceChanged = true;
+    }
+
+    let notification: TerminalNotification | undefined;
+    if (["completed", "failed", "error", "cancelled", "stopped"].includes(status)) {
+      notification = {
+        id: createId("note"),
+        workspaceId: target.workspace.id,
+        tabId: target.tab.id,
+        paneId: target.pane.id,
+        title: agent,
+        subtitle: status,
+        body: summary || title || `${agent} ${status}`,
+        createdAt,
+        read: false,
+      };
+      this.state.notifications.unshift(notification);
+      this.state.notifications = this.state.notifications.slice(0, 200);
+      workspaceChanged = true;
+    }
+
+    if (workspaceChanged) target.workspace.updatedAt = createdAt;
+    this.save();
+    if (notification) this.emit("notification", structuredClone(notification));
+    return {
+      workspace: structuredClone(target.workspace),
+      notification: notification ? structuredClone(notification) : undefined,
+      agentEvent: structuredClone(agentEvent),
+    };
+  }
+
+  recordRunEvent(input: RecordRunEventInput): TerminalRun {
+    const target = this.resolveNotificationTarget(input);
+    const status = input.status ?? "completed";
+    const startedAt = validIsoDate(input.startedAt) ?? now();
+    const completedAt = status === "started" ? undefined : validIsoDate(input.completedAt) ?? now();
+    const command = cleanText(input.command ?? "", "command").slice(0, 500);
+    const id = cleanEventId(input.runId) || createId("run");
+    const existingIndex = this.state.runs.findIndex((candidate) => candidate.id === id);
+
+    if (existingIndex !== -1) {
+      const [existing] = this.state.runs.splice(existingIndex, 1);
+      existing.workspaceId = target.workspace.id;
+      existing.tabId = target.tab.id;
+      existing.paneId = target.pane.id;
+      existing.command = command || existing.command;
+      existing.status = status;
+      existing.exitCode = input.exitCode ?? null;
+      existing.startedAt = validIsoDate(input.startedAt) ?? existing.startedAt;
+      if (completedAt) {
+        existing.completedAt = completedAt;
+      } else {
+        delete existing.completedAt;
+      }
+      this.state.runs.unshift(existing);
+      this.state.runs = this.state.runs.slice(0, 300);
+      target.workspace.updatedAt = now();
+      this.save();
+      this.emit("run", structuredClone(existing));
+      return structuredClone(existing);
+    }
+
+    const run: TerminalRun = {
+      id,
+      workspaceId: target.workspace.id,
+      tabId: target.tab.id,
+      paneId: target.pane.id,
+      command,
+      status,
+      exitCode: input.exitCode ?? null,
+      startedAt,
+      completedAt,
+    };
+    if (!completedAt) delete run.completedAt;
+    this.state.runs.unshift(run);
+    this.state.runs = this.state.runs.slice(0, 300);
+    target.workspace.updatedAt = now();
+    this.save();
+    this.emit("run", structuredClone(run));
+    return structuredClone(run);
+  }
+
   markNotificationRead(notificationId: string): void {
     const notification = this.state.notifications.find((candidate) => candidate.id === notificationId);
     if (!notification || notification.read) return;
@@ -410,7 +561,14 @@ export class StateStore extends EventEmitter {
       const raw = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as PersistedState;
       return { ...this.normalizeRestoredState(raw), machines };
     }
-    const state: PersistedState = { machines, workspaces: [], activeWorkspaceId: "", notifications: [] };
+    const state: PersistedState = {
+      machines,
+      workspaces: [],
+      activeWorkspaceId: "",
+      notifications: [],
+      agentEvents: [],
+      runs: [],
+    };
     this.state = state;
     const workspace = this.createWorkspace("local");
     return { ...state, activeWorkspaceId: workspace.id };
@@ -471,6 +629,8 @@ export class StateStore extends EventEmitter {
 
   private normalizeRestoredState(state: PersistedState): PersistedState {
     state.notifications ??= [];
+    state.agentEvents ??= [];
+    state.runs ??= [];
     for (const workspace of state.workspaces) {
       workspace.nameSource ??= isDefaultWorkspaceName(workspace.name, workspace.machineId) ? "default" : "user";
       workspace.descriptor ??= this.machineDescriptor(workspace.machineId, state.machines ?? []);
@@ -513,6 +673,21 @@ const firstPaneId = (node: LayoutNode): string | null => {
   return firstPaneId(node.first) ?? firstPaneId(node.second);
 };
 
+const splitAtPath = (node: LayoutNode, pathValue: string): Extract<LayoutNode, { type: "split" }> | null => {
+  if (!/^[01]*$/.test(pathValue)) return null;
+  let current: LayoutNode = node;
+  for (const segment of pathValue) {
+    if (current.type !== "split") return null;
+    current = segment === "0" ? current.first : current.second;
+  }
+  return current.type === "split" ? current : null;
+};
+
+const clampSplitRatio = (value: number): number => {
+  const numeric = Number.isFinite(value) ? value : 0.5;
+  return Math.min(0.85, Math.max(0.15, numeric));
+};
+
 const cleanText = (value: string, fallback: string): string => {
   const cleaned = value.replace(/\s+/g, " ").trim();
   return (cleaned || fallback).slice(0, 500);
@@ -526,6 +701,17 @@ const cleanTitle = (value: string, fallback: string): string => {
 const cleanDescriptor = (value: string, fallback: string): string => {
   const cleaned = value.replace(/\s+/g, " ").trim();
   return (cleaned || fallback).slice(0, 120);
+};
+
+const cleanEventId = (value?: string): string => {
+  const cleaned = (value ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80);
+  return cleaned;
+};
+
+const validIsoDate = (value?: string): string | null => {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 };
 
 const isDefaultWorkspaceName = (name: string, machineId: string): boolean => {

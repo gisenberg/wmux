@@ -11,6 +11,9 @@ export interface MachineStatus {
   sessionBackend?: SessionBackend;
   reachable: boolean;
   reason?: string;
+  checkedAt: string;
+  endpoint?: string;
+  backendDetail?: string;
 }
 
 export interface PaneState {
@@ -77,6 +80,30 @@ export interface TerminalMedia {
   createdAt: string;
 }
 
+export interface AgentActivity {
+  id: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  agent: string;
+  status: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface TerminalRun {
+  id: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  command: string;
+  status: "started" | "completed" | "failed";
+  exitCode?: number | null;
+  startedAt: string;
+  completedAt?: string;
+}
+
 export interface WmuxSettings {
   terminalFontSize: number;
   machineAliases: Record<string, string>;
@@ -87,5 +114,31 @@ export interface BootstrapPayload {
   workspaces: Workspace[];
   activeWorkspaceId: string;
   notifications: TerminalNotification[];
+  agentEvents: AgentActivity[];
+  runs: TerminalRun[];
   settings: WmuxSettings;
+}
+
+export interface DurableSessionAuditRow {
+  backend: "tmux" | "screen";
+  name: string;
+  paneId: string;
+  attached: boolean;
+  detail: string;
+  activePane: boolean;
+  status: "active" | "duplicate" | "orphan";
+  cleanupAllowed: boolean;
+}
+
+export interface DurableSessionAudit {
+  summary: {
+    statePath: string;
+    activePaneCount: number;
+    sessionCount: number;
+    orphanCount: number;
+    duplicateCount: number;
+    missingCount: number;
+  };
+  sessions: DurableSessionAuditRow[];
+  missing: Array<{ paneId: string; name: string }>;
 }

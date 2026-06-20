@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { resolveMachineStatuses } from "./machines.js";
+import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import type { MachineConfig } from "./types.js";
 import type { StateStore } from "./state.js";
 import type { SessionManager } from "./session-manager.js";
@@ -42,6 +43,8 @@ export const createHttpServer = (
       workspaces: snapshot.workspaces,
       activeWorkspaceId: snapshot.activeWorkspaceId,
       notifications: snapshot.notifications,
+      agentEvents: snapshot.agentEvents,
+      runs: snapshot.runs,
       settings: settings.snapshot(),
     };
   };
@@ -59,6 +62,17 @@ export const createHttpServer = (
     try {
       if (url.pathname === "/api/bootstrap" && request.method === "GET") {
         sendJson(response, 200, await bootstrap());
+        return;
+      }
+
+      if (url.pathname === "/api/session-audit" && request.method === "GET") {
+        sendJson(response, 200, auditDurableSessions());
+        return;
+      }
+
+      const cleanupSession = url.pathname.match(/^\/api\/session-audit\/(tmux|screen)\/([^/]+)$/);
+      if (cleanupSession && request.method === "DELETE") {
+        sendJson(response, 200, cleanupDurableSession(cleanupSession[1] as "tmux" | "screen", decodeURIComponent(cleanupSession[2])));
         return;
       }
 
@@ -100,6 +114,62 @@ export const createHttpServer = (
           body: body.body,
         });
         sendJson(response, 201, { notification, state: await bootstrap() });
+        return;
+      }
+
+      if (url.pathname === "/api/agent-events" && request.method === "POST") {
+        const body = (await readBody(request)) as {
+          workspaceId?: string;
+          tabId?: string;
+          paneId?: string;
+          agent?: string;
+          status?: string;
+          title?: string;
+          summary?: string;
+          body?: string;
+        };
+        const result = state.recordAgentEvent({
+          workspaceId: body.workspaceId,
+          tabId: body.tabId,
+          paneId: body.paneId,
+          agent: body.agent,
+          status: body.status,
+          title: body.title,
+          summary: body.summary,
+          body: body.body,
+        });
+        sendJson(response, 201, { ...result, state: await bootstrap() });
+        return;
+      }
+
+      if (url.pathname === "/api/run-events" && request.method === "POST") {
+        const body = (await readBody(request)) as {
+          workspaceId?: string;
+          tabId?: string;
+          paneId?: string;
+          runId?: string;
+          command?: string;
+          status?: "started" | "completed" | "failed";
+          exitCode?: number | null;
+          startedAt?: string;
+          completedAt?: string;
+        };
+        if (body.status && !["started", "completed", "failed"].includes(body.status)) {
+          sendJson(response, 400, { error: "invalid_run_status" });
+          return;
+        }
+        const run = state.recordRunEvent({
+          workspaceId: body.workspaceId,
+          tabId: body.tabId,
+          paneId: body.paneId,
+          runId: body.runId,
+          command: body.command,
+          status: body.status,
+          exitCode: body.exitCode,
+          startedAt: body.startedAt,
+          completedAt: body.completedAt,
+        });
+        sendJson(response, 201, { run, state: await bootstrap() });
         return;
       }
 
@@ -228,6 +298,19 @@ export const createHttpServer = (
         }
         const tab = state.splitPane(split[1], body.paneId, body.direction, body.machineId);
         sendJson(response, 201, { tab, state: await bootstrap() });
+        return;
+      }
+
+      const splitRatio = url.pathname.match(/^\/api\/tabs\/([^/]+)\/split-ratio$/);
+      if (splitRatio && request.method === "POST") {
+        const body = (await readBody(request)) as { path?: string; ratio?: number };
+        const ratio = body.ratio;
+        if (typeof body.path !== "string" || typeof ratio !== "number" || !Number.isFinite(ratio)) {
+          sendJson(response, 400, { error: "invalid_split_ratio" });
+          return;
+        }
+        const tab = state.setSplitRatio(splitRatio[1], body.path, ratio);
+        sendJson(response, 200, { tab, state: await bootstrap() });
         return;
       }
 

@@ -26,8 +26,13 @@ For MagicDNS names or reverse-proxy hostnames, set `WMUX_ALLOWED_HOSTS` to a com
 - A pane maps to one long-lived server PTY client while the wmux service process is alive.
 - Closing or refreshing the browser disconnects the WebSocket but does not kill the pane process.
 - Restarting the wmux service restores layout metadata and reattaches local/SSH durable sessions when the target has `tmux` or `screen`. Raw PTY and PowerShell panes still cannot preserve live process state across service restart.
-- SSH panes stage `wmux-media`, `wmux-notify`, and `wmux-title` into `~/.cache/wmux/bin` on the remote host and try to place shims in common user bin directories such as `~/.local/bin`, `~/.cargo/bin`, and `~/bin`.
+- SSH panes stage `wmux-media`, `wmux-notify`, `wmux-title`, `wmux-agent-event`, and `wmux-run` into `~/.cache/wmux/bin` on the remote host and try to place shims in common user bin directories such as `~/.local/bin`, `~/.cargo/bin`, and `~/bin`.
 - Remote helper staging must run under POSIX `sh`; do not rely on zsh/bash-specific word splitting in `src/server/machines.ts`.
+- Agent events are handled by `POST /api/agent-events`; this updates auto-owned workspace titles/descriptors and creates terminal notifications for completed/failed/stopped states.
+- Run metadata is handled by `POST /api/run-events`; `scripts/wmux-run` wraps a command and records start/completion state without changing the terminal canvas renderer.
+- Session audit cleanup must remain limited to local `wmux_` tmux/screen sessions that the audit marks duplicate or orphan. Do not add automatic cleanup of active sessions.
+- `wmux-hooks install claude` mutates `~/.claude/settings.json` outside the repo. Be careful to merge hooks idempotently and preserve user settings.
+- `wmux-hooks install codex` mutates `~/.codex/hooks.json` outside the repo. Codex command hooks require the user to review/trust them with `/hooks` before they run.
 
 ## Code Style
 

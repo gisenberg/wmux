@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.request
+
+
+def clean_text(value, limit):
+    value = re.sub(r"\s+", " ", value or "").strip()
+    return value[:limit]
+
+
+def text_from_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            elif isinstance(item, dict) and item.get("type") in ("input_text", "output_text"):
+                parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+        if isinstance(content.get("content"), (str, list, dict)):
+            return text_from_content(content.get("content"))
+    return ""
+
+
+def title_from_prompt(prompt):
+    prompt = clean_text(prompt, 300)
+    prompt = re.sub(r"^(please|can you|could you|let'?s|we need to|i want to)\s+", "", prompt, flags=re.I)
+    prompt = prompt.rstrip(".?!:; ")
+    if not prompt:
+        return ""
+    words = prompt.split()
+    return clean_text(" ".join(words[:8]), 50)
+
+
+def summary_from_output(output):
+    output = clean_text(output, 600)
+    if not output:
+        return ""
+    first = re.split(r"(?<=[.!?])\s+|\n+", output, maxsplit=1)[0]
+    return clean_text(first, 120)
+
+
+def read_hook_input():
+    raw = os.environ.get("HOOK_INPUT", "")
+    if not raw and not sys.stdin.isatty():
+        raw = sys.stdin.read()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+
+def transcript_summary(path):
+    if not path or not os.path.isfile(path):
+        return "", ""
+    last_user = ""
+    last_assistant = ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                message = entry.get("message") if isinstance(entry.get("message"), dict) else entry
+                if isinstance(entry.get("item"), dict):
+                    message = entry["item"]
+                role = message.get("role")
+                if not role and message.get("type") == "user_message":
+                    role = "user"
+                if not role and message.get("type") == "assistant_message":
+                    role = "assistant"
+                text = text_from_content(message.get("content"))
+                if not text:
+                    text = text_from_content(message.get("text"))
+                if role == "user" and text:
+                    last_user = text
+                if role == "assistant" and text:
+                    last_assistant = text
+    except OSError:
+        return "", ""
+    return title_from_prompt(last_user), summary_from_output(last_assistant)
+
+
+def post_json(url, payload):
+    request = urllib.request.Request(
+        url.rstrip("/") + "/api/agent-events",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15):
+        pass
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="wmux-agent-event")
+    parser.add_argument("--url", default=os.environ.get("WMUX_URL", "http://127.0.0.1:3478"))
+    parser.add_argument("--agent", default=os.environ.get("WMUX_AGENT_NAME", "agent"))
+    parser.add_argument("--status", default="completed")
+    parser.add_argument("--title", default="")
+    parser.add_argument("--summary", default="")
+    parser.add_argument("--body", default="")
+    parser.add_argument("--pane", default=os.environ.get("WMUX_PANE_ID", ""))
+    parser.add_argument("--workspace", default=os.environ.get("WMUX_WORKSPACE_ID", ""))
+    parser.add_argument("--tab", default=os.environ.get("WMUX_TAB_ID", ""))
+    parser.add_argument("--transcript", default="")
+    parser.add_argument("--claude-hook", action="store_true")
+    parser.add_argument("--codex-hook", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    hook_input = read_hook_input() if args.claude_hook or args.codex_hook else {}
+    transcript = args.transcript or hook_input.get("transcript_path") or hook_input.get("agent_transcript_path") or ""
+    transcript_title, transcript_summary_text = transcript_summary(transcript)
+
+    hook_event = str(hook_input.get("hook_event_name") or "")
+    prompt_title = title_from_prompt(hook_input.get("prompt") or "")
+    hook_summary = summary_from_output(hook_input.get("last_assistant_message") or "")
+    title = args.title or prompt_title or transcript_title
+    summary = args.summary or args.body or hook_summary or transcript_summary_text
+    status = args.status
+    if args.claude_hook:
+        status = "completed"
+    if args.codex_hook:
+        if hook_event == "UserPromptSubmit":
+            status = "running"
+            summary = summary or "codex running"
+        elif hook_event:
+            status = "completed"
+            summary = summary or "codex completed"
+
+    payload = {
+        "agent": clean_text(args.agent, 50),
+        "status": clean_text(status, 50),
+        "title": clean_text(title, 80),
+        "summary": clean_text(summary, 500),
+        "body": clean_text(args.body, 500),
+    }
+    if args.pane:
+        payload["paneId"] = args.pane
+    if args.workspace:
+        payload["workspaceId"] = args.workspace
+    if args.tab:
+        payload["tabId"] = args.tab
+
+    if not args.force and not any(key in payload for key in ("paneId", "workspaceId")):
+        return 0
+
+    post_json(args.url, payload)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,4 +1,4 @@
-import type { BootstrapPayload, SplitDirection, WmuxSettings } from "./types";
+import type { BootstrapPayload, DurableSessionAudit, SplitDirection, WmuxSettings } from "./types";
 
 const json = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
@@ -14,6 +14,9 @@ const json = async <T>(path: string, init?: RequestInit): Promise<T> => {
 
 export const api = {
   bootstrap: () => json<BootstrapPayload>("/api/bootstrap"),
+  auditSessions: () => json<DurableSessionAudit>("/api/session-audit"),
+  cleanupSession: (backend: "tmux" | "screen", name: string) =>
+    json<DurableSessionAudit>(`/api/session-audit/${backend}/${encodeURIComponent(name)}`, { method: "DELETE" }),
   updateSettings: (settings: WmuxSettings) =>
     json<{ settings: WmuxSettings; state: BootstrapPayload }>("/api/settings", {
       method: "POST",
@@ -60,6 +63,11 @@ export const api = {
     json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/split`, {
       method: "POST",
       body: JSON.stringify({ paneId, direction, machineId }),
+    }),
+  updateSplitRatio: (tabId: string, path: string, ratio: number) =>
+    json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/split-ratio`, {
+      method: "POST",
+      body: JSON.stringify({ path, ratio }),
     }),
   activatePane: (tabId: string, paneId: string) =>
     json<BootstrapPayload>(`/api/tabs/${tabId}/panes/${paneId}/active`, { method: "POST" }),

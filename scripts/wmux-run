@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+import argparse
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import uuid
+import urllib.request
+
+
+def utc_now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def clean_command(command):
+    return re.sub(r"\s+", " ", " ".join(command)).strip()[:500]
+
+
+def post_json(url, payload):
+    request = urllib.request.Request(
+        url.rstrip("/") + "/api/run-events",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5):
+            pass
+    except Exception:
+        return
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="wmux-run")
+    parser.add_argument("--url", default=os.environ.get("WMUX_URL", "http://127.0.0.1:3478"))
+    parser.add_argument("--pane", default=os.environ.get("WMUX_PANE_ID", ""))
+    parser.add_argument("--workspace", default=os.environ.get("WMUX_WORKSPACE_ID", ""))
+    parser.add_argument("--tab", default=os.environ.get("WMUX_TAB_ID", ""))
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+
+    command = args.command
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        parser.error("command is required")
+
+    started_at = utc_now()
+    run_id = "run_" + uuid.uuid4().hex[:18]
+    display_command = clean_command(command)
+    payload = {
+        "runId": run_id,
+        "command": display_command,
+        "status": "started",
+        "startedAt": started_at,
+    }
+    if args.pane:
+        payload["paneId"] = args.pane
+    if args.workspace:
+        payload["workspaceId"] = args.workspace
+    if args.tab:
+        payload["tabId"] = args.tab
+
+    if args.pane or args.workspace:
+        post_json(args.url, payload)
+
+    try:
+        exit_code = subprocess.call(command)
+    except FileNotFoundError:
+        print(f"wmux-run: command not found: {command[0]}", file=sys.stderr)
+        exit_code = 127
+
+    if args.pane or args.workspace:
+        payload.update(
+            {
+                "status": "completed" if exit_code == 0 else "failed",
+                "exitCode": exit_code,
+                "completedAt": utc_now(),
+            }
+        )
+        post_json(args.url, payload)
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

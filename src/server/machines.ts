@@ -1,4 +1,5 @@
 import net from "node:net";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -165,11 +166,11 @@ const durableShellScript = ({
   const pathExport = helperPathExport ?? "";
   const startDir = cwd ? `cd ${shellQuote(cwd)} 2>/dev/null || true;` : "";
   const paneCommand = `${startDir} ${exports} ${pathExport} ${shellCommand}`;
-  const tmuxCommand = [
+  const tmuxCreateCommand = [
     "tmux",
     "-u",
     "new-session",
-    "-A",
+    "-d",
     "-s",
     shellQuote(sessionName),
     "-x",
@@ -179,17 +180,36 @@ const durableShellScript = ({
     "--",
     shellQuote(paneCommand),
   ].join(" ");
-  const screenAttach = `screen -S ${shellQuote(sessionName)} -x`;
-  const screenCreate = `screen -S ${shellQuote(sessionName)} -U -h 10000 /bin/sh -lc ${shellQuote(paneCommand)}`;
+  const tmuxTarget = shellQuote(sessionName);
+  const tmuxAttachCommand = `tmux -u attach-session -t ${tmuxTarget}`;
+  const tmuxCommand = [
+    `tmux has-session -t ${tmuxTarget} 2>/dev/null || ${tmuxCreateCommand}`,
+    `tmux set-option -t ${tmuxTarget} history-limit 100000 >/dev/null 2>&1 || true`,
+    `tmux set-option -t ${tmuxTarget} mouse on >/dev/null 2>&1 || true`,
+    `exec ${tmuxAttachCommand}`,
+  ].join("; ");
+  const screenRc = [
+    "defscrollback 100000",
+    "scrollback 100000",
+    "altscreen off",
+    "defmousetrack off",
+    "mousetrack off",
+    "termcapinfo xterm* ti@:te@",
+    "termcapinfo screen* ti@:te@",
+  ].join("\\n");
+  const screenConfigPath = `"${"${TMPDIR:-/tmp}"}/wmux-screen-${sessionName}.rc"`;
+  const screenConfigScript = `wmux_screenrc=${screenConfigPath}; printf '%s\\n' ${shellQuote(screenRc)} > "$wmux_screenrc";`;
+  const screenAttach = `${screenConfigScript} screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -x`;
+  const screenCreate = `screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -U -h 100000 /bin/sh -lc ${shellQuote(paneCommand)}`;
   const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
 
   if (backend === "tmux") {
-    return `if command -v tmux >/dev/null 2>&1; then exec ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
   if (backend === "screen") {
     return `if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
-  return `if command -v tmux >/dev/null 2>&1; then exec ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
+  return `if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
 };
 
 const localScopeScript = (sessionName: string, innerScript: string): string => {
@@ -246,7 +266,13 @@ __WMUX_NOTIFY_HELPER__
 cat > "$wmux_helper_dir/wmux-title" <<'__WMUX_TITLE_HELPER__'
 ${remoteTitleHelper}
 __WMUX_TITLE_HELPER__
-chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title";
+cat > "$wmux_helper_dir/wmux-agent-event" <<'__WMUX_AGENT_EVENT_HELPER__'
+${localHelperScript("wmux-agent-event")}
+__WMUX_AGENT_EVENT_HELPER__
+cat > "$wmux_helper_dir/wmux-run" <<'__WMUX_RUN_HELPER__'
+${localHelperScript("wmux-run")}
+__WMUX_RUN_HELPER__
+chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-run";
 wmux_old_ifs="$IFS";
 IFS=":";
 wmux_candidate_path="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin";
@@ -258,12 +284,22 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-media" "$wmux_path_dir/wmux-media" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-notify" "$wmux_path_dir/wmux-notify" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-title" "$wmux_path_dir/wmux-title" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-agent-event" "$wmux_path_dir/wmux-agent-event" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-run" "$wmux_path_dir/wmux-run" 2>/dev/null || true;
       fi;
       ;;
   esac;
 done;
 IFS="$wmux_old_ifs";
 `;
+
+const localHelperScript = (name: string): string => {
+  try {
+    return fs.readFileSync(path.join(process.cwd(), "scripts", name), "utf8");
+  } catch {
+    return `#!/bin/sh\necho '${name} is unavailable on this host' >&2\nexit 127\n`;
+  }
+};
 
 const remoteMediaHelper = `#!/usr/bin/env python3
 import argparse
@@ -412,11 +448,35 @@ const commandExists = (command: string): boolean => {
 export const resolveMachineStatuses = async (machines: MachineConfig[]): Promise<MachineStatus[]> => {
   return Promise.all(
     machines.map(async (machine) => {
-      if (machine.kind === "local") return { ...machine, reachable: true };
-      if (machine.kind === "powershell" && process.platform !== "win32" && !commandExists("pwsh")) {
-        return { ...machine, reachable: false, reason: "local pwsh client is not installed" };
+      const checkedAt = new Date().toISOString();
+      if (machine.kind === "local") {
+        return {
+          ...machine,
+          reachable: true,
+          checkedAt,
+          endpoint: os.hostname(),
+          backendDetail: localBackendDetail(machine),
+        };
       }
-      if (!machine.host) return { ...machine, reachable: false, reason: "missing host" };
+      if (machine.kind === "powershell" && process.platform !== "win32" && !commandExists("pwsh")) {
+        return {
+          ...machine,
+          reachable: false,
+          reason: "local pwsh client is not installed",
+          checkedAt,
+          endpoint: machine.host ? `${machine.host}:5985` : undefined,
+          backendDetail: "PowerShell remoting client unavailable",
+        };
+      }
+      if (!machine.host) {
+        return {
+          ...machine,
+          reachable: false,
+          reason: "missing host",
+          checkedAt,
+          backendDetail: backendDetail(machine),
+        };
+      }
       const port =
         machine.port ??
         (machine.kind === "ssh" ? 22 : machine.kind === "powershell" ? 5985 : 3478);
@@ -424,8 +484,27 @@ export const resolveMachineStatuses = async (machines: MachineConfig[]): Promise
       return {
         ...machine,
         reachable,
+        checkedAt,
+        endpoint: `${machine.host}:${port}`,
+        backendDetail: backendDetail(machine),
         reason: reachable ? undefined : `no TCP response on ${machine.host}:${port}`,
       };
     }),
   );
+};
+
+const localBackendDetail = (machine: MachineConfig): string => {
+  const backend = machine.sessionBackend ?? "auto";
+  if (backend === "pty") return "raw PTY; not restart-durable";
+  const tmux = commandExists("tmux") ? "tmux available" : "tmux missing";
+  const screen = commandExists("screen") ? "screen available" : "screen missing";
+  return `${backend} backend; ${tmux}; ${screen}`;
+};
+
+const backendDetail = (machine: MachineConfig): string => {
+  const backend = machine.sessionBackend ?? "auto";
+  if (machine.kind === "ssh") return `SSH client; ${backend} durable backend on attach`;
+  if (machine.kind === "powershell") return "PowerShell remoting; no durable backend";
+  if (machine.kind === "service") return "wmux remote service probe";
+  return localBackendDetail(machine);
 };

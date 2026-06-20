@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+import {
+  auditDurableSessions,
+  formatDurableSessionAudit,
+  hasDurableSessionAuditIssues,
+} from "../dist/server/session-audit.js";
+
+const audit = auditDurableSessions();
+if (process.argv.includes("--json")) {
+  console.log(JSON.stringify(audit, null, 2));
+} else {
+  console.log(formatDurableSessionAudit(audit));
+}
+process.exit(hasDurableSessionAuditIssues(audit) ? 1 : 0);
