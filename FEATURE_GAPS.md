@@ -50,3 +50,11 @@
 12. Cwd preservation is best-effort outside tmux and common POSIX shells.
 
    Same-machine workspaces, tabs, and splits preserve cwd by querying tmux `pane_current_path` for the source pane. When tmux is unavailable, wmux-launched zsh and bash panes emit OSC 7 cwd reports through temporary prompt hooks, but some backends such as macOS screen may not pass those sequences through. PowerShell, fish, custom command machines, and shells launched outside wmux can only preserve cwd if they emit OSC 7 themselves or if a stored/configured cwd is available.
+
+13. The empty-state shader is not a native ghostty-web shader.
+
+   Desktop Ghostty supports `custom-shader`, but `ghostty-web@0.4.0` exposes a 2D canvas renderer and no public shader hook. wmux renders the zero-workspace idle effect with a sibling WebGL fragment shader. Moving this into the Ghostty renderer requires upstream ghostty-web shader support or a local renderer fork.
+
+14. The OpenTUI web UI migration is vendored, experimental, and partial.
+
+   `rbbydotdev/opentui-web` currently describes itself as a proof of concept, its `opentui-browser` package is private/unpublished, and the repository has no license file. wmux vendors a local snapshot under `vendor/opentui-browser` with provenance in `vendor/opentui-browser/UPSTREAM.md`. The default sidebar now renders through the vendored `CanvasPainter` cell-grid path, while the topbar, command palette, and activity drawer still use wmux's earlier canvas implementation. `?legacy=1` remains available for the older React chrome. Settings remains a DOM form because it has editable controls and session-audit actions. Wider migration needs either a published/licensed upstream API or a deliberate decision to keep maintaining the vendored snapshot.

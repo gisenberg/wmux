@@ -17,6 +17,7 @@
     "ghostty-web": "^0.4.0",
     "lucide-react": "^0.468.0",
     "node-pty": "^1.0.0",
+    "opentui-browser": "file:vendor/opentui-browser",
     "tsx": "^4.20.5",
     "vite": "^7.2.4",
     "ws": "^8.18.3",

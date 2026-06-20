@@ -217,7 +217,6 @@ export class StateStore extends EventEmitter {
   }
 
   removeWorkspace(workspaceId: string): string[] {
-    if (this.state.workspaces.length <= 1) return [];
     const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace) return [];
     const paneIds = workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id));
@@ -236,23 +235,8 @@ export class StateStore extends EventEmitter {
 
   closeWorkspaceAfterExit(workspaceId: string): void {
     const paneIds = this.removeWorkspace(workspaceId);
-    if (paneIds.length === 0 && this.state.workspaces.length <= 1) {
-      const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
-      if (workspace) {
-        this.state.workspaces = this.state.workspaces.filter((candidate) => candidate.id !== workspaceId);
-        this.state.notifications = this.state.notifications.filter(
-          (notification) => notification.workspaceId !== workspaceId,
-        );
-        this.state.agentEvents = this.state.agentEvents.filter((event) => event.workspaceId !== workspaceId);
-        this.state.runs = this.state.runs.filter((run) => run.workspaceId !== workspaceId);
-      }
-    }
-    if (this.state.workspaces.length === 0) {
-      const replacement = this.createWorkspace("local");
-      this.state.activeWorkspaceId = replacement.id;
-      return;
-    }
-    if (this.state.activeWorkspaceId === workspaceId) {
+    if (paneIds.length === 0) return;
+    if (this.state.workspaces.length > 0 && this.state.activeWorkspaceId === workspaceId) {
       this.state.activeWorkspaceId = this.state.workspaces[0].id;
       this.save();
     }

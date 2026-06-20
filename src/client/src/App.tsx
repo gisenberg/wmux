@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bell, BellRing, CheckCheck, CirclePlus, Clipboard, Command as CommandIcon, Link2, PanelLeft, Plus, Search, Server, Settings, TerminalSquare, Trash2, X } from "lucide-react";
 import { api } from "./api";
+import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
 import { LayoutView } from "./LayoutView";
+import { OpenTuiActivityPanel } from "./OpenTuiActivityPanel";
+import type { OpenTuiActivityRow } from "./OpenTuiActivityPanel";
+import { OpenTuiCommandPalette } from "./OpenTuiCommandPalette";
+import { OpenTuiSidebar } from "./OpenTuiSidebar";
+import type { OpenTuiSidebarMachine, OpenTuiSidebarWorkspace } from "./OpenTuiSidebar";
+import { OpenTuiTopbar } from "./OpenTuiTopbar";
 import type {
   AgentActivity,
   BootstrapPayload,
@@ -35,6 +42,7 @@ const defaultSettings: WmuxSettings = {
 };
 
 export function App() {
+  const openTuiMode = useMemo(() => new URLSearchParams(window.location.search).get("legacy") !== "1", []);
   const [state, setState] = useState<BootstrapPayload | null>(null);
   const [newMachineId, setNewMachineId] = useState("local");
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +147,96 @@ export function App() {
       ) ?? [],
     [state, workspaceHostFilter],
   );
+  const openTuiWorkspaces = useMemo<OpenTuiSidebarWorkspace[]>(
+    () =>
+      visibleWorkspaces.flatMap((workspace) => {
+        const machine = machineFor(displayMachines, workspace.machineId);
+        const sourceMachine = machineFor(machines, workspace.machineId);
+        const unreadCount = unreadByWorkspaceId.get(workspace.id) ?? 0;
+        const latestUnread = latestUnreadByWorkspaceId.get(workspace.id);
+        const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
+        const descriptor =
+          latestUnread?.body ||
+          latestUnread?.subtitle ||
+          latestAgent?.summary ||
+          displayWorkspaceDescriptor(workspace.descriptor, machine, sourceMachine, workspace.machineId);
+        const host = displayWorkspaceHost(machine, sourceMachine, workspace.machineId);
+        const visibleDescriptor = compactWorkspaceDescription(descriptor, 72);
+        const tab = workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace.tabs[0];
+        if (!tab) return [];
+        return [
+          {
+            id: workspace.id,
+            tabId: tab.id,
+            title: workspace.name,
+            descriptor: visibleDescriptor && visibleDescriptor !== host ? visibleDescriptor : "",
+            host,
+            reachable: Boolean(machine?.reachable),
+            active: workspace.id === activeWorkspace?.id,
+            unreadCount,
+            agentLabel: latestAgent ? `${latestAgent.agent} ${latestAgent.status}` : undefined,
+          },
+        ];
+      }),
+    [
+      activeWorkspace?.id,
+      displayMachines,
+      latestAgentByWorkspaceId,
+      latestUnreadByWorkspaceId,
+      machines,
+      unreadByWorkspaceId,
+      visibleWorkspaces,
+    ],
+  );
+  const openTuiMachines = useMemo<OpenTuiSidebarMachine[]>(
+    () =>
+      displayMachines.map((machine) => ({
+        id: machine.id,
+        name: machine.name,
+        reachable: machine.reachable,
+        detail: machineStatusDetail(machine),
+      })),
+    [displayMachines],
+  );
+  const openTuiActivityRows = useMemo<OpenTuiActivityRow[]>(
+    () => {
+      if (!state) return [];
+      return buildActivityItems(state.agentEvents, state.runs)
+        .slice(0, 100)
+        .map((item): OpenTuiActivityRow => {
+          if (item.kind === "agent") {
+            const workspace = state.workspaces.find((candidate) => candidate.id === item.event.workspaceId);
+            const machine = workspace ? machineFor(displayMachines, workspace.machineId) : undefined;
+            const title = item.event.title || workspace?.name || item.event.agent;
+            const summary = compactWorkspaceDescription(item.event.summary, 140);
+            return {
+              id: item.id,
+              kind: item.event.agent,
+              title,
+              summary,
+              meta: [item.event.status, workspace?.name ?? "workspace removed", machine?.name ?? workspace?.machineId ?? "host unknown", formatRelativeTime(item.event.createdAt)]
+                .filter(Boolean)
+                .join(" / "),
+              status: openTuiActivityStatus(item.event.status),
+            };
+          }
+          const workspace = state.workspaces.find((candidate) => candidate.id === item.run.workspaceId);
+          const tab = workspace?.tabs.find((candidate) => candidate.id === item.run.tabId);
+          const machine = workspace ? machineFor(displayMachines, workspace.machineId) : undefined;
+          return {
+            id: item.id,
+            kind: "run",
+            title: item.run.command,
+            summary: `${item.run.status === "started" ? "running" : `exit ${item.run.exitCode ?? "?"}`}${item.run.completedAt ? ` / ${formatDuration(item.run.startedAt, item.run.completedAt)}` : ""}`,
+            meta: [workspace?.name ?? "workspace removed", tab?.title ?? "tab removed", machine?.name ?? workspace?.machineId ?? "host unknown", formatRelativeTime(item.run.completedAt ?? item.run.startedAt)]
+              .filter(Boolean)
+              .join(" / "),
+            status: openTuiActivityStatus(item.run.status),
+          };
+        });
+    },
+    [displayMachines, state],
+  );
 
   const refresh = async (nextState?: BootstrapPayload) => {
     setState(nextState ?? (await api.bootstrap()));
@@ -156,17 +254,38 @@ export function App() {
     setSettingsOpen(false);
   };
 
+  const chromePath = (path: string) => (openTuiMode ? path : `${path}?legacy=1`);
+  const currentChromePath = () => `${window.location.pathname}${window.location.search}`;
+  const switchChromeMode = (enabled: boolean) => {
+    const params = new URLSearchParams(window.location.search);
+    params.delete("opentui");
+    if (enabled) params.delete("legacy");
+    else params.set("legacy", "1");
+    const query = params.toString();
+    window.location.assign(`${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+
   useEffect(() => {
-    if (!state || !activeWorkspace || !activeTab) return;
-    const nextPath = workspaceTabPath(activeWorkspace.id, activeTab.id);
-    if (window.location.pathname === nextPath) {
-      lastSyncedPath.current = nextPath;
+    if (!state) return;
+    if (!activeWorkspace || !activeTab) {
+      const nextPath = chromePath("/");
+      if (currentChromePath() !== nextPath) {
+        window.history.replaceState(null, "", nextPath);
+        lastSyncedPath.current = nextPath;
+      }
       return;
     }
-    const replace = lastSyncedPath.current === "" || window.location.pathname !== lastSyncedPath.current;
-    window.history[replace ? "replaceState" : "pushState"](null, "", nextPath);
-    lastSyncedPath.current = nextPath;
-  }, [state, activeWorkspace, activeTab]);
+    const nextPath = workspaceTabPath(activeWorkspace.id, activeTab.id);
+    const nextChromePath = chromePath(nextPath);
+    const currentPath = currentChromePath();
+    if (currentPath === nextChromePath) {
+      lastSyncedPath.current = nextChromePath;
+      return;
+    }
+    const replace = lastSyncedPath.current === "" || currentPath !== lastSyncedPath.current;
+    window.history[replace ? "replaceState" : "pushState"](null, "", nextChromePath);
+    lastSyncedPath.current = nextChromePath;
+  }, [state, activeWorkspace, activeTab, openTuiMode]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -194,14 +313,30 @@ export function App() {
       return;
     }
     event.preventDefault();
-    window.history.pushState(null, "", workspaceTabPath(workspaceId, tabId));
-    lastSyncedPath.current = window.location.pathname;
+    const nextPath = chromePath(workspaceTabPath(workspaceId, tabId));
+    window.history.pushState(null, "", nextPath);
+    lastSyncedPath.current = nextPath;
+    await refresh(await activateRouteTarget(await api.bootstrap()));
+  };
+
+  const activateWorkspaceFromChrome = async (workspaceId: string, tabId: string) => {
+    const nextPath = chromePath(workspaceTabPath(workspaceId, tabId));
+    window.history.pushState(null, "", nextPath);
+    lastSyncedPath.current = nextPath;
+    await refresh(await activateRouteTarget(await api.bootstrap()));
+  };
+
+  const activateTabFromChrome = async (tabId: string) => {
+    if (!activeWorkspace) return;
+    const nextPath = chromePath(workspaceTabPath(activeWorkspace.id, tabId));
+    window.history.pushState(null, "", nextPath);
+    lastSyncedPath.current = nextPath;
     await refresh(await activateRouteTarget(await api.bootstrap()));
   };
 
   const copyActiveLink = async () => {
     if (!activeWorkspace || !activeTab) return;
-    const url = new URL(workspaceTabPath(activeWorkspace.id, activeTab.id), window.location.origin);
+    const url = new URL(chromePath(workspaceTabPath(activeWorkspace.id, activeTab.id)), window.location.origin);
     await writeBrowserClipboard(url.toString());
   };
 
@@ -246,7 +381,7 @@ export function App() {
   };
 
   const closeActiveWorkspace = async () => {
-    if (!state || !activeWorkspace || state.workspaces.length <= 1) return;
+    if (!state || !activeWorkspace) return;
     const response = await api.closeWorkspace(activeWorkspace.id);
     await refresh(response.state);
   };
@@ -431,6 +566,14 @@ export function App() {
         keywords: ["timeline", "agent", "runs", "history"],
       },
       {
+        id: "switch-chrome-mode",
+        title: openTuiMode ? "Use legacy browser chrome" : "Use OpenTUI chrome",
+        subtitle: openTuiMode ? "Reload with the original React controls" : "Reload with the canvas TUI chrome",
+        section: "View",
+        run: () => switchChromeMode(!openTuiMode),
+        keywords: ["opentui", "canvas", "chrome", "ui", "legacy"],
+      },
+      {
         id: "copy-link",
         title: "Copy active session link",
         subtitle: activeWorkspace && activeTab ? `${activeWorkspace.name} / ${activeTab.title}` : undefined,
@@ -546,7 +689,7 @@ export function App() {
         subtitle: activeWorkspace?.name,
         section: "Close",
         shortcut: "Shift+Cmd+W",
-        disabled: !state || !activeWorkspace || state.workspaces.length <= 1,
+        disabled: !state || !activeWorkspace,
         run: closeActiveWorkspace,
       },
       {
@@ -615,8 +758,9 @@ export function App() {
                 subtitle: host,
                 section: "Workspaces",
                 run: async () => {
-                  window.history.pushState(null, "", workspaceTabPath(workspace.id, activeWorkspaceTab.id));
-                  lastSyncedPath.current = window.location.pathname;
+                  const nextPath = chromePath(workspaceTabPath(workspace.id, activeWorkspaceTab.id));
+                  window.history.pushState(null, "", nextPath);
+                  lastSyncedPath.current = nextPath;
                   await refresh(await activateRouteTarget(await api.bootstrap()));
                 },
                 keywords: [host, workspace.descriptor ?? ""],
@@ -629,8 +773,9 @@ export function App() {
           subtitle: workspace.name,
           section: "Tabs",
           run: async () => {
-            window.history.pushState(null, "", workspaceTabPath(workspace.id, tab.id));
-            lastSyncedPath.current = window.location.pathname;
+            const nextPath = chromePath(workspaceTabPath(workspace.id, tab.id));
+            window.history.pushState(null, "", nextPath);
+            lastSyncedPath.current = nextPath;
             await refresh(await activateRouteTarget(await api.bootstrap()));
           },
           keywords: [host],
@@ -646,6 +791,7 @@ export function App() {
     displayMachines,
     machines,
     newMachineId,
+    openTuiMode,
     selectedMachine,
     sidebarCollapsed,
     state,
@@ -654,10 +800,22 @@ export function App() {
   ]);
 
   if (error) return <div className="load-state">wmux failed to load: {error}</div>;
-  if (!state || !activeWorkspace || !activeTab) return <div className="load-state">Loading wmux...</div>;
+  if (!state) return <div className="load-state">Loading wmux...</div>;
 
   return (
-    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${openTuiMode ? "open-tui-mode" : ""}`}>
+      {openTuiMode ? (
+        <OpenTuiSidebar
+          targetMachineId={newMachineId}
+          targetMachineName={selectedMachine?.name ?? newMachineId}
+          targetMachineReachable={Boolean(selectedMachine?.reachable)}
+          workspaces={openTuiWorkspaces}
+          machines={openTuiMachines}
+          onTargetMachineChange={setNewMachineId}
+          onCreateWorkspace={() => createWorkspace(newMachineId)}
+          onActivateWorkspace={activateWorkspaceFromChrome}
+        />
+      ) : (
       <aside className="sidebar">
         <div className="brand">
           <PanelLeft size={18} />
@@ -725,7 +883,7 @@ export function App() {
                 key={workspace.id}
                 href={workspaceTabPath(workspace.id, tab.id)}
                 title={tooltip}
-                className={`workspace-item ${workspace.id === activeWorkspace.id ? "active" : ""} ${
+                className={`workspace-item ${workspace.id === activeWorkspace?.id ? "active" : ""} ${
                   machine?.reachable ? "" : "disabled"
                 }`}
                 onClick={(event) => activateWorkspaceLink(event, workspace.id, tab.id)}
@@ -758,26 +916,60 @@ export function App() {
           ))}
         </div>
       </aside>
+      )}
       <section className="workspace">
+        {openTuiMode ? (
+          <OpenTuiTopbar
+            tabs={
+              activeWorkspace?.tabs.map((tab) => ({
+                id: tab.id,
+                title: tab.title,
+                active: tab.id === activeTab?.id,
+                unreadCount: unreadByTabId.get(tab.id) ?? 0,
+              })) ?? []
+            }
+            serviceConnection={serviceConnection}
+            targetLabel={selectedMachine?.name ?? newMachineId}
+            canCreate={Boolean(selectedMachine?.reachable)}
+            canCopyLink={Boolean(activeWorkspace && activeTab)}
+            canCopyClipboard={Boolean(clipboardItem)}
+            clipboardAttention={clipboardStatus === "blocked"}
+            unreadNotifications={unreadNotifications.length}
+            canMarkRead={Boolean(activeWorkspace && (unreadByWorkspaceId.get(activeWorkspace.id) ?? 0) > 0)}
+            canEnableNotifications={"Notification" in window && Notification.permission === "default"}
+            activityOpen={activityOpen}
+            onActivateTab={activateTabFromChrome}
+            onCreate={() => (activeWorkspace ? createTab(newMachineId) : createWorkspace(newMachineId))}
+            onOpenCommandPalette={openCommandPalette}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onToggleActivity={() => setActivityOpen((value) => !value)}
+            onCopyLink={copyActiveLink}
+            onCopyClipboard={copyWmuxClipboard}
+            onEnableNotifications={enableBrowserNotifications}
+            onMarkRead={markWorkspaceRead}
+          />
+        ) : (
         <header className="topbar">
           <div className="tabs">
-            {activeWorkspace.tabs.map((tab) => (
+            {activeWorkspace
+              ? activeWorkspace.tabs.map((tab) => (
               <a
                 key={tab.id}
                 href={workspaceTabPath(activeWorkspace.id, tab.id)}
-                className={`tab ${tab.id === activeTab.id ? "active" : ""} ${(unreadByTabId.get(tab.id) ?? 0) > 0 ? "unread" : ""}`}
+                className={`tab ${tab.id === activeTab?.id ? "active" : ""} ${(unreadByTabId.get(tab.id) ?? 0) > 0 ? "unread" : ""}`}
                 onClick={(event) => activateWorkspaceLink(event, activeWorkspace.id, tab.id)}
               >
                 <TerminalSquare size={15} />
                 <span>{tab.title}</span>
                 {(unreadByTabId.get(tab.id) ?? 0) > 0 ? <span className="badge">{unreadByTabId.get(tab.id)}</span> : null}
               </a>
-            ))}
+                ))
+              : null}
             <button
               className="icon-button"
-              title={`New tab on ${selectedMachine?.name ?? newMachineId}`}
+              title={`${activeWorkspace ? "New tab" : "New workspace"} on ${selectedMachine?.name ?? newMachineId}`}
               disabled={!selectedMachine?.reachable}
-              onClick={() => createTab(newMachineId)}
+              onClick={() => (activeWorkspace ? createTab(newMachineId) : createWorkspace(newMachineId))}
             >
               <Plus size={16} />
             </button>
@@ -808,6 +1000,7 @@ export function App() {
             </button>
             <button
               title="Copy active session link"
+              disabled={!activeWorkspace || !activeTab}
               onClick={copyActiveLink}
             >
               <Link2 size={16} />
@@ -829,34 +1022,46 @@ export function App() {
             </button>
             <button
               title="Mark workspace notifications read"
-              disabled={(unreadByWorkspaceId.get(activeWorkspace.id) ?? 0) === 0}
+              disabled={!activeWorkspace || (unreadByWorkspaceId.get(activeWorkspace.id) ?? 0) === 0}
               onClick={markWorkspaceRead}
             >
               <CheckCheck size={16} />
             </button>
           </div>
         </header>
-        <LayoutView
-          tab={activeTab}
-          machines={displayMachines}
-          splitMachineId={newMachineId}
-          terminalFontSize={settings.terminalFontSize}
-          unreadByPaneId={unreadByPaneId}
-          mediaByPaneId={mediaByPaneId}
-          onActivatePane={async (paneId) => refresh(await api.activatePane(activeTab.id, paneId))}
-          onSplit={splitPane}
-          onResizeSplit={resizeSplit}
-          onClosePane={closePane}
-          onDismissMedia={(mediaId) => setMediaItems((items) => items.filter((item) => item.id !== mediaId))}
-          runsByPaneId={latestRunByPaneId}
-        />
+        )}
+        {activeTab ? (
+          <LayoutView
+            tab={activeTab}
+            machines={displayMachines}
+            splitMachineId={newMachineId}
+            terminalFontSize={settings.terminalFontSize}
+            unreadByPaneId={unreadByPaneId}
+            mediaByPaneId={mediaByPaneId}
+            onActivatePane={async (paneId) => refresh(await api.activatePane(activeTab.id, paneId))}
+            onSplit={splitPane}
+            onResizeSplit={resizeSplit}
+            onClosePane={closePane}
+            onDismissMedia={(mediaId) => setMediaItems((items) => items.filter((item) => item.id !== mediaId))}
+            runsByPaneId={latestRunByPaneId}
+          />
+        ) : (
+          <EmptyWorkspaceView />
+        )}
       </section>
       {activityOpen ? (
-        <ActivityPanel
-          state={state}
-          machines={displayMachines}
-          onClose={() => setActivityOpen(false)}
-        />
+        openTuiMode ? (
+          <OpenTuiActivityPanel
+            rows={openTuiActivityRows}
+            onClose={() => setActivityOpen(false)}
+          />
+        ) : (
+          <ActivityPanel
+            state={state}
+            machines={displayMachines}
+            onClose={() => setActivityOpen(false)}
+          />
+        )
       ) : null}
       {settingsOpen ? (
         <SettingsModal
@@ -868,12 +1073,21 @@ export function App() {
         />
       ) : null}
       {commandPaletteOpen ? (
-        <CommandPalette
-          commands={commands}
-          query={commandPaletteQuery}
-          onQueryChange={setCommandPaletteQuery}
-          onClose={() => setCommandPaletteOpen(false)}
-        />
+        openTuiMode ? (
+          <OpenTuiCommandPalette
+            commands={commands}
+            query={commandPaletteQuery}
+            onQueryChange={setCommandPaletteQuery}
+            onClose={() => setCommandPaletteOpen(false)}
+          />
+        ) : (
+          <CommandPalette
+            commands={commands}
+            query={commandPaletteQuery}
+            onQueryChange={setCommandPaletteQuery}
+            onClose={() => setCommandPaletteOpen(false)}
+          />
+        )
       ) : null}
     </main>
   );
@@ -942,6 +1156,14 @@ const latestRunByPane = (runs: TerminalRun[]): Map<string, TerminalRun> => {
 };
 
 const agentStatusClass = (status: string): string => {
+  const normalized = status.toLowerCase();
+  if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
+  if (["completed", "done", "success"].includes(normalized)) return "completed";
+  if (["running", "started", "working"].includes(normalized)) return "running";
+  return "updated";
+};
+
+const openTuiActivityStatus = (status: string): OpenTuiActivityRow["status"] => {
   const normalized = status.toLowerCase();
   if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";

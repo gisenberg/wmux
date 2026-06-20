@@ -75,6 +75,19 @@ a {
   padding: 10px;
 }
 
+.open-tui-sidebar {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: var(--black);
+}
+
+.open-tui-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -378,6 +391,13 @@ button.attention-tool {
   padding: 8px 10px;
 }
 
+.open-tui-topbar {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: var(--black);
+}
+
 .tabs {
   flex: 1;
   overflow: hidden;
@@ -470,6 +490,136 @@ button.attention-tool {
 .layout-view {
   height: 100%;
   background: var(--black);
+}
+
+.empty-workspace-view {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background:
+    linear-gradient(to right, #050505 0%, rgba(5, 5, 5, 0) 18%, rgba(5, 5, 5, 0) 82%, #050505 100%),
+    linear-gradient(to bottom, #050505 0%, rgba(5, 5, 5, 0) 18%, rgba(5, 5, 5, 0) 82%, #050505 100%),
+    #111216;
+}
+
+.empty-shader-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #050505;
+  cursor: pointer;
+}
+
+.empty-shader-canvas.shader-unavailable {
+  opacity: 0;
+}
+
+.life-settings-toggle {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 4;
+  width: 26px;
+  height: 22px;
+  border: 1px solid rgba(212, 180, 95, 0.18);
+  background: rgba(3, 3, 3, 0.28);
+  color: rgba(244, 211, 94, 0.32);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  opacity: 0.42;
+}
+
+.life-settings-toggle:hover,
+.life-settings-toggle[aria-expanded="true"] {
+  border-color: rgba(244, 211, 94, 0.58);
+  background: rgba(3, 3, 3, 0.72);
+  color: rgba(244, 211, 94, 0.9);
+  opacity: 1;
+}
+
+.life-settings-panel {
+  position: absolute;
+  right: 12px;
+  bottom: 42px;
+  z-index: 3;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100% - 24px));
+  padding: 10px;
+  border: 1px solid rgba(212, 180, 95, 0.42);
+  background: rgba(3, 3, 3, 0.78);
+  color: var(--ivory);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+}
+
+.life-settings-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.life-settings-actions button {
+  height: 24px;
+  border: 1px solid rgba(212, 180, 95, 0.42);
+  background: #090907;
+  color: var(--gold-hot);
+  font: inherit;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.life-settings-actions button:hover {
+  border-color: rgba(244, 211, 94, 0.82);
+  color: #fff3ba;
+}
+
+.life-settings-slider {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 58px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #a8a194;
+}
+
+.life-settings-slider span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #bdb4a3;
+  font-weight: 700;
+}
+
+.life-settings-slider input {
+  width: 100%;
+  min-width: 0;
+  accent-color: #f4d35e;
+}
+
+.life-settings-slider output {
+  color: #f3eee1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.life-settings-status {
+  max-height: 80px;
+  overflow: auto;
+  border-top: 1px solid rgba(212, 180, 95, 0.2);
+  padding-top: 6px;
+  color: #8f887a;
+  white-space: pre-wrap;
 }
 
 .split {
@@ -830,6 +980,57 @@ button.attention-tool {
   color: #756d5f;
 }
 
+.open-tui-command-panel {
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
+  width: min(820px, calc(100vw - 32px));
+  height: min(620px, calc(100vh - 96px));
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(212, 180, 95, 0.62);
+  border-radius: 0;
+  background: var(--black);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.62);
+}
+
+.open-tui-command-input-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  background: #090907;
+  padding: 0 12px;
+  color: var(--gold-hot);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.open-tui-command-input-row input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ivory);
+  font: inherit;
+  font-weight: 700;
+}
+
+.open-tui-command-input-row input::placeholder {
+  color: #756d5f;
+}
+
+.open-tui-command-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 .command-list {
   display: grid;
   align-content: start;
@@ -914,6 +1115,13 @@ button.attention-tool {
   border-left: 1px solid rgba(212, 180, 95, 0.42);
   background: var(--panel);
   box-shadow: -24px 0 70px rgba(0, 0, 0, 0.45);
+}
+
+.open-tui-activity-panel {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: var(--black);
 }
 
 .activity-header {
