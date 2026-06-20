@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import type { MachineConfig, MachineStatus, PtySpawnSpec, SessionBackend } from "./types.js";
 
 const DEFAULT_TERM = "xterm-256color";
+const remotePathBootstrap = (): string => `export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"`;
 
 export const localMachine = (): MachineConfig => ({
   id: "local",
@@ -66,17 +67,18 @@ export const buildSpawnSpec = (
       CLICOLOR: "1",
     };
     const sessionName = durableSessionName(extraEnv.WMUX_PANE_ID);
+    const remotePathExport = remotePathBootstrap();
     const remoteCommand =
-      `${installRemoteHelpersScript()} ` +
+      `${remotePathExport}; ${installRemoteHelpersScript()} ` +
       durableShellScript({
         backend: machine.sessionBackend ?? "auto",
         sessionName,
         cwd: startCwd,
         cols,
         rows,
-        shellCommand: `exec "\${SHELL:-/bin/sh}" -i`,
+        shellCommand: interactiveShellCommand(`"\${SHELL:-/bin/sh}"`, sessionName),
         extraEnv: remoteEnv,
-        helperPathExport: `export PATH="$wmux_helper_dir:$PATH";`,
+        helperPathExport: `export PATH="$wmux_helper_dir:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH";`,
         useSystemdScope: false,
       });
     args.push(`/bin/sh -lc ${shellQuote(remoteCommand)}`);
@@ -108,7 +110,7 @@ export const buildSpawnSpec = (
       cwd: startCwd,
       cols,
       rows,
-      shellCommand: `exec ${shellQuote(machine.shell ?? defaultShell())} -i`,
+      shellCommand: interactiveShellCommand(shellQuote(machine.shell ?? defaultShell()), sessionName),
       extraEnv,
       helperPathExport: `export PATH=${shellQuote(`${process.cwd()}/scripts`)}":$PATH";`,
       useSystemdScope: false,
@@ -138,12 +140,75 @@ const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'
 
 const durableSessionName = (paneId?: string): string => `wmux_${(paneId || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")}`;
 
+const interactiveShellCommand = (shellValue: string, sessionName: string): string => {
+  const shellDir = `"${"${TMPDIR:-/tmp}"}/wmux-shell-${sessionName}"`;
+  return `
+wmux_shell=${shellValue};
+wmux_shell_name="\${wmux_shell##*/}";
+wmux_shell_dir=${shellDir};
+mkdir -p "$wmux_shell_dir" 2>/dev/null || true;
+case "$wmux_shell_name" in
+  zsh)
+    cat > "$wmux_shell_dir/.zshenv" <<'__WMUX_ZSHENV__'
+if [ -n "\${WMUX_ORIGINAL_ZDOTDIR:-}" ] && [ -r "$WMUX_ORIGINAL_ZDOTDIR/.zshenv" ]; then
+  source "$WMUX_ORIGINAL_ZDOTDIR/.zshenv"
+fi
+if [ -n "\${WMUX_ZDOTDIR:-}" ]; then
+  export ZDOTDIR="$WMUX_ZDOTDIR"
+fi
+__WMUX_ZSHENV__
+    cat > "$wmux_shell_dir/.zshrc" <<'__WMUX_ZSHRC__'
+if [ -n "\${WMUX_ORIGINAL_ZDOTDIR:-}" ] && [ -r "$WMUX_ORIGINAL_ZDOTDIR/.zshrc" ]; then
+  source "$WMUX_ORIGINAL_ZDOTDIR/.zshrc"
+fi
+_wmux_emit_cwd() {
+  emulate -L zsh
+  printf '\\033]7;file://%s%s\\a' "\${HOST:-$(hostname 2>/dev/null || printf wmux)}" "$PWD"
+}
+autoload -Uz add-zsh-hook 2>/dev/null || true
+if (( $+functions[add-zsh-hook] )); then
+  add-zsh-hook precmd _wmux_emit_cwd
+else
+  precmd_functions=(_wmux_emit_cwd $precmd_functions)
+fi
+_wmux_emit_cwd
+__WMUX_ZSHRC__
+    export WMUX_ORIGINAL_ZDOTDIR="\${ZDOTDIR:-$HOME}";
+    export WMUX_ZDOTDIR="$wmux_shell_dir";
+    export ZDOTDIR="$wmux_shell_dir";
+    exec "$wmux_shell" -i
+    ;;
+  bash)
+    cat > "$wmux_shell_dir/bashrc" <<'__WMUX_BASHRC__'
+if [ -r "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi
+_wmux_emit_cwd() {
+  printf '\\033]7;file://%s%s\\a' "\${HOSTNAME:-$(hostname 2>/dev/null || printf wmux)}" "$PWD"
+}
+case ";\${PROMPT_COMMAND:-};" in
+  *";_wmux_emit_cwd;"*) ;;
+  *) PROMPT_COMMAND="_wmux_emit_cwd\${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+esac
+_wmux_emit_cwd
+__WMUX_BASHRC__
+    exec "$wmux_shell" --rcfile "$wmux_shell_dir/bashrc" -i
+    ;;
+  *)
+    exec "$wmux_shell" -i
+    ;;
+esac
+`;
+};
+
 export const readDurableSessionCwd = (machine: MachineConfig, paneId: string): string | undefined => {
   const backend = machine.sessionBackend ?? "auto";
   if (backend === "screen" || backend === "pty" || machine.command?.length) return undefined;
   if (machine.kind !== "local" && machine.kind !== "ssh") return undefined;
   const sessionName = durableSessionName(paneId);
-  const query = `command -v tmux >/dev/null 2>&1 && tmux display-message -p -t ${shellQuote(sessionName)} '#{pane_current_path}' 2>/dev/null`;
+  const query =
+    `${machine.kind === "ssh" ? `${remotePathBootstrap()}; ` : ""}` +
+    `command -v tmux >/dev/null 2>&1 && tmux display-message -p -t ${shellQuote(sessionName)} '#{pane_current_path}' 2>/dev/null`;
 
   const result =
     machine.kind === "local"
@@ -273,6 +338,7 @@ export const disposeDurableSession = (machine: MachineConfig, paneId: string): v
   if (machine.kind !== "local" && machine.kind !== "ssh") return;
   const sessionName = durableSessionName(paneId);
   const killScript = [
+    machine.kind === "ssh" ? remotePathBootstrap() : "",
     backend !== "screen" ? `command -v tmux >/dev/null 2>&1 && tmux kill-session -t ${shellQuote(sessionName)} 2>/dev/null || true` : "",
     backend !== "tmux" ? `command -v screen >/dev/null 2>&1 && screen -S ${shellQuote(sessionName)} -X quit 2>/dev/null || true` : "",
   ]
@@ -513,7 +579,10 @@ const commandExists = (command: string): boolean => {
   return result.status === 0;
 };
 
-export const resolveMachineStatuses = async (machines: MachineConfig[]): Promise<MachineStatus[]> => {
+export const resolveMachineStatuses = async (
+  machines: MachineConfig[],
+  localEndpoint = "127.0.0.1",
+): Promise<MachineStatus[]> => {
   return Promise.all(
     machines.map(async (machine) => {
       const checkedAt = new Date().toISOString();
@@ -522,7 +591,7 @@ export const resolveMachineStatuses = async (machines: MachineConfig[]): Promise
           ...machine,
           reachable: true,
           checkedAt,
-          endpoint: os.hostname(),
+          endpoint: localEndpoint === "localhost" ? "127.0.0.1" : localEndpoint,
           backendDetail: localBackendDetail(machine),
         };
       }

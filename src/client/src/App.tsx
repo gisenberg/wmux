@@ -748,7 +748,7 @@ export function App() {
             <div
               key={machine.id}
               className={`machine-row ${machine.reachable ? "" : "offline"}`}
-              title={[machine.reason, machine.backendDetail, machine.endpoint].filter(Boolean).join(" / ") || machine.kind}
+              title={[machine.name, machine.reason, machine.backendDetail, machine.endpoint].filter(Boolean).join(" / ") || machine.kind}
             >
               <Server size={14} />
               <span className="machine-name">{machine.name}</span>

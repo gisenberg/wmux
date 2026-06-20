@@ -23,7 +23,7 @@ For MagicDNS names or reverse-proxy hostnames, set `WMUX_ALLOWED_HOSTS` to a com
 - Server-backed UI settings live in `~/.wmux/settings.json` unless `WMUX_SETTINGS_PATH` is set.
 - Machine definitions are read from `./wmux.config.json` first, then `~/.wmux/config.json`.
 - Local and SSH panes default to durable `tmux`/`screen` sessions via `sessionBackend: "auto"`.
-- Same-machine workspace/tab/split creation should preserve the source pane cwd. The primary source is tmux `#{pane_current_path}`; OSC 7 cwd reports are a secondary state update path.
+- Same-machine workspace/tab/split creation should preserve the source pane cwd. The primary source is tmux `#{pane_current_path}`; OSC 7 cwd reports from wmux-managed zsh/bash prompt hooks are a secondary state update path.
 - A pane maps to one long-lived server PTY client while the wmux service process is alive.
 - Closing or refreshing the browser disconnects the WebSocket but does not kill the pane process.
 - Restarting the wmux service restores layout metadata and reattaches local/SSH durable sessions when the target has `tmux` or `screen`. Raw PTY and PowerShell panes still cannot preserve live process state across service restart.

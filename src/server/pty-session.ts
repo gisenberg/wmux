@@ -13,6 +13,7 @@ interface PtyEvents {
 }
 
 const MAX_REPLAY_BYTES = 2 * 1024 * 1024;
+const MAX_CWD_CAPTURE_BYTES = 8192;
 
 export class PtySession extends EventEmitter<PtyEvents> {
   private pty: IPty;
@@ -21,6 +22,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
   private exited = false;
   private title: string;
   private cwd = "";
+  private cwdCaptureBuffer = "";
 
   constructor(
     readonly pane: PaneState,
@@ -103,8 +105,19 @@ export class PtySession extends EventEmitter<PtyEvents> {
   }
 
   private captureCwd(data: string): void {
-    const pattern = /\x1b]7;file:\/\/([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
-    for (const match of data.matchAll(pattern)) {
+    const combined = this.cwdCaptureBuffer + data;
+    const pendingStart = combined.lastIndexOf("\x1b]7;");
+    let searchable = combined;
+    this.cwdCaptureBuffer = "";
+    if (pendingStart !== -1) {
+      const pending = combined.slice(pendingStart);
+      if (!pending.includes("\x07") && !pending.includes("\x1b\\")) {
+        searchable = combined.slice(0, pendingStart);
+        this.cwdCaptureBuffer = pending.slice(-MAX_CWD_CAPTURE_BYTES);
+      }
+    }
+
+    for (const match of searchable.matchAll(/\x1b]7;file:\/\/([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) {
       const cwd = cwdFromFileUri(match[1]);
       if (!cwd || cwd === this.cwd) continue;
       this.cwd = cwd;

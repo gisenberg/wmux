@@ -39,7 +39,7 @@ export const createHttpServer = (
   const bootstrap = async () => {
     const snapshot = state.snapshot();
     return {
-      machines: await resolveMachineStatuses(machines),
+      machines: await resolveMachineStatuses(machines, bindHost),
       workspaces: snapshot.workspaces,
       activeWorkspaceId: snapshot.activeWorkspaceId,
       notifications: snapshot.notifications,
