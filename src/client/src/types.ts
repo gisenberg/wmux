@@ -1,4 +1,4 @@
-export type MachineKind = "local" | "ssh" | "powershell" | "service";
+export type MachineKind = "local" | "ssh" | "powershell" | "powershell-ssh" | "service";
 export type SessionBackend = "auto" | "pty" | "tmux" | "screen";
 
 export interface MachineStatus {

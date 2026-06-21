@@ -63,8 +63,9 @@ Put machine definitions in `wmux.config.json` or `~/.wmux/config.json`:
     {
       "id": "9800x3d",
       "name": "9800x3d",
-      "kind": "powershell",
-      "host": "9800x3d"
+      "kind": "powershell-ssh",
+      "host": "9800x3d",
+      "user": "gisen"
     }
   ]
 }
@@ -74,7 +75,9 @@ If the browser accesses wmux through a MagicDNS or reverse-proxy name that is no
 
 Unix-like local and SSH machines default to `"sessionBackend": "auto"`, which attaches panes to a durable `tmux` session when available, or `screen` when `tmux` is not installed. Use `"sessionBackend": "pty"` to force the original raw PTY behavior for a machine.
 
-PowerShell machines are scaffolded through `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so an Ubuntu wmux server such as rtx6000 cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. To bring a Windows host such as `9800x3d` online from rtx6000, wmux needs a different transport such as PowerShell-over-SSH, a Windows-side wmux agent/service, or a Windows jump host that can run the WSMan client. wmux currently treats PowerShell panes as non-durable; they do not survive a wmux service restart the way local/SSH `tmux` or `screen` panes do.
+Use `kind: "powershell-ssh"` for Windows hosts reachable from a non-Windows wmux server. It starts the local `pwsh` client and runs `Enter-PSSession -HostName ... -UserName ...`, so the Windows host must have PowerShell 7, OpenSSH Server, and a PowerShell SSH subsystem configured. Reachability for this kind requires local `pwsh` and a TCP response on SSH port 22. This path does not use WSMan.
+
+Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so an Ubuntu wmux server such as rtx6000 cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. PowerShell panes are currently non-durable; they do not survive a wmux service restart the way local/SSH `tmux` or `screen` panes do. Durable Windows process persistence needs a Windows-side wmux agent/service.
 
 ## Settings
 

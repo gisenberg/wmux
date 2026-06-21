@@ -8,7 +8,7 @@ import type { MachineConfig } from "./types.js";
 const machineSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  kind: z.enum(["local", "ssh", "powershell", "service"]),
+  kind: z.enum(["local", "ssh", "powershell", "powershell-ssh", "service"]),
   host: z.string().optional(),
   user: z.string().optional(),
   port: z.number().int().positive().optional(),

@@ -6,13 +6,13 @@
 
    The first implementation supports machine affinity by spawning a local PTY for this box, or by launching `ssh` / PowerShell remoting clients from this box. It does not yet install a wmux agent on Linux, macOS, or Windows hosts and proxy PTY streams back over a machine-local service.
 
-2. PowerShell remoting is scaffolded but not validated.
+2. PowerShell-over-SSH is scaffolded but not yet validated end to end on 9800x3d.
 
-   `kind: "powershell"` starts `pwsh` or `powershell.exe` with `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so this transport cannot make `9800x3d` usable from the current Ubuntu rtx6000 service. `9800x3d` is reachable on Tailscale and TCP 5985, but wmux should use a different transport such as PowerShell-over-SSH, a Windows-side wmux agent/service, or a Windows jump host before enabling it in the UI.
+   `kind: "powershell-ssh"` starts local `pwsh` with `Enter-PSSession -HostName`, which is the intended cross-platform route from an Ubuntu wmux host to a Windows host once OpenSSH Server and the PowerShell SSH subsystem are configured on the target. `kind: "powershell"` remains the legacy WSMan path through `Enter-PSSession -ComputerName`; Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts. The 9800x3d config now uses the SSH transport, but the Windows-side OpenSSH setup, key/password authentication, and rtx6000-to-9800x3d remote PowerShell validation still need to be completed outside this repo.
 
 3. PowerShell session process checkpointing does not survive service restart.
 
-   Layout, tabs, pane metadata, and machine affinity are persisted. Local and SSH panes can now survive wmux service restarts when the target has `tmux` or `screen`, because wmux reattaches to a durable per-pane multiplexer session. PowerShell remoting still needs a Windows-side durable agent/service; raw `Enter-PSSession` clients are killed with the wmux service.
+   Layout, tabs, pane metadata, and machine affinity are persisted. Local and SSH panes can now survive wmux service restarts when the target has `tmux` or `screen`, because wmux reattaches to a durable per-pane multiplexer session. PowerShell remoting still needs a Windows-side durable agent/service; raw `Enter-PSSession` clients, including PowerShell-over-SSH clients, are killed with the wmux service.
 
 4. Machine management is file-based.
 

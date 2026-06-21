@@ -98,6 +98,16 @@ export const buildSpawnSpec = (
     return { file: shell, args, cwd: configuredCwd, env, title: machine.name, trackProcessTitle: true };
   }
 
+  if (machine.kind === "powershell-ssh") {
+    if (!machine.host) throw new Error(`Machine ${machine.id} is missing host`);
+    const shell = machine.shell ?? "pwsh";
+    const commandParts = ["Enter-PSSession", "-HostName", powershellQuote(machine.host)];
+    if (machine.user) commandParts.push("-UserName", powershellQuote(machine.user));
+    if (machine.port) commandParts.push("-Port", String(machine.port));
+    const args = ["-NoLogo", "-NoProfile", "-Command", commandParts.join(" ")];
+    return { file: shell, args, cwd: configuredCwd, env, title: machine.name, trackProcessTitle: true };
+  }
+
   if (machine.kind === "service") {
     throw new Error("Remote wmux service machines are not implemented yet");
   }
@@ -138,6 +148,7 @@ export const buildSpawnSpec = (
 };
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+const powershellQuote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
 
 const durableSessionName = (paneId?: string): string => `wmux_${(paneId || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")}`;
 
@@ -638,9 +649,15 @@ const probeTcp = (host: string, port: number, timeoutMs: number): Promise<boolea
   });
 
 const commandExists = (command: string): boolean => {
-  const result = spawnSync("sh", ["-lc", `command -v ${command}`], {
-    stdio: "ignore",
-  });
+  if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
+    return fs.existsSync(command);
+  }
+  const result =
+    process.platform === "win32"
+      ? spawnSync("where.exe", [command], { stdio: "ignore" })
+      : spawnSync("sh", ["-lc", `command -v ${shellQuote(command)}`], {
+          stdio: "ignore",
+        });
   return result.status === 0;
 };
 
@@ -682,9 +699,25 @@ export const resolveMachineStatuses = async (
           backendDetail: backendDetail(machine),
         };
       }
-      const port =
-        machine.port ??
-        (machine.kind === "ssh" ? 22 : machine.kind === "powershell" ? 5985 : 3478);
+      if (machine.kind === "powershell-ssh") {
+        const shell = machine.shell ?? "pwsh";
+        const hasPwsh = commandExists(shell);
+        const port = machine.port ?? 22;
+        const reachable = hasPwsh ? await probeTcp(machine.host, port, 900) : false;
+        return {
+          ...machine,
+          reachable,
+          checkedAt,
+          endpoint: `${machine.host}:${port}`,
+          backendDetail: backendDetail(machine),
+          reason: hasPwsh
+            ? reachable
+              ? undefined
+              : `no TCP response on ${machine.host}:${port}`
+            : `local PowerShell client is not installed or not executable: ${shell}`,
+        };
+      }
+      const port = machine.port ?? (machine.kind === "ssh" ? 22 : machine.kind === "powershell" ? 5985 : 3478);
       const reachable = await probeTcp(machine.host, port, 900);
       return {
         ...machine,
@@ -710,6 +743,7 @@ const backendDetail = (machine: MachineConfig): string => {
   const backend = machine.sessionBackend ?? "auto";
   if (machine.kind === "ssh") return `SSH client; ${backend} durable backend on attach`;
   if (machine.kind === "powershell") return "PowerShell remoting; no durable backend";
+  if (machine.kind === "powershell-ssh") return "PowerShell over SSH; no durable backend";
   if (machine.kind === "service") return "wmux remote service probe";
   return localBackendDetail(machine);
 };
