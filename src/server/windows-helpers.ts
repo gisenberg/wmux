@@ -12,6 +12,17 @@ const windowsBootstrapEnvKeys = new Set([
   "WMUX_PANE_ID",
   "KITTY_WINDOW_ID",
 ]);
+const windowsRequiredHelperNames = [
+  "wmux-agent-event",
+  "wmux-copy",
+  "wmux-hooks",
+  "wmux-media",
+  "wmux-notify",
+  "wmux-run",
+  "wmux-stream-agent-service",
+  "wmux-title",
+  "wmux-windows-setup",
+];
 
 export const encodePowerShellCommand = (script: string): string =>
   Buffer.from(script, "utf16le").toString("base64");
@@ -162,16 +173,53 @@ __wmuxEmitCwd
 `;
 };
 
-const windowsPowerShellHelperNames = (): string[] => [
-  "wmux-agent-event",
-  "wmux-copy",
-  "wmux-hooks",
-  "wmux-media",
-  "wmux-notify",
-  "wmux-run",
-  "wmux-stream-agent-service",
-  "wmux-title",
-];
+export const buildWindowsHealthProbeScript = (wmuxUrl: string): string => `
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+$HelperDir = Join-Path $env:LOCALAPPDATA 'wmux\\bin'
+$HelperNames = @(${windowsRequiredHelperNames.map((name) => psSingleQuote(`${name}.ps1`)).join(", ")})
+$Helpers = [ordered]@{}
+$HelperCount = 0
+foreach ($Helper in $HelperNames) {
+  $Exists = Test-Path -LiteralPath (Join-Path $HelperDir $Helper) -PathType Leaf
+  $Helpers[$Helper] = $Exists
+  if ($Exists) { $HelperCount += 1 }
+}
+$ConfigPath = Join-Path $HOME '.wmux\\stream-agent.json'
+$StreamConfig = $null
+if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+  try { $StreamConfig = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -AsHashtable } catch {}
+}
+$Task = Get-ScheduledTask -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue
+$TaskInfo = if ($Task) { Get-ScheduledTaskInfo -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue } else { $null }
+$WmuxReachable = $false
+try {
+  $Response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri ${psSingleQuote(`${wmuxUrl.replace(/\/+$/, "")}/api/health`)} -TimeoutSec 3
+  $WmuxReachable = [int]$Response.StatusCode -ge 200 -and [int]$Response.StatusCode -lt 500
+} catch {}
+[ordered]@{
+  computerName = $env:COMPUTERNAME
+  userName = $env:USERNAME
+  powerShellVersion = $PSVersionTable.PSVersion.ToString()
+  helperDir = $HelperDir
+  helpersReady = ($HelperCount -eq $HelperNames.Count)
+  helperCount = $HelperCount
+  helperTotal = $HelperNames.Count
+  helpers = $Helpers
+  wmuxUrl = ${psSingleQuote(wmuxUrl)}
+  wmuxReachable = $WmuxReachable
+  ffmpeg = [bool](Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)
+  python = [bool](Get-Command python.exe -ErrorAction SilentlyContinue)
+  py = [bool](Get-Command py.exe -ErrorAction SilentlyContinue)
+  winget = [bool](Get-Command winget.exe -ErrorAction SilentlyContinue)
+  streamConfigExists = [bool]$StreamConfig
+  streamTaskState = $(if ($Task) { [string]$Task.State } else { 'missing' })
+  streamTaskLastRunTime = $(if ($TaskInfo) { $TaskInfo.LastRunTime.ToString('o') } else { $null })
+  streamTaskLastTaskResult = $(if ($TaskInfo) { $TaskInfo.LastTaskResult } else { $null })
+} | ConvertTo-Json -Depth 8 -Compress
+`;
+
+const windowsPowerShellHelperNames = (): string[] => windowsRequiredHelperNames;
 
 const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
   ...windowsPowerShellHelperNames().map((name) => ({

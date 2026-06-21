@@ -369,6 +369,27 @@ def run_publisher(
     return run_ffmpeg_publisher(command, machine_id, rtsp_url, should_continue)
 
 
+def probe_capture(ffmpeg: str, args: argparse.Namespace) -> int:
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "info",
+        *capture_args(args),
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ]
+    print(" ".join(subprocess.list2cmdline([part]) for part in command), file=sys.stderr)
+    try:
+        return subprocess.run(command, timeout=20).returncode
+    except subprocess.TimeoutExpired:
+        print("wmux-stream-agent: capture probe timed out", file=sys.stderr)
+        return 124
+
+
 def run_on_demand(ffmpeg: str, args: argparse.Namespace, machine_id: str, rtsp_url: str, fps: int, backend: str) -> int:
     print(
         f"wmux-stream-agent: waiting for wmux stream requests at {request_status_url(args, machine_id)}",
@@ -434,6 +455,7 @@ def main() -> int:
     demand_group.add_argument("--no-on-demand", dest="on_demand", action="store_false", help="Publish continuously instead of waiting for viewer requests.")
     parser.set_defaults(on_demand=config_bool(config, "onDemand", False))
     parser.add_argument("--list-devices", action="store_true", help="List ffmpeg capture devices and exit.")
+    parser.add_argument("--probe-capture", action="store_true", help="Capture one frame to ffmpeg null output and exit.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     args.poll_interval = max(1, min(60, args.poll_interval))
@@ -448,8 +470,15 @@ def main() -> int:
     if args.list_devices:
         if system == "darwin":
             return subprocess.call([ffmpeg, "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""])
+        if system == "windows":
+            print("wmux-stream-agent: Windows uses ffmpeg gdigrab with --input desktop by default.", file=sys.stderr)
+            print("Run wmux-stream-agent --probe-capture to validate one-frame desktop capture.", file=sys.stderr)
+            return 0
         print("wmux-stream-agent: --list-devices is currently implemented for macOS avfoundation only", file=sys.stderr)
         return 2
+
+    if args.probe_capture:
+        return probe_capture(ffmpeg, args)
 
     machine_id = clean_machine_id(args.machine)
     rtsp_url = args.rtsp_url or f"rtsp://{args.server}:8554/wmux-{machine_id}"

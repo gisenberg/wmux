@@ -20,6 +20,7 @@ export interface MachineStatus extends MachineConfig {
   checkedAt: string;
   endpoint?: string;
   backendDetail?: string;
+  health?: Record<string, unknown>;
 }
 
 export interface PaneState {

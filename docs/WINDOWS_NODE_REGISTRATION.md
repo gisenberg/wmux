@@ -198,8 +198,84 @@ The node is registered correctly when wmux reports:
   "id": "9800x3d",
   "kind": "powershell-ssh",
   "reachable": true,
-  "endpoint": "100.68.206.111:22"
+  "endpoint": "100.68.206.111:22",
+  "backendDetail": "SSH-launched PowerShell; pwsh 7.6.1; helpers ready; stream task Running; ffmpeg+python"
 }
+```
+
+For `powershell-ssh`, `/api/bootstrap` does more than a TCP check. It runs a short encoded PowerShell health probe over SSH and reports helper readiness, `WMUX_URL` reachability through `/api/health`, FFmpeg/Python availability, and the `wmux-stream-agent` Scheduled Task state.
+
+## 5. Finish Windows Helper Setup
+
+Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helper bundle from rtx6000 and stages scripts plus CMD shims into:
+
+```text
+%LOCALAPPDATA%\wmux\bin
+```
+
+Then run:
+
+```powershell
+wmux-windows-setup validate
+wmux-windows-setup persist-path
+wmux-windows-setup install-deps
+wmux-windows-setup install-stream
+wmux-windows-setup stream-status
+```
+
+Notes:
+
+- `validate` prints a JSON report for helper state, wmux API reachability, FFmpeg/Python/winget availability, hook config files, and stream Scheduled Task state.
+- `persist-path` adds `%LOCALAPPDATA%\wmux\bin` to the persistent user PATH for future non-wmux shells.
+- `install-deps` uses `winget` to install `Gyan.FFmpeg` and `Python.Python.3.12` when missing.
+- `install-stream` installs and starts the per-user `wmux-stream-agent` Scheduled Task.
+
+If you are running setup from plain SSH before the helper directory is on PATH, invoke the staged script by path:
+
+```powershell
+& "$env:LOCALAPPDATA\wmux\bin\wmux-windows-setup.ps1" validate
+```
+
+## 6. Validate Screen Streaming
+
+Direct capture probes from plain SSH can fail with Windows desktop access errors because the SSH process does not necessarily own the interactive desktop session:
+
+```powershell
+wmux-stream-agent --probe-capture
+```
+
+The intended Windows streaming path is the per-user Scheduled Task. Validate that the task is idle and waiting:
+
+```powershell
+wmux-stream-agent-service logs
+```
+
+From rtx6000, request a short stream lease:
+
+```bash
+curl -fsS -X POST http://100.107.241.79:3478/api/streams/9800x3d/request \
+  -H 'content-type: application/json' \
+  -d '{"requestId":"windows-smoke","ttlMs":12000}' | jq .
+```
+
+The Windows logs should show:
+
+```text
+wmux-stream-agent: stream requested for 9800x3d
+wmux-stream-agent: publishing 9800x3d to rtsp://100.107.241.79:8554/wmux-9800x3d
+```
+
+MediaMTX/wmux should report the stream as live while the lease is active:
+
+```bash
+curl -fsS http://100.107.241.79:3478/api/streams |
+  jq '.streams[] | select(.machineId == "9800x3d")'
+```
+
+Release the smoke lease when done:
+
+```bash
+curl -fsS -X DELETE http://100.107.241.79:3478/api/streams/9800x3d/request/windows-smoke
 ```
 
 ## Definition Of Done
@@ -211,10 +287,12 @@ The node is registered correctly when wmux reports:
 - `/api/bootstrap` reports `9800x3d` as reachable.
 - Creating a wmux workspace on `9800x3d` opens an interactive PowerShell session.
 - New Windows panes stage helper scripts into `%LOCALAPPDATA%\wmux\bin`.
-- `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, `wmux-hooks`, and `wmux-stream-agent-service` resolve inside new Windows panes.
+- `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup` resolve inside new Windows panes.
+- `wmux-windows-setup validate` reports `wmuxApi.reachable: true`, helper scripts present, FFmpeg/Python available, and the stream task running.
+- A short `/api/streams/9800x3d/request` lease causes the Windows stream agent to publish `wmux-9800x3d`, then return idle after release.
 
 ## Known Limits
 
 - Windows SSH PowerShell panes are not durable yet. They are killed when `wmux.service` restarts.
 - Windows helper staging and cwd reporting require a new pane after the wmux service has been updated.
-- Windows screen streaming has a per-user Scheduled Task installer path, but desktop capture still needs host-side validation.
+- Windows screen streaming is validated on 9800x3d through FFmpeg/gdigrab and the per-user Scheduled Task. Locked/logged-out behavior, reconnect supervision, and a native Windows wmux agent are still not implemented.

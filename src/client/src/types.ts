@@ -14,6 +14,7 @@ export interface MachineStatus {
   checkedAt: string;
   endpoint?: string;
   backendDetail?: string;
+  health?: Record<string, unknown>;
 }
 
 export interface PaneState {

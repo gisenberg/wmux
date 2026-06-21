@@ -2,13 +2,27 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { streamPathForMachine } from "./streams.js";
 import type { MachineConfig, MachineStatus, PtySpawnSpec, SessionBackend } from "./types.js";
-import { buildWindowsPowerShellBootstrapUrl, encodePowerShellCommand } from "./windows-helpers.js";
+import {
+  buildWindowsHealthProbeScript,
+  buildWindowsPowerShellBootstrapUrl,
+  encodePowerShellCommand,
+} from "./windows-helpers.js";
 
 const DEFAULT_TERM = "xterm-256color";
 const remotePathBootstrap = (): string => `export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"`;
+const WINDOWS_HEALTH_CACHE_MS = 15_000;
+
+interface WindowsHealthProbe {
+  reachable: boolean;
+  reason?: string;
+  health?: Record<string, unknown>;
+  backendDetail?: string;
+}
+
+const windowsHealthCache = new Map<string, { checkedAt: number; result: WindowsHealthProbe }>();
 
 export const localMachine = (): MachineConfig => ({
   id: "local",
@@ -660,6 +674,112 @@ const probeTcp = (host: string, port: number, timeoutMs: number): Promise<boolea
     socket.once("error", () => done(false));
   });
 
+const probeWindowsPowerShellSsh = async (
+  machine: MachineConfig,
+  localEndpoint: string,
+): Promise<WindowsHealthProbe> => {
+  if (!machine.host) return { reachable: false, reason: "missing host" };
+  const wmuxUrl =
+    process.env.WMUX_PUBLIC_URL ??
+    process.env.WMUX_URL ??
+    `http://${localEndpoint}:${process.env.WMUX_PORT ?? "3478"}`;
+  const cacheKey = `${machine.id}:${machine.user ?? ""}@${machine.host}:${machine.port ?? 22}:${wmuxUrl}`;
+  const cached = windowsHealthCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAt < WINDOWS_HEALTH_CACHE_MS) return cached.result;
+
+  const target = machine.user ? `${machine.user}@${machine.host}` : machine.host;
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3"];
+  if (machine.port) args.push("-p", String(machine.port));
+  const script = buildWindowsHealthProbeScript(wmuxUrl);
+  args.push(target, machine.shell ?? "pwsh", "-NoLogo", "-NoProfile", "-EncodedCommand", encodePowerShellCommand(script));
+  const result = await runSshProbe(args, undefined, 7_000);
+  const health = parseWindowsHealth(result.stdout);
+  const probe: WindowsHealthProbe =
+    result.status === 0 && health
+      ? {
+          reachable: true,
+          health,
+          backendDetail: windowsBackendDetail(health),
+        }
+      : {
+          reachable: false,
+          reason: result.timedOut
+            ? "PowerShell SSH health check timed out"
+            : `PowerShell SSH health check failed${result.stderr ? `: ${trimProbeError(result.stderr)}` : ""}`,
+          health: health ?? undefined,
+          backendDetail: backendDetail(machine),
+        };
+  windowsHealthCache.set(cacheKey, { checkedAt: Date.now(), result: probe });
+  return probe;
+};
+
+const runSshProbe = (
+  args: string[],
+  script: string | undefined,
+  timeoutMs: number,
+): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> =>
+  new Promise((resolve) => {
+    const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        if (!child.killed) child.kill("SIGKILL");
+      }, 500).unref();
+    }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ status: 1, stdout, stderr: error.message, timedOut });
+    });
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr, timedOut });
+    });
+    child.stdin.end(script ? `${script}\n` : undefined);
+  });
+
+const parseWindowsHealth = (stdout: string): Record<string, unknown> | undefined => {
+  for (const line of stdout.trim().split(/\r?\n/).reverse()) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      /* keep searching */
+    }
+  }
+  return undefined;
+};
+
+const windowsBackendDetail = (health: Record<string, unknown>): string => {
+  const version = typeof health.powerShellVersion === "string" ? `pwsh ${health.powerShellVersion}` : "pwsh";
+  const helpers = health.helpersReady === true ? "helpers ready" : `helpers ${health.helperCount ?? 0}/${health.helperTotal ?? "?"}`;
+  const streamTask = typeof health.streamTaskState === "string" ? `stream task ${health.streamTaskState}` : "stream task unknown";
+  const captureTools = [
+    health.ffmpeg === true ? "ffmpeg" : "",
+    health.python === true || health.py === true ? "python" : "",
+  ].filter(Boolean);
+  const tools = captureTools.length ? captureTools.join("+") : "capture tools missing";
+  return `SSH-launched PowerShell; ${version}; ${helpers}; ${streamTask}; ${tools}`;
+};
+
+const trimProbeError = (stderr: string): string => {
+  const cleaned = stderr.replace(/#< CLIXML[\s\S]*/g, "PowerShell returned an error").replace(/\s+/g, " ").trim();
+  return cleaned.slice(0, 240);
+};
+
 const commandExists = (command: string): boolean => {
   if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
     return fs.existsSync(command);
@@ -715,17 +835,20 @@ export const resolveMachineStatuses = async (
         const hasSsh = commandExists("ssh");
         const port = machine.port ?? 22;
         const reachable = hasSsh ? await probeTcp(machine.host, port, 900) : false;
+        const health = reachable
+          ? await probeWindowsPowerShellSsh(machine, localEndpoint)
+          : {
+              reachable: false,
+              reason: hasSsh ? `no TCP response on ${machine.host}:${port}` : "local ssh client is not installed or not executable",
+            };
         return {
           ...machine,
-          reachable,
+          reachable: health.reachable,
           checkedAt,
           endpoint: `${machine.host}:${port}`,
-          backendDetail: backendDetail(machine),
-          reason: hasSsh
-            ? reachable
-              ? undefined
-              : `no TCP response on ${machine.host}:${port}`
-            : "local ssh client is not installed or not executable",
+          backendDetail: health.backendDetail ?? backendDetail(machine),
+          reason: health.reason,
+          health: health.health,
         };
       }
       const port = machine.port ?? (machine.kind === "ssh" ? 22 : machine.kind === "powershell" ? 5985 : 3478);

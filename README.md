@@ -75,7 +75,7 @@ If the browser accesses wmux through a MagicDNS or reverse-proxy name that is no
 
 Unix-like local and SSH machines default to `"sessionBackend": "auto"`, which attaches panes to a durable `tmux` session when available, or `screen` when `tmux` is not installed. Use `"sessionBackend": "pty"` to force the original raw PTY behavior for a machine.
 
-Use `kind: "powershell-ssh"` for Windows hosts reachable from a non-Windows wmux server. It starts the local `ssh` client with a forced TTY and launches `pwsh -NoLogo -NoProfile` on the Windows host, so the Windows host must have PowerShell 7 and OpenSSH Server configured for the target user. Reachability for this kind requires a local `ssh` client and a TCP response on SSH port 22. This path does not use WSMan or the PowerShell SSH remoting subsystem.
+Use `kind: "powershell-ssh"` for Windows hosts reachable from a non-Windows wmux server. It starts the local `ssh` client with a forced TTY and launches `pwsh -NoLogo -NoProfile` on the Windows host, so the Windows host must have PowerShell 7 and OpenSSH Server configured for the target user. Reachability for this kind requires a local `ssh` client, a TCP response on SSH port 22, and a short PowerShell health probe that reports helper and stream readiness. This path does not use WSMan or the PowerShell SSH remoting subsystem.
 
 Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so an Ubuntu wmux server such as rtx6000 cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. PowerShell panes are currently non-durable; they do not survive a wmux service restart the way local/SSH `tmux` or `screen` panes do. Durable Windows process persistence needs a Windows-side wmux agent/service.
 
@@ -117,7 +117,18 @@ Unread notifications light the workspace, tab, and pane. The browser notificatio
 
 SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, and `wmux-stream-agent` available on hosts like Away-Team without manually copying this repo there.
 
-Windows `powershell-ssh` panes fetch a helper bundle from wmux when the pane starts and stage PowerShell/CMD shims into `%LOCALAPPDATA%\wmux\bin`. New Windows panes get the same helper command names plus `wmux-hooks` and `wmux-stream-agent-service`.
+Windows `powershell-ssh` panes fetch a helper bundle from wmux when the pane starts and stage PowerShell/CMD shims into `%LOCALAPPDATA%\wmux\bin`. New Windows panes get the same helper command names plus `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup`.
+
+On Windows, use the setup helper to validate and finish host-local setup:
+
+```powershell
+wmux-windows-setup validate
+wmux-windows-setup persist-path
+wmux-windows-setup install-deps
+wmux-windows-setup install-stream
+```
+
+`install-deps` uses `winget` to install FFmpeg and Python when missing. `install-stream` creates the per-user Scheduled Task that runs the on-demand screen stream agent.
 
 ## Agent Events
 
@@ -203,7 +214,7 @@ wmux-stream-agent-service status
 wmux-stream-agent-service logs
 ```
 
-On Windows hosts, `wmux-stream-agent-service install` creates a per-user Scheduled Task at logon. It still requires host-side validation of `ffmpeg`/Python availability and desktop capture behavior in the logged-in user session.
+On Windows hosts, `wmux-stream-agent-service install` creates a per-user Scheduled Task at logon. `wmux-windows-setup install-deps` can install FFmpeg and Python with `winget`, and `wmux-stream-agent --probe-capture` can test a direct one-frame FFmpeg capture. Direct SSH capture may fail with Windows desktop access errors; the scheduled task is the intended path because it runs in the logged-in interactive user context.
 
 ## Workspace Titles
 

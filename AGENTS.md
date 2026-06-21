@@ -45,6 +45,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Keep remote-machine behavior explicit in `MachineConfig`; do not hide durable/session behavior in UI-only state.
 - The `local` and SSH machines default to durable `tmux`/`screen` sessions via `sessionBackend: "auto"`.
 - Use `kind: "powershell-ssh"` for Windows hosts reached from non-Windows wmux servers. It uses local `ssh -tt` to launch remote `pwsh`; follow [docs/WINDOWS_NODE_REGISTRATION.md](docs/WINDOWS_NODE_REGISTRATION.md) for setup and validation. Legacy `kind: "powershell"` means WSMan `Enter-PSSession -ComputerName`; do not mark it online from a non-Windows wmux host by TCP probe alone.
+- `powershell-ssh` host status runs a short encoded PowerShell health probe over SSH, cached for about 15 seconds. It reports helper readiness, wmux reachability through `/api/health`, FFmpeg/Python availability, and the `wmux-stream-agent` Scheduled Task state.
 - Same-machine workspace/tab/split creation should preserve the source pane cwd. The primary source is tmux `#{pane_current_path}`; OSC 7 cwd reports from wmux-managed zsh/bash prompt hooks are the fallback state update path.
 - A pane maps to one long-lived server PTY client while the wmux service process is alive. Closing or refreshing the browser disconnects the WebSocket but does not kill the pane process.
 - Restarting the wmux service restores layout metadata and reattaches local/SSH durable sessions when the target has `tmux` or `screen`. Raw PTY and PowerShell panes still cannot preserve live process state across service restart.
@@ -96,10 +97,11 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Browser clipboard handoff is handled by `POST /api/clipboard`; `scripts/wmux-copy` reads stdin or a file and lets the browser attempt the OS clipboard write with a top-bar fallback button.
 - Browser media handoff is handled by `wmux-media`. Images prefer `kitten icat --transfer-mode=stream --passthrough=tmux --align=left --engine=builtin --stdin=no`; audio/video render in browser media controls; `--mode http` forces the media shelf and `--mode kitty` fails instead of falling back.
 - Windows helper scripts live under `scripts/windows` and are served as a Base64 helper bundle instead of being embedded in the SSH command line. Keep the launch command small; Windows OpenSSH rejects large encoded commands.
+- `wmux-windows-setup` is the Windows self-check/setup entry point. It validates helper state, can persist the helper directory to the user PATH, can install FFmpeg/Python with `winget`, and can install/status the per-user stream Scheduled Task. It must work both inside a bootstrapped wmux pane and from plain SSH where `%LOCALAPPDATA%\wmux\bin` is not yet on `PATH`.
 - Terminal-native image rendering is intentionally implemented around the terminal viewport as Kitty placeholder overlays. Keep product styling out of the terminal canvas/content area.
 - `wmux-hooks install claude` mutates `~/.claude/settings.json` outside the repo. Merge hooks idempotently and preserve user settings.
 - `wmux-hooks install codex` mutates `~/.codex/hooks.json` outside the repo. Codex command hooks require the user to review/trust them with `/hooks` before they run.
-- `wmux-stream-agent` publishes the local display with ffmpeg to the machine's `WMUX_STREAM_RTSP_URL`. It should normally run as a service with `onDemand: true`, polling wmux and starting actual capture only while a stream dialog is open. It must run in the graphical login session of the machine being captured. On macOS, the owning app needs System Settings -> Privacy & Security -> Screen Recording permission.
+- `wmux-stream-agent` publishes the local display with ffmpeg to the machine's `WMUX_STREAM_RTSP_URL`. It should normally run as a service with `onDemand: true`, polling wmux and starting actual capture only while a stream dialog is open. It must run in the graphical login session of the machine being captured. On macOS, the owning app needs System Settings -> Privacy & Security -> Screen Recording permission. On Windows, the validated path is `wmux-windows-setup install-stream`, which creates a per-user Scheduled Task that runs under the logged-in user session.
 - Remote hooks/helpers are not auto-installed retroactively into already-running shell sessions. Start a new wmux pane or ensure the staged helper directory is on `PATH` on the remote host.
 
 ## Current Gaps To Preserve In Docs
@@ -113,7 +115,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Command run tracking is explicit through `wmux-run`; arbitrary shell command detection is not implemented.
 - Cwd preservation is best-effort outside tmux and wmux-managed shell bootstraps.
 - OpenTUI migration is partial and vendored.
-- Pixel streaming is helper-based. Wayland, Windows service/session capture, macOS permission automation, reconnect supervision, and a full wmux native agent remain gaps.
+- Pixel streaming is helper-based. Wayland, locked/logged-out Windows capture behavior, macOS permission automation, reconnect supervision, and a full wmux native agent remain gaps.
 - Keep `FEATURE_GAPS.md` current when a limitation is discovered or intentionally deferred.
 
 ## Code Style

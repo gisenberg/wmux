@@ -64,6 +64,11 @@ export const createHttpServer = (
 
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? bindHost}`);
     try {
+      if (url.pathname === "/api/health" && request.method === "GET") {
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
       if (url.pathname === "/api/bootstrap" && request.method === "GET") {
         sendJson(response, 200, await bootstrap());
         return;
