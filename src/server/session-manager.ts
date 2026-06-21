@@ -123,16 +123,16 @@ export class SessionManager {
     this.sessions.set(pane.id, session);
     this.state.updatePane(pane.id, { status: "running", exitCode: undefined, title: pane.title });
 
-    session.on("output", (data) => this.broadcast(pane.id, { type: "output", data }));
+    session.on("output", (data) => this.broadcast(pane.id, { type: "output", paneId: pane.id, data }));
     session.on("title", (title) => {
       this.state.updatePane(pane.id, { title });
-      this.broadcast(pane.id, { type: "title", title });
+      this.broadcast(pane.id, { type: "title", paneId: pane.id, title });
     });
     session.on("cwd", (cwd) => {
       this.state.updatePane(pane.id, { cwd });
     });
     session.on("exit", (code) => {
-      this.broadcast(pane.id, { type: "exit", code });
+      this.broadcast(pane.id, { type: "exit", paneId: pane.id, code });
       this.sessions.delete(pane.id);
       this.resizeOwners.delete(pane.id);
       const context = this.state.findPaneContext(pane.id);
@@ -211,7 +211,7 @@ export class SessionManager {
       ? this.machines.find((candidate) => candidate.id === fallbackMachineId)
       : undefined;
     if (machine) disposeDurableSession(machine, paneId);
-    this.broadcast(paneId, { type: "removed" });
+    this.broadcast(paneId, { type: "removed", paneId });
     for (const socket of this.sockets.get(paneId) ?? []) {
       this.socketState.delete(socket);
       socket.close(1000, "pane closed");

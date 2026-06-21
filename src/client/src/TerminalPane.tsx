@@ -102,7 +102,6 @@ export function TerminalPane({
     let scrollDisposable: { dispose: () => void } | undefined;
     let renderDisposable: { dispose: () => void } | undefined;
     let reconnectDelayMs = 350;
-    let connectCount = 0;
     kittyParserRef.current = new KittyGraphicsParser();
     kittyPlaceholderStripRef.current.pendingPlaceholderMarks = false;
     kittyImageCacheRef.current.clear();
@@ -275,8 +274,6 @@ export function TerminalPane({
       const term = terminalRef.current;
       if (cancelled || removed || !term) return;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const shouldClearOnReady = connectCount > 0;
-      connectCount += 1;
       const ws = new WebSocket(
         `${protocol}//${window.location.host}/ws/panes/${pane.id}?cols=${safeCols(term.cols)}&rows=${safeRows(term.rows)}`,
       );
@@ -292,21 +289,23 @@ export function TerminalPane({
         ws.send(JSON.stringify({ type: "resize", cols: safeCols(term.cols), rows: safeRows(term.rows) }));
       };
       ws.onclose = () => {
+        if (cancelled) return;
         if (socketRef.current === ws) socketRef.current = null;
         setConnected(false);
         scheduleReconnect();
       };
       ws.onerror = () => {
+        if (cancelled || socketRef.current !== ws) return;
         setConnected(false);
       };
       ws.onmessage = (event) => {
+        if (cancelled || socketRef.current !== ws) return;
         const message = JSON.parse(event.data);
+        if (typeof message.paneId === "string" && message.paneId !== pane.id) return;
         if (message.type === "ready") {
           outputCarryRef.current = "";
-          if (shouldClearOnReady || !message.replay) {
-            term.clear();
-            setKittyInlineItems([]);
-          }
+          term.clear();
+          setKittyInlineItems([]);
           if (message.replay) handleOutput(term, message.replay);
         }
         if (message.type === "output") handleOutput(term, message.data);
