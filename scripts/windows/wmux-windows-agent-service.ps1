@@ -6,17 +6,44 @@ $StateDir = Join-Path $HOME '.wmux'
 $LogDir = Join-Path $StateDir 'logs'
 $Config = if ($env:WMUX_WINDOWS_AGENT_CONFIG) { $env:WMUX_WINDOWS_AGENT_CONFIG } else { Join-Path $StateDir 'windows-agent.json' }
 $HelperDir = if ($env:WMUX_HELPER_DIR) { $env:WMUX_HELPER_DIR } else { Join-Path $env:LOCALAPPDATA 'wmux\bin' }
-$Agent = Join-Path $HelperDir 'wmux-windows-agent.cmd'
+$Agent = Join-Path $HelperDir 'wmux-windows-agent.py'
 $Wrapper = Join-Path $HelperDir 'wmux-windows-agent-task.cmd'
 $OutLog = Join-Path $LogDir 'windows-agent.out.log'
 $ErrLog = Join-Path $LogDir 'windows-agent.err.log'
 
+function Get-PythonLaunch {
+  $Py = Get-Command py.exe -ErrorAction SilentlyContinue
+  if ($Py) {
+    return [ordered]@{
+      exe = [string]$Py.Source
+      prefix = '-3 '
+    }
+  }
+  $Python = Get-Command python.exe -ErrorAction SilentlyContinue
+  if ($Python) {
+    return [ordered]@{
+      exe = [string]$Python.Source
+      prefix = ''
+    }
+  }
+  return $null
+}
+
 function Write-Wrapper {
   New-Item -ItemType Directory -Force -Path $StateDir, $LogDir, $HelperDir | Out-Null
+  $Python = Get-PythonLaunch
+  if (-not $Python) {
+    Write-Error 'Python was not found. Run wmux-windows-setup install-deps, then retry install-agent.'
+    exit 127
+  }
   $Content = @"
 @echo off
 setlocal
-"$Agent" --config "$Config" >> "$OutLog" 2>> "$ErrLog"
+set "PATH=$HelperDir;%PATH%"
+set "WMUX_AGENT_RUN=%RANDOM%-%RANDOM%"
+set "WMUX_AGENT_OUT=$LogDir\windows-agent-%WMUX_AGENT_RUN%.out.log"
+set "WMUX_AGENT_ERR=$LogDir\windows-agent-%WMUX_AGENT_RUN%.err.log"
+"$($Python.exe)" $($Python.prefix)"$Agent" --config "$Config" >> "%WMUX_AGENT_OUT%" 2>> "%WMUX_AGENT_ERR%"
 exit /b %ERRORLEVEL%
 "@
   [System.IO.File]::WriteAllText($Wrapper, $Content, [System.Text.UTF8Encoding]::new($false))
@@ -48,9 +75,7 @@ switch ($ActionName) {
     Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
     Write-Output "Installed $TaskName"
-    Write-Output "Logs:"
-    Write-Output "  $OutLog"
-    Write-Output "  $ErrLog"
+    Write-Output "Logs: $LogDir"
   }
   'restart' {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -72,8 +97,14 @@ switch ($ActionName) {
     Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List *
   }
   'logs' {
-    if (Test-Path -LiteralPath $OutLog) { Get-Content -LiteralPath $OutLog -Tail 120 }
-    if (Test-Path -LiteralPath $ErrLog) { Get-Content -LiteralPath $ErrLog -Tail 120 }
+    $Files = @()
+    $Files += Get-Item -LiteralPath $OutLog, $ErrLog -ErrorAction SilentlyContinue
+    $Files += Get-ChildItem -LiteralPath $LogDir -Filter 'windows-agent-*.out.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2
+    $Files += Get-ChildItem -LiteralPath $LogDir -Filter 'windows-agent-*.err.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2
+    foreach ($File in @($Files | Sort-Object FullName -Unique)) {
+      Write-Output "--- $($File.FullName) ---"
+      Get-Content -LiteralPath $File.FullName -Tail 120 -ErrorAction SilentlyContinue
+    }
   }
   'diagnose' {
     Write-Output "task=$TaskName"

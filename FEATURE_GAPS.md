@@ -4,15 +4,15 @@
 
 1. Remote per-platform agents are only partially implemented.
 
-   The default implementation supports machine affinity by spawning a local PTY for this box or by launching client processes such as `ssh` from this box. Windows now has an experimental machine-local session agent, but Linux/macOS agents are not implemented and the Windows agent still needs a native ConPTY backend before it can replace the legacy SSH PowerShell path for all terminal workflows.
+   The default implementation supports machine affinity by spawning a local PTY for this box or by launching client processes such as `ssh` from this box. Windows now has an experimental machine-local pywinpty-backed ConPTY session agent, but Linux/macOS agents are not implemented.
 
 2. Windows SSH PowerShell is validated on 9800x3d; the Windows agent is experimental.
 
-   `kind: "powershell-ssh"` now starts local `ssh -tt` and launches `pwsh -NoLogo -NoProfile` on the Windows host. This avoids the `Enter-PSSession -HostName` interactive hang seen from wmux's PTY path and does not require the PowerShell SSH remoting subsystem. `sessionBackend: "agent"` opts into the Windows-side agent, which owns processes and replay buffers across wmux server restarts. The first agent backend uses redirected PowerShell stdio, not ConPTY, so it is suitable for simple shell workflows but not full terminal fidelity yet. `kind: "powershell"` remains the legacy WSMan path through `Enter-PSSession -ComputerName`; Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts.
+   `kind: "powershell-ssh"` now starts local `ssh -tt` and launches `pwsh -NoLogo -NoProfile` on the Windows host. This avoids the `Enter-PSSession -HostName` interactive hang seen from wmux's PTY path and does not require the PowerShell SSH remoting subsystem. `sessionBackend: "agent"` opts into the Windows-side agent, which owns pywinpty-backed ConPTY processes and replay buffers across wmux server restarts. `kind: "powershell"` remains the legacy WSMan path through `Enter-PSSession -ComputerName`; Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts.
 
-3. Full Windows terminal fidelity still needs a native ConPTY backend.
+3. Windows agent lifecycle control still needs hardening.
 
-   Layout, tabs, pane metadata, and machine affinity are persisted. Local and SSH panes can survive wmux service restarts when the target has `tmux` or `screen`, because wmux reattaches to a durable per-pane multiplexer session. Windows panes launched through the experimental agent can survive wmux server restarts, but the stdio backend does not provide true terminal resize semantics, rich line editing, full-screen TUI behavior, or ConPTY-compatible control handling. A native ConPTY backend should replace the stdio process adapter behind the same agent API.
+   Layout, tabs, pane metadata, and machine affinity are persisted. Local and SSH panes can survive wmux service restarts when the target has `tmux` or `screen`, because wmux reattaches to a durable per-pane multiplexer session. Windows panes launched through the experimental pywinpty/ConPTY agent can survive wmux server restarts while the Windows agent remains running, but restarting the Windows agent still kills those processes. Graceful process-tree shutdown, recovery after agent restart, and broader full-screen terminal app validation are still pending.
 
 4. Machine management is file-based.
 

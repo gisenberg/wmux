@@ -836,6 +836,26 @@ export const resolveMachineStatuses = async (
       if (machine.kind === "powershell-ssh") {
         const hasSsh = commandExists("ssh");
         const port = machine.port ?? 22;
+        const agent = shouldUseWindowsAgent(machine) ? await probeWindowsAgent(machine) : undefined;
+        if (shouldUseWindowsAgent(machine)) {
+          const sshReachable = hasSsh ? await probeTcp(machine.host, port, 900) : false;
+          const agentReachable = agent?.reachable === true;
+          return {
+            ...machine,
+            reachable: agentReachable,
+            checkedAt,
+            endpoint: agent?.url ?? `${machine.host}:${machine.agentPort ?? 3481}`,
+            backendDetail: windowsStatusDetail(backendDetail(machine), agent),
+            reason: agentReachable ? undefined : `Windows agent unavailable: ${agent?.reason ?? "unknown error"}`,
+            health: {
+              sshReachable,
+              agentReachable: agent?.reachable ?? false,
+              agentUrl: agent?.url,
+              agentHealth: agent?.health,
+              agentReason: agent?.reason,
+            },
+          };
+        }
         const reachable = hasSsh ? await probeTcp(machine.host, port, 900) : false;
         const health = reachable
           ? await probeWindowsPowerShellSsh(machine, localEndpoint)
@@ -843,15 +863,13 @@ export const resolveMachineStatuses = async (
               reachable: false,
               reason: hasSsh ? `no TCP response on ${machine.host}:${port}` : "local ssh client is not installed or not executable",
             };
-        const agent = shouldUseWindowsAgent(machine) ? await probeWindowsAgent(machine) : undefined;
-        const agentUnavailable = shouldUseWindowsAgent(machine) && agent?.reachable !== true;
         return {
           ...machine,
-          reachable: health.reachable && !agentUnavailable,
+          reachable: health.reachable,
           checkedAt,
           endpoint: `${machine.host}:${port}`,
           backendDetail: windowsStatusDetail(health.backendDetail ?? backendDetail(machine), agent),
-          reason: agentUnavailable ? `Windows agent unavailable: ${agent?.reason ?? "unknown error"}` : health.reason,
+          reason: health.reason,
           health: {
             ...(health.health ?? {}),
             ...(agent
@@ -902,8 +920,11 @@ const windowsStatusDetail = (
   agent: Awaited<ReturnType<typeof probeWindowsAgent>> | undefined,
 ): string => {
   if (!agent) return detail;
+  const backend = agent.health?.backend ? ` ${agent.health.backend}` : "";
+  const dependency =
+    agent.health?.backend === "conpty" && agent.health.conptyAvailable === false ? "; pywinpty missing" : "";
   const agentDetail = agent.reachable
-    ? `agent ${agent.health?.version ?? "ready"} at ${agent.url}`
+    ? `agent ${agent.health?.version ?? "ready"}${backend} at ${agent.url}${dependency}`
     : `agent unavailable at ${agent.url ?? "unknown URL"}`;
   return `${detail}; ${agentDetail}`;
 };

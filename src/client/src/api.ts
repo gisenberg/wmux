@@ -70,10 +70,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
-  splitPane: (tabId: string, paneId: string, direction: SplitDirection, machineId: string) =>
+  splitPane: (tabId: string, paneId: string, direction: SplitDirection, machineId?: string) =>
     json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/split`, {
       method: "POST",
-      body: JSON.stringify({ paneId, direction, machineId }),
+      body: JSON.stringify({ paneId, direction, ...(machineId ? { machineId } : {}) }),
     }),
   updateSplitRatio: (tabId: string, path: string, ratio: number) =>
     json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/split-ratio`, {

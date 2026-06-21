@@ -148,7 +148,7 @@ if ((Test-Path -LiteralPath $AgentDefaultsPath) -and -not (Test-Path -LiteralPat
   }
   $DefaultAgentConfig = Get-Content -LiteralPath $AgentDefaultsPath -Raw | ConvertFrom-Json -AsHashtable
   $ChangedAgentConfig = $false
-  foreach ($Key in @('machine', 'host', 'port', 'shell', 'cwd', 'helperDir', 'maxReplayBytes')) {
+  foreach ($Key in @('machine', 'host', 'port', 'shell', 'cwd', 'helperDir', 'maxReplayBytes', 'backend')) {
     if (-not $ExistingAgentConfig.ContainsKey($Key)) {
       $ExistingAgentConfig[$Key] = $DefaultAgentConfig[$Key]
       $ChangedAgentConfig = $true
@@ -193,6 +193,10 @@ function global:prompt {
   "PS $($executionContext.SessionState.Path.CurrentLocation)> "
 }
 
+try {
+  Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue
+} catch {}
+
 $StartCwd = __wmuxNormalizeStartCwd $env:WMUX_START_CWD
 if ($StartCwd) {
   Set-Location -LiteralPath $StartCwd -ErrorAction SilentlyContinue
@@ -227,6 +231,16 @@ try {
   $Response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri ${psSingleQuote(`${wmuxUrl.replace(/\/+$/, "")}/api/health`)} -TimeoutSec 3
   $WmuxReachable = [int]$Response.StatusCode -ge 200 -and [int]$Response.StatusCode -lt 500
 } catch {}
+$Pywinpty = $false
+try {
+  if (Get-Command py.exe -ErrorAction SilentlyContinue) {
+    & py.exe -3 -c 'import winpty' *> $null
+    $Pywinpty = ($LASTEXITCODE -eq 0)
+  } elseif (Get-Command python.exe -ErrorAction SilentlyContinue) {
+    & python.exe -c 'import winpty' *> $null
+    $Pywinpty = ($LASTEXITCODE -eq 0)
+  }
+} catch {}
 [ordered]@{
   computerName = $env:COMPUTERNAME
   userName = $env:USERNAME
@@ -241,6 +255,7 @@ try {
   ffmpeg = [bool](Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)
   python = [bool](Get-Command python.exe -ErrorAction SilentlyContinue)
   py = [bool](Get-Command py.exe -ErrorAction SilentlyContinue)
+  pywinpty = $Pywinpty
   winget = [bool](Get-Command winget.exe -ErrorAction SilentlyContinue)
   streamConfigExists = [bool]$StreamConfig
   streamTaskState = $(if ($Task) { [string]$Task.State } else { 'missing' })
@@ -309,6 +324,7 @@ const windowsAgentConfig = (machine: MachineConfig): Record<string, unknown> => 
   cwd: machine.cwd ?? "",
   helperDir: "%LOCALAPPDATA%\\wmux\\bin",
   maxReplayBytes: 2 * 1024 * 1024,
+  backend: "conpty",
 });
 
 const localWindowsHelperScript = (name: string): string => {

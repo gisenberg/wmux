@@ -8,6 +8,60 @@ function Get-CommandPath([string]$Name) {
   return $null
 }
 
+function Update-ProcessPath {
+  $MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $env:PATH = @($MachinePath, $UserPath, $env:PATH) -join ';'
+}
+
+function Invoke-Python([string[]]$PythonArgs, [switch]$Quiet) {
+  $Py = Get-CommandPath 'py.exe'
+  if ($Py) {
+    if ($Quiet) {
+      & $Py -3 @PythonArgs *> $null
+    } else {
+      & $Py -3 @PythonArgs
+    }
+    $script:WmuxLastPythonExitCode = [int]$LASTEXITCODE
+    return
+  }
+  $Python = Get-CommandPath 'python.exe'
+  if ($Python) {
+    if ($Quiet) {
+      & $Python @PythonArgs *> $null
+    } else {
+      & $Python @PythonArgs
+    }
+    $script:WmuxLastPythonExitCode = [int]$LASTEXITCODE
+    return
+  }
+  if (-not $Quiet) {
+    Write-Error 'Python was not found. Run wmux-windows-setup install-deps after installing winget or Python.'
+  }
+  $script:WmuxLastPythonExitCode = 127
+}
+
+function Test-PythonModule([string]$ModuleName) {
+  if (-not (Get-CommandPath 'py.exe') -and -not (Get-CommandPath 'python.exe')) {
+    return $false
+  }
+  $Code = "import $ModuleName"
+  Invoke-Python -PythonArgs @('-c', $Code) -Quiet
+  return ($script:WmuxLastPythonExitCode -eq 0)
+}
+
+function Install-PythonPackage([string]$PackageName, [string]$ImportName) {
+  if (Test-PythonModule $ImportName) {
+    Write-Output "$PackageName is already available."
+    return
+  }
+  Invoke-Python -PythonArgs @('-m', 'pip', 'install', '--user', '--upgrade', $PackageName)
+  if ($script:WmuxLastPythonExitCode -ne 0) {
+    Write-Error "Failed to install $PackageName with pip."
+    exit $script:WmuxLastPythonExitCode
+  }
+}
+
 function Get-WmuxHelperDir {
   if ($env:WMUX_HELPER_DIR) { return $env:WMUX_HELPER_DIR }
   return (Join-Path $env:LOCALAPPDATA 'wmux\bin')
@@ -100,6 +154,9 @@ function Get-WindowsWmuxReport {
       winget = Get-CommandPath 'winget.exe'
       sshd = Get-CommandPath 'sshd.exe'
     }
+    pythonModules = [ordered]@{
+      pywinpty = Test-PythonModule 'winpty'
+    }
     hookConfig = [ordered]@{
       claudeSettings = Test-Path -LiteralPath (Join-Path $HOME '.claude\settings.json') -PathType Leaf
       codexHooks = Test-Path -LiteralPath (Join-Path $HOME '.codex\hooks.json') -PathType Leaf
@@ -130,14 +187,17 @@ function Install-WmuxDependencies {
   }
   if (-not (Get-CommandPath 'ffmpeg.exe')) {
     & $Winget install --id Gyan.FFmpeg --exact --accept-package-agreements --accept-source-agreements
+    Update-ProcessPath
   } else {
     Write-Output 'ffmpeg.exe is already available.'
   }
   if (-not (Get-CommandPath 'python.exe') -and -not (Get-CommandPath 'py.exe')) {
     & $Winget install --id Python.Python.3.12 --exact --accept-package-agreements --accept-source-agreements
+    Update-ProcessPath
   } else {
     Write-Output 'Python is already available.'
   }
+  Install-PythonPackage 'pywinpty' 'winpty'
 }
 
 function Show-Usage {
@@ -146,7 +206,7 @@ usage: wmux-windows-setup [validate|persist-path|install-deps|install-stream|str
 
 validate       Print a JSON report for Windows wmux prerequisites and helper state.
 persist-path   Add %LOCALAPPDATA%\wmux\bin to the persistent user PATH.
-install-deps   Install ffmpeg and Python with winget when missing.
+install-deps   Install ffmpeg, Python, and pywinpty when missing.
 install-stream Install/start the per-user wmux stream-agent Scheduled Task.
 stream-status  Show the wmux stream-agent Scheduled Task status.
 install-agent  Install/start the per-user wmux Windows session agent Scheduled Task.

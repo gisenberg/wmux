@@ -401,7 +401,7 @@ export function App() {
     await refresh(response.state);
   };
 
-  const splitPane = async (paneId: string, direction: SplitDirection, machineId: string) => {
+  const splitPane = async (paneId: string, direction: SplitDirection, machineId?: string) => {
     if (!activeTab) return;
     const response = await api.splitPane(activeTab.id, paneId, direction, machineId);
     await refresh(response.state);
@@ -522,7 +522,7 @@ export function App() {
       if (primaryOnly && key === "d") {
         const pane = activeTab?.panes.find((candidate) => candidate.id === activeTab.activePaneId);
         if (!pane) return;
-        run(() => splitPane(pane.id, event.shiftKey ? "horizontal" : "vertical", newMachineId));
+        run(() => splitPane(pane.id, event.shiftKey ? "horizontal" : "vertical"));
         return;
       }
 
@@ -618,6 +618,7 @@ export function App() {
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const activePane = activeTab?.panes.find((pane) => pane.id === activeTab.activePaneId);
+    const activePaneMachine = activePane ? displayMachines.find((machine) => machine.id === activePane.machineId) : undefined;
     const activePaneCount = activeTab?.panes.length ?? 0;
     const workspaceUnreadCount = activeWorkspace ? unreadByWorkspaceId.get(activeWorkspace.id) ?? 0 : 0;
     const base: PaletteCommand[] = [
@@ -729,22 +730,22 @@ export function App() {
       },
       {
         id: "split-right",
-        title: `Split right on ${selectedMachine?.name ?? newMachineId}`,
+        title: `Split right on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
         subtitle: activeTab?.title,
         section: "Pane",
         shortcut: "Cmd+D",
-        disabled: !activePane || !selectedMachine?.reachable,
-        run: () => activePane && splitPane(activePane.id, "vertical", newMachineId),
+        disabled: !activePane || !activePaneMachine?.reachable,
+        run: () => activePane && splitPane(activePane.id, "vertical"),
         keywords: ["vertical", "pane"],
       },
       {
         id: "split-down",
-        title: `Split down on ${selectedMachine?.name ?? newMachineId}`,
+        title: `Split down on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
         subtitle: activeTab?.title,
         section: "Pane",
         shortcut: "Shift+Cmd+D",
-        disabled: !activePane || !selectedMachine?.reachable,
-        run: () => activePane && splitPane(activePane.id, "horizontal", newMachineId),
+        disabled: !activePane || !activePaneMachine?.reachable,
+        run: () => activePane && splitPane(activePane.id, "horizontal"),
         keywords: ["horizontal", "pane"],
       },
       {
@@ -930,7 +931,7 @@ export function App() {
             <span className={`reach-dot ${selectedMachine?.reachable ? "on" : ""}`} />
           </div>
           <div className="new-session">
-            <select title="Target host for new workspaces, tabs, and splits" value={newMachineId} onChange={(event) => setNewMachineId(event.target.value)}>
+            <select title="Target host for new workspaces and tabs" value={newMachineId} onChange={(event) => setNewMachineId(event.target.value)}>
             {displayMachines.map((machine) => (
               <option key={machine.id} value={machine.id} disabled={!machine.reachable}>
                 {machine.name}
@@ -1171,7 +1172,6 @@ export function App() {
           <LayoutView
             tab={activeTab}
             machines={displayMachines}
-            splitMachineId={newMachineId}
             terminalFontSize={settings.terminalFontSize}
             unreadByPaneId={unreadByPaneId}
             mediaByPaneId={mediaByPaneId}

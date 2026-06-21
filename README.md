@@ -129,7 +129,7 @@ wmux-windows-setup install-stream
 wmux-windows-setup install-agent
 ```
 
-`install-deps` uses `winget` to install FFmpeg and Python when missing. `install-stream` creates the per-user Scheduled Task that runs the on-demand screen stream agent. `install-agent` creates a per-user Scheduled Task for the experimental Windows session agent.
+`install-deps` uses `winget` to install FFmpeg and Python when missing, then installs `pywinpty` for the Windows session agent's ConPTY backend. `install-stream` creates the per-user Scheduled Task that runs the on-demand screen stream agent. `install-agent` creates a per-user Scheduled Task for the experimental Windows session agent, which uses ConPTY by default.
 
 ## Agent Events
 
@@ -215,7 +215,7 @@ wmux-stream-agent-service status
 wmux-stream-agent-service logs
 ```
 
-On Windows hosts, `wmux-stream-agent-service install` creates a per-user Scheduled Task at logon. `wmux-windows-setup install-deps` can install FFmpeg and Python with `winget`, and `wmux-stream-agent --probe-capture` can test a direct one-frame FFmpeg capture. Direct SSH capture may fail with Windows desktop access errors; the scheduled task is the intended path because it runs in the logged-in interactive user context.
+On Windows hosts, `wmux-stream-agent-service install` creates a per-user Scheduled Task at logon. `wmux-windows-setup install-deps` can install FFmpeg and Python with `winget`, installs `pywinpty`, and `wmux-stream-agent --probe-capture` can test a direct one-frame FFmpeg capture. Direct SSH capture may fail with Windows desktop access errors; the scheduled task is the intended path because it runs in the logged-in interactive user context.
 
 ## Experimental Windows Session Agent
 
@@ -239,7 +239,7 @@ The agent listens on the configured Tailscale/internal host and owns pane proces
 }
 ```
 
-This first backend uses redirected PowerShell stdio, so it is restart-durable for simple shell workflows but is not a full ConPTY terminal yet. Full-screen terminal apps, rich line editing, and resize fidelity still need a native ConPTY backend.
+The Windows agent uses `pywinpty` with its native ConPTY backend by default, so pane input, resize, rich line editing, and full-screen terminal applications go through Windows' pseudo console API instead of redirected PowerShell stdio. A `backend: "stdio"` config value remains available as an explicit fallback for debugging older hosts.
 
 ## Workspace Titles
 
@@ -277,7 +277,7 @@ When you create a new workspace, tab, or split on the same host as the source pa
 
 Open the command palette with `Cmd+K` or `Ctrl+K`, or use the command icon in the top bar. It searches common actions, workspace and tab navigation, host-scoped session creation, pane splits, settings, and session audit entry points.
 
-The workspace rail has a host filter for narrowing the left navigation without changing the target host used for new workspaces, tabs, and splits.
+The workspace rail has a host filter for narrowing the left navigation without changing the target host used for new workspaces and tabs. Splits open on the host of the pane being split.
 
 ## Durable Session Audit
 

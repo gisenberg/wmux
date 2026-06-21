@@ -23,13 +23,12 @@ interface Props {
   active: boolean;
   unreadCount: number;
   machines: MachineStatus[];
-  splitMachineId: string;
   terminalFontSize: number;
   canClose: boolean;
   mediaItems: TerminalMedia[];
   lastRun?: TerminalRun;
   onActivate: () => void;
-  onSplit: (direction: SplitDirection, machineId: string) => void;
+  onSplit: (direction: SplitDirection, machineId?: string) => void;
   onClose: () => void;
   onDismissMedia: (mediaId: string) => void;
 }
@@ -68,7 +67,6 @@ export function TerminalPane({
   active,
   unreadCount,
   machines,
-  splitMachineId,
   terminalFontSize,
   canClose,
   mediaItems,
@@ -411,8 +409,7 @@ export function TerminalPane({
   }, [terminalFontSize]);
 
   const currentMachine = machines.find((machine) => machine.id === pane.machineId);
-  const selectedMachine = machines.find((machine) => machine.id === splitMachineId);
-  const canSplit = selectedMachine?.reachable ?? false;
+  const canSplit = currentMachine?.reachable ?? false;
   const rerunLastCommand = () => {
     if (!lastRun?.command || !socketRef.current) return;
     sendInput(socketRef.current, `${lastRun.command}\r`);
@@ -448,10 +445,10 @@ export function TerminalPane({
               </button>
             </div>
           ) : null}
-          <button title={`Split right on ${selectedMachine?.name ?? splitMachineId}`} disabled={!canSplit} onClick={() => onSplit("vertical", splitMachineId)}>
+          <button title={`Split right on ${currentMachine?.name ?? pane.machineId}`} disabled={!canSplit} onClick={() => onSplit("vertical")}>
             <Columns2 size={16} />
           </button>
-          <button title={`Split down on ${selectedMachine?.name ?? splitMachineId}`} disabled={!canSplit} onClick={() => onSplit("horizontal", splitMachineId)}>
+          <button title={`Split down on ${currentMachine?.name ?? pane.machineId}`} disabled={!canSplit} onClick={() => onSplit("horizontal")}>
             <Rows2 size={16} />
           </button>
           <button title="Focus pane" onClick={onActivate}>

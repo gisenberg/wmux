@@ -16,6 +16,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 VERSION = "0.1"
 DEFAULT_REPLAY_BYTES = 2 * 1024 * 1024
+BACKEND_CONPTY = "conpty"
+BACKEND_STDIO = "stdio"
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -44,6 +46,30 @@ def config_int(config: dict[str, Any], key: str, fallback: int) -> int:
         except ValueError:
             return fallback
     return fallback
+
+
+def pywinpty_available() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import winpty  # type: ignore
+
+        return hasattr(winpty, "PtyProcess")
+    except Exception:
+        return False
+
+
+def conpty_available() -> bool:
+    return pywinpty_available()
+
+
+def configured_backend(config: dict[str, Any]) -> str:
+    value = config_string(config, "backend", BACKEND_CONPTY).strip().lower()
+    if value in (BACKEND_STDIO, "legacy", "legacy-stdio"):
+        return BACKEND_STDIO
+    if value == "auto":
+        return BACKEND_CONPTY if conpty_available() else BACKEND_STDIO
+    return BACKEND_CONPTY
 
 
 def is_private_bind_host(host: str) -> bool:
@@ -82,6 +108,9 @@ function global:prompt {{
   __wmuxEmitCwd
   "PS $($executionContext.SessionState.Path.CurrentLocation)> "
 }}
+try {{
+  Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue
+}} catch {{}}
 if ('{escaped_cwd}') {{
   Set-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue
 }}
@@ -103,6 +132,167 @@ def powershell_command(shell: str, cwd: str) -> list[str]:
     ]
 
 
+def session_environment(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("TERM", "xterm-256color")
+    env.setdefault("COLORTERM", "truecolor")
+    helper_dir = os.path.expandvars(config_string(config, "helperDir"))
+    if helper_dir:
+        env["PATH"] = helper_dir + os.pathsep + env.get("PATH", "")
+        env["WMUX_HELPER_DIR"] = helper_dir
+    payload_env = payload.get("env")
+    if isinstance(payload_env, dict):
+        for key, value in payload_env.items():
+            if isinstance(key, str) and isinstance(value, str):
+                env[key] = value
+    return env
+
+
+def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -> list[str] | str:
+    shell = str(payload.get("shell") or config_string(config, "shell", "pwsh"))
+    lower_shell = os.path.basename(shell).lower()
+    if lower_shell in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+        return powershell_command(shell, cwd)
+    return shell
+
+
+class StdioBackend:
+    name = BACKEND_STDIO
+
+    def __init__(self, config: dict[str, Any], payload: dict[str, Any], cwd: str):
+        command = session_command(config, payload, cwd)
+        self.process = subprocess.Popen(
+            command,
+            cwd=cwd if os.path.isdir(cwd) else None,
+            env=session_environment(config, payload),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+
+    @property
+    def pid(self) -> int:
+        return int(self.process.pid or 0)
+
+    def write(self, data: bytes) -> None:
+        if not self.process.stdin:
+            return
+        self.process.stdin.write(data.replace(b"\r", b"\n"))
+        self.process.stdin.flush()
+
+    def resize(self, _cols: int, _rows: int) -> None:
+        return
+
+    def terminate(self) -> None:
+        try:
+            if os.name == "nt":
+                self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                time.sleep(0.2)
+            self.process.terminate()
+        except Exception:
+            pass
+
+    def read_output(self, append: Any) -> int | None:
+        while True:
+            chunk = os.read(self.process.stdout.fileno(), 4096) if self.process.stdout else b""
+            if not chunk:
+                break
+            append(chunk)
+        return self.process.poll()
+
+
+class ConptyBackend:
+    name = BACKEND_CONPTY
+
+    def __init__(self, config: dict[str, Any], payload: dict[str, Any], cwd: str, cols: int, rows: int):
+        if not conpty_available():
+            raise RuntimeError("pywinpty is required for the wmux ConPTY backend; run wmux-windows-setup install-deps")
+        from winpty import Backend, PtyProcess  # type: ignore
+
+        command = session_command(config, payload, cwd)
+        self.process = PtyProcess.spawn(
+            command,
+            cwd=cwd if os.path.isdir(cwd) else None,
+            env=session_environment(config, payload),
+            dimensions=(max(1, int(rows)), max(2, int(cols))),
+            backend=Backend.ConPTY,
+        )
+        self.lock = threading.Lock()
+        self.closed = False
+
+    @property
+    def pid(self) -> int:
+        return int(self.process.pid or 0)
+
+    def write(self, data: bytes) -> None:
+        if self.closed or not data:
+            return
+        with self.lock:
+            if self.closed:
+                return
+            self.process.write(data.decode("utf-8", errors="replace"))
+
+    def resize(self, cols: int, rows: int) -> None:
+        if self.closed:
+            return
+        cols = max(2, int(cols))
+        rows = max(1, int(rows))
+        with self.lock:
+            if self.closed:
+                return
+            self.process.setwinsize(rows, cols)
+
+    def terminate(self) -> None:
+        with self.lock:
+            if self.closed:
+                return
+            try:
+                self.process.terminate(force=True)
+            except Exception:
+                pass
+            try:
+                self.process.close(force=True)
+            except Exception:
+                pass
+            self.closed = True
+
+    def read_output(self, append: Any) -> int | None:
+        try:
+            while True:
+                chunk = self.process.fileobj.recv(4096)
+                if not chunk:
+                    break
+                chunk = chunk.replace(b"0011Ignore", b"")
+                if chunk:
+                    append(chunk)
+        except OSError:
+            pass
+        finally:
+            exit_code = self._exit_code()
+            self._close()
+        return exit_code
+
+    def _exit_code(self) -> int | None:
+        try:
+            if self.process.isalive():
+                return None
+            value = self.process.exitstatus
+            return int(value) if value is not None else None
+        except Exception:
+            return None
+
+    def _close(self) -> None:
+        with self.lock:
+            if self.closed:
+                return
+            try:
+                self.process.close(force=True)
+            except Exception:
+                pass
+            self.closed = True
+
+
 class Session:
     def __init__(self, session_id: str, config: dict[str, Any], payload: dict[str, Any]):
         self.id = session_id
@@ -114,7 +304,7 @@ class Session:
         self.condition = threading.Condition()
         self.exited = False
         self.exit_code: int | None = None
-        self.process = self._spawn(payload)
+        self.backend = self._create_backend(payload)
         self.reader = threading.Thread(target=self._read_output, name=f"wmux-agent-reader-{session_id}", daemon=True)
         self.reader.start()
 
@@ -124,12 +314,13 @@ class Session:
 
     @property
     def pid(self) -> int:
-        return int(self.process.pid or 0)
+        return self.backend.pid
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "pid": self.pid,
+            "backend": self.backend.name,
             "status": "exited" if self.exited else "running",
             "exitCode": self.exit_code,
             "cwd": self.cwd,
@@ -138,26 +329,19 @@ class Session:
         }
 
     def write(self, data: bytes) -> None:
-        if self.exited or not self.process.stdin:
+        if self.exited:
             return
-        data = data.replace(b"\r", b"\n")
-        self.process.stdin.write(data)
-        self.process.stdin.flush()
+        self.backend.write(data)
 
-    def resize(self, _cols: int, _rows: int) -> None:
-        # The first backend uses redirected stdio. A later ConPTY backend should resize here.
-        return
+    def resize(self, cols: int, rows: int) -> None:
+        if self.exited:
+            return
+        self.backend.resize(cols, rows)
 
     def terminate(self) -> None:
         if self.exited:
             return
-        try:
-            if os.name == "nt":
-                self.process.send_signal(signal.CTRL_BREAK_EVENT)
-                time.sleep(0.2)
-            self.process.terminate()
-        except Exception:
-            pass
+        self.backend.terminate()
 
     def read_from(self, cursor: int, timeout_ms: int) -> dict[str, Any]:
         deadline = time.monotonic() + max(0, timeout_ms) / 1000
@@ -179,42 +363,21 @@ class Session:
                 "cwd": self.cwd,
             }
 
-    def _spawn(self, payload: dict[str, Any]) -> subprocess.Popen[bytes]:
-        env = os.environ.copy()
-        helper_dir = os.path.expandvars(config_string(self.config, "helperDir"))
-        if helper_dir:
-            env["PATH"] = helper_dir + os.pathsep + env.get("PATH", "")
-            env["WMUX_HELPER_DIR"] = helper_dir
-        payload_env = payload.get("env")
-        if isinstance(payload_env, dict):
-            for key, value in payload_env.items():
-                if isinstance(key, str) and isinstance(value, str):
-                    env[key] = value
-        shell = str(payload.get("shell") or config_string(self.config, "shell", "pwsh"))
-        lower_shell = os.path.basename(shell).lower()
-        if lower_shell in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
-            command = powershell_command(shell, self.cwd)
-        else:
-            command = shell
-        return subprocess.Popen(
-            command,
-            cwd=self.cwd if os.path.isdir(self.cwd) else None,
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        )
+    def _create_backend(self, payload: dict[str, Any]) -> StdioBackend | ConptyBackend:
+        backend = configured_backend(self.config)
+        if backend == BACKEND_STDIO:
+            return StdioBackend(self.config, payload, self.cwd)
+        cols = int(payload.get("cols") or 80)
+        rows = int(payload.get("rows") or 24)
+        return ConptyBackend(self.config, payload, self.cwd, cols, rows)
 
     def _read_output(self) -> None:
         try:
-            while True:
-                chunk = os.read(self.process.stdout.fileno(), 4096) if self.process.stdout else b""
-                if not chunk:
-                    break
-                self._append(chunk)
+            self.exit_code = self.backend.read_output(self._append)
+        except Exception as error:
+            self._append(f"\r\n[wmux-agent] backend read failed: {error}\r\n".encode("utf-8", errors="replace"))
+            self.exit_code = None
         finally:
-            self.exit_code = self.process.poll()
             self.exited = True
             self._append(f"\r\n[wmux-agent] process exited with code {self.exit_code}\r\n".encode("utf-8"))
             with self.condition:
@@ -233,6 +396,7 @@ class Session:
 class AgentState:
     def __init__(self, config: dict[str, Any]):
         self.config = config
+        self.backend = configured_backend(config)
         self.sessions: dict[str, Session] = {}
         self.lock = threading.Lock()
 
@@ -279,7 +443,9 @@ class Handler(BaseHTTPRequestHandler):
                     "machine": config_string(self.state.config, "machine", "windows"),
                     "pid": os.getpid(),
                     "sessions": len(self.state.sessions),
-                    "backend": "stdio",
+                    "backend": self.state.backend,
+                    "conptyAvailable": conpty_available(),
+                    "pywinptyAvailable": pywinpty_available(),
                 }
             )
             return
@@ -301,7 +467,11 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
         if len(parts) == 2 and parts[0] == "sessions":
-            session = self.state.get_or_create(parts[1], self.read_json())
+            try:
+                session = self.state.get_or_create(parts[1], self.read_json())
+            except Exception as error:
+                self.send_json({"error": "session_start_failed", "message": str(error)}, status=500)
+                return
             self.send_json(session.snapshot())
             return
         if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "input":

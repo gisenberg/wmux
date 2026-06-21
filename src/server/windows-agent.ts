@@ -35,6 +35,8 @@ export interface WindowsAgentHealth {
   pid?: number;
   sessions?: number;
   backend?: string;
+  conptyAvailable?: boolean;
+  pywinptyAvailable?: boolean;
 }
 
 const MAX_REPLAY_BYTES = 2 * 1024 * 1024;

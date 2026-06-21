@@ -227,9 +227,9 @@ wmux-windows-setup agent-status
 
 Notes:
 
-- `validate` prints a JSON report for helper state, wmux API reachability, FFmpeg/Python/winget availability, hook config files, and stream Scheduled Task state.
+- `validate` prints a JSON report for helper state, wmux API reachability, FFmpeg/Python/pywinpty/winget availability, hook config files, and stream Scheduled Task state.
 - `persist-path` adds `%LOCALAPPDATA%\wmux\bin` to the persistent user PATH for future non-wmux shells.
-- `install-deps` uses `winget` to install `Gyan.FFmpeg` and `Python.Python.3.12` when missing.
+- `install-deps` uses `winget` to install `Gyan.FFmpeg` and `Python.Python.3.12` when missing, then installs `pywinpty` with pip.
 - `install-stream` installs and starts the per-user `wmux-stream-agent` Scheduled Task.
 - `install-agent` installs and starts the per-user `wmux-windows-agent` Scheduled Task for experimental restart-durable sessions.
 
@@ -296,7 +296,9 @@ Expected:
   "ok": true,
   "version": "0.1",
   "machine": "9800x3d",
-  "backend": "stdio"
+  "backend": "conpty",
+  "conptyAvailable": true,
+  "pywinptyAvailable": true
 }
 ```
 
@@ -307,6 +309,10 @@ session="windows-agent-smoke"
 curl -fsS -X POST "http://100.68.206.111:3481/sessions/$session" \
   -H 'content-type: application/json' \
   -d '{"cols":120,"rows":30,"cwd":"C:\\Users\\gisen"}'
+da=$(printf '\033[?64;1;2;6;9;15;18;21;22c' | base64 -w0)
+curl -fsS -X POST "http://100.68.206.111:3481/sessions/$session/input" \
+  -H 'content-type: application/json' \
+  -d "{\"dataBase64\":\"$da\"}"
 curl -fsS -X POST "http://100.68.206.111:3481/sessions/$session/input" \
   -H 'content-type: application/json' \
   -d '{"dataBase64":"V3JpdGUtT3V0cHV0ICJoZWxsby1mcm9tLWFnZW50Ig0="}'
@@ -330,7 +336,7 @@ To make wmux use the agent for new panes, opt in explicitly:
 }
 ```
 
-Keep the legacy `powershell-ssh` path available until the agent has a native ConPTY backend.
+Keep the legacy `powershell-ssh` path available as a fallback while the ConPTY agent is still being validated.
 
 ## Definition Of Done
 
@@ -342,7 +348,7 @@ Keep the legacy `powershell-ssh` path available until the agent has a native Con
 - Creating a wmux workspace on `9800x3d` opens an interactive PowerShell session.
 - New Windows panes stage helper scripts into `%LOCALAPPDATA%\wmux\bin`.
 - `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup` resolve inside new Windows panes.
-- `wmux-windows-setup validate` reports `wmuxApi.reachable: true`, helper scripts present, FFmpeg/Python available, and the stream task running.
+- `wmux-windows-setup validate` reports `wmuxApi.reachable: true`, helper scripts present, FFmpeg/Python/pywinpty available, and the stream task running.
 - A short `/api/streams/9800x3d/request` lease causes the Windows stream agent to publish `wmux-9800x3d`, then return idle after release.
 - `wmux-windows-setup validate` reports the `wmux-windows-agent` helper and agent config present.
 - `curl http://100.68.206.111:3481/health` reports the Windows session agent as healthy.
@@ -352,5 +358,5 @@ Keep the legacy `powershell-ssh` path available until the agent has a native Con
 
 - Legacy Windows SSH PowerShell panes are not durable. Agent-backed Windows panes are owned by `wmux-windows-agent` and can survive `wmux.service` restarts.
 - Windows helper staging and cwd reporting require a new pane after the wmux service has been updated.
-- Windows screen streaming is validated on 9800x3d through FFmpeg/gdigrab and the per-user Scheduled Task. Locked/logged-out behavior, reconnect supervision, and a native Windows wmux agent are still not implemented.
-- The first Windows session agent backend uses redirected stdio PowerShell, not ConPTY. It is restart-durable for simple shell workflows but does not yet have full terminal fidelity.
+- Windows screen streaming is validated on 9800x3d through FFmpeg/gdigrab and the per-user Scheduled Task. Locked/logged-out behavior, reconnect supervision, and a fuller Windows wmux agent are still not implemented.
+- The Windows session agent uses pywinpty-backed ConPTY by default. It is restart-durable across `wmux.service` restarts while the Windows agent keeps running, but Windows-agent restarts still kill the owned ConPTY processes and broad full-screen app validation is still pending.

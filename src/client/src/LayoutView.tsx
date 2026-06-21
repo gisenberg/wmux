@@ -5,13 +5,12 @@ import type { LayoutNode, MachineStatus, PaneState, SplitDirection, SurfaceTab, 
 interface Props {
   tab: SurfaceTab;
   machines: MachineStatus[];
-  splitMachineId: string;
   terminalFontSize: number;
   unreadByPaneId: Map<string, number>;
   mediaByPaneId: Map<string, TerminalMedia[]>;
   runsByPaneId: Map<string, TerminalRun>;
   onActivatePane: (paneId: string) => void;
-  onSplit: (paneId: string, direction: SplitDirection, machineId: string) => void;
+  onSplit: (paneId: string, direction: SplitDirection, machineId?: string) => void;
   onResizeSplit: (path: string, ratio: number) => void;
   onClosePane: (paneId: string) => void;
   onDismissMedia: (mediaId: string) => void;
@@ -20,7 +19,6 @@ interface Props {
 export function LayoutView({
   tab,
   machines,
-  splitMachineId,
   terminalFontSize,
   unreadByPaneId,
   mediaByPaneId,
@@ -99,7 +97,6 @@ export function LayoutView({
           active={tab.activePaneId === pane.id}
           unreadCount={unreadByPaneId.get(pane.id) ?? 0}
           machines={machines}
-          splitMachineId={splitMachineId}
           terminalFontSize={terminalFontSize}
           canClose={tab.panes.length > 1}
           mediaItems={mediaByPaneId.get(pane.id) ?? []}
