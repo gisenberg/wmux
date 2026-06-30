@@ -1,8 +1,8 @@
 # Windows Node Registration
 
-This runbook is for registering a Windows machine, such as `9800x3d`, as a wmux node from the rtx6000 Ubuntu wmux server.
+This runbook is for registering a Windows machine, such as `9800x3d`, as a wmux node from the homelab Ubuntu wmux server.
 
-wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host. Do not use the legacy `kind: "powershell"` WSMan transport from rtx6000.
+wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host. Do not use the legacy `kind: "powershell"` WSMan transport from homelab.
 
 For parallel host-local validation work, see [WINDOWS_HOST_HANDOFF.md](../WINDOWS_HOST_HANDOFF.md).
 
@@ -17,7 +17,7 @@ References:
 Collect these values before changing either host:
 
 ```text
-wmux server: rtx6000
+wmux server: homelab
 windows node id: 9800x3d
 windows node host: 100.68.206.111
 windows ssh user: gisen
@@ -28,7 +28,7 @@ If the Tailscale IP or Windows username differs, update the commands and `wmux.c
 
 ## 1. Prepare The wmux Server
 
-Run on rtx6000.
+Run on homelab.
 
 1. Confirm the Windows node is reachable over Tailscale:
 
@@ -52,7 +52,7 @@ test -f ~/.ssh/id_ed25519.pub && cat ~/.ssh/id_ed25519.pub
 If no key exists, create one:
 
 ```bash
-ssh-keygen -t ed25519 -C 'wmux rtx6000'
+ssh-keygen -t ed25519 -C 'wmux homelab'
 ```
 
 ## 2. Prepare The Windows Node
@@ -112,9 +112,9 @@ Get-Command pwsh.exe
 
 If `pwsh.exe` is not on the login-session `PATH`, add the PowerShell 7 install directory to the system PATH or set `"shell"` in the wmux machine config to a command path that OpenSSH can execute.
 
-6. Install the rtx6000 public key for the Windows user.
+6. Install the homelab public key for the Windows user.
 
-For a non-administrator user, append the public key from rtx6000 to:
+For a non-administrator user, append the public key from homelab to:
 
 ```text
 $env:USERPROFILE\.ssh\authorized_keys
@@ -138,9 +138,9 @@ icacls.exe 'C:\ProgramData\ssh\administrators_authorized_keys' /inheritance:r /g
 Restart-Service sshd
 ```
 
-## 3. Validate From rtx6000
+## 3. Validate From homelab
 
-Run on rtx6000.
+Run on homelab.
 
 1. Validate plain SSH:
 
@@ -207,7 +207,7 @@ For `powershell-ssh`, `/api/bootstrap` does more than a TCP check. It runs a sho
 
 ## 5. Finish Windows Helper Setup
 
-Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helper bundle from rtx6000 and stages scripts plus CMD shims into:
+Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helper bundle from homelab and stages scripts plus CMD shims into:
 
 ```text
 %LOCALAPPDATA%\wmux\bin
@@ -254,7 +254,7 @@ The intended Windows streaming path is the per-user Scheduled Task. Validate tha
 wmux-stream-agent-service logs
 ```
 
-From rtx6000, request a short stream lease:
+From homelab, request a short stream lease:
 
 ```bash
 curl -fsS -X POST http://100.107.241.79:3478/api/streams/9800x3d/request \
@@ -341,8 +341,8 @@ Keep the legacy `powershell-ssh` path available as a fallback while the ConPTY a
 
 ## Definition Of Done
 
-- rtx6000 can SSH to the Windows user on `100.68.206.111:22` without a password prompt.
-- `ssh -tt gisen@100.68.206.111 pwsh -NoLogo -NoProfile` opens an interactive prompt from rtx6000.
+- homelab can SSH to the Windows user on `100.68.206.111:22` without a password prompt.
+- `ssh -tt gisen@100.68.206.111 pwsh -NoLogo -NoProfile` opens an interactive prompt from homelab.
 - Windows firewall exposes SSH only to Tailscale/internal clients.
 - `wmux.config.json` uses `kind: "powershell-ssh"`, not legacy `kind: "powershell"`.
 - `/api/bootstrap` reports `9800x3d` as reachable.

@@ -56,7 +56,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Windows `powershell-ssh` panes fetch helper scripts from `/api/helpers/windows/:machineId`, stage them into `%LOCALAPPDATA%\wmux\bin`, prepend that directory to `PATH`, and install a temporary PowerShell prompt function for OSC 7 cwd reporting.
 - POSIX SSH helper staging must run under POSIX `sh`; do not rely on zsh/bash-specific word splitting in `src/server/machines.ts`.
 - Session audit cleanup must remain limited to local `wmux_` tmux/screen sessions that the audit marks duplicate or orphan. Never add automatic cleanup of active sessions or non-wmux multiplexer sessions.
-- Machine screen streams are machine-local captures, not browser captures. The active host publishes its own pixels to the MediaMTX service on rtx6000, and wmux viewers embed the active machine's WebRTC path. Do not replace this with `getDisplayMedia` from the viewing browser.
+- Machine screen streams are machine-local captures, not browser captures. The active host publishes its own pixels to the MediaMTX service on homelab, and wmux viewers embed the active machine's WebRTC path. Do not replace this with `getDisplayMedia` from the viewing browser.
 - Stream capture should remain on-demand. The browser requests/releases a short stream lease through the existing `/ws/events` socket, while `wmux-stream-agent` polls the wmux lease endpoint and only runs `screencapture`/ffmpeg while a lease is active.
 - MediaMTX should bind RTSP/WebRTC only to the Tailscale/internal interface and keep its API on loopback. Use `scripts/install-stream-service.sh` for repeatable setup.
 
