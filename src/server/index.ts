@@ -14,6 +14,7 @@ const arg = (name: string, fallback: string): string => {
 const main = async (): Promise<void> => {
   const host = arg("--host", process.env.WMUX_HOST ?? "127.0.0.1");
   const port = Number(arg("--port", process.env.WMUX_PORT ?? "3478"));
+  const dev = process.argv.includes("--dev");
   if (!isAllowedBindHost(host)) {
     throw new Error(
       `Refusing to bind ${host}. Use loopback, Tailscale 100.64.0.0/10, or an RFC1918/internal interface.`,
@@ -24,9 +25,9 @@ const main = async (): Promise<void> => {
   const state = new StateStore(config.machines);
   const settings = new SettingsStore();
   const sessionManager = new SessionManager(state, config.machines);
-  const server = createHttpServer(host, state, config.machines, sessionManager, settings);
+  const server = await createHttpServer(host, state, config.machines, sessionManager, settings, { dev });
   server.listen(port, host, () => {
-    console.log(`wmux listening on http://${host}:${port}`);
+    console.log(`wmux listening on http://${host}:${port}${dev ? " (dev)" : ""}`);
   });
 };
 

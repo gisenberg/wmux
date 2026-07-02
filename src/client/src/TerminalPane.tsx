@@ -15,6 +15,7 @@ import {
   type KittyMaterializedImage,
   type KittyPlaceholderStripState,
 } from "./kitty-graphics";
+import { ensureWmuxFonts, WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import type { MachineStatus, PaneState, SplitDirection, TerminalMedia, TerminalRun } from "./types";
@@ -334,12 +335,12 @@ export function TerminalPane({
     };
 
     const start = async () => {
-      await ensureGhostty();
+      await Promise.all([ensureGhostty(), ensureWmuxFonts()]);
       if (cancelled || !containerRef.current) return;
       const term = new Terminal({
         cursorBlink: true,
         fontSize: terminalFontSize,
-        fontFamily: 'Menlo, Monaco, "Cascadia Mono", "Courier New", monospace',
+        fontFamily: WMUX_MONO_FONT_FAMILY,
         scrollback: 10000,
         theme: {
           background: "#101114",

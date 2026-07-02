@@ -12,6 +12,7 @@ import {
   type CellMetrics,
   type RGBA,
 } from "./opentui-grid";
+import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 
 export interface OpenTuiActivityRow {
   id: string;
@@ -27,7 +28,6 @@ interface OpenTuiActivityPanelProps {
   onClose: () => void;
 }
 
-const fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const colors = {
   black: "#050505",
   panel: "#090907",
@@ -65,7 +65,7 @@ export function OpenTuiActivityPanel({ rows, onClose }: OpenTuiActivityPanelProp
 
     const painter = createOpenTuiPainter(canvas, {
       fontSize: 12,
-      fontFamily,
+      fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
       clearColor: colors.black,
     });

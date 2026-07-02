@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
+    "@fontsource/fira-code": "^5.2.7",
     "@vitejs/plugin-react": "^4.7.0",
     "ghostty-web": "^0.4.0",
     "lucide-react": "^0.468.0",

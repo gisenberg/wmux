@@ -12,6 +12,7 @@ import {
   type CellMetrics,
   type RGBA,
 } from "./opentui-grid";
+import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 
 export interface OpenTuiTabItem {
   id: string;
@@ -68,7 +69,6 @@ interface HitZone {
   action: HitAction;
 }
 
-const fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const colors = {
   black: "#050505",
   panel: "#0a0907",
@@ -98,7 +98,7 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
 
     const painter = createOpenTuiPainter(canvas, {
       fontSize: 12,
-      fontFamily,
+      fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
       clearColor: colors.black,
     });

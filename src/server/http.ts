@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { readDurableSessionCwd, resolveMachineStatuses } from "./machines.js";
@@ -36,9 +37,11 @@ export const createHttpServer = (
   machines: MachineConfig[],
   sessions: SessionManager,
   settings: SettingsStore,
-): http.Server => {
+  options: { dev?: boolean } = {},
+): Promise<http.Server> => {
   const root = clientRoot();
   const streamRequests = new StreamRequestStore();
+  let vite: ViteDevServer | undefined;
   const bootstrap = async () => {
     const snapshot = state.snapshot();
     return {
@@ -467,6 +470,8 @@ export const createHttpServer = (
       }
 
       if (request.method === "GET") {
+        if (vite && await serveViteRequest(vite, request, response, url, root)) return;
+
         const filePath =
           url.pathname === "/" ? path.join(root, "index.html") : path.join(root, url.pathname);
         const normalized = path.normalize(filePath);
@@ -489,6 +494,22 @@ export const createHttpServer = (
     }
   });
 
+  const setupDevServer = async (): Promise<void> => {
+    if (!options.dev) return;
+    const { createServer: createViteServer } = await import("vite");
+    vite = await createViteServer({
+      configFile: path.resolve(process.cwd(), "vite.config.ts"),
+      server: {
+        middlewareMode: true,
+        hmr: {
+          server,
+          path: "/ws/vite-hmr",
+        },
+      },
+      appType: "custom",
+    });
+  };
+
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (request, socket, head) => {
     if (
@@ -500,6 +521,7 @@ export const createHttpServer = (
       return;
     }
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? bindHost}`);
+    if (options.dev && url.pathname === "/ws/vite-hmr") return;
     if (url.pathname === "/ws/events") {
       wss.handleUpgrade(request, socket, head, (ws) => {
         const onChange = () => {
@@ -557,7 +579,34 @@ export const createHttpServer = (
     });
   });
 
-  return server;
+  return setupDevServer().then(() => server);
+};
+
+const serveViteRequest = async (
+  vite: ViteDevServer,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  url: URL,
+  root: string,
+): Promise<boolean> => {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      vite.middlewares(request, response, (error?: unknown) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    if (response.writableEnded || response.headersSent) return true;
+    const indexPath = path.join(root, "index.html");
+    if (!fs.existsSync(indexPath)) return false;
+    const html = await vite.transformIndexHtml(url.pathname, fs.readFileSync(indexPath, "utf8"));
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(html);
+    return true;
+  } catch (error) {
+    if (error instanceof Error) vite.ssrFixStacktrace(error);
+    throw error;
+  }
 };
 
 const cwdForActivePane = (state: StateStore, machines: MachineConfig[], targetMachineId: string): string | undefined => {
@@ -585,6 +634,8 @@ const contentType = (filePath: string): string => {
   if (filePath.endsWith(".html")) return "text/html";
   if (filePath.endsWith(".js")) return "text/javascript";
   if (filePath.endsWith(".css")) return "text/css";
+  if (filePath.endsWith(".woff")) return "font/woff";
+  if (filePath.endsWith(".woff2")) return "font/woff2";
   if (filePath.endsWith(".wasm")) return "application/wasm";
   return "application/octet-stream";
 };

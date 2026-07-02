@@ -13,6 +13,7 @@ import {
   type CellMetrics,
   type RGBA,
 } from "./opentui-grid";
+import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 
 export interface OpenTuiSidebarWorkspace {
   id: string;
@@ -58,7 +59,6 @@ interface HitZone {
   title: string;
 }
 
-const fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const colors = {
   black: "#050505",
   panel: "#090909",
@@ -109,7 +109,7 @@ export function OpenTuiSidebar({
 
     const painter = createOpenTuiPainter(canvas, {
       fontSize: 12,
-      fontFamily,
+      fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
       clearColor: colors.black,
     });
@@ -202,7 +202,6 @@ const drawSidebarGrid = (
 
   let row = 1;
   write(row, 1, "WMUX", rgba.gold, 700);
-  write(row, Math.max(8, cols - 14), "OPENTUI WEB", rgba.faint, 700);
   row += 2;
 
   section(row, "target host");
