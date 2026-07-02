@@ -892,8 +892,8 @@ const probeWindowsPowerShellSsh = async (
   const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=3"];
   if (machine.port) args.push("-p", String(machine.port));
   const script = buildWindowsHealthProbeScript(wmuxUrl);
-  args.push(target, machine.shell ?? "pwsh", "-NoLogo", "-NoProfile", "-EncodedCommand", encodePowerShellCommand(script));
-  const result = await runSshProbe(args, undefined, 7_000);
+  args.push(target, machine.shell ?? "pwsh", "-NoLogo", "-NoProfile", "-Command", "-");
+  const result = await runSshProbe(args, script, 7_000);
   const health = parseWindowsHealth(result.stdout);
   const probe: WindowsHealthProbe =
     result.status === 0 && health
