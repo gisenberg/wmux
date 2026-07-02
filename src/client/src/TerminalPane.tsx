@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { FitAddon, Terminal } from "ghostty-web";
-import { Clipboard, Columns2, Maximize2, RotateCcw, Rows2, X } from "lucide-react";
+import { X } from "lucide-react";
 import {
   KittyGraphicsParser,
   isKittyPlaceholder,
@@ -16,6 +16,7 @@ import {
   type KittyPlaceholderStripState,
 } from "./kitty-graphics";
 import { ensureGhostty } from "./terminal-loader";
+import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import type { MachineStatus, PaneState, SplitDirection, TerminalMedia, TerminalRun } from "./types";
 
 interface Props {
@@ -86,6 +87,9 @@ export function TerminalPane({
   const kittyImageCacheRef = useRef(new Map<string, TerminalMedia>());
   const kittyVirtualPlacementsRef = useRef(new Map<string, KittyVirtualPlacement>());
   const pendingVirtualImageIdRef = useRef<string | undefined>();
+  const wmuxControlCarryRef = useRef("");
+  const shellCursorPlacementRef = useRef(false);
+  const onActivateRef = useRef(onActivate);
   const [connected, setConnected] = useState(false);
   const [kittyMediaItems, setKittyMediaItems] = useState<TerminalMedia[]>([]);
   const [kittyInlineItems, setKittyInlineItems] = useState<KittyInlineImage[]>([]);
@@ -95,18 +99,25 @@ export function TerminalPane({
   const visibleInlineItems = viewportY < 1 ? kittyInlineItems.filter((item) => item.data) : [];
 
   useEffect(() => {
+    onActivateRef.current = onActivate;
+  }, [onActivate]);
+
+  useEffect(() => {
     let cancelled = false;
     let removed = false;
     let fitAddon: FitAddon | null = null;
     let reconnectTimer: number | undefined;
     let scrollDisposable: { dispose: () => void } | undefined;
     let renderDisposable: { dispose: () => void } | undefined;
+    let mouseDownListener: ((event: MouseEvent) => void) | undefined;
     let reconnectDelayMs = 350;
     kittyParserRef.current = new KittyGraphicsParser();
     kittyPlaceholderStripRef.current.pendingPlaceholderMarks = false;
     kittyImageCacheRef.current.clear();
     kittyVirtualPlacementsRef.current.clear();
     pendingVirtualImageIdRef.current = undefined;
+    wmuxControlCarryRef.current = "";
+    shellCursorPlacementRef.current = false;
     setKittyMediaItems([]);
     setKittyInlineItems([]);
     setViewportY(0);
@@ -238,12 +249,17 @@ export function TerminalPane({
       const parsed = kittyParserRef.current.push(data);
       for (const event of parsed.events) {
         if (event.kind === "text") {
+          const text = stripWmuxControlSequences(wmuxControlCarryRef, event.text, (control) => {
+            if (control === "cursor=1") shellCursorPlacementRef.current = true;
+            if (control === "cursor=0") shellCursorPlacementRef.current = false;
+          });
+          if (!text) continue;
           const placeholderCells: KittyPlaceholderCell[] = [];
           writeTerminalOutput(
             term,
             outputCarryRef,
             kittyPlaceholderStripRef,
-            event.text,
+            text,
             () => {
               const imageId = pendingVirtualImageIdRef.current;
               const cursor = term.wasmTerm?.getCursor();
@@ -345,6 +361,19 @@ export function TerminalPane({
       scrollDisposable = term.onScroll((position) => setViewportY(position));
       renderDisposable = term.onRender(() => refreshMetrics(term));
 
+      mouseDownListener = (event) => {
+        const sequence = shellCursorPlacementSequence(event, term, shellCursorPlacementRef.current);
+        if (!sequence) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        onActivateRef.current();
+        term.focus();
+        term.clearSelection();
+        sendInput(socketRef.current, sequence);
+      };
+      term.element?.addEventListener("mousedown", mouseDownListener, { capture: true });
+
       term.attachCustomKeyEventHandler((event) => {
         if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
           if (event.key === "ArrowLeft") {
@@ -370,6 +399,7 @@ export function TerminalPane({
       });
 
       term.onData((data) => {
+        if (inputMayLeaveShellPrompt(data)) shellCursorPlacementRef.current = false;
         sendInput(socketRef.current, data);
       });
       term.onResize((size) => {
@@ -387,6 +417,7 @@ export function TerminalPane({
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       scrollDisposable?.dispose();
       renderDisposable?.dispose();
+      if (mouseDownListener) terminalRef.current?.element?.removeEventListener("mousedown", mouseDownListener, { capture: true });
       socketRef.current?.close();
       fitAddon?.dispose();
       terminalRef.current?.dispose();
@@ -413,6 +444,18 @@ export function TerminalPane({
     if (!lastRun?.command || !socketRef.current) return;
     sendInput(socketRef.current, `${lastRun.command}\r`);
   };
+  const copyLastCommand = () => {
+    if (!lastRun?.command || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(lastRun.command);
+  };
+  const paneMachineLabel = currentMachine?.name ?? pane.machineId;
+  const paneRun = lastRun
+    ? {
+        status: lastRun.status,
+        label: runLabel(lastRun),
+        title: runTitle(lastRun),
+      }
+    : undefined;
 
   return (
     <section
@@ -421,43 +464,22 @@ export function TerminalPane({
       }`}
       onMouseDown={onActivate}
     >
-      <div className="pane-toolbar">
-        <div className="pane-title">
-          <span className={`status-dot ${connected ? "on" : ""}`} />
-          <span>{pane.title}</span>
-          <span className="machine-label">{currentMachine?.name ?? pane.machineId}</span>
-          {unreadCount > 0 ? <span className="badge">{unreadCount}</span> : null}
-        </div>
-        <div className="pane-actions">
-          {lastRun ? (
-            <div className={`run-chip ${lastRun.status}`} title={runTitle(lastRun)}>
-              <span>{runLabel(lastRun)}</span>
-              <button
-                title="Copy last command"
-                disabled={!navigator.clipboard}
-                onClick={() => void navigator.clipboard?.writeText(lastRun.command)}
-              >
-                <Clipboard size={13} />
-              </button>
-              <button title="Rerun last command" disabled={!connected || !lastRun.command} onClick={rerunLastCommand}>
-                <RotateCcw size={13} />
-              </button>
-            </div>
-          ) : null}
-          <button title={`Split right on ${currentMachine?.name ?? pane.machineId}`} disabled={!canSplit} onClick={() => onSplit("vertical")}>
-            <Columns2 size={16} />
-          </button>
-          <button title={`Split down on ${currentMachine?.name ?? pane.machineId}`} disabled={!canSplit} onClick={() => onSplit("horizontal")}>
-            <Rows2 size={16} />
-          </button>
-          <button title="Focus pane" onClick={onActivate}>
-            <Maximize2 size={15} />
-          </button>
-          <button title="Close pane" disabled={!canClose} onClick={onClose}>
-            <X size={16} />
-          </button>
-        </div>
-      </div>
+      <OpenTuiPaneToolbar
+        title={pane.title}
+        machineLabel={paneMachineLabel}
+        connected={connected}
+        unreadCount={unreadCount}
+        run={paneRun}
+        canCopyLastCommand={Boolean(lastRun?.command && navigator.clipboard)}
+        canRerunLastCommand={Boolean(connected && lastRun?.command)}
+        canSplit={canSplit}
+        canClose={canClose}
+        onSplit={onSplit}
+        onActivate={onActivate}
+        onClose={onClose}
+        onCopyLastCommand={copyLastCommand}
+        onRerunLastCommand={rerunLastCommand}
+      />
       <div
         className="terminal-host-shell"
         onPointerDown={() => {
@@ -558,6 +580,105 @@ const configureTerminalInput = (term: Terminal): void => {
 
 const sendInput = (ws: WebSocket | null, data: string): void => {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
+};
+
+const inputMayLeaveShellPrompt = (data: string): boolean => data.includes("\r") || data.includes("\n") || data.includes("\x04");
+
+const WMUX_CONTROL_PREFIX = "\x1b]777;wmux;";
+const WMUX_SHELL_CURSOR_PREFIX = "\x1b[9000;";
+const MAX_WMUX_CONTROL_CARRY = 256;
+
+const stripWmuxControlSequences = (
+  carryRef: MutableRefObject<string>,
+  data: string,
+  onControl: (control: string) => void,
+): string => {
+  let input = carryRef.current + data;
+  carryRef.current = "";
+  let output = "";
+
+  while (input.length > 0) {
+    const start = input.indexOf(WMUX_CONTROL_PREFIX);
+    if (start === -1) {
+      const partialLength = partialSuffixLength(input, WMUX_CONTROL_PREFIX);
+      if (partialLength > 0) {
+        output += input.slice(0, -partialLength);
+        carryRef.current = input.slice(-partialLength);
+      } else {
+        output += input;
+      }
+      break;
+    }
+
+    output += input.slice(0, start);
+    const bodyStart = start + WMUX_CONTROL_PREFIX.length;
+    const end = findOscTerminator(input, bodyStart);
+    if (!end) {
+      carryRef.current = input.slice(start).slice(0, MAX_WMUX_CONTROL_CARRY);
+      break;
+    }
+
+    onControl(input.slice(bodyStart, end.index));
+    input = input.slice(end.index + end.length);
+  }
+
+  return output;
+};
+
+const findOscTerminator = (input: string, start: number): { index: number; length: number } | null => {
+  for (let index = start; index < input.length; index += 1) {
+    if (input[index] === "\x07") return { index, length: 1 };
+    if (input[index] === "\x1b" && input[index + 1] === "\\") return { index, length: 2 };
+  }
+  return null;
+};
+
+const partialSuffixLength = (input: string, prefix: string): number => {
+  const max = Math.min(input.length, prefix.length - 1);
+  for (let length = max; length > 0; length -= 1) {
+    if (input.slice(-length) === prefix.slice(0, length)) return length;
+  }
+  return 0;
+};
+
+const shellCursorPlacementSequence = (
+  event: MouseEvent,
+  term: Terminal,
+  shellCursorPlacementEnabled: boolean,
+): string | null => {
+  if (!shellCursorPlacementEnabled) return null;
+  if (event.button !== 0 || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (term.getViewportY() > 0.5) return null;
+  if (isScrollbarMouseDown(event, term)) return null;
+  const cell = mouseCellInGrid(event, term);
+  if (!cell) return null;
+  const cursor = term.wasmTerm?.getCursor();
+  const cursorCol = clamp((cursor?.x ?? 0) + 1, 1, safeCols(term.cols));
+  const cursorRow = clamp((cursor?.y ?? 0) + 1, 1, safeRows(term.rows));
+  return `${WMUX_SHELL_CURSOR_PREFIX}${cell.col};${cell.row};${cursorCol};${cursorRow}~`;
+};
+
+const isScrollbarMouseDown = (event: MouseEvent, term: Terminal): boolean => {
+  if (term.getScrollbackLength() <= 0) return false;
+  const rect = term.element?.getBoundingClientRect();
+  return rect ? event.clientX - rect.left >= rect.width - 12 : false;
+};
+
+const mouseCellInGrid = (event: MouseEvent, term: Terminal): { col: number; row: number } | null => {
+  const rect = term.element?.getBoundingClientRect();
+  const metrics = term.renderer?.getMetrics?.();
+  const width = metrics?.width ?? 8;
+  const height = metrics?.height ?? 16;
+  if (!rect || width <= 0 || height <= 0) return null;
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const gridWidth = safeCols(term.cols) * width;
+  const gridHeight = safeRows(term.rows) * height;
+  if (x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) return null;
+  return {
+    col: Math.floor(x / width) + 1,
+    row: Math.floor(y / height) + 1,
+  };
 };
 
 const kittyImageToMedia = (image: KittyMaterializedImage, pane: PaneState, imageId?: string): TerminalMedia => ({

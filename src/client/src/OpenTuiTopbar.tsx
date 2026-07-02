@@ -1,4 +1,17 @@
 import { useEffect, useMemo, useRef } from "react";
+import {
+  createGrid,
+  createOpenTuiPainter,
+  fillCells,
+  fitText,
+  hexToRgba,
+  observeCanvasViewport,
+  syncPainterViewport,
+  writeText,
+  type CellGrid,
+  type CellMetrics,
+  type RGBA,
+} from "./opentui-grid";
 
 export interface OpenTuiTabItem {
   id: string;
@@ -47,20 +60,12 @@ type HitAction =
   | { type: "mark-read" };
 
 interface HitZone {
-  x: number;
-  y: number;
+  row: number;
+  col: number;
   width: number;
-  height: number;
   title: string;
   disabled?: boolean;
   action: HitAction;
-}
-
-interface CellMetrics {
-  width: number;
-  height: number;
-  cols: number;
-  rows: number;
 }
 
 const fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -77,6 +82,10 @@ const colors = {
   red: "#d94a3d",
 };
 
+const rgba = Object.fromEntries(
+  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
+) as Record<keyof typeof colors, RGBA>;
+
 export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
@@ -85,41 +94,27 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d", { alpha: false });
-    const parent = canvas?.parentElement;
-    if (!canvas || !ctx || !parent) return;
+    if (!canvas) return;
 
-    const paint = () => {
-      const rect = parent.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      const fontSize = 12;
-      ctx.font = `600 ${fontSize}px ${fontFamily}`;
-      ctx.textBaseline = "top";
-      const cellWidth = Math.max(7, Math.round(ctx.measureText("M").width));
-      const cellHeight = 17;
-      const cols = Math.max(1, Math.floor(rect.width / cellWidth));
-      const rows = Math.max(1, Math.floor(rect.height / cellHeight));
-      metricsRef.current = { width: cellWidth, height: cellHeight, cols, rows };
+    const painter = createOpenTuiPainter(canvas, {
+      fontSize: 12,
+      fontFamily,
+      cellVAlign: "middle",
+      clearColor: colors.black,
+    });
 
-      const cssWidth = Math.max(1, Math.floor(rect.width));
-      const cssHeight = Math.max(1, Math.floor(rect.height));
-      const nextWidth = Math.ceil(cssWidth * dpr);
-      const nextHeight = Math.ceil(cssHeight * dpr);
-      if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
-        canvas.width = nextWidth;
-        canvas.height = nextHeight;
-        canvas.style.width = `${cssWidth}px`;
-        canvas.style.height = `${cssHeight}px`;
-      }
-
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawTopbar(ctx, metricsRef.current, renderModel, hitsRef.current);
+    const paint = (entry?: ResizeObserverEntry) => {
+      const metrics = syncPainterViewport(painter, canvas, entry);
+      metricsRef.current = metrics;
+      painter.paint(drawTopbar(metrics, renderModel, hitsRef.current));
     };
 
     paint();
-    const observer = new ResizeObserver(paint);
-    observer.observe(parent);
-    return () => observer.disconnect();
+    const observer = observeCanvasViewport(canvas, paint);
+    return () => {
+      observer.disconnect();
+      painter.dispose();
+    };
   }, [renderModel]);
 
   const runAction = (action: HitAction) => {
@@ -139,15 +134,14 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const row = Math.floor((event.clientY - rect.top) / metricsRef.current.height);
+    const col = Math.floor((event.clientX - rect.left) / metricsRef.current.width);
     const hit = hitsRef.current.find(
       (candidate) =>
         !candidate.disabled &&
-        x >= candidate.x &&
-        x <= candidate.x + candidate.width &&
-        y >= candidate.y &&
-        y <= candidate.y + candidate.height,
+        row === candidate.row &&
+        col >= candidate.col &&
+        col < candidate.col + candidate.width,
     );
     if (hit) runAction(hit.action);
   };
@@ -156,15 +150,14 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const row = Math.floor((event.clientY - rect.top) / metricsRef.current.height);
+    const col = Math.floor((event.clientX - rect.left) / metricsRef.current.width);
     const hit = hitsRef.current.find(
       (candidate) =>
         !candidate.disabled &&
-        x >= candidate.x &&
-        x <= candidate.x + candidate.width &&
-        y >= candidate.y &&
-        y <= candidate.y + candidate.height,
+        row === candidate.row &&
+        col >= candidate.col &&
+        col < candidate.col + candidate.width,
     );
     canvas.style.cursor = hit ? "pointer" : "default";
     canvas.title = hit?.title ?? "";
@@ -178,53 +171,38 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
 }
 
 const drawTopbar = (
-  ctx: CanvasRenderingContext2D,
   metrics: CellMetrics,
   props: OpenTuiTopbarProps,
   hits: HitZone[],
-) => {
+): CellGrid => {
   hits.length = 0;
-  const { width: cellWidth, height: cellHeight, cols, rows } = metrics;
-  const canvasWidth = cols * cellWidth;
-  const canvasHeight = rows * cellHeight;
-  ctx.fillStyle = colors.black;
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  const { cols, rows } = metrics;
+  const grid = createGrid(cols, rows, rgba.black, rgba.text);
 
-  const write = (row: number, col: number, text: string, color: string, weight: 400 | 600 | 700 = 600) => {
-    ctx.font = `${weight} 12px ${fontFamily}`;
-    ctx.fillStyle = color;
-    ctx.fillText(fitText(text, Math.max(0, cols - col - 1)), col * cellWidth, row * cellHeight + 2);
+  const write = (row: number, col: number, text: string, color: RGBA, weight: 400 | 600 | 700 = 600) => {
+    writeText(grid, row, col, fitText(text, Math.max(0, cols - col - 1)), color, weight >= 700 ? 1 : 0);
   };
-  const fillCells = (row: number, col: number, width: number, color: string) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(col * cellWidth, row * cellHeight, width * cellWidth, cellHeight);
+  const fill = (row: number, col: number, width: number, color: RGBA) => {
+    fillCells(grid, row, col, width, color);
   };
   const hit = (row: number, col: number, width: number, title: string, action: HitAction, disabled = false) => {
-    hits.push({
-      x: col * cellWidth,
-      y: row * cellHeight,
-      width: width * cellWidth,
-      height: cellHeight,
-      title,
-      action,
-      disabled,
-    });
+    if (row >= 0 && row < rows && width > 0) hits.push({ row, col, width, title, action, disabled });
   };
 
-  const row = 1;
+  const row = rows > 2 ? 1 : 0;
   let col = 1;
   for (const tab of props.tabs) {
     const label = `${tab.active ? ">" : " "} ${tab.title}${tab.unreadCount > 0 ? ` (${tab.unreadCount})` : ""}`;
     const width = Math.min(Math.max(12, label.length + 2), 24);
-    fillCells(row, col, width, tab.active ? colors.active : colors.panel);
-    write(row, col + 1, label, tab.active ? colors.gold : colors.text, tab.active ? 700 : 600);
+    fill(row, col, width, tab.active ? rgba.active : rgba.panel);
+    write(row, col + 1, label, tab.active ? rgba.gold : rgba.text, tab.active ? 700 : 600);
     hit(row, col, width, `Activate ${tab.title}`, { type: "tab", tabId: tab.id });
     col += width + 1;
     if (col > cols - 46) break;
   }
 
-  fillCells(row, col, 4, props.canCreate ? colors.panel : colors.black);
-  write(row, col + 1, "+", props.canCreate ? colors.gold : colors.faint, 700);
+  fill(row, col, 4, props.canCreate ? rgba.panel : rgba.black);
+  write(row, col + 1, "+", props.canCreate ? rgba.gold : rgba.faint, 700);
   hit(row, col, 4, `New on ${props.targetLabel}`, { type: "create" }, !props.canCreate);
 
   const serviceLabel = `wmux ${props.serviceConnection}`;
@@ -244,28 +222,19 @@ const drawTopbar = (
   for (const [label, title, action, disabled, active] of buttons) {
     const width = Math.max(5, label.length + 2);
     right -= width;
-    fillCells(row, right, width, active ? colors.active : colors.panel);
-    write(row, right + 1, label, disabled ? colors.faint : active ? colors.gold : colors.text, active ? 700 : 600);
+    fill(row, right, width, active ? rgba.active : rgba.panel);
+    write(row, right + 1, label, disabled ? rgba.faint : active ? rgba.gold : rgba.text, active ? 700 : 600);
     hit(row, right, width, title, action, disabled);
     right -= 1;
   }
 
   right -= serviceWidth;
-  fillCells(row, right, serviceWidth, colors.panel);
-  const serviceColor = props.serviceConnection === "online" ? colors.green : props.serviceConnection === "offline" ? colors.red : colors.gold;
+  fill(row, right, serviceWidth, rgba.panel);
+  const serviceColor = props.serviceConnection === "online" ? rgba.green : props.serviceConnection === "offline" ? rgba.red : rgba.gold;
   write(row, right + 1, serviceLabel, serviceColor, 700);
-  write(0, 1, "tabs", colors.faint, 700);
-  write(0, Math.max(1, cols - props.targetLabel.length - 10), `target ${props.targetLabel}`, colors.faint, 700);
-  ctx.strokeStyle = colors.line;
-  ctx.beginPath();
-  ctx.moveTo(0, canvasHeight - 0.5);
-  ctx.lineTo(canvasWidth, canvasHeight - 0.5);
-  ctx.stroke();
-};
-
-const fitText = (text: string, maxCells: number): string => {
-  if (maxCells <= 0) return "";
-  if (text.length <= maxCells) return text;
-  if (maxCells <= 3) return text.slice(0, maxCells);
-  return `${text.slice(0, maxCells - 3)}...`;
+  if (rows > 1) {
+    write(0, 1, "tabs", rgba.faint, 700);
+    write(0, Math.max(1, cols - props.targetLabel.length - 10), `target ${props.targetLabel}`, rgba.faint, 700);
+  }
+  return grid;
 };

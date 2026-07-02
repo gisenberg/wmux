@@ -64,7 +64,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 
 - The terminal canvas/content area should remain visually untreated. Product styling belongs in surrounding chrome, overlays, sidebars, shelves, and toolbars.
 - The default chrome is the OpenTUI-inspired path. `?legacy=1` keeps the older React chrome available.
-- The OpenTUI sidebar uses the vendored `opentui-browser` package under `vendor/opentui-browser`; upstream is private/unpublished and currently treated as an experimental snapshot. Preserve provenance in `vendor/opentui-browser/UPSTREAM.md`.
+- OpenTUI chrome surfaces use the vendored `opentui-browser` package under `vendor/opentui-browser`; upstream is private/unpublished and currently treated as an experimental snapshot. Preserve provenance in `vendor/opentui-browser/UPSTREAM.md`.
 - The empty-workspace view is a sibling WebGL shader, not a ghostty-web shader. It renders a Game-of-Life/metal light-panel cube field with mobile-adjusted projection and click-to-toggle cells.
 - Settings remains a DOM modal because it contains editable controls and destructive session-audit actions.
 - Machine aliases are user-facing labels only. Underlying machine IDs and hosts must remain stable for links, state, and helper environment.

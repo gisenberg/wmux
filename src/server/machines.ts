@@ -202,14 +202,113 @@ if [ -n "\${WMUX_ORIGINAL_ZDOTDIR:-}" ] && [ -r "$WMUX_ORIGINAL_ZDOTDIR/.zshrc" 
 fi
 _wmux_emit_cwd() {
   emulate -L zsh
+  _wmux_install_cursor_bindings
   printf '\\033]7;file://%s%s\\a' "\${HOST:-$(hostname 2>/dev/null || printf wmux)}" "$PWD"
+  _wmux_emit_control cursor=1
+}
+_wmux_emit_control() {
+  emulate -L zsh
+  if [[ -n "\${TMUX:-}" ]]; then
+    printf '\\033Ptmux;\\033\\033]777;wmux;%s\\a\\033\\\\' "$1"
+  else
+    printf '\\033]777;wmux;%s\\a' "$1"
+  fi
+}
+_wmux_emit_cursor_inactive() {
+  emulate -L zsh
+  _wmux_emit_control cursor=0
+}
+_wmux_query_cursor_position() {
+  emulate -L zsh
+  local old_stty response char body row col
+  old_stty=$(stty -g < /dev/tty 2>/dev/null) || old_stty=
+  stty raw -echo min 0 time 10 < /dev/tty 2>/dev/null || true
+  printf '\\033[6n' > /dev/tty
+  response=
+  while read -rk 1 char < /dev/tty; do
+    response+="$char"
+    [[ "$char" == R || \${#response} -ge 32 ]] && break
+  done
+  [[ -n "$old_stty" ]] && stty "$old_stty" < /dev/tty 2>/dev/null || true
+  body=\${response#*$'\\033['}
+  body=\${body%%R*}
+  row=\${body%%;*}
+  col=\${body#*;}
+  [[ "$row" == <-> && "$col" == <-> ]] || return 1
+  printf '%s;%s\\n' "$row" "$col"
+}
+_wmux_buffer_cell_width() {
+  emulate -L zsh
+  local char="$1" current_width="$2"
+  if [[ "$char" == $'\\t' ]]; then
+    printf '%s\\n' $(( ((current_width / 8) + 1) * 8 - current_width ))
+  elif [[ "$char" < $' ' || "$char" == $'\\177' ]]; then
+    printf '2\\n'
+  else
+    printf '1\\n'
+  fi
+}
+_wmux_cursor_offset_for_cell() {
+  emulate -L zsh
+  local target_col="$1" target_row="$2" current_col="$3" current_row="$4" buffer="$5" point="$6" columns="\${7:-\${COLUMNS:-80}}"
+  local -i len width_to_cursor width start target offset char_width
+  len=\${#buffer}
+  (( point < 0 )) && point=0
+  (( point > len )) && point=$len
+  width_to_cursor=0
+  for (( offset = 1; offset <= point; offset += 1 )); do
+    char_width=$(_wmux_buffer_cell_width "\${buffer[offset]}" "$width_to_cursor")
+    width_to_cursor=$(( width_to_cursor + char_width ))
+  done
+  start=$(( (current_row - 1) * columns + current_col - 1 - width_to_cursor ))
+  target=$(( (target_row - 1) * columns + target_col - 1 ))
+  (( target <= start )) && { printf '0\\n'; return; }
+  width=0
+  for (( offset = 1; offset <= len; offset += 1 )); do
+    (( start + width >= target )) && { printf '%s\\n' $(( offset - 1 )); return; }
+    char_width=$(_wmux_buffer_cell_width "\${buffer[offset]}" "$width")
+    width=$(( width + char_width ))
+  done
+  printf '%s\\n' "$len"
+}
+_wmux_click_cursor() {
+  emulate -L zsh
+  local payload char target_col target_row current current_row current_col next_cursor extra
+  payload=
+  while read -rk 1 char; do
+    [[ "$char" == '~' ]] && break
+    payload+="$char"
+    (( \${#payload} >= 32 )) && return
+  done
+  IFS=';' read -r target_col target_row current_col current_row extra <<< "$payload"
+  [[ "$target_col" == <-> && "$target_row" == <-> ]] || return
+  if [[ "$current_col" != <-> || "$current_row" != <-> ]]; then
+    current=$(_wmux_query_cursor_position) || return
+    current_row=\${current%%;*}
+    current_col=\${current#*;}
+  fi
+  next_cursor=$(_wmux_cursor_offset_for_cell "$target_col" "$target_row" "$current_col" "$current_row" "$BUFFER" "$CURSOR" "\${COLUMNS:-80}") || return
+  CURSOR=$next_cursor
+  _wmux_emit_control cursor=1
+  zle redisplay
+}
+_wmux_install_cursor_bindings() {
+  emulate -L zsh
+  zle -N _wmux_click_cursor 2>/dev/null || true
+  bindkey $'\\033[9000;' _wmux_click_cursor 2>/dev/null || true
+  bindkey -M emacs $'\\033[9000;' _wmux_click_cursor 2>/dev/null || true
+  bindkey -M viins $'\\033[9000;' _wmux_click_cursor 2>/dev/null || true
+  bindkey -M vicmd $'\\033[9000;' _wmux_click_cursor 2>/dev/null || true
 }
 autoload -Uz add-zsh-hook 2>/dev/null || true
 if (( $+functions[add-zsh-hook] )); then
   add-zsh-hook precmd _wmux_emit_cwd
+  add-zsh-hook preexec _wmux_emit_cursor_inactive
 else
   precmd_functions=(_wmux_emit_cwd $precmd_functions)
+  preexec_functions=(_wmux_emit_cursor_inactive $preexec_functions)
 fi
+_wmux_install_cursor_bindings
 _wmux_emit_cwd
 __WMUX_ZSHRC__
     export WMUX_ORIGINAL_ZDOTDIR="\${ZDOTDIR:-$HOME}";
@@ -223,12 +322,105 @@ if [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
 fi
 _wmux_emit_cwd() {
+  _wmux_install_cursor_bindings
   printf '\\033]7;file://%s%s\\a' "\${HOSTNAME:-$(hostname 2>/dev/null || printf wmux)}" "$PWD"
+  _wmux_emit_control cursor=1
+}
+_wmux_emit_control() {
+  if [[ -n "\${TMUX:-}" ]]; then
+    printf '\\033Ptmux;\\033\\033]777;wmux;%s\\a\\033\\\\' "$1"
+  else
+    printf '\\033]777;wmux;%s\\a' "$1"
+  fi
+}
+_wmux_emit_cursor_inactive() {
+  [[ "\${_wmux_suppress_cursor_inactive:-}" == 1 ]] && return
+  _wmux_emit_control cursor=0
+}
+_wmux_query_cursor_position() {
+  local old_stty response char body row col
+  old_stty=$(stty -g < /dev/tty 2>/dev/null) || old_stty=
+  stty raw -echo min 0 time 10 < /dev/tty 2>/dev/null || true
+  printf '\\033[6n' > /dev/tty
+  response=
+  while IFS= read -r -s -n 1 char < /dev/tty; do
+    response+="$char"
+    [[ "$char" == R || \${#response} -ge 32 ]] && break
+  done
+  [[ -n "$old_stty" ]] && stty "$old_stty" < /dev/tty 2>/dev/null || true
+  body=\${response#*$'\\033['}
+  body=\${body%%R*}
+  row=\${body%%;*}
+  col=\${body#*;}
+  [[ "$row" =~ ^[0-9]+$ && "$col" =~ ^[0-9]+$ ]] || return 1
+  printf '%s;%s\\n' "$row" "$col"
+}
+_wmux_buffer_cell_width() {
+  local char="$1" current_width="$2"
+  if [[ "$char" == $'\\t' ]]; then
+    printf '%s\\n' $(( ((current_width / 8) + 1) * 8 - current_width ))
+  elif [[ "$char" < $' ' || "$char" == $'\\177' ]]; then
+    printf '2\\n'
+  else
+    printf '1\\n'
+  fi
+}
+_wmux_cursor_offset_for_cell() {
+  local target_col="$1" target_row="$2" current_col="$3" current_row="$4" buffer="$5" point="$6" columns="\${7:-\${COLUMNS:-80}}"
+  local len width_to_cursor width start target offset char_width
+  len=\${#buffer}
+  (( point < 0 )) && point=0
+  (( point > len )) && point=$len
+  width_to_cursor=0
+  for (( offset = 0; offset < point; offset += 1 )); do
+    char_width=$(_wmux_buffer_cell_width "\${buffer:offset:1}" "$width_to_cursor")
+    width_to_cursor=$(( width_to_cursor + char_width ))
+  done
+  start=$(( (current_row - 1) * columns + current_col - 1 - width_to_cursor ))
+  target=$(( (target_row - 1) * columns + target_col - 1 ))
+  (( target <= start )) && { printf '0\\n'; return; }
+  width=0
+  for (( offset = 0; offset < len; offset += 1 )); do
+    (( start + width >= target )) && { printf '%s\\n' "$offset"; return; }
+    char_width=$(_wmux_buffer_cell_width "\${buffer:offset:1}" "$width")
+    width=$(( width + char_width ))
+  done
+  printf '%s\\n' "$len"
+}
+_wmux_click_cursor() {
+  local _wmux_suppress_cursor_inactive=1
+  local payload char target_col target_row current current_row current_col next_cursor extra
+  payload=
+  while IFS= read -r -s -n 1 char; do
+    [[ "$char" == '~' ]] && break
+    payload+="$char"
+    (( \${#payload} >= 32 )) && return
+  done
+  IFS=';' read -r target_col target_row current_col current_row extra <<< "$payload"
+  [[ "$target_col" =~ ^[0-9]+$ && "$target_row" =~ ^[0-9]+$ ]] || return
+  if [[ ! "$current_col" =~ ^[0-9]+$ || ! "$current_row" =~ ^[0-9]+$ ]]; then
+    current=$(_wmux_query_cursor_position) || return
+    current_row=\${current%%;*}
+    current_col=\${current#*;}
+  fi
+  next_cursor=$(_wmux_cursor_offset_for_cell "$target_col" "$target_row" "$current_col" "$current_row" "$READLINE_LINE" "$READLINE_POINT" "\${COLUMNS:-80}") || return
+  READLINE_POINT=$next_cursor
+  _wmux_emit_control cursor=1
+}
+_wmux_install_cursor_bindings() {
+  bind -x '"\\e[9000;": _wmux_click_cursor' 2>/dev/null || true
+  bind -m emacs -x '"\\e[9000;": _wmux_click_cursor' 2>/dev/null || true
+  bind -m vi-insert -x '"\\e[9000;": _wmux_click_cursor' 2>/dev/null || true
+  bind -m vi-command -x '"\\e[9000;": _wmux_click_cursor' 2>/dev/null || true
 }
 case ";\${PROMPT_COMMAND:-};" in
   *";_wmux_emit_cwd;"*) ;;
   *) PROMPT_COMMAND="_wmux_emit_cwd\${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
 esac
+_wmux_install_cursor_bindings
+if [ -z "$(trap -p DEBUG)" ]; then
+  trap '_wmux_emit_cursor_inactive' DEBUG
+fi
 _wmux_emit_cwd
 __WMUX_BASHRC__
     exec "$wmux_shell" --rcfile "$wmux_shell_dir/bashrc" -i
@@ -328,6 +520,8 @@ const durableShellScript = ({
     `tmux set-option -t ${tmuxTarget} history-limit 100000 >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} mouse on >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} allow-passthrough on >/dev/null 2>&1 || true`,
+    `tmux set-option -s user-keys[99] ${shellQuote("\\033[9000\\;")} >/dev/null 2>&1 || true`,
+    `tmux bind-key -n User99 send-keys Escape ${shellQuote("[9000\\;")} >/dev/null 2>&1 || true`,
     `exec ${tmuxAttachCommand}`,
   ].join("; ");
   const screenRc = [

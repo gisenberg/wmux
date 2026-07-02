@@ -106,7 +106,6 @@ a {
 }
 
 .new-session,
-.pane-actions,
 .machine-picker,
 .tabs {
   display: flex;
@@ -866,26 +865,15 @@ button.attention-tool {
 }
 
 .pane-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   min-width: 0;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  padding: 3px 6px 3px 10px;
 }
 
-.pane-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: var(--ivory);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.open-tui-pane-toolbar {
+  display: block;
+  overflow: hidden;
+  background: var(--panel);
 }
 
 .badge {
@@ -907,61 +895,6 @@ button.attention-tool {
   position: absolute;
   right: 8px;
   top: 7px;
-}
-
-.pane-title span:not(.status-dot) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.machine-label {
-  color: var(--muted);
-}
-
-.pane-actions {
-  flex: none;
-}
-
-.run-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  max-width: 184px;
-  height: 26px;
-  border: 1px solid rgba(212, 180, 95, 0.16);
-  border-radius: 3px;
-  background: #0b0a08;
-  padding-left: 6px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.run-chip.completed {
-  color: var(--green);
-}
-
-.run-chip.failed {
-  color: var(--red);
-}
-
-.run-chip.started {
-  color: var(--blue);
-}
-
-.run-chip span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.run-chip button {
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
 }
 
 .media-shelf {
@@ -1718,30 +1651,6 @@ button.attention-tool {
 
   .terminal-pane.has-media {
     grid-template-rows: 30px minmax(0, 1fr) auto;
-  }
-
-  .pane-toolbar {
-    min-height: 30px;
-    gap: 4px;
-    padding: 2px 4px 2px 8px;
-  }
-
-  .pane-title .machine-label {
-    display: none;
-  }
-
-  .pane-actions {
-    gap: 4px;
-  }
-
-  .run-chip {
-    display: none;
-  }
-
-  .pane-actions button {
-    width: 26px;
-    min-width: 26px;
-    height: 26px;
   }
 
   .mobile-keyboard-open .workspace {

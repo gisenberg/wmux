@@ -1,4 +1,17 @@
 import { useEffect, useMemo, useRef } from "react";
+import {
+  createGrid,
+  createOpenTuiPainter,
+  fillCells,
+  fitText,
+  hexToRgba,
+  observeCanvasViewport,
+  syncPainterViewport,
+  writeText,
+  type CellGrid,
+  type CellMetrics,
+  type RGBA,
+} from "./opentui-grid";
 
 export interface OpenTuiActivityRow {
   id: string;
@@ -29,55 +42,67 @@ const colors = {
   red: "#d94a3d",
 };
 
+const rgba = Object.fromEntries(
+  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
+) as Record<keyof typeof colors, RGBA>;
+
+interface HitZone {
+  row: number;
+  col: number;
+  width: number;
+  title: string;
+}
+
 export function OpenTuiActivityPanel({ rows, onClose }: OpenTuiActivityPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hitsRef = useRef<HitZone[]>([]);
+  const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const renderRows = useMemo(() => rows.slice(0, 100), [rows]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d", { alpha: false });
-    const parent = canvas?.parentElement;
-    if (!canvas || !ctx || !parent) return;
+    if (!canvas) return;
 
-    const paint = () => {
-      const rect = parent.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      const width = Math.max(1, Math.floor(rect.width));
-      const height = Math.max(1, Math.floor(rect.height));
-      const nextWidth = Math.ceil(width * dpr);
-      const nextHeight = Math.ceil(height * dpr);
-      if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
-        canvas.width = nextWidth;
-        canvas.height = nextHeight;
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawActivity(ctx, width, height, renderRows);
+    const painter = createOpenTuiPainter(canvas, {
+      fontSize: 12,
+      fontFamily,
+      cellVAlign: "middle",
+      clearColor: colors.black,
+    });
+
+    const paint = (entry?: ResizeObserverEntry) => {
+      const metrics = syncPainterViewport(painter, canvas, entry);
+      metricsRef.current = metrics;
+      painter.paint(drawActivity(metrics, renderRows, hitsRef.current));
     };
 
     paint();
-    const observer = new ResizeObserver(paint);
-    observer.observe(parent);
-    return () => observer.disconnect();
+    const observer = observeCanvasViewport(canvas, paint);
+    return () => {
+      observer.disconnect();
+      painter.dispose();
+    };
   }, [renderRows]);
 
   const onClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    if (x >= rect.width - 54 && y <= 36) onClose();
+    const row = Math.floor((event.clientY - rect.top) / metricsRef.current.height);
+    const col = Math.floor((event.clientX - rect.left) / metricsRef.current.width);
+    const hit = hitsRef.current.find((candidate) => row === candidate.row && col >= candidate.col && col < candidate.col + candidate.width);
+    if (hit) onClose();
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    canvas.style.cursor = x >= rect.width - 54 && y <= 36 ? "pointer" : "default";
+    const row = Math.floor((event.clientY - rect.top) / metricsRef.current.height);
+    const col = Math.floor((event.clientX - rect.left) / metricsRef.current.width);
+    const hit = hitsRef.current.find((candidate) => row === candidate.row && col >= candidate.col && col < candidate.col + candidate.width);
+    canvas.style.cursor = hit ? "pointer" : "default";
+    canvas.title = hit?.title ?? "";
   };
 
   return (
@@ -88,63 +113,51 @@ export function OpenTuiActivityPanel({ rows, onClose }: OpenTuiActivityPanelProp
 }
 
 const drawActivity = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
+  metrics: CellMetrics,
   rows: OpenTuiActivityRow[],
-) => {
-  ctx.fillStyle = colors.black;
-  ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = colors.line;
-  ctx.beginPath();
-  ctx.moveTo(0.5, 0);
-  ctx.lineTo(0.5, height);
-  ctx.stroke();
+  hits: HitZone[],
+): CellGrid => {
+  hits.length = 0;
+  const { cols, rows: gridRows } = metrics;
+  const grid = createGrid(cols, gridRows, rgba.black, rgba.text);
 
-  const write = (text: string, x: number, y: number, color: string, weight: 400 | 600 | 700 = 600) => {
-    ctx.font = `${weight} 12px ${fontFamily}`;
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y);
+  const write = (row: number, col: number, text: string, color: RGBA, weight: 400 | 600 | 700 = 600) => {
+    writeText(grid, row, col, fitText(text, Math.max(0, cols - col - 1)), color, weight >= 700 ? 1 : 0);
   };
+  const fillRow = (row: number, color: RGBA) => fillCells(grid, row, 0, cols, color);
 
-  write("ACTIVITY", 14, 14, colors.gold, 700);
-  write("close", width - 50, 14, colors.faint, 700);
-  ctx.strokeStyle = colors.line;
-  ctx.beginPath();
-  ctx.moveTo(0, 42.5);
-  ctx.lineTo(width, 42.5);
-  ctx.stroke();
+  write(1, 2, "ACTIVITY", rgba.gold, 700);
+  const closeCol = Math.max(1, cols - 8);
+  write(1, closeCol, "close", rgba.faint, 700);
+  hits.push({ row: 1, col: closeCol - 1, width: 8, title: "Close activity" });
+  fillRow(3, rgba.line);
 
   if (!rows.length) {
-    write("NO ACTIVITY YET", 20, 68, colors.faint, 700);
-    return;
+    write(5, 2, "NO ACTIVITY YET", rgba.faint, 700);
+    return grid;
   }
 
-  const rowHeight = 58;
-  const maxRows = Math.max(0, Math.floor((height - 52) / rowHeight));
+  const rowHeight = 4;
+  const startRow = 5;
+  const maxRows = Math.max(0, Math.floor((gridRows - startRow) / rowHeight));
   for (let index = 0; index < Math.min(rows.length, maxRows); index += 1) {
-    const row = rows[index];
-    const y = 52 + index * rowHeight;
-    ctx.fillStyle = index % 2 === 0 ? colors.black : colors.panel;
-    ctx.fillRect(8, y, width - 16, rowHeight - 6);
-    const statusColor = statusColorFor(row.status);
-    write(fitText(row.kind.toUpperCase(), 10), 18, y + 8, statusColor, 700);
-    write(fitText(row.title, Math.max(12, Math.floor((width - 112) / 7))), 98, y + 8, colors.text, 700);
-    write(fitText(row.summary, Math.max(12, Math.floor((width - 112) / 7))), 98, y + 26, colors.muted, 400);
-    write(fitText(row.meta, Math.max(12, Math.floor((width - 112) / 7))), 98, y + 42, colors.faint, 400);
+    const item = rows[index];
+    const itemRow = startRow + index * rowHeight;
+    for (let offset = 0; offset < rowHeight - 1; offset += 1) {
+      fillRow(itemRow + offset, index % 2 === 0 ? rgba.black : rgba.panel);
+    }
+    const statusColor = statusColorFor(item.status);
+    write(itemRow, 2, item.kind.toUpperCase(), statusColor, 700);
+    write(itemRow, 14, item.title, rgba.text, 700);
+    write(itemRow + 1, 14, item.summary, rgba.muted, 400);
+    write(itemRow + 2, 14, item.meta, rgba.faint, 400);
   }
+  return grid;
 };
 
-const statusColorFor = (status: OpenTuiActivityRow["status"]): string => {
-  if (status === "running") return colors.blue;
-  if (status === "completed") return colors.green;
-  if (status === "failed") return colors.red;
-  return colors.gold;
-};
-
-const fitText = (text: string, maxCells: number): string => {
-  if (maxCells <= 0) return "";
-  if (text.length <= maxCells) return text;
-  if (maxCells <= 3) return text.slice(0, maxCells);
-  return `${text.slice(0, maxCells - 3)}...`;
+const statusColorFor = (status: OpenTuiActivityRow["status"]): RGBA => {
+  if (status === "running") return rgba.blue;
+  if (status === "completed") return rgba.green;
+  if (status === "failed") return rgba.red;
+  return rgba.gold;
 };

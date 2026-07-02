@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
-import { CanvasPainter } from "opentui-browser/canvas-painter";
-import type { CellGrid } from "opentui-browser/cell-grid";
-
-type RGBA = readonly [number, number, number, number];
+import {
+  createGrid,
+  createOpenTuiPainter,
+  fillCells,
+  fitText,
+  hexToRgba,
+  observeCanvasViewport,
+  syncPainterViewport,
+  writeText,
+  type CellGrid,
+  type CellMetrics,
+  type RGBA,
+} from "./opentui-grid";
 
 export interface OpenTuiSidebarWorkspace {
   id: string;
@@ -47,13 +56,6 @@ interface HitZone {
   width: number;
   action: HitAction;
   title: string;
-}
-
-interface CellMetrics {
-  width: number;
-  height: number;
-  cols: number;
-  rows: number;
 }
 
 const fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -103,22 +105,23 @@ export function OpenTuiSidebar({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const parent = canvas?.parentElement;
-    if (!canvas || !parent) return;
+    if (!canvas) return;
 
-    const painter = new CanvasPainter(canvas, { fontSize: 12, fontFamily });
+    const painter = createOpenTuiPainter(canvas, {
+      fontSize: 12,
+      fontFamily,
+      cellVAlign: "middle",
+      clearColor: colors.black,
+    });
 
-    const paint = () => {
-      const rect = parent.getBoundingClientRect();
-      const { cols, rows } = painter.fit(rect.width, rect.height);
-      painter.resize(cols, rows);
-      metricsRef.current = { width: painter.cellWidth, height: painter.cellHeight, cols, rows };
+    const paint = (entry?: ResizeObserverEntry) => {
+      const metrics = syncPainterViewport(painter, canvas, entry);
+      metricsRef.current = metrics;
       painter.paint(drawSidebarGrid(metricsRef.current, renderModel, hitsRef));
     };
 
     paint();
-    const observer = new ResizeObserver(paint);
-    observer.observe(parent);
+    const observer = observeCanvasViewport(canvas, paint);
     return () => {
       observer.disconnect();
       painter.dispose();
@@ -173,13 +176,13 @@ const drawSidebarGrid = (
   hitsRef: MutableRefObject<HitZone[]>,
 ): CellGrid => {
   const { cols, rows } = metrics;
-  const grid = createGrid(cols, rows, rgba.black);
+  const grid = createGrid(cols, rows, rgba.black, rgba.text);
   const hits: HitZone[] = [];
   hitsRef.current = hits;
 
   const fillRow = (row: number, color: RGBA) => {
     if (row < 0 || row >= rows) return;
-    for (let col = 0; col < cols; col += 1) setCellBackground(grid, row, col, color);
+    fillCells(grid, row, 0, cols, color);
   };
   const write = (row: number, col: number, text: string, color: RGBA, weight: 400 | 600 | 700 = 600) => {
     if (row < 0 || row >= rows || col >= cols) return;
@@ -283,13 +286,6 @@ const drawSidebarGrid = (
   return grid;
 };
 
-const fitText = (text: string, maxCells: number): string => {
-  if (maxCells <= 0) return "";
-  if (text.length <= maxCells) return text;
-  if (maxCells <= 3) return text.slice(0, maxCells);
-  return `${text.slice(0, maxCells - 3)}...`;
-};
-
 const wrapText = (text: string, maxCells: number, maxLines: number): string[] => {
   if (maxCells <= 0 || maxLines <= 0) return [];
   const words = text.trim().split(/\s+/).filter(Boolean);
@@ -310,53 +306,3 @@ const wrapText = (text: string, maxCells: number, maxLines: number): string[] =>
   if (current && lines.length < maxLines) lines.push(current);
   return lines.slice(0, maxLines).map((line) => fitText(line, maxCells));
 };
-
-const createGrid = (width: number, height: number, background: RGBA): CellGrid => {
-  const cells = Math.max(1, width * height);
-  const chars = new Uint32Array(cells);
-  const fg = new Float32Array(cells * 4);
-  const bg = new Float32Array(cells * 4);
-  const attrs = new Uint32Array(cells);
-  for (let index = 0; index < cells; index += 1) {
-    chars[index] = 0x20;
-    setRgba(fg, index, rgba.text);
-    setRgba(bg, index, background);
-  }
-  return { width, height, chars, fg, bg, attrs };
-};
-
-const writeText = (grid: CellGrid, row: number, col: number, text: string, color: RGBA, attributes: number) => {
-  let x = col;
-  for (const char of text) {
-    if (x >= grid.width) break;
-    const codePoint = char.codePointAt(0) ?? 0x20;
-    const index = row * grid.width + x;
-    grid.chars[index] = codePoint;
-    grid.attrs[index] = attributes;
-    setRgba(grid.fg, index, color);
-    x += 1;
-  }
-};
-
-const setCellBackground = (grid: CellGrid, row: number, col: number, color: RGBA) => {
-  setRgba(grid.bg, row * grid.width + col, color);
-};
-
-const setRgba = (buffer: Float32Array, index: number, color: RGBA) => {
-  const offset = index * 4;
-  buffer[offset] = color[0];
-  buffer[offset + 1] = color[1];
-  buffer[offset + 2] = color[2];
-  buffer[offset + 3] = color[3];
-};
-
-function hexToRgba(hex: string): RGBA {
-  const value = hex.replace("#", "");
-  const parsed = Number.parseInt(value, 16);
-  return [
-    ((parsed >> 16) & 255) / 255,
-    ((parsed >> 8) & 255) / 255,
-    (parsed & 255) / 255,
-    1,
-  ];
-}

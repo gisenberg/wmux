@@ -49,6 +49,7 @@
 12. Cwd preservation is best-effort outside tmux and wmux-managed shell bootstraps.
 
    Same-machine workspaces, tabs, and splits preserve cwd by querying tmux `pane_current_path` for the source pane. When tmux is unavailable, wmux-launched zsh/bash panes and Windows `powershell-ssh` panes emit OSC 7 cwd reports through temporary prompt hooks. Some backends such as macOS screen may not pass those sequences through. Fish, custom command machines, and shells launched outside wmux can only preserve cwd if they emit OSC 7 themselves or if a stored/configured cwd is available.
+   Shell-aware click-to-place-cursor support is also limited to wmux-managed zsh/bash prompt hooks. Its buffer-to-cell mapping handles normal single-width command text, tabs, and simple control characters, but wide graphemes and unusual shell redisplay behavior can still place the cursor approximately.
 
 13. The empty-state shader is not a native ghostty-web shader.
 
@@ -56,7 +57,7 @@
 
 14. The OpenTUI web UI migration is vendored, experimental, and partial.
 
-   `rbbydotdev/opentui-web` currently describes itself as a proof of concept, its `opentui-browser` package is private/unpublished, and the repository has no license file. wmux vendors a local snapshot under `vendor/opentui-browser` with provenance in `vendor/opentui-browser/UPSTREAM.md`. The default sidebar now renders through the vendored `CanvasPainter` cell-grid path, while the topbar, command palette, and activity drawer still use wmux's earlier canvas implementation. `?legacy=1` remains available for the older React chrome. Settings remains a DOM form because it has editable controls and session-audit actions. Wider migration needs either a published/licensed upstream API or a deliberate decision to keep maintaining the vendored snapshot.
+   `rbbydotdev/opentui-web` currently describes itself as a proof of concept, its `opentui-browser` package is private/unpublished, and the repository has no license file. wmux vendors a local snapshot under `vendor/opentui-browser` with provenance in `vendor/opentui-browser/UPSTREAM.md`. The default sidebar, topbar, terminal pane toolbar, command-palette results list, and activity drawer now render through the vendored `CanvasPainter` cell-grid path; settings remains a DOM form because it has editable controls and session-audit actions. `?legacy=1` remains available for the older React chrome. Wider migration needs either a published/licensed upstream API or a deliberate decision to keep maintaining the vendored snapshot.
 
 15. Machine pixel streams are helper-based, not a full wmux native agent yet.
 

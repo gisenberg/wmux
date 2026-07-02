@@ -1,4 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  createGrid,
+  createOpenTuiPainter,
+  fillCells,
+  fitText,
+  hexToRgba,
+  observeCanvasViewport,
+  syncPainterViewport,
+  writeText,
+  type CellGrid,
+  type CellMetrics,
+  type RGBA,
+} from "./opentui-grid";
 
 export interface OpenTuiCommand {
   id: string;
@@ -20,8 +33,8 @@ interface OpenTuiCommandPaletteProps {
 
 interface HitZone {
   index: number;
-  x: number;
-  y: number;
+  row: number;
+  col: number;
   width: number;
   height: number;
 }
@@ -39,10 +52,15 @@ const colors = {
   red: "#d94a3d",
 };
 
+const rgba = Object.fromEntries(
+  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
+) as Record<keyof typeof colors, RGBA>;
+
 export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose }: OpenTuiCommandPaletteProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
+  const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const [selectedIndex, setSelectedIndex] = useState(0);
   const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
   const selectableCommands = filteredCommands.filter((command) => !command.disabled);
@@ -58,31 +76,27 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d", { alpha: false });
-    const parent = canvas?.parentElement;
-    if (!canvas || !ctx || !parent) return;
+    if (!canvas) return;
 
-    const paint = () => {
-      const rect = parent.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      const width = Math.max(1, Math.floor(rect.width));
-      const height = Math.max(1, Math.floor(rect.height));
-      const nextWidth = Math.ceil(width * dpr);
-      const nextHeight = Math.ceil(height * dpr);
-      if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
-        canvas.width = nextWidth;
-        canvas.height = nextHeight;
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawPalette(ctx, width, height, filteredCommands, selectedIndex, hitsRef.current);
+    const painter = createOpenTuiPainter(canvas, {
+      fontSize: 12,
+      fontFamily,
+      cellVAlign: "middle",
+      clearColor: colors.black,
+    });
+
+    const paint = (entry?: ResizeObserverEntry) => {
+      const metrics = syncPainterViewport(painter, canvas, entry);
+      metricsRef.current = metrics;
+      painter.paint(drawPalette(metrics, filteredCommands, selectedIndex, hitsRef.current));
     };
 
     paint();
-    const observer = new ResizeObserver(paint);
-    observer.observe(parent);
-    return () => observer.disconnect();
+    const observer = observeCanvasViewport(canvas, paint);
+    return () => {
+      observer.disconnect();
+      painter.dispose();
+    };
   }, [filteredCommands, selectedIndex]);
 
   const runCommand = async (command: OpenTuiCommand | undefined) => {
@@ -129,14 +143,14 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const row = Math.floor((event.clientY - rect.top) / metricsRef.current.height);
+    const col = Math.floor((event.clientX - rect.left) / metricsRef.current.width);
     const hit = hitsRef.current.find(
       (candidate) =>
-        x >= candidate.x &&
-        x <= candidate.x + candidate.width &&
-        y >= candidate.y &&
-        y <= candidate.y + candidate.height,
+        row >= candidate.row &&
+        row < candidate.row + candidate.height &&
+        col >= candidate.col &&
+        col < candidate.col + candidate.width,
     );
     if (hit) void runCommand(filteredCommands[hit.index]);
   };
@@ -145,14 +159,14 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const row = Math.floor((event.clientY - rect.top) / metricsRef.current.height);
+    const col = Math.floor((event.clientX - rect.left) / metricsRef.current.width);
     const hit = hitsRef.current.find(
       (candidate) =>
-        x >= candidate.x &&
-        x <= candidate.x + candidate.width &&
-        y >= candidate.y &&
-        y <= candidate.y + candidate.height,
+        row >= candidate.row &&
+        row < candidate.row + candidate.height &&
+        col >= candidate.col &&
+        col < candidate.col + candidate.width,
     );
     canvas.style.cursor = hit ? "pointer" : "default";
     if (hit) setSelectedIndex(hit.index);
@@ -177,49 +191,45 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
 }
 
 const drawPalette = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
+  metrics: CellMetrics,
   commands: OpenTuiCommand[],
   selectedIndex: number,
   hits: HitZone[],
-) => {
+): CellGrid => {
   hits.length = 0;
-  ctx.fillStyle = colors.black;
-  ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = colors.line;
-  ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+  const { cols, rows } = metrics;
+  const grid = createGrid(cols, rows, rgba.black, rgba.text);
 
-  const cellHeight = 32;
-  const rowTop = 10;
-  const rowWidth = Math.max(1, width - 20);
-  const write = (text: string, x: number, y: number, color: string, weight: 400 | 600 | 700 = 600) => {
-    ctx.font = `${weight} 12px ${fontFamily}`;
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y);
+  const write = (row: number, col: number, text: string, color: RGBA, weight: 400 | 600 | 700 = 600) => {
+    writeText(grid, row, col, fitText(text, Math.max(0, cols - col - 1)), color, weight >= 700 ? 1 : 0);
   };
+  const fillRow = (row: number, col: number, width: number, color: RGBA) => fillCells(grid, row, col, width, color);
 
   if (!commands.length) {
-    write("NO COMMANDS", 14, rowTop + 4, colors.faint, 700);
-    return;
+    write(1, 2, "NO COMMANDS", rgba.faint, 700);
+    return grid;
   }
 
+  const rowHeight = 3;
+  const rowTop = 1;
+  const rowWidth = Math.max(1, cols - 2);
   for (let index = 0; index < commands.length; index += 1) {
     const command = commands[index];
-    const y = rowTop + index * cellHeight;
-    if (y > height - cellHeight - 6) break;
+    const row = rowTop + index * rowHeight;
+    if (row + rowHeight > rows) break;
     const selected = index === selectedIndex;
-    ctx.fillStyle = selected ? colors.active : index % 2 === 0 ? colors.black : colors.panel;
-    ctx.fillRect(10, y, rowWidth, cellHeight);
-    const section = fitText(command.section.toUpperCase(), 12);
-    const title = fitText(command.title, Math.max(12, Math.floor((rowWidth - 240) / 7)));
-    const shortcut = command.shortcut ? fitText(command.shortcut, 14) : "";
-    write(section, 18, y + 3, command.disabled ? colors.faint : colors.gold, 700);
-    write(title, 120, y + 3, command.disabled ? colors.faint : selected ? colors.gold : colors.text, selected ? 700 : 600);
-    if (command.subtitle) write(fitText(command.subtitle, 42), 120, y + 21, colors.muted, 400);
-    if (shortcut) write(shortcut, width - 118, y + 3, command.disabled ? colors.faint : colors.muted, 700);
-    if (!command.disabled) hits.push({ index, x: 10, y, width: rowWidth, height: cellHeight });
+    for (let offset = 0; offset < rowHeight; offset += 1) {
+      fillRow(row + offset, 1, rowWidth, selected ? rgba.active : index % 2 === 0 ? rgba.black : rgba.panel);
+    }
+    const shortcut = command.shortcut ?? "";
+    const shortcutCol = Math.max(18, cols - 16);
+    write(row, 2, command.section.toUpperCase(), command.disabled ? rgba.faint : rgba.gold, 700);
+    write(row, 16, command.title, command.disabled ? rgba.faint : selected ? rgba.gold : rgba.text, selected ? 700 : 600);
+    if (command.subtitle) write(row + 1, 16, command.subtitle, rgba.muted, 400);
+    if (shortcut) write(row, shortcutCol, shortcut, command.disabled ? rgba.faint : rgba.muted, 700);
+    if (!command.disabled) hits.push({ index, row, col: 1, width: rowWidth, height: rowHeight });
   }
+  return grid;
 };
 
 const filterCommands = (commands: OpenTuiCommand[], query: string): OpenTuiCommand[] => {
@@ -235,13 +245,6 @@ const filterCommands = (commands: OpenTuiCommand[], query: string): OpenTuiComma
       .toLowerCase();
     return tokens.every((token) => haystack.includes(token));
   });
-};
-
-const fitText = (text: string, maxCells: number): string => {
-  if (maxCells <= 0) return "";
-  if (text.length <= maxCells) return text;
-  if (maxCells <= 3) return text.slice(0, maxCells);
-  return `${text.slice(0, maxCells - 3)}...`;
 };
 
 const modulo = (value: number, divisor: number): number => ((value % divisor) + divisor) % divisor;
