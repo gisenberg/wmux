@@ -24,6 +24,7 @@ const windowsRequiredHelperNames = [
   "wmux-windows-agent-service",
   "wmux-windows-setup",
 ];
+const windowsClipboardAliasNames = ["wmux-clip", "wclip", "wmclip"];
 
 export const encodePowerShellCommand = (script: string): string =>
   Buffer.from(script, "utf16le").toString("base64");
@@ -268,12 +269,14 @@ try {
 } | ConvertTo-Json -Depth 8 -Compress
 `;
 
-const windowsPowerShellHelperNames = (): string[] => windowsRequiredHelperNames;
+const windowsPowerShellHelperNames = (): string[] => [...windowsRequiredHelperNames, ...windowsClipboardAliasNames];
+const windowsPowerShellSourceName = (name: string): string =>
+  windowsClipboardAliasNames.includes(name) ? "wmux-copy.ps1" : `${name}.ps1`;
 
 const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
   ...windowsPowerShellHelperNames().map((name) => ({
     name: `${name}.ps1`,
-    content: localWindowsHelperScript(`${name}.ps1`),
+    content: localWindowsHelperScript(windowsPowerShellSourceName(name)),
   })),
   ...windowsPowerShellHelperNames().map((name) => ({
     name: `${name}.cmd`,

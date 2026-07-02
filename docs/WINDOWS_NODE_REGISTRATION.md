@@ -348,7 +348,7 @@ Keep the legacy `powershell-ssh` path available as a fallback while the ConPTY a
 - `/api/bootstrap` reports `9800x3d` as reachable.
 - Creating a wmux workspace on `9800x3d` opens an interactive PowerShell session.
 - New Windows panes stage helper scripts into `%LOCALAPPDATA%\wmux\bin`.
-- `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup` resolve inside new Windows panes.
+- `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, `wmux-clip`, `wclip`, `wmclip`, `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup` resolve inside new Windows panes.
 - `wmux-windows-setup validate` reports `wmuxApi.reachable: true`, helper scripts present, FFmpeg/Python/pywinpty available, and the stream task running.
 - A short `/api/streams/9800x3d/request` lease causes the Windows stream agent to publish `wmux-9800x3d`, then return idle after release.
 - `wmux-windows-setup validate` reports the `wmux-windows-agent` helper and agent config present.

@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
+$CommandName = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Name)
+if (-not $CommandName) { $CommandName = 'wmux-copy' }
 $WmuxUrl = $env:WMUX_URL
 if (-not $WmuxUrl) { $WmuxUrl = 'http://127.0.0.1:3478' }
 $PaneId = $env:WMUX_PANE_ID
@@ -32,12 +34,12 @@ if ($File) {
 } elseif ($MyInvocation.ExpectingInput) {
   $Text = ($input | Out-String)
 } else {
-  Write-Error 'wmux-copy requires stdin or a file'
+  Write-Error "$CommandName requires stdin or a file"
   exit 2
 }
 
 if (-not $Text) {
-  Write-Error 'wmux-copy: no input'
+  Write-Error "${CommandName}: no input"
   exit 2
 }
 

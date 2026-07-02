@@ -103,12 +103,15 @@ function Get-WindowsWmuxReport {
   $HelperNames = @(
     'wmux-agent-event',
     'wmux-copy',
+    'wmux-clip',
     'wmux-hooks',
     'wmux-media',
     'wmux-notify',
     'wmux-run',
     'wmux-stream-agent-service',
     'wmux-title',
+    'wclip',
+    'wmclip',
     'wmux-windows-agent-service',
     'wmux-windows-setup'
   )

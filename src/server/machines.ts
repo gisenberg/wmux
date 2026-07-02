@@ -674,6 +674,9 @@ cat > "$wmux_helper_dir/wmux-stream-agent-service" <<'__WMUX_STREAM_AGENT_SERVIC
 ${localHelperScript("wmux-stream-agent-service")}
 __WMUX_STREAM_AGENT_SERVICE_HELPER__
 chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service";
+ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-clip" 2>/dev/null || true;
+ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wclip" 2>/dev/null || true;
+ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmclip" 2>/dev/null || true;
 wmux_old_ifs="$IFS";
 IFS=":";
 wmux_candidate_path="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin";
@@ -688,6 +691,9 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-agent-event" "$wmux_path_dir/wmux-agent-event" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-run" "$wmux_path_dir/wmux-run" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-copy" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-clip" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wclip" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmclip" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-stream-agent" "$wmux_path_dir/wmux-stream-agent" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_path_dir/wmux-stream-agent-service" 2>/dev/null || true;
       fi;

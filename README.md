@@ -115,7 +115,7 @@ curl -fsS \
 
 Unread notifications light the workspace, tab, and pane. The browser notification button in the top bar requests browser notification permission.
 
-SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, and `wmux-stream-agent` available on hosts like Away-Team without manually copying this repo there.
+SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, its `wmux-clip`/`wclip`/`wmclip` aliases, and `wmux-stream-agent` available on hosts like Away-Team without manually copying this repo there.
 
 Windows `powershell-ssh` panes fetch a helper bundle from wmux when the pane starts and stage PowerShell/CMD shims into `%LOCALAPPDATA%\wmux\bin`. New Windows panes get the same helper command names plus `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup`.
 
@@ -183,7 +183,10 @@ Pipe text to the browser-side clipboard buffer with:
 ```bash
 git diff | wmux-copy
 wmux-copy ./notes.txt
+git show | wclip
 ```
+
+`wmux-clip`, `wclip`, and `wmclip` are aliases for `wmux-copy`.
 
 wmux asks the open browser to write the text to the OS clipboard immediately. If the browser blocks the write because it requires a user gesture, the top-bar clipboard button turns attention-colored; click it to copy the buffered text.
 
