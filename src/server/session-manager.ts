@@ -75,13 +75,24 @@ export class SessionManager {
   }
 
   closePane(paneId: string): boolean {
-    const machineId = this.state.findPane(paneId)?.machineId;
+    const context = this.state.findPaneContext(paneId);
+    if (!context) return false;
+    if (context.tab.panes.length <= 1) {
+      return context.workspace.tabs.length <= 1
+        ? this.closeWorkspace(context.workspace.id)
+        : this.closeTab(context.workspace.id, context.tab.id);
+    }
+    const machineId = context.pane.machineId;
     const removed = this.state.removePane(paneId);
-    this.disposePaneProcess(paneId, machineId);
+    if (removed) this.disposePaneProcess(paneId, machineId);
     return removed;
   }
 
   closeTab(workspaceId: string, tabId: string): boolean {
+    const workspace = this.state.snapshot().workspaces.find((candidate) => candidate.id === workspaceId);
+    const tab = workspace?.tabs.find((candidate) => candidate.id === tabId);
+    if (!workspace || !tab) return false;
+    if (workspace.tabs.length <= 1) return this.closeWorkspace(workspaceId);
     const machineIds = this.machineIdsForTab(workspaceId, tabId);
     const paneIds = this.state.removeTab(workspaceId, tabId);
     for (const paneId of paneIds) this.disposePaneProcess(paneId, machineIds.get(paneId));

@@ -98,7 +98,6 @@ export function LayoutView({
           unreadCount={unreadByPaneId.get(pane.id) ?? 0}
           machines={machines}
           terminalFontSize={terminalFontSize}
-          canClose={tab.panes.length > 1}
           mediaItems={mediaByPaneId.get(pane.id) ?? []}
           lastRun={runsByPaneId.get(pane.id)}
           onActivate={() => onActivatePane(pane.id)}

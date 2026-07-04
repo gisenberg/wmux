@@ -26,7 +26,6 @@ interface Props {
   unreadCount: number;
   machines: MachineStatus[];
   terminalFontSize: number;
-  canClose: boolean;
   mediaItems: TerminalMedia[];
   lastRun?: TerminalRun;
   onActivate: () => void;
@@ -77,7 +76,6 @@ export function TerminalPane({
   unreadCount,
   machines,
   terminalFontSize,
-  canClose,
   mediaItems,
   lastRun,
   onActivate,
@@ -567,7 +565,6 @@ export function TerminalPane({
         canCopyLastCommand={Boolean(lastRun?.command && navigator.clipboard)}
         canRerunLastCommand={Boolean(connected && lastRun?.command)}
         canSplit={canSplit}
-        canClose={canClose}
         onSplit={onSplit}
         onActivate={onActivate}
         onClose={onClose}

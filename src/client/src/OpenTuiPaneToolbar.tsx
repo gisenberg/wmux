@@ -30,7 +30,6 @@ interface OpenTuiPaneToolbarProps {
   canCopyLastCommand: boolean;
   canRerunLastCommand: boolean;
   canSplit: boolean;
-  canClose: boolean;
   onSplit: (direction: SplitDirection) => void;
   onActivate: () => void;
   onClose: () => void;
@@ -177,7 +176,7 @@ const drawPaneToolbar = (
   };
 
   let right = cols - 1;
-  right = button(right, "x", "Close pane", { type: "close" }, !props.canClose);
+  right = button(right, "x", "Close pane and kill process", { type: "close" });
   right = button(right, "max", "Focus pane", { type: "focus" });
   right = button(right, "down", `Split down on ${props.machineLabel}`, { type: "split", direction: "horizontal" }, !props.canSplit);
   right = button(right, "right", `Split right on ${props.machineLabel}`, { type: "split", direction: "vertical" }, !props.canSplit);

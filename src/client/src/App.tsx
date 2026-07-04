@@ -490,13 +490,13 @@ export function App() {
   };
 
   const closePane = async (paneId: string) => {
-    if (!activeTab || activeTab.panes.length <= 1) return;
+    if (!activeTab) return;
     const response = await api.closePane(activeTab.id, paneId);
     await refresh(response.state);
   };
 
   const closeActiveTab = async () => {
-    if (!activeWorkspace || !activeTab || activeWorkspace.tabs.length <= 1) return;
+    if (!activeWorkspace || !activeTab) return;
     const response = await api.closeTab(activeWorkspace.id, activeTab.id);
     await refresh(response.state);
   };
@@ -846,7 +846,7 @@ export function App() {
         subtitle: activeTab?.title,
         section: "Close",
         shortcut: "Cmd+W",
-        disabled: !activeWorkspace || !activeTab || activeWorkspace.tabs.length <= 1,
+        disabled: !activeWorkspace || !activeTab,
         run: closeActiveTab,
       },
       {
