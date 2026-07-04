@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
@@ -322,6 +323,48 @@ export const createHttpServer = (
         return;
       }
 
+      const paneAttachment = url.pathname.match(/^\/api\/panes\/([^/]+)\/attachments$/);
+      if (paneAttachment && request.method === "POST") {
+        const paneId = decodeURIComponent(paneAttachment[1]);
+        if (!state.findPane(paneId)) {
+          sendJson(response, 404, { error: "pane_not_found" });
+          return;
+        }
+        const body = (await readBody(request)) as { name?: unknown; mimeType?: unknown; data?: unknown };
+        if (typeof body.data !== "string" || !body.data.trim()) {
+          sendJson(response, 400, { error: "missing_attachment_data" });
+          return;
+        }
+        const mimeType = typeof body.mimeType === "string" ? body.mimeType.trim().toLowerCase() : "";
+        const extension = attachmentExtensionForMimeType(mimeType);
+        if (!extension) {
+          sendJson(response, 400, { error: "unsupported_attachment_type" });
+          return;
+        }
+        const encodedData = body.data.replace(/\s+/g, "");
+        if (!isBase64Data(encodedData)) {
+          sendJson(response, 400, { error: "invalid_attachment_data" });
+          return;
+        }
+        const buffer = Buffer.from(encodedData, "base64");
+        if (buffer.length === 0) {
+          sendJson(response, 400, { error: "empty_attachment" });
+          return;
+        }
+        if (buffer.length > maxAttachmentBytes) {
+          sendJson(response, 413, { error: "attachment_too_large" });
+          return;
+        }
+        const attachment = savePaneAttachment(paneId, {
+          name: typeof body.name === "string" ? body.name : undefined,
+          mimeType,
+          extension,
+          buffer,
+        });
+        sendJson(response, 201, { attachment });
+        return;
+      }
+
       const readNotification = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
       if (readNotification && request.method === "POST") {
         state.markNotificationRead(readNotification[1]);
@@ -455,6 +498,31 @@ export const createHttpServer = (
         return;
       }
 
+      const paneInput = url.pathname.match(/^\/api\/panes\/([^/]+)\/input$/);
+      if (paneInput && request.method === "POST") {
+        const body = (await readBody(request)) as { data?: unknown; cols?: unknown; rows?: unknown };
+        if (typeof body.data !== "string") {
+          sendJson(response, 400, { error: "invalid_input" });
+          return;
+        }
+        if (body.data.length > 256 * 1024) {
+          sendJson(response, 413, { error: "input_too_large" });
+          return;
+        }
+        const written = sessions.writePane(
+          decodeURIComponent(paneInput[1]),
+          body.data,
+          typeof body.cols === "number" ? body.cols : undefined,
+          typeof body.rows === "number" ? body.rows : undefined,
+        );
+        if (!written) {
+          sendJson(response, 404, { error: "pane_not_found" });
+          return;
+        }
+        sendJson(response, 200, await bootstrap());
+        return;
+      }
+
       const activePane = url.pathname.match(/^\/api\/tabs\/([^/]+)\/panes\/([^/]+)\/active$/);
       if (activePane && request.method === "POST") {
         state.setActivePane(activePane[1], activePane[2]);
@@ -470,19 +538,26 @@ export const createHttpServer = (
       }
 
       if (request.method === "GET") {
+        const attachment = url.pathname.match(/^\/api\/attachments\/([^/]+)\/([^/]+)$/);
+        if (attachment) {
+          if (servePaneAttachment(decodeURIComponent(attachment[1]), decodeURIComponent(attachment[2]), response)) return;
+          sendJson(response, 404, { error: "attachment_not_found" });
+          return;
+        }
+
         if (vite && await serveViteRequest(vite, request, response, url, root)) return;
 
         const filePath =
           url.pathname === "/" ? path.join(root, "index.html") : path.join(root, url.pathname);
         const normalized = path.normalize(filePath);
         if (normalized.startsWith(root) && fs.existsSync(normalized) && fs.statSync(normalized).isFile()) {
-          response.writeHead(200, { "content-type": contentType(normalized) });
+          response.writeHead(200, staticHeaders(normalized));
           fs.createReadStream(normalized).pipe(response);
           return;
         }
         const index = path.join(root, "index.html");
         if (fs.existsSync(index)) {
-          response.writeHead(200, { "content-type": "text/html" });
+          response.writeHead(200, staticHeaders(index));
           fs.createReadStream(index).pipe(response);
           return;
         }
@@ -600,7 +675,7 @@ const serveViteRequest = async (
     const indexPath = path.join(root, "index.html");
     if (!fs.existsSync(indexPath)) return false;
     const html = await vite.transformIndexHtml(url.pathname, fs.readFileSync(indexPath, "utf8"));
-    response.writeHead(200, { "content-type": "text/html" });
+    response.writeHead(200, staticHeaders(indexPath));
     response.end(html);
     return true;
   } catch (error) {
@@ -630,6 +705,108 @@ const cwdForSourcePane = (
   return cwd ?? sourcePane.cwd;
 };
 
+const maxAttachmentBytes = 8 * 1024 * 1024;
+
+const attachmentExtensions: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/avif": "avif",
+  "image/bmp": "bmp",
+  "image/heic": "heic",
+  "image/heif": "heif",
+};
+
+interface SavedPaneAttachment {
+  id: string;
+  paneId: string;
+  name: string;
+  mimeType: string;
+  bytes: number;
+  url: string;
+  createdAt: string;
+}
+
+const attachmentRoot = (): string =>
+  path.resolve(process.env.WMUX_ATTACHMENT_DIR ?? path.join(os.homedir(), ".wmux", "attachments"));
+
+const attachmentExtensionForMimeType = (mimeType: string): string | null =>
+  attachmentExtensions[mimeType.toLowerCase()] ?? null;
+
+const isBase64Data = (value: string): boolean =>
+  value.length % 4 !== 1 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
+
+const savePaneAttachment = (
+  paneId: string,
+  input: { name?: string; mimeType: string; extension: string; buffer: Buffer },
+): SavedPaneAttachment => {
+  const paneSegment = safePathSegment(paneId, "pane");
+  const id = `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const displayName = safeDisplayName(input.name, `pasted-image.${input.extension}`);
+  const baseName = safeFileBaseName(displayName, "pasted-image");
+  const fileName = `${id}-${baseName}.${input.extension}`;
+  const paneDirectory = path.join(attachmentRoot(), paneSegment);
+  fs.mkdirSync(paneDirectory, { recursive: true });
+  fs.writeFileSync(path.join(paneDirectory, fileName), input.buffer, { flag: "wx" });
+  return {
+    id,
+    paneId,
+    name: displayName,
+    mimeType: input.mimeType,
+    bytes: input.buffer.length,
+    url: `/api/attachments/${encodeURIComponent(paneSegment)}/${encodeURIComponent(fileName)}`,
+    createdAt: new Date().toISOString(),
+  };
+};
+
+const servePaneAttachment = (paneSegment: string, fileName: string, response: http.ServerResponse): boolean => {
+  if (safePathSegment(paneSegment, "") !== paneSegment || path.basename(fileName) !== fileName) return false;
+  if (!/^[A-Za-z0-9._-]+$/.test(fileName)) return false;
+  const paneDirectory = path.resolve(attachmentRoot(), paneSegment);
+  const filePath = path.resolve(paneDirectory, fileName);
+  if (!filePath.startsWith(`${paneDirectory}${path.sep}`)) return false;
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
+  const stat = fs.statSync(filePath);
+  response.writeHead(200, {
+    "content-type": attachmentContentType(fileName),
+    "content-length": String(stat.size),
+    "cache-control": "private, max-age=86400",
+    "x-content-type-options": "nosniff",
+  });
+  fs.createReadStream(filePath).pipe(response);
+  return true;
+};
+
+const safeDisplayName = (name: string | undefined, fallback: string): string => {
+  const trimmed = (name ?? "").trim();
+  const baseName = trimmed ? path.basename(trimmed) : fallback;
+  return baseName.replace(/[^\w .()[\]-]+/g, "-").replace(/\s+/g, " ").slice(0, 120) || fallback;
+};
+
+const safeFileBaseName = (name: string, fallback: string): string => {
+  const withoutExtension = name.replace(/\.[^.]+$/, "");
+  return safePathSegment(withoutExtension, fallback).slice(0, 80);
+};
+
+const safePathSegment = (value: string, fallback: string): string => {
+  const safe = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe || fallback;
+};
+
+const attachmentContentType = (filePath: string): string => {
+  if (filePath.endsWith(".png")) return "image/png";
+  if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) return "image/jpeg";
+  if (filePath.endsWith(".gif")) return "image/gif";
+  if (filePath.endsWith(".webp")) return "image/webp";
+  if (filePath.endsWith(".avif")) return "image/avif";
+  if (filePath.endsWith(".bmp")) return "image/bmp";
+  if (filePath.endsWith(".heic")) return "image/heic";
+  if (filePath.endsWith(".heif")) return "image/heif";
+  return "application/octet-stream";
+};
+
 const contentType = (filePath: string): string => {
   if (filePath.endsWith(".html")) return "text/html";
   if (filePath.endsWith(".js")) return "text/javascript";
@@ -638,6 +815,16 @@ const contentType = (filePath: string): string => {
   if (filePath.endsWith(".woff2")) return "font/woff2";
   if (filePath.endsWith(".wasm")) return "application/wasm";
   return "application/octet-stream";
+};
+
+const staticHeaders = (filePath: string): Record<string, string> => {
+  const headers: Record<string, string> = { "content-type": contentType(filePath) };
+  if (filePath.endsWith(".html")) {
+    headers["cache-control"] = "no-store";
+  } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+    headers["cache-control"] = "public, max-age=31536000, immutable";
+  }
+  return headers;
 };
 
 const machineExists = (machines: MachineConfig[], machineId: string): boolean =>

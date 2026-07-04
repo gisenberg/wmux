@@ -106,6 +106,15 @@ export class SessionManager {
     return paneIds.length > 0;
   }
 
+  writePane(paneId: string, data: string, cols = 96, rows = 32): boolean {
+    const pane = this.state.findPane(paneId);
+    if (!pane) return false;
+    const size = normalizeSize(cols, rows);
+    const session = this.ensureSession(pane, size.cols, size.rows);
+    session.write(data);
+    return true;
+  }
+
   private ensureSession(pane: PaneState, cols: number, rows: number): ManagedSession {
     const existing = this.sessions.get(pane.id);
     if (existing && !existing.isExited) return existing;

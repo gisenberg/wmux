@@ -1,5 +1,15 @@
 import type { BootstrapPayload, DurableSessionAudit, SplitDirection, WmuxSettings } from "./types";
 
+export interface PaneAttachment {
+  id: string;
+  paneId: string;
+  name: string;
+  mimeType: string;
+  bytes: number;
+  url: string;
+  createdAt: string;
+}
+
 const json = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
     ...init,
@@ -84,6 +94,16 @@ export const api = {
     json<BootstrapPayload>(`/api/tabs/${tabId}/panes/${paneId}/active`, { method: "POST" }),
   closePane: (tabId: string, paneId: string) =>
     json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/panes/${paneId}`, { method: "DELETE" }),
+  sendPaneInput: (paneId: string, data: string, cols = 96, rows = 32) =>
+    json<BootstrapPayload>(`/api/panes/${encodeURIComponent(paneId)}/input`, {
+      method: "POST",
+      body: JSON.stringify({ data, cols, rows }),
+    }),
+  uploadPaneAttachment: (paneId: string, attachment: { name: string; mimeType: string; data: string }) =>
+    json<{ attachment: PaneAttachment }>(`/api/panes/${encodeURIComponent(paneId)}/attachments`, {
+      method: "POST",
+      body: JSON.stringify(attachment),
+    }),
   createNotification: (paneId: string, title: string, subtitle: string, body: string) =>
     json<{ state: BootstrapPayload }>("/api/notifications", {
       method: "POST",

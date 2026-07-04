@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Activity, Bell, BellRing, CheckCheck, CirclePlus, Clipboard, Command as CommandIcon, GripVertical, Link2, PanelLeft, PanelLeftClose, PanelLeftOpen, Plus, ScreenShare, Search, Server, Settings, TerminalSquare, Trash2, X } from "lucide-react";
+import { Activity, Bell, BellRing, CheckCheck, CirclePlus, Clipboard, Command as CommandIcon, GripVertical, Link2, MessageSquare, PanelLeft, PanelLeftClose, PanelLeftOpen, Plus, ScreenShare, Search, Server, Settings, TerminalSquare, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
 import { LayoutView } from "./LayoutView";
+import { MobileAgentSurface } from "./MobileAgentSurface";
 import { OpenTuiActivityPanel } from "./OpenTuiActivityPanel";
 import type { OpenTuiActivityRow } from "./OpenTuiActivityPanel";
 import { OpenTuiCommandPalette } from "./OpenTuiCommandPalette";
@@ -25,6 +26,7 @@ import type {
 } from "./types";
 
 type ServiceConnection = "connecting" | "online" | "offline";
+type MobileSurfaceMode = "agent" | "terminal";
 
 interface PaletteCommand {
   id: string;
@@ -52,6 +54,13 @@ const maxMountedTabViews = 6;
 interface MobileViewportState {
   isMobile: boolean;
   keyboardOpen: boolean;
+}
+
+interface MobileViewportMetrics extends MobileViewportState {
+  height: number;
+  width: number;
+  offsetTop: number;
+  offsetLeft: number;
 }
 
 interface MountedTabView {
@@ -88,6 +97,7 @@ export function App() {
   const [workspaceHostFilter, setWorkspaceHostFilter] = useState("all");
   const [activityOpen, setActivityOpen] = useState(false);
   const [streamOpen, setStreamOpen] = useState(false);
+  const [mobileSurfaceMode, setMobileSurfaceMode] = useState<MobileSurfaceMode>("agent");
   const [bellPaneIds, setBellPaneIds] = useState<Set<string>>(() => new Set());
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
@@ -197,6 +207,7 @@ export function App() {
     [state],
   );
   const activeTab = activeWorkspace?.tabs.find((tab) => tab.id === activeWorkspace.activeTabId) ?? activeWorkspace?.tabs[0];
+  const activePane = activeTab?.panes.find((pane) => pane.id === activeTab.activePaneId) ?? activeTab?.panes[0];
   const activeTabKey = activeWorkspace && activeTab ? mountedTabViewKey(activeWorkspace.id, activeTab.id) : null;
   const tabViewsByKey = useMemo(() => {
     const views = new Map<string, MountedTabView>();
@@ -441,7 +452,10 @@ export function App() {
       window.history[options.replaceHistory ? "replaceState" : "pushState"](null, "", nextPath);
       lastSyncedPath.current = nextPath;
     }
-    if (mobileViewport.isMobile) setSidebarCollapsed(true);
+    if (mobileViewport.isMobile) {
+      setSidebarCollapsed(true);
+      settleMobileViewportAfterNavigation();
+    }
     clearBellPanes(target.tab.panes.map((pane) => pane.id));
 
     const optimistic = activateWorkspaceTabInState(current, workspaceId, target.tab.id);
@@ -509,6 +523,25 @@ export function App() {
   const appStyle = {
     "--wmux-sidebar-width": `${sidebarWidth}px`,
   } as CSSProperties;
+  const showMobileModeBar = mobileViewport.isMobile;
+  const showMobileAgentSurface = showMobileModeBar && mobileSurfaceMode === "agent";
+  const mobileHeaderMachine = activePane
+    ? machineFor(displayMachines, activePane.machineId)
+    : activeWorkspace
+      ? machineFor(displayMachines, activeWorkspace.machineId)
+      : undefined;
+  const mobileHeaderAgent = activeWorkspace ? latestAgentByWorkspaceId.get(activeWorkspace.id) : undefined;
+  const mobileHeaderStatus = mobileHeaderAgent
+    ? agentStatusClass(mobileHeaderAgent.status)
+    : activePane?.status === "running"
+      ? "running"
+      : activePane?.status === "exited"
+        ? "failed"
+        : "updated";
+  const mobileHeaderStatusLabel = mobileHeaderAgent?.status ?? activePane?.status ?? "idle";
+  const mobileHeaderSubtitle = [activeTab?.title, mobileHeaderMachine?.name ?? activeWorkspace?.machineId]
+    .filter(Boolean)
+    .join(" / ");
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((value) => !value);
@@ -666,6 +699,10 @@ export function App() {
     if (!state || !activeWorkspace) return;
     const response = await api.closeWorkspace(activeWorkspace.id);
     await refresh(response.state);
+  };
+
+  const sendPaneInput = async (paneId: string, data: string) => {
+    await refresh(await api.sendPaneInput(paneId, data));
   };
 
   const activateWorkspaceAt = (index: number) => {
@@ -1276,16 +1313,18 @@ export function App() {
       </div>
       {mobileViewport.isMobile ? (
         <>
-          <button
-            type="button"
-            className="mobile-sidebar-toggle"
-            title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
-            aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
-            aria-expanded={!sidebarCollapsed}
-            onClick={toggleSidebar}
-          >
-            <PanelLeft size={16} />
-          </button>
+          {!showMobileModeBar ? (
+            <button
+              type="button"
+              className="mobile-sidebar-toggle"
+              title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
+              aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
+              aria-expanded={!sidebarCollapsed}
+              onClick={toggleSidebar}
+            >
+              <PanelLeft size={16} />
+            </button>
+          ) : null}
           {!sidebarCollapsed ? (
             <button
               type="button"
@@ -1296,8 +1335,63 @@ export function App() {
           ) : null}
         </>
       ) : null}
-      <section className="workspace">
-        {openTuiMode ? (
+      <section className={`workspace ${showMobileModeBar ? "mobile-workspace" : ""} ${showMobileAgentSurface ? "mobile-agent-active" : ""}`}>
+        {showMobileModeBar ? (
+          <header className="mobile-shell-header">
+            <button
+              type="button"
+              className="mobile-header-nav"
+              title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
+              aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
+              aria-expanded={!sidebarCollapsed}
+              onClick={toggleSidebar}
+            >
+              <PanelLeft size={20} />
+            </button>
+            <div className="mobile-header-identity">
+              <strong>{activeWorkspace?.name ?? "wmux"}</strong>
+              <span>
+                <span className={`mobile-header-status ${mobileHeaderStatus}`} aria-hidden="true" />
+                <span className={`mobile-header-status-label ${mobileHeaderStatus}`}>{mobileHeaderStatusLabel}</span>
+                {mobileHeaderSubtitle ? <span className="mobile-header-divider">|</span> : null}
+                {mobileHeaderSubtitle ? <span>{mobileHeaderSubtitle}</span> : null}
+              </span>
+            </div>
+            <div className="mobile-header-actions">
+              <button type="button" title="Command palette" onClick={openCommandPalette}>
+                <CommandIcon size={17} />
+              </button>
+              <button type="button" title="Settings" onClick={() => setSettingsOpen(true)}>
+                <Settings size={17} />
+              </button>
+            </div>
+          </header>
+        ) : null}
+        {showMobileModeBar ? (
+          <div className="mobile-mode-bar">
+            <div className="mobile-mode-tabs" role="tablist" aria-label="Mobile surface">
+              <button
+                type="button"
+                className={mobileSurfaceMode === "agent" ? "active" : ""}
+                aria-selected={mobileSurfaceMode === "agent"}
+                onClick={() => setMobileSurfaceMode("agent")}
+              >
+                <MessageSquare size={15} />
+                <span>Chat</span>
+              </button>
+              <button
+                type="button"
+                className={mobileSurfaceMode === "terminal" ? "active" : ""}
+                aria-selected={mobileSurfaceMode === "terminal"}
+                onClick={() => setMobileSurfaceMode("terminal")}
+              >
+                <TerminalSquare size={15} />
+                <span>Term</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {!showMobileAgentSurface && (openTuiMode ? (
           <OpenTuiTopbar
             tabs={
               activeWorkspace?.tabs.map((tab) => ({
@@ -1409,8 +1503,23 @@ export function App() {
             </button>
           </div>
         </header>
-        )}
-        {activeTab ? (
+        ))}
+        {showMobileAgentSurface ? (
+          <MobileAgentSurface
+            state={state}
+            machines={displayMachines}
+            workspace={activeWorkspace}
+            tab={activeTab}
+            pane={activePane}
+            onSendInput={sendPaneInput}
+            onUploadAttachment={async (paneId, attachment) => (await api.uploadPaneAttachment(paneId, attachment)).attachment}
+            onFocusTerminal={() => {
+              if (activeWorkspace && activeTab) requestTerminalFocus(activeWorkspace.id, activeTab.id);
+              setMobileSurfaceMode("terminal");
+            }}
+            onOpenActions={openCommandPalette}
+          />
+        ) : activeTab ? (
           <div className="layout-cache">
             {mountedTabViews.map((view) => {
               const isActive = view.key === activeTabKey;
@@ -1509,13 +1618,26 @@ export function App() {
 }
 
 const useMobileViewportState = (): MobileViewportState => {
-  const [state, setState] = useState<MobileViewportState>(() => measureMobileViewport());
+  const initialMetrics = measureMobileViewport();
+  const [state, setState] = useState<MobileViewportState>(() => ({
+    isMobile: initialMetrics.isMobile,
+    keyboardOpen: initialMetrics.keyboardOpen,
+  }));
+  const maxMobileViewportHeight = useRef(initialMetrics.isMobile ? initialMetrics.height : 0);
 
   useEffect(() => {
     const update = () => {
-      const next = measureMobileViewport();
-      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-      document.documentElement.style.setProperty("--wmux-viewport-height", `${Math.max(1, Math.floor(viewportHeight))}px`);
+      const metrics = measureMobileViewport(maxMobileViewportHeight.current);
+      if (metrics.isMobile && !metrics.keyboardOpen) {
+        maxMobileViewportHeight.current = Math.max(maxMobileViewportHeight.current, metrics.height);
+      }
+      const next = metrics.isMobile
+        ? { isMobile: metrics.isMobile, keyboardOpen: metrics.keyboardOpen }
+        : { isMobile: false, keyboardOpen: false };
+      document.documentElement.style.setProperty("--wmux-viewport-height", `${Math.max(1, Math.floor(metrics.height))}px`);
+      document.documentElement.style.setProperty("--wmux-viewport-width", `${Math.max(1, Math.floor(metrics.width))}px`);
+      document.documentElement.style.setProperty("--wmux-viewport-top", `${Math.max(0, Math.floor(metrics.offsetTop))}px`);
+      document.documentElement.style.setProperty("--wmux-viewport-left", `${Math.max(0, Math.floor(metrics.offsetLeft))}px`);
       setState((current) =>
         current.isMobile === next.isMobile && current.keyboardOpen === next.keyboardOpen ? current : next,
       );
@@ -1537,11 +1659,33 @@ const useMobileViewportState = (): MobileViewportState => {
   return state;
 };
 
-const measureMobileViewport = (): MobileViewportState => {
+const measureMobileViewport = (maxMobileViewportHeight = 0): MobileViewportMetrics => {
   const isMobile = window.matchMedia("(max-width: 800px)").matches;
-  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-  const keyboardOpen = isMobile && window.innerHeight - viewportHeight > 120;
-  return { isMobile, keyboardOpen };
+  const viewport = window.visualViewport;
+  const viewportHeight = viewport?.height ?? window.innerHeight;
+  const viewportWidth = viewport?.width ?? window.innerWidth;
+  const keyboardOpen =
+    isMobile &&
+    (window.innerHeight - viewportHeight > 80 ||
+      (maxMobileViewportHeight > 0 && maxMobileViewportHeight - viewportHeight > 120));
+  return {
+    isMobile,
+    keyboardOpen,
+    height: viewportHeight,
+    width: viewportWidth,
+    offsetTop: viewport?.offsetTop ?? 0,
+    offsetLeft: viewport?.offsetLeft ?? 0,
+  };
+};
+
+const settleMobileViewportAfterNavigation = (): void => {
+  const sync = () => {
+    window.scrollTo(0, 0);
+    window.dispatchEvent(new Event("resize"));
+  };
+  window.requestAnimationFrame(sync);
+  window.setTimeout(sync, 120);
+  window.setTimeout(sync, 320);
 };
 
 const machineFor = (machines: MachineStatus[], machineId: string): MachineStatus | undefined =>
