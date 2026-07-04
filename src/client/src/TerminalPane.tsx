@@ -129,8 +129,13 @@ export function TerminalPane({
     let scrollDisposable: { dispose: () => void } | undefined;
     let renderDisposable: { dispose: () => void } | undefined;
     let mouseDownListener: ((event: MouseEvent) => void) | undefined;
+    let contextMenuListener: ((event: MouseEvent) => void) | undefined;
     let copyListener: ((event: ClipboardEvent) => void) | undefined;
     let pasteListener: ((event: ClipboardEvent) => void) | undefined;
+    let contextMenuSelection = "";
+    let contextCopyBridge: HTMLTextAreaElement | undefined;
+    let contextCopyBridgeTimer: number | undefined;
+    let removeContextCopyBridgeDismissListeners: (() => void) | undefined;
     let terminalOutputTimer: number | undefined;
     let queuedTerminalOutput = "";
     let reconnectDelayMs = 350;
@@ -152,6 +157,43 @@ export function TerminalPane({
       setTerminalMetrics((previous) =>
         previous.width === metrics.width && previous.height === metrics.height ? previous : metrics,
       );
+    };
+
+    const clearContextCopyBridge = () => {
+      if (contextCopyBridgeTimer !== undefined) {
+        window.clearTimeout(contextCopyBridgeTimer);
+        contextCopyBridgeTimer = undefined;
+      }
+      removeContextCopyBridgeDismissListeners?.();
+      removeContextCopyBridgeDismissListeners = undefined;
+      const bridge = contextCopyBridge;
+      contextCopyBridge = undefined;
+      if (!bridge) return;
+      const bridgeHadFocus = document.activeElement === bridge;
+      bridge.remove();
+      if (bridgeHadFocus && activeRef.current) terminalRef.current?.focus();
+    };
+
+    const prepareContextCopyBridge = (selection: string) => {
+      clearContextCopyBridge();
+      const bridge = document.createElement("textarea");
+      bridge.value = selection;
+      bridge.readOnly = true;
+      bridge.tabIndex = -1;
+      bridge.setAttribute("aria-hidden", "true");
+      bridge.className = "terminal-context-copy-bridge";
+      document.body.appendChild(bridge);
+      bridge.focus({ preventScroll: true });
+      bridge.select();
+
+      const dismiss = () => clearContextCopyBridge();
+      document.addEventListener("pointerdown", dismiss, true);
+      removeContextCopyBridgeDismissListeners = () => {
+        document.removeEventListener("pointerdown", dismiss, true);
+      };
+      bridge.addEventListener("copy", () => window.setTimeout(clearContextCopyBridge, 0), { once: true });
+      contextCopyBridge = bridge;
+      contextCopyBridgeTimer = window.setTimeout(clearContextCopyBridge, CONTEXT_COPY_BRIDGE_TIMEOUT_MS);
     };
 
     const sendKittyResponse = (imageId: string | undefined, quiet: string, status: "ok" | "error", message: string) => {
@@ -438,6 +480,9 @@ export function TerminalPane({
       renderDisposable = term.onRender(() => refreshMetrics(term));
 
       mouseDownListener = (event) => {
+        if (event.button === 2 || (event.button === 0 && event.ctrlKey)) {
+          contextMenuSelection = term.getSelection();
+        }
         const sequence = shellCursorPlacementSequence(event, term, shellCursorPlacementRef.current);
         if (!sequence) return;
         event.preventDefault();
@@ -449,6 +494,16 @@ export function TerminalPane({
         sendInput(socketRef.current, sequence);
       };
       term.element?.addEventListener("mousedown", mouseDownListener, { capture: true });
+      contextMenuListener = () => {
+        const selection = term.getSelection() || contextMenuSelection;
+        contextMenuSelection = "";
+        if (!selection) {
+          clearContextCopyBridge();
+          return;
+        }
+        prepareContextCopyBridge(selection);
+      };
+      term.element?.addEventListener("contextmenu", contextMenuListener, { capture: true });
       copyListener = (event) => {
         const selection = term.getSelection();
         if (!selection) return;
@@ -519,7 +574,9 @@ export function TerminalPane({
       scrollDisposable?.dispose();
       renderDisposable?.dispose();
       if (terminalOutputTimer !== undefined) window.clearTimeout(terminalOutputTimer);
+      clearContextCopyBridge();
       if (mouseDownListener) terminalRef.current?.element?.removeEventListener("mousedown", mouseDownListener, { capture: true });
+      if (contextMenuListener) terminalRef.current?.element?.removeEventListener("contextmenu", contextMenuListener, { capture: true });
       if (copyListener) terminalRef.current?.element?.removeEventListener("copy", copyListener, { capture: true });
       if (pasteListener) terminalRef.current?.element?.removeEventListener("paste", pasteListener, { capture: true });
       socketRef.current?.close();
@@ -703,6 +760,7 @@ const SYNCHRONIZED_OUTPUT_SEQUENCES = [SYNCHRONIZED_OUTPUT_START, SYNCHRONIZED_O
 const MAX_SYNCHRONIZED_OUTPUT_BUFFER_CHARS = 512 * 1024;
 const MAX_SYNCHRONIZED_OUTPUT_HOLD_MS = 500;
 const TERMINAL_OUTPUT_BATCH_MS = 16;
+const CONTEXT_COPY_BRIDGE_TIMEOUT_MS = 30_000;
 
 const createSynchronizedOutputState = (): SynchronizedOutputState => ({
   active: false,
