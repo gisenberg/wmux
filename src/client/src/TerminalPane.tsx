@@ -28,6 +28,7 @@ interface Props {
   terminalFontSize: number;
   mediaItems: TerminalMedia[];
   lastRun?: TerminalRun;
+  focusSignal?: number;
   onActivate: () => void;
   onSplit: (direction: SplitDirection, machineId?: string) => void;
   onClose: () => void;
@@ -78,6 +79,7 @@ export function TerminalPane({
   terminalFontSize,
   mediaItems,
   lastRun,
+  focusSignal = 0,
   onActivate,
   onSplit,
   onClose,
@@ -97,6 +99,8 @@ export function TerminalPane({
   const synchronizedOutputRef = useRef<SynchronizedOutputState>(createSynchronizedOutputState());
   const shellCursorPlacementRef = useRef(false);
   const onActivateRef = useRef(onActivate);
+  const activeRef = useRef(active);
+  const focusSignalRef = useRef(focusSignal);
   const [connected, setConnected] = useState(false);
   const [kittyMediaItems, setKittyMediaItems] = useState<TerminalMedia[]>([]);
   const [kittyInlineItems, setKittyInlineItems] = useState<KittyInlineImage[]>([]);
@@ -108,6 +112,14 @@ export function TerminalPane({
   useEffect(() => {
     onActivateRef.current = onActivate;
   }, [onActivate]);
+
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  useEffect(() => {
+    focusSignalRef.current = focusSignal;
+  }, [focusSignal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -417,6 +429,7 @@ export function TerminalPane({
       term.open(containerRef.current);
       configureTerminalInput(term);
       terminalRef.current = term;
+      if (activeRef.current && focusSignalRef.current > 0) requestAnimationFrame(() => term.focus());
       await waitForVisibleBox(containerRef.current);
       fitAddon.fit();
       fitAddon.observeResize();
@@ -518,6 +531,12 @@ export function TerminalPane({
       fitAddonRef.current = null;
     };
   }, [pane.id]);
+
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!active || focusSignal <= 0 || !term) return;
+    requestAnimationFrame(() => term.focus());
+  }, [active, focusSignal]);
 
   useEffect(() => {
     const term = terminalRef.current;

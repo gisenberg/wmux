@@ -9,6 +9,7 @@ interface Props {
   unreadByPaneId: Map<string, number>;
   mediaByPaneId: Map<string, TerminalMedia[]>;
   runsByPaneId: Map<string, TerminalRun>;
+  focusActivePaneSignal?: number;
   onActivatePane: (paneId: string) => void;
   onSplit: (paneId: string, direction: SplitDirection, machineId?: string) => void;
   onResizeSplit: (path: string, ratio: number) => void;
@@ -23,6 +24,7 @@ export function LayoutView({
   unreadByPaneId,
   mediaByPaneId,
   runsByPaneId,
+  focusActivePaneSignal = 0,
   onActivatePane,
   onSplit,
   onResizeSplit,
@@ -100,6 +102,7 @@ export function LayoutView({
           terminalFontSize={terminalFontSize}
           mediaItems={mediaByPaneId.get(pane.id) ?? []}
           lastRun={runsByPaneId.get(pane.id)}
+          focusSignal={tab.activePaneId === pane.id ? focusActivePaneSignal : 0}
           onActivate={() => onActivatePane(pane.id)}
           onSplit={(direction, machineId) => onSplit(pane.id, direction, machineId)}
           onClose={() => onClosePane(pane.id)}

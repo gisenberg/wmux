@@ -17,6 +17,7 @@ import type {
   LayoutNode,
   MachineStatus,
   SplitDirection,
+  SurfaceTab,
   TerminalClipboard,
   TerminalMedia,
   TerminalNotification,
@@ -47,10 +48,28 @@ const defaultSidebarWidth = 288;
 const minSidebarWidth = 220;
 const maxSidebarWidth = 520;
 const collapseSidebarDragThreshold = 128;
+const maxMountedTabViews = 6;
 
 interface MobileViewportState {
   isMobile: boolean;
   keyboardOpen: boolean;
+}
+
+interface MountedTabView {
+  key: string;
+  tabId: string;
+  tab: SurfaceTab;
+}
+
+interface PendingActiveRoute {
+  requestId: number;
+  workspaceId: string;
+  tabId: string;
+}
+
+interface TerminalFocusRequest {
+  key: string;
+  token: number;
 }
 
 export function App() {
@@ -72,9 +91,15 @@ export function App() {
   const [streamOpen, setStreamOpen] = useState(false);
   const [clipboardItem, setClipboardItem] = useState<TerminalClipboard | null>(null);
   const [clipboardStatus, setClipboardStatus] = useState<"idle" | "copied" | "blocked">("idle");
+  const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
   const eventsSocketRef = useRef<WebSocket | null>(null);
+  const stateRef = useRef<BootstrapPayload | null>(null);
   const seenNotificationIds = useRef(new Set<string>());
   const lastSyncedPath = useRef("");
+  const activeRouteRequestId = useRef(0);
+  const pendingActiveRoute = useRef<PendingActiveRoute | null>(null);
+  const terminalFocusToken = useRef(0);
   const previousMobileViewport = useRef(mobileViewport.isMobile);
 
   useEffect(() => {
@@ -82,6 +107,10 @@ export function App() {
     if (!mobileViewport.isMobile && previousMobileViewport.current) setSidebarCollapsed(false);
     previousMobileViewport.current = mobileViewport.isMobile;
   }, [mobileViewport.isMobile]);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     window.localStorage.setItem(sidebarWidthStorageKey, String(sidebarWidth));
@@ -129,7 +158,7 @@ export function App() {
             .catch(() => setClipboardStatus("blocked"));
         }
         if (message.type === "state" || message.type === "notification") {
-          api.bootstrap().then(setState).catch((nextError) => setError(String(nextError)));
+          api.bootstrap().then((payload) => refresh(payload)).catch((nextError) => setError(String(nextError)));
         }
       };
       ws.onclose = () => {
@@ -174,6 +203,28 @@ export function App() {
     [state],
   );
   const activeTab = activeWorkspace?.tabs.find((tab) => tab.id === activeWorkspace.activeTabId) ?? activeWorkspace?.tabs[0];
+  const activeTabKey = activeWorkspace && activeTab ? mountedTabViewKey(activeWorkspace.id, activeTab.id) : null;
+  const tabViewsByKey = useMemo(() => {
+    const views = new Map<string, MountedTabView>();
+    for (const workspace of state?.workspaces ?? []) {
+      for (const tab of workspace.tabs) {
+        const key = mountedTabViewKey(workspace.id, tab.id);
+        views.set(key, { key, tabId: tab.id, tab });
+      }
+    }
+    return views;
+  }, [state?.workspaces]);
+  const renderedTabKeys = useMemo(() => {
+    if (!activeTabKey || mountedTabKeys.includes(activeTabKey)) return mountedTabKeys;
+    return [activeTabKey, ...mountedTabKeys].slice(0, maxMountedTabViews);
+  }, [activeTabKey, mountedTabKeys]);
+  const mountedTabViews = useMemo(
+    () => renderedTabKeys.flatMap((key) => {
+      const view = tabViewsByKey.get(key);
+      return view ? [view] : [];
+    }),
+    [renderedTabKeys, tabViewsByKey],
+  );
   const machines = state?.machines ?? [];
   const persistedSettings = state?.settings ?? defaultSettings;
   const settings = previewSettings ?? persistedSettings;
@@ -190,6 +241,25 @@ export function App() {
   const streams = state?.streams ?? [];
   const latestAgentByWorkspaceId = useMemo(() => latestAgentByWorkspace(agentEvents), [agentEvents]);
   const latestRunByPaneId = useMemo(() => latestRunByPane(runs), [runs]);
+
+  useEffect(() => {
+    setMountedTabKeys((current) => {
+      const validKeys = current.filter((key) => tabViewsByKey.has(key));
+      const next = activeTabKey
+        ? [activeTabKey, ...validKeys.filter((key) => key !== activeTabKey)]
+        : validKeys;
+      const limited = next.slice(0, maxMountedTabViews);
+      return sameStringList(current, limited) ? current : limited;
+    });
+  }, [activeTabKey, tabViewsByKey]);
+
+  useEffect(() => {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && activeElement.closest(".layout-cache-item.hidden")) {
+      activeElement.blur();
+    }
+  }, [activeTabKey]);
+
   const visibleWorkspaces = useMemo(
     () =>
       state?.workspaces.filter(
@@ -289,7 +359,11 @@ export function App() {
   );
 
   const refresh = async (nextState?: BootstrapPayload) => {
-    setState(nextState ?? (await api.bootstrap()));
+    const incoming = nextState ?? (await api.bootstrap());
+    const pending = pendingActiveRoute.current;
+    const applied = pending ? activateWorkspaceTabInState(incoming, pending.workspaceId, pending.tabId) : incoming;
+    stateRef.current = applied;
+    setState(applied);
   };
 
   const updateSettings = async (nextSettings: WmuxSettings) => {
@@ -313,6 +387,78 @@ export function App() {
     else params.set("legacy", "1");
     const query = params.toString();
     window.location.assign(`${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+
+  const requestTerminalFocus = (workspaceId: string, tabId: string) => {
+    setTerminalFocusRequest({
+      key: mountedTabViewKey(workspaceId, tabId),
+      token: ++terminalFocusToken.current,
+    });
+  };
+
+  const persistActiveRoute = async (
+    workspaceId: string,
+    tabId: string,
+    requestId: number,
+    shouldActivateWorkspace: boolean,
+    shouldActivateTab: boolean,
+  ) => {
+    let nextState: BootstrapPayload | null = null;
+    try {
+      if (shouldActivateWorkspace) nextState = await api.activateWorkspace(workspaceId);
+      if (shouldActivateTab) nextState = await api.activateTab(workspaceId, tabId);
+    } catch (nextError) {
+      if (activeRouteRequestId.current === requestId) {
+        pendingActiveRoute.current = null;
+        setError(String(nextError));
+        void refresh();
+      }
+      return;
+    }
+
+    if (activeRouteRequestId.current !== requestId) return;
+    pendingActiveRoute.current = null;
+    if (nextState) {
+      const applied = activateWorkspaceTabInState(nextState, workspaceId, tabId);
+      stateRef.current = applied;
+      setState(applied);
+    }
+  };
+
+  const activateWorkspaceTab = (
+    workspaceId: string,
+    tabId: string | undefined,
+    options: { focusTerminal?: boolean; replaceHistory?: boolean } = {},
+  ) => {
+    const current = stateRef.current;
+    if (!current) return;
+    const target = findWorkspaceTab(current, workspaceId, tabId);
+    if (!target) return;
+
+    const nextPath = chromePath(workspaceTabPath(workspaceId, target.tab.id));
+    if (currentChromePath() !== nextPath) {
+      window.history[options.replaceHistory ? "replaceState" : "pushState"](null, "", nextPath);
+      lastSyncedPath.current = nextPath;
+    }
+    if (mobileViewport.isMobile) setSidebarCollapsed(true);
+
+    const optimistic = activateWorkspaceTabInState(current, workspaceId, target.tab.id);
+    stateRef.current = optimistic;
+    setState((snapshot) => {
+      if (!snapshot) return snapshot;
+      const next = activateWorkspaceTabInState(snapshot, workspaceId, target.tab.id);
+      stateRef.current = next;
+      return next;
+    });
+    if (options.focusTerminal) requestTerminalFocus(workspaceId, target.tab.id);
+
+    const shouldActivateWorkspace = current.activeWorkspaceId !== workspaceId;
+    const shouldActivateTab = target.workspace.activeTabId !== target.tab.id;
+    if (!shouldActivateWorkspace && !shouldActivateTab) return;
+
+    const requestId = ++activeRouteRequestId.current;
+    pendingActiveRoute.current = { requestId, workspaceId, tabId: target.tab.id };
+    void persistActiveRoute(workspaceId, target.tab.id, requestId, shouldActivateWorkspace, shouldActivateTab);
   };
 
   useEffect(() => {
@@ -339,10 +485,8 @@ export function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      api.bootstrap()
-        .then(activateRouteTarget)
-        .then(setState)
-        .catch((nextError) => setError(String(nextError)));
+      const target = parseRouteTarget();
+      if (target) activateWorkspaceTab(target.workspaceId, target.tabId, { replaceHistory: true });
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -427,32 +571,26 @@ export function App() {
     await refresh();
   };
 
-  const activateWorkspaceLink = async (event: React.MouseEvent<HTMLAnchorElement>, workspaceId: string, tabId: string) => {
+  const activateWorkspaceLink = (
+    event: React.MouseEvent<HTMLAnchorElement>,
+    workspaceId: string,
+    tabId: string,
+    options: { focusTerminal?: boolean } = {},
+  ) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
     }
     event.preventDefault();
-    const nextPath = chromePath(workspaceTabPath(workspaceId, tabId));
-    window.history.pushState(null, "", nextPath);
-    lastSyncedPath.current = nextPath;
-    if (mobileViewport.isMobile) setSidebarCollapsed(true);
-    await refresh(await activateRouteTarget(await api.bootstrap()));
+    activateWorkspaceTab(workspaceId, tabId, options);
   };
 
-  const activateWorkspaceFromChrome = async (workspaceId: string, tabId: string) => {
-    const nextPath = chromePath(workspaceTabPath(workspaceId, tabId));
-    window.history.pushState(null, "", nextPath);
-    lastSyncedPath.current = nextPath;
-    if (mobileViewport.isMobile) setSidebarCollapsed(true);
-    await refresh(await activateRouteTarget(await api.bootstrap()));
+  const activateWorkspaceFromChrome = (workspaceId: string, tabId: string) => {
+    activateWorkspaceTab(workspaceId, tabId, { focusTerminal: true });
   };
 
-  const activateTabFromChrome = async (tabId: string) => {
+  const activateTabFromChrome = (tabId: string) => {
     if (!activeWorkspace) return;
-    const nextPath = chromePath(workspaceTabPath(activeWorkspace.id, tabId));
-    window.history.pushState(null, "", nextPath);
-    lastSyncedPath.current = nextPath;
-    await refresh(await activateRouteTarget(await api.bootstrap()));
+    activateWorkspaceTab(activeWorkspace.id, tabId);
   };
 
   const copyActiveLink = async () => {
@@ -507,32 +645,33 @@ export function App() {
     await refresh(response.state);
   };
 
-  const activateWorkspaceAt = async (index: number) => {
+  const activateWorkspaceAt = (index: number) => {
     if (!state) return;
     const workspace = state.workspaces[index];
-    if (workspace) await refresh(await api.activateWorkspace(workspace.id));
+    const tab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace?.tabs[0];
+    if (workspace && tab) activateWorkspaceTab(workspace.id, tab.id);
   };
 
-  const activateWorkspaceRelative = async (delta: number) => {
+  const activateWorkspaceRelative = (delta: number) => {
     if (!state || !activeWorkspace) return;
     const current = state.workspaces.findIndex((workspace) => workspace.id === activeWorkspace.id);
     if (current === -1) return;
     const next = modulo(current + delta, state.workspaces.length);
-    await activateWorkspaceAt(next);
+    activateWorkspaceAt(next);
   };
 
-  const activateTabAt = async (index: number) => {
+  const activateTabAt = (index: number) => {
     if (!activeWorkspace) return;
     const tab = activeWorkspace.tabs[index];
-    if (tab) await refresh(await api.activateTab(activeWorkspace.id, tab.id));
+    if (tab) activateWorkspaceTab(activeWorkspace.id, tab.id);
   };
 
-  const activateTabRelative = async (delta: number) => {
+  const activateTabRelative = (delta: number) => {
     if (!activeWorkspace || !activeTab) return;
     const current = activeWorkspace.tabs.findIndex((tab) => tab.id === activeTab.id);
     if (current === -1) return;
     const next = modulo(current + delta, activeWorkspace.tabs.length);
-    await activateTabAt(next);
+    activateTabAt(next);
   };
 
   const focusPaneRelative = async (delta: number) => {
@@ -547,8 +686,7 @@ export function App() {
   const jumpLatestUnread = async () => {
     const latest = notifications.find((notification) => !notification.read);
     if (!latest) return;
-    await refresh(await api.activateWorkspace(latest.workspaceId));
-    await refresh(await api.activateTab(latest.workspaceId, latest.tabId));
+    activateWorkspaceTab(latest.workspaceId, latest.tabId);
     await refresh(await api.activatePane(latest.tabId, latest.paneId));
   };
 
@@ -923,12 +1061,7 @@ export function App() {
                 title: `Open workspace: ${workspace.name}`,
                 subtitle: host,
                 section: "Workspaces",
-                run: async () => {
-                  const nextPath = chromePath(workspaceTabPath(workspace.id, activeWorkspaceTab.id));
-                  window.history.pushState(null, "", nextPath);
-                  lastSyncedPath.current = nextPath;
-                  await refresh(await activateRouteTarget(await api.bootstrap()));
-                },
+                run: () => activateWorkspaceTab(workspace.id, activeWorkspaceTab.id),
                 keywords: [host, workspace.descriptor ?? ""],
               },
             ]
@@ -938,12 +1071,7 @@ export function App() {
           title: `Open tab: ${tab.title}`,
           subtitle: workspace.name,
           section: "Tabs",
-          run: async () => {
-            const nextPath = chromePath(workspaceTabPath(workspace.id, tab.id));
-            window.history.pushState(null, "", nextPath);
-            lastSyncedPath.current = nextPath;
-            await refresh(await activateRouteTarget(await api.bootstrap()));
-          },
+          run: () => activateWorkspaceTab(workspace.id, tab.id),
           keywords: [host],
         }));
         return [...workspaceCommand, ...tabCommands];
@@ -1066,7 +1194,7 @@ export function App() {
                 className={`workspace-item ${workspace.id === activeWorkspace?.id ? "active" : ""} ${
                   machine?.reachable ? "" : "disabled"
                 }`}
-                onClick={(event) => activateWorkspaceLink(event, workspace.id, tab.id)}
+                onClick={(event) => activateWorkspaceLink(event, workspace.id, tab.id, { focusTerminal: true })}
                 >
                   <span className={`reach-dot ${machine?.reachable ? "on" : ""}`} />
                   <span className="workspace-title">{workspace.name}</span>
@@ -1272,19 +1400,42 @@ export function App() {
         </header>
         )}
         {activeTab ? (
-          <LayoutView
-            tab={activeTab}
-            machines={displayMachines}
-            terminalFontSize={settings.terminalFontSize}
-            unreadByPaneId={unreadByPaneId}
-            mediaByPaneId={mediaByPaneId}
-            onActivatePane={async (paneId) => refresh(await api.activatePane(activeTab.id, paneId))}
-            onSplit={splitPane}
-            onResizeSplit={resizeSplit}
-            onClosePane={closePane}
-            onDismissMedia={(mediaId) => setMediaItems((items) => items.filter((item) => item.id !== mediaId))}
-            runsByPaneId={latestRunByPaneId}
-          />
+          <div className="layout-cache">
+            {mountedTabViews.map((view) => {
+              const isActive = view.key === activeTabKey;
+              return (
+                <div
+                  key={view.key}
+                  className={`layout-cache-item ${isActive ? "active" : "hidden"}`}
+                  aria-hidden={!isActive}
+                >
+                  <LayoutView
+                    tab={view.tab}
+                    machines={displayMachines}
+                    terminalFontSize={settings.terminalFontSize}
+                    unreadByPaneId={unreadByPaneId}
+                    mediaByPaneId={mediaByPaneId}
+                    focusActivePaneSignal={terminalFocusRequest?.key === view.key ? terminalFocusRequest.token : 0}
+                    onActivatePane={async (paneId) => refresh(await api.activatePane(view.tabId, paneId))}
+                    onSplit={async (paneId, direction, machineId) => {
+                      const response = await api.splitPane(view.tabId, paneId, direction, machineId);
+                      await refresh(response.state);
+                    }}
+                    onResizeSplit={async (path, ratio) => {
+                      const response = await api.updateSplitRatio(view.tabId, path, ratio);
+                      await refresh(response.state);
+                    }}
+                    onClosePane={async (paneId) => {
+                      const response = await api.closePane(view.tabId, paneId);
+                      await refresh(response.state);
+                    }}
+                    onDismissMedia={(mediaId) => setMediaItems((items) => items.filter((item) => item.id !== mediaId))}
+                    runsByPaneId={latestRunByPaneId}
+                  />
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <EmptyWorkspaceView />
         )}
@@ -1994,6 +2145,11 @@ const clampSidebarWidth = (value: number): number =>
 
 const cleanAlias = (value: string): string => value.replace(/\s+/g, " ").trim().slice(0, 40);
 
+const mountedTabViewKey = (workspaceId: string, tabId: string): string => `${workspaceId}:${tabId}`;
+
+const sameStringList = (first: string[], second: string[]): boolean =>
+  first.length === second.length && first.every((value, index) => value === second[index]);
+
 const workspaceTabPath = (workspaceId: string, tabId: string): string =>
   `/workspaces/${encodeURIComponent(workspaceId)}/tabs/${encodeURIComponent(tabId)}`;
 
@@ -2006,25 +2162,37 @@ const parseRouteTarget = (): { workspaceId: string; tabId?: string } | null => {
   };
 };
 
+const findWorkspaceTab = (
+  payload: BootstrapPayload,
+  workspaceId: string,
+  tabId?: string,
+): { workspace: BootstrapPayload["workspaces"][number]; tab: SurfaceTab } | null => {
+  const workspace = payload.workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) return null;
+  const tab = tabId
+    ? workspace.tabs.find((candidate) => candidate.id === tabId)
+    : workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace.tabs[0];
+  return tab ? { workspace, tab } : null;
+};
+
+const activateWorkspaceTabInState = (payload: BootstrapPayload, workspaceId: string, tabId: string): BootstrapPayload => {
+  const target = findWorkspaceTab(payload, workspaceId, tabId);
+  if (!target) return payload;
+  if (payload.activeWorkspaceId === workspaceId && target.workspace.activeTabId === tabId) return payload;
+  return {
+    ...payload,
+    activeWorkspaceId: workspaceId,
+    workspaces: payload.workspaces.map((workspace) =>
+      workspace.id === workspaceId ? { ...workspace, activeTabId: tabId } : workspace,
+    ),
+  };
+};
+
 const activateRouteTarget = async (payload: BootstrapPayload): Promise<BootstrapPayload> => {
   const target = parseRouteTarget();
   if (!target) return payload;
-  const workspace = payload.workspaces.find((candidate) => candidate.id === target.workspaceId);
-  if (!workspace) return payload;
-  const tab = target.tabId
-    ? workspace.tabs.find((candidate) => candidate.id === target.tabId)
-    : workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace.tabs[0];
-  if (!tab) return payload;
-
-  let next = payload;
-  if (next.activeWorkspaceId !== workspace.id) {
-    next = await api.activateWorkspace(workspace.id);
-  }
-  const nextWorkspace = next.workspaces.find((candidate) => candidate.id === workspace.id);
-  if (nextWorkspace && nextWorkspace.activeTabId !== tab.id) {
-    next = await api.activateTab(workspace.id, tab.id);
-  }
-  return next;
+  const route = findWorkspaceTab(payload, target.workspaceId, target.tabId);
+  return route ? activateWorkspaceTabInState(payload, route.workspace.id, route.tab.id) : payload;
 };
 
 const countUnreadBy = (
