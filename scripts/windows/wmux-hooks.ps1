@@ -29,10 +29,10 @@ function Test-HookCommand($Items, [string]$Command) {
 }
 
 function Add-HookCommand($Settings, [string]$EventName, [string]$Command, [hashtable]$Options) {
-  if (-not $Settings.ContainsKey('hooks') -or $null -eq $Settings.hooks) {
+  if (-not $Settings.Contains('hooks') -or $null -eq $Settings.hooks) {
     $Settings.hooks = [ordered]@{}
   }
-  if (-not $Settings.hooks.ContainsKey($EventName) -or $null -eq $Settings.hooks[$EventName]) {
+  if (-not $Settings.hooks.Contains($EventName) -or $null -eq $Settings.hooks[$EventName]) {
     $Settings.hooks[$EventName] = @()
   }
   if (Test-HookCommand $Settings.hooks[$EventName] $Command) {
