@@ -639,6 +639,19 @@ export const createHttpServer = (
       });
       return;
     }
+    const outputMatch = url.pathname.match(/^\/ws\/panes\/([^/]+)\/output$/);
+    if (outputMatch) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        sessions.watchOutput(
+          outputMatch[1],
+          ws,
+          Number(url.searchParams.get("cols") ?? 96),
+          Number(url.searchParams.get("rows") ?? 32),
+        );
+      });
+      return;
+    }
+
     const match = url.pathname.match(/^\/ws\/panes\/([^/]+)$/);
     if (!match) {
       socket.destroy();

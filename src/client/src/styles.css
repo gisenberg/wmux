@@ -1015,6 +1015,11 @@ button.active-tool {
   background: rgba(80, 151, 255, 0.06);
 }
 
+.mobile-agent-message.stream {
+  border-left-color: #8ebdff;
+  background: rgba(80, 151, 255, 0.045);
+}
+
 .mobile-agent-message.agent.running,
 .mobile-agent-message.run.started {
   border-left-color: var(--blue);

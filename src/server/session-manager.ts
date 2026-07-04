@@ -21,6 +21,7 @@ type ManagedSession = PtySession | WindowsAgentSession;
 export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
   private sockets = new Map<string, Set<WebSocket>>();
+  private outputWatchers = new Map<string, Set<WebSocket>>();
   private resizeOwners = new Map<string, WebSocket>();
   private socketState = new Map<WebSocket, SocketState>();
 
@@ -71,6 +72,33 @@ export class SessionManager {
       this.socketState.delete(socket);
       this.sockets.get(paneId)?.delete(socket);
       this.reassignResizeOwner(paneId, socket, session);
+    });
+  }
+
+  watchOutput(paneId: string, socket: WebSocket, cols = 96, rows = 32): void {
+    const pane = this.state.findPane(paneId);
+    if (!pane) {
+      socket.close(1008, "pane not found");
+      return;
+    }
+    const size = normalizeSize(cols, rows);
+    const session = this.ensureSession(pane, size.cols, size.rows);
+    if (!this.outputWatchers.has(paneId)) this.outputWatchers.set(paneId, new Set());
+    this.outputWatchers.get(paneId)?.add(socket);
+
+    this.send(socket, {
+      type: "ready",
+      paneId,
+      pid: session.pid,
+      title: pane.title,
+      status: pane.status,
+      replay: session.replayOutput,
+      outputOnly: true,
+    });
+
+    socket.on("close", () => {
+      this.outputWatchers.get(paneId)?.delete(socket);
+      if ((this.outputWatchers.get(paneId)?.size ?? 0) === 0) this.outputWatchers.delete(paneId);
     });
   }
 
@@ -173,6 +201,9 @@ export class SessionManager {
     for (const socket of this.sockets.get(paneId) ?? []) {
       this.send(socket, payload);
     }
+    for (const socket of this.outputWatchers.get(paneId) ?? []) {
+      this.send(socket, payload);
+    }
   }
 
   private ensureResizeOwner(
@@ -236,7 +267,11 @@ export class SessionManager {
       this.socketState.delete(socket);
       socket.close(1000, "pane closed");
     }
+    for (const socket of this.outputWatchers.get(paneId) ?? []) {
+      socket.close(1000, "pane closed");
+    }
     this.sockets.delete(paneId);
+    this.outputWatchers.delete(paneId);
   }
 
   private machineIdsForTab(workspaceId: string, tabId: string): Map<string, string> {

@@ -37,6 +37,17 @@ type LocalMobileMessage = {
   attachments?: LocalSentAttachment[];
 };
 
+type LocalStreamMessage = {
+  kind: "stream";
+  id: string;
+  workspaceId: string;
+  paneId: string;
+  agent: string;
+  createdAt: string;
+  updatedAt: string;
+  text: string;
+};
+
 interface PaneAttachmentUpload {
   name: string;
   mimeType: string;
@@ -63,6 +74,7 @@ interface LocalSentAttachment {
 
 type MobileThreadItem =
   | LocalMobileMessage
+  | LocalStreamMessage
   | { kind: "separator"; id: string; createdAt: string; label: string }
   | { kind: "agent"; id: string; createdAt: string; event: AgentActivity }
   | { kind: "run"; id: string; createdAt: string; run: TerminalRun }
@@ -106,9 +118,11 @@ export function MobileAgentSurface({
   const [launchingAgent, setLaunchingAgent] = useState<AgentLauncher | null>(null);
   const [trustedAgentLaunch, setTrustedAgentLaunch] = useState<{ paneId: string; agent: AgentLauncher; createdAt: number } | null>(null);
   const [localMessages, setLocalMessages] = useState<LocalMobileMessage[]>([]);
+  const [streamMessages, setStreamMessages] = useState<LocalStreamMessage[]>([]);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const previewUrlsRef = useRef(new Set<string>());
+  const lastUserSendAtRef = useRef(0);
 
   const machine = workspace ? machines.find((candidate) => candidate.id === workspace.machineId) : undefined;
   const latestWorkspaceAgent = useMemo(() => {
@@ -139,9 +153,9 @@ export function MobileAgentSurface({
   const threadItems = useMemo(
     () =>
       workspace
-        ? buildMobileThreadItems(workspace.id, state.agentEvents, state.runs, state.notifications, localMessages)
+        ? buildMobileThreadItems(workspace.id, state.agentEvents, state.runs, state.notifications, localMessages, streamMessages)
         : [],
-    [localMessages, state.agentEvents, state.notifications, state.runs, workspace],
+    [localMessages, state.agentEvents, state.notifications, state.runs, streamMessages, workspace],
   );
   const threadScrollKey = useMemo(() => threadItems.map(threadItemScrollKey).join("|"), [threadItems]);
   const recentItems = useMemo(
@@ -172,6 +186,49 @@ export function MobileAgentSurface({
     },
     [],
   );
+
+  useEffect(() => {
+    const paneId = pane?.id;
+    const workspaceId = workspace?.id;
+    if (!paneId || !workspaceId || !agentSession.canSend) return;
+    const agent = String(agentSession.agent ?? "agent");
+    const socket = new WebSocket(paneOutputSocketUrl(paneId));
+    let pendingOutput = "";
+    let flushTimer: number | undefined;
+
+    const flush = () => {
+      flushTimer = undefined;
+      const text = sanitizeTerminalOutput(pendingOutput);
+      pendingOutput = "";
+      if (!text.trim()) return;
+      setStreamMessages((current) =>
+        appendStreamMessage(current, {
+          workspaceId,
+          paneId,
+          agent,
+          text,
+          boundaryMs: lastUserSendAtRef.current,
+        }),
+      );
+    };
+
+    const scheduleFlush = (data: string) => {
+      pendingOutput += data;
+      if (flushTimer !== undefined) return;
+      flushTimer = window.setTimeout(flush, 120);
+    };
+
+    socket.addEventListener("message", (event) => {
+      const message = parsePaneSocketMessage(event.data);
+      if (!message || message.paneId !== paneId) return;
+      if (message.type === "output" && typeof message.data === "string") scheduleFlush(message.data);
+    });
+
+    return () => {
+      if (flushTimer !== undefined) window.clearTimeout(flushTimer);
+      socket.close(1000, "mobile chat closed");
+    };
+  }, [agentSession.agent, agentSession.canSend, pane?.id, workspace?.id]);
 
   const appendPastedImages = (files: File[]) => {
     if (files.length === 0) return;
@@ -250,6 +307,7 @@ export function MobileAgentSurface({
       );
       await onSendInput(pane.id, formatComposerTextInput(text, sentAttachments));
       await onSendInput(pane.id, "\r");
+      lastUserSendAtRef.current = Date.now();
       setLocalMessages((current) => [
         ...current,
         {
@@ -531,6 +589,19 @@ function MobileThreadMessage({ item }: { item: MobileMessageItem }) {
     );
   }
 
+  if (item.kind === "stream") {
+    return (
+      <article className="mobile-agent-message stream">
+        <div className="mobile-agent-message-meta">
+          <span>{item.agent}</span>
+          <span>streaming</span>
+          <span>{formatRelativeTime(item.updatedAt)}</span>
+        </div>
+        <p>{limitText(item.text.trim(), 6000)}</p>
+      </article>
+    );
+  }
+
   if (item.kind === "agent") {
     const status = agentStatusClass(item.event.status);
     const title = item.event.title || item.event.agent;
@@ -581,9 +652,11 @@ const buildMobileThreadItems = (
   runs: TerminalRun[],
   notifications: TerminalNotification[],
   localMessages: LocalMobileMessage[],
+  streamMessages: LocalStreamMessage[],
 ): MobileThreadItem[] => {
   const rawItems: MobileMessageItem[] = [
     ...localMessages.filter((message) => message.workspaceId === workspaceId),
+    ...streamMessages.filter((message) => message.workspaceId === workspaceId && message.text.trim()),
     ...agentEvents
       .filter((event) => event.workspaceId === workspaceId)
       .map((event) => ({ kind: "agent" as const, id: `agent:${event.id}`, createdAt: event.createdAt, event })),
@@ -687,9 +760,100 @@ const formatDateGroup = (iso: string): string => {
 const threadItemScrollKey = (item: MobileThreadItem): string => {
   if (item.kind === "separator") return `${item.id}:${item.label}`;
   if (item.kind === "user") return `${item.id}:${item.text}`;
+  if (item.kind === "stream") return `${item.id}:${item.updatedAt}:${item.text}`;
   if (item.kind === "agent") return `${item.id}:${item.event.status}:${item.event.title}:${item.event.summary}`;
   if (item.kind === "run") return `${item.id}:${item.run.status}:${item.run.exitCode ?? ""}:${item.run.command}`;
   return `${item.id}:${item.notification.title}:${item.notification.subtitle}:${item.notification.body}`;
+};
+
+const paneOutputSocketUrl = (paneId: string): string => {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws/panes/${encodeURIComponent(paneId)}/output`;
+};
+
+const parsePaneSocketMessage = (raw: unknown): { type?: string; paneId?: string; data?: string } | null => {
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw) as { type?: unknown; paneId?: unknown; data?: unknown };
+    return {
+      type: typeof parsed.type === "string" ? parsed.type : undefined,
+      paneId: typeof parsed.paneId === "string" ? parsed.paneId : undefined,
+      data: typeof parsed.data === "string" ? parsed.data : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const appendStreamMessage = (
+  current: LocalStreamMessage[],
+  input: { workspaceId: string; paneId: string; agent: string; text: string; boundaryMs: number },
+): LocalStreamMessage[] => {
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const last = current.at(-1);
+  const canAppend =
+    last?.paneId === input.paneId &&
+    Date.parse(last.createdAt) >= input.boundaryMs &&
+    nowMs - Date.parse(last.updatedAt) < 2500;
+  if (last && canAppend) {
+    return [
+      ...current.slice(0, -1),
+      {
+        ...last,
+        updatedAt: now,
+        text: trimStreamText(`${last.text}${input.text}`),
+      },
+    ];
+  }
+  return [
+    ...current,
+    {
+      kind: "stream" as const,
+      id: `stream:${nowMs}:${Math.random().toString(36).slice(2, 8)}`,
+      workspaceId: input.workspaceId,
+      paneId: input.paneId,
+      agent: input.agent,
+      createdAt: now,
+      updatedAt: now,
+      text: trimStreamText(input.text),
+    },
+  ].slice(-40);
+};
+
+const sanitizeTerminalOutput = (data: string): string =>
+  normalizeStreamWhitespace(stripBackspaces(stripTerminalControls(data)));
+
+const stripTerminalControls = (data: string): string =>
+  data
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[P^_X][\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[()][A-Za-z0-9]/g, "")
+    .replace(/\x1b[@-Z\\-_]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+
+const stripBackspaces = (value: string): string => {
+  const chars: string[] = [];
+  for (const char of value) {
+    if (char === "\b") {
+      chars.pop();
+    } else {
+      chars.push(char);
+    }
+  }
+  return chars.join("");
+};
+
+const normalizeStreamWhitespace = (value: string): string =>
+  value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n");
+
+const trimStreamText = (value: string): string => {
+  const limit = 12_000;
+  return value.length > limit ? value.slice(-limit) : value;
 };
 
 const detectAgentSession = (
