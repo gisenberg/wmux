@@ -12,12 +12,33 @@ const streamSchema = z.object({
   gatewayToken: z.string().optional(),
 });
 
+// ids and names end up in generated shell scripts, tmux session names, URLs,
+// and filesystem paths, so they are constrained at load time instead of
+// trusting every embedding site to quote them.
+const machineIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, "machine id must be alphanumeric with - or _ (max 64 chars)");
+const machineNameSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  // eslint-disable-next-line no-control-regex
+  .regex(/^[^\x00-\x1f\x7f'"`$\\]+$/, "machine name must not contain control characters or shell metacharacters");
+const hostSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9.:_-]+$/, "host must be a hostname or IP address")
+  .optional();
+const userSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._-]+$/, "user must be a plain account name")
+  .optional();
+
 const machineSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
+  id: machineIdSchema,
+  name: machineNameSchema,
   kind: z.enum(["local", "ssh", "powershell", "powershell-ssh", "service"]),
-  host: z.string().optional(),
-  user: z.string().optional(),
+  host: hostSchema,
+  user: userSchema,
   port: z.number().int().positive().optional(),
   shell: z.string().optional(),
   cwd: z.string().optional(),
@@ -29,7 +50,7 @@ const machineSchema = z.object({
   stream: streamSchema.optional(),
 });
 
-const configSchema = z.object({
+export const configSchema = z.object({
   machines: z.array(machineSchema).optional(),
 });
 

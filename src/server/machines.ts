@@ -261,12 +261,20 @@ const powershellQuote = (value: string): string => `'${value.replace(/'/g, "''")
 export const durableSessionName = (paneId?: string): string =>
   `wmux_${(paneId || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")}`;
 
+// Staging for generated shell rc files. XDG_RUNTIME_DIR (a per-user 0700
+// tmpfs) or ~/.wmux/run — never the shared /tmp, where a predictable path
+// would let another local user pre-create the directory or a symlink and
+// control the rc files a wmux shell sources.
+const runtimeStageDirScript = `
+wmux_run_base="\${XDG_RUNTIME_DIR:-\${HOME:-\${TMPDIR:-/tmp}}/.wmux/run}";
+mkdir -p "$wmux_run_base" 2>/dev/null || true;
+chmod 700 "$wmux_run_base" 2>/dev/null || true;`;
+
 const interactiveShellCommand = (shellValue: string, sessionName: string): string => {
-  const shellDir = `"${"${TMPDIR:-/tmp}"}/wmux-shell-${sessionName}"`;
   return `
 wmux_shell=${shellValue};
-wmux_shell_name="\${wmux_shell##*/}";
-wmux_shell_dir=${shellDir};
+wmux_shell_name="\${wmux_shell##*/}";${runtimeStageDirScript}
+wmux_shell_dir="$wmux_run_base/wmux-shell-${sessionName}";
 mkdir -p "$wmux_shell_dir" 2>/dev/null || true;
 case "$wmux_shell_name" in
   zsh)
@@ -640,8 +648,7 @@ const durableShellScript = ({
     "termcapinfo xterm* ti@:te@",
     "termcapinfo screen* ti@:te@",
   ].join("\\n");
-  const screenConfigPath = `"${"${TMPDIR:-/tmp}"}/wmux-screen-${sessionName}.rc"`;
-  const screenConfigScript = `wmux_screenrc=${screenConfigPath}; printf '%s\\n' ${shellQuote(screenRc)} > "$wmux_screenrc";`;
+  const screenConfigScript = `${runtimeStageDirScript} wmux_screenrc="$wmux_run_base/wmux-screen-${sessionName}.rc"; printf '%s\\n' ${shellQuote(screenRc)} > "$wmux_screenrc";`;
   const screenAttach = `${screenConfigScript} screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -x`;
   const screenCreate = `screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -U -h 100000 /bin/sh -lc ${shellQuote(paneCommand)}`;
   const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
