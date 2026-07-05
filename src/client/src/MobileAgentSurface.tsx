@@ -123,6 +123,7 @@ export function MobileAgentSurface({
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const previewUrlsRef = useRef(new Set<string>());
   const lastUserSendAtRef = useRef(0);
+  const lastUserPromptRef = useRef("");
 
   const machine = workspace ? machines.find((candidate) => candidate.id === workspace.machineId) : undefined;
   const latestWorkspaceAgent = useMemo(() => {
@@ -198,7 +199,11 @@ export function MobileAgentSurface({
 
     const flush = () => {
       flushTimer = undefined;
-      const text = sanitizeTerminalOutput(pendingOutput);
+      if (!lastUserSendAtRef.current) {
+        pendingOutput = "";
+        return;
+      }
+      const text = sanitizeTerminalOutput(pendingOutput, lastUserPromptRef.current);
       pendingOutput = "";
       if (!text.trim()) return;
       setStreamMessages((current) =>
@@ -288,6 +293,8 @@ export function MobileAgentSurface({
     setSendError("");
     setSendNotice("");
     try {
+      lastUserSendAtRef.current = Date.now();
+      lastUserPromptRef.current = text.trim();
       const sentAttachments = await Promise.all(
         imagesToSend.map(async (image) => {
           const uploaded = await onUploadAttachment(pane.id, {
@@ -307,7 +314,6 @@ export function MobileAgentSurface({
       );
       await onSendInput(pane.id, formatComposerTextInput(text, sentAttachments));
       await onSendInput(pane.id, "\r");
-      lastUserSendAtRef.current = Date.now();
       setLocalMessages((current) => [
         ...current,
         {
@@ -821,8 +827,11 @@ const appendStreamMessage = (
   ].slice(-40);
 };
 
-const sanitizeTerminalOutput = (data: string): string =>
-  normalizeStreamWhitespace(stripBackspaces(stripTerminalControls(data)));
+const sanitizeTerminalOutput = (data: string, latestPrompt = ""): string =>
+  filterAgentStreamText(
+    normalizeStreamWhitespace(stripBackspaces(stripTerminalControls(data))),
+    latestPrompt,
+  );
 
 const stripTerminalControls = (data: string): string =>
   data
@@ -850,6 +859,75 @@ const normalizeStreamWhitespace = (value: string): string =>
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{4,}/g, "\n\n\n");
+
+const filterAgentStreamText = (value: string, latestPrompt: string): string => {
+  const promptLines = promptComparableLines(latestPrompt);
+  const filteredLines: string[] = [];
+  for (const rawLine of value.split("\n")) {
+    const line = cleanStreamLine(rawLine);
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (filteredLines.length && filteredLines.at(-1) !== "") filteredLines.push("");
+      continue;
+    }
+    if (isPromptEchoLine(trimmed, promptLines) || isAgentTerminalChromeLine(trimmed)) continue;
+    filteredLines.push(line);
+  }
+  return normalizeStreamWhitespace(filteredLines.join("\n")).trimStart();
+};
+
+const cleanStreamLine = (line: string): string =>
+  line
+    .replace(/^[\s│┃▌▐║]+/, "")
+    .replace(/[\s│┃▌▐║]+$/, "")
+    .replace(/[ \t]{2,}/g, " ");
+
+const promptComparableLines = (prompt: string): Set<string> =>
+  new Set(
+    prompt
+      .split(/\n+/)
+      .map(comparableStreamText)
+      .filter((line) => line.length >= 8),
+  );
+
+const isPromptEchoLine = (line: string, promptLines: Set<string>): boolean => {
+  const comparable = comparableStreamText(line);
+  if (comparable.length < 8) return false;
+  if (promptLines.has(comparable)) return true;
+  for (const promptLine of promptLines) {
+    if (promptLine.length >= 18 && promptLine.includes(comparable)) return true;
+    if (comparable.length >= 18 && comparable.includes(promptLine)) return true;
+  }
+  return false;
+};
+
+const comparableStreamText = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const isAgentTerminalChromeLine = (line: string): boolean => {
+  const compact = line.trim();
+  const lower = compact.toLowerCase();
+  if (!compact) return true;
+  if (/^[+\-=_~*# .·•●○◦|/\\[\]:;]+$/.test(compact)) return true;
+  if (/^[╭╮╰╯┌┐└┘├┤┬┴┼─━═│┃║╔╗╚╝╠╣╦╩╬\s]+$/.test(compact)) return true;
+  if (/^[⠁⠂⠄⡀⢀⣀⣄⣆⣇⣧⣷⣿⡿⠿⢿⠟⠻⠽⠾⠶⠦⠤⠠⠐⠈.\s-]+$/.test(compact)) return true;
+  if (/^(working|thinking|reading|searching|checking|editing|running|loading|streaming)\b[ .·•●○◦-]*$/i.test(compact)) return true;
+  if (/^(esc|enter|tab|ctrl|control|cmd|command|shift|option|alt)\b.*\b(interrupt|cancel|send|submit|navigate|close|exit|stop|continue)\b/i.test(compact)) return true;
+  if (/\b(esc|ctrl|control|cmd|command)\s*[+ -]?\s*[a-z0-9]\b.*\b(interrupt|cancel|quit|stop|send)\b/i.test(compact)) return true;
+  if (/^(model|provider|approval|sandbox|cwd|workdir|directory|session|tokens?|context|reasoning|effort|network|mode|account)\s*[:=]/i.test(compact)) return true;
+  if (/^[-*•]\s*(model|provider|approval|sandbox|cwd|workdir|directory|session|tokens?|context|reasoning|effort|network|mode|account)\b/i.test(compact)) return true;
+  if (/^(codex|claude)\s*(>|$)/i.test(compact)) return true;
+  if (/^(ps\s+)?[a-z]:\\.*[>»]$/i.test(compact)) return true;
+  if (/^[$#>]\s*$/.test(compact)) return true;
+  if (/^\[[^\]]{1,24}\]\s*$/.test(compact)) return true;
+  if (lower.includes("tokens used") || lower.includes("context left")) return true;
+  if (lower.includes("press enter to") || lower.includes("shift+tab to") || lower.includes("ctrl+c")) return true;
+  return false;
+};
 
 const trimStreamText = (value: string): string => {
   const limit = 12_000;
