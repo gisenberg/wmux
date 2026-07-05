@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { TerminalPane } from "./TerminalPane";
 import type { LayoutNode, MachineStatus, PaneState, SplitDirection, SurfaceTab, TerminalMedia, TerminalRun } from "./types";
 
@@ -12,15 +12,18 @@ interface Props {
   mediaByPaneId: Map<string, TerminalMedia[]>;
   runsByPaneId: Map<string, TerminalRun>;
   focusActivePaneSignal?: number;
-  onActivatePane: (paneId: string) => void;
-  onSplit: (paneId: string, direction: SplitDirection, machineId?: string) => void;
-  onResizeSplit: (path: string, ratio: number) => void;
-  onClosePane: (paneId: string) => void;
+  onActivatePane: (tabId: string, paneId: string) => void;
+  onSplit: (tabId: string, paneId: string, direction: SplitDirection, machineId?: string) => void;
+  onResizeSplit: (tabId: string, path: string, ratio: number) => void;
+  onClosePane: (tabId: string, paneId: string) => void;
   onBell: (paneId: string) => void;
   onDismissMedia: (mediaId: string) => void;
 }
 
-export function LayoutView({
+// Memoized: bootstrap resyncs preserve object identity for unchanged tabs
+// (see reconcile.ts), so a state event only re-renders the layouts whose
+// content actually changed.
+export const LayoutView = memo(function LayoutView({
   tab,
   viewActive,
   machines,
@@ -91,7 +94,7 @@ export function LayoutView({
     event.preventDefault();
     event.currentTarget.releasePointerCapture(event.pointerId);
     dragRef.current = null;
-    onResizeSplit(drag.path, drag.ratio);
+    onResizeSplit(tab.id, drag.path, drag.ratio);
   };
 
   const renderNode = (node: LayoutNode, path = "") => {
@@ -99,21 +102,22 @@ export function LayoutView({
       const pane = paneById.get(node.paneId) as PaneState | undefined;
       if (!pane) return <div className="missing-pane">Missing pane</div>;
       return (
-        <TerminalPane
+        <LayoutPane
           key={`${pane.id}:${terminalScrollbackRows}`}
           pane={pane}
+          tabId={tab.id}
           active={viewActive && tab.activePaneId === pane.id}
           unreadCount={unreadByPaneId.get(pane.id) ?? 0}
           machines={machines}
           terminalFontSize={terminalFontSize}
           terminalScrollbackRows={terminalScrollbackRows}
-          mediaItems={mediaByPaneId.get(pane.id) ?? []}
+          mediaItems={mediaByPaneId.get(pane.id) ?? emptyMedia}
           lastRun={runsByPaneId.get(pane.id)}
           focusSignal={viewActive && tab.activePaneId === pane.id ? focusActivePaneSignal : 0}
-          onActivate={() => onActivatePane(pane.id)}
-          onSplit={(direction, machineId) => onSplit(pane.id, direction, machineId)}
-          onClose={() => onClosePane(pane.id)}
-          onBell={() => onBell(pane.id)}
+          onActivatePane={onActivatePane}
+          onSplit={onSplit}
+          onClosePane={onClosePane}
+          onBell={onBell}
           onDismissMedia={onDismissMedia}
         />
       );
@@ -145,7 +149,75 @@ export function LayoutView({
   };
 
   return <div className="layout-view">{renderNode(tab.layout)}</div>;
+});
+
+interface LayoutPaneProps {
+  pane: PaneState;
+  tabId: string;
+  active: boolean;
+  unreadCount: number;
+  machines: MachineStatus[];
+  terminalFontSize: number;
+  terminalScrollbackRows: number;
+  mediaItems: TerminalMedia[];
+  lastRun?: TerminalRun;
+  focusSignal: number;
+  onActivatePane: (tabId: string, paneId: string) => void;
+  onSplit: (tabId: string, paneId: string, direction: SplitDirection, machineId?: string) => void;
+  onClosePane: (tabId: string, paneId: string) => void;
+  onBell: (paneId: string) => void;
+  onDismissMedia: (mediaId: string) => void;
 }
+
+// Bridges the tab-level callbacks to TerminalPane's pane-scoped props with
+// stable identities, so the memoized TerminalPane skips re-rendering when a
+// sibling pane (or another tab) changes.
+const LayoutPane = memo(function LayoutPane({
+  pane,
+  tabId,
+  active,
+  unreadCount,
+  machines,
+  terminalFontSize,
+  terminalScrollbackRows,
+  mediaItems,
+  lastRun,
+  focusSignal,
+  onActivatePane,
+  onSplit,
+  onClosePane,
+  onBell,
+  onDismissMedia,
+}: LayoutPaneProps) {
+  const paneId = pane.id;
+  const onActivate = useCallback(() => onActivatePane(tabId, paneId), [onActivatePane, tabId, paneId]);
+  const onPaneSplit = useCallback(
+    (direction: SplitDirection, machineId?: string) => onSplit(tabId, paneId, direction, machineId),
+    [onSplit, tabId, paneId],
+  );
+  const onClose = useCallback(() => onClosePane(tabId, paneId), [onClosePane, tabId, paneId]);
+  const onPaneBell = useCallback(() => onBell(paneId), [onBell, paneId]);
+  return (
+    <TerminalPane
+      pane={pane}
+      active={active}
+      unreadCount={unreadCount}
+      machines={machines}
+      terminalFontSize={terminalFontSize}
+      terminalScrollbackRows={terminalScrollbackRows}
+      mediaItems={mediaItems}
+      lastRun={lastRun}
+      focusSignal={focusSignal}
+      onActivate={onActivate}
+      onSplit={onPaneSplit}
+      onClose={onClose}
+      onBell={onPaneBell}
+      onDismissMedia={onDismissMedia}
+    />
+  );
+});
+
+const emptyMedia: TerminalMedia[] = [];
 
 const clampRatio = (value: number): number => Math.min(0.85, Math.max(0.15, value));
 

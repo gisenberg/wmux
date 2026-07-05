@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { FitAddon, Terminal } from "ghostty-web";
 import { X } from "lucide-react";
 import {
@@ -74,7 +74,9 @@ interface SynchronizedOutputState {
   flushTimer: number | undefined;
 }
 
-export function TerminalPane({
+// Memoized: with structural sharing in refresh (reconcile.ts) and the stable
+// callbacks from LayoutPane, unrelated state events skip this subtree.
+export const TerminalPane = memo(function TerminalPane({
   pane,
   active,
   unreadCount,
@@ -143,6 +145,9 @@ export function TerminalPane({
     let removeContextCopyBridgeDismissListeners: (() => void) | undefined;
     let terminalOutputTimer: number | undefined;
     let queuedTerminalOutput = "";
+    let replayChunks: string[] = [];
+    let replayBufferedOutput: string[] = [];
+    let replayDrainTimer: number | undefined;
     let reconnectDelayMs = 350;
     // The server preserves a pane whose process died abnormally instead of
     // deleting it, so a keypress here re-attaches (and re-spawns) on demand
@@ -393,6 +398,61 @@ export function TerminalPane({
       }
     };
 
+    // Large reconnect replays (up to 2 MiB) are parsed and written in chunks
+    // across macrotasks so the main thread never blocks on one giant write.
+    // Live output arriving mid-drain is buffered to preserve ordering.
+    const replayDraining = () => replayChunks.length > 0 || replayDrainTimer !== undefined;
+
+    const resetReplayDrain = () => {
+      if (replayDrainTimer !== undefined) {
+        window.clearTimeout(replayDrainTimer);
+        replayDrainTimer = undefined;
+      }
+      replayChunks = [];
+      replayBufferedOutput = [];
+    };
+
+    const startReplayDrain = (term: Terminal, replay: string) => {
+      if (replay.length <= REPLAY_CHUNK_CHARS) {
+        handleOutput(term, replay);
+        return;
+      }
+      for (let index = 0; index < replay.length; index += REPLAY_CHUNK_CHARS) {
+        replayChunks.push(replay.slice(index, index + REPLAY_CHUNK_CHARS));
+      }
+      scheduleReplayDrainStep(term);
+    };
+
+    const scheduleReplayDrainStep = (term: Terminal) => {
+      if (replayDrainTimer !== undefined) return;
+      replayDrainTimer = window.setTimeout(() => {
+        replayDrainTimer = undefined;
+        if (cancelled) return;
+        const chunk = replayChunks.shift();
+        if (chunk !== undefined) handleOutput(term, chunk);
+        if (replayChunks.length > 0) {
+          scheduleReplayDrainStep(term);
+          return;
+        }
+        const buffered = replayBufferedOutput;
+        replayBufferedOutput = [];
+        for (const data of buffered) handleOutput(term, data);
+      }, 0);
+    };
+
+    const finishReplayDrainNow = (term: Terminal) => {
+      if (replayDrainTimer !== undefined) {
+        window.clearTimeout(replayDrainTimer);
+        replayDrainTimer = undefined;
+      }
+      const chunks = replayChunks;
+      replayChunks = [];
+      for (const chunk of chunks) handleOutput(term, chunk);
+      const buffered = replayBufferedOutput;
+      replayBufferedOutput = [];
+      for (const data of buffered) handleOutput(term, data);
+    };
+
     const scheduleReconnect = () => {
       if (cancelled || removed || reconnectTimer) return;
       reconnectTimer = window.setTimeout(() => {
@@ -443,21 +503,25 @@ export function TerminalPane({
             window.clearTimeout(terminalOutputTimer);
             terminalOutputTimer = undefined;
           }
+          resetReplayDrain();
           resetSynchronizedOutput(synchronizedOutputRef.current);
           term.clear();
           setKittyInlineItems([]);
-          if (message.replay) handleOutput(term, message.replay);
+          if (message.replay) startReplayDrain(term, message.replay);
         }
         if (message.type === "output") {
           if (typeof message.data === "string" && message.data.includes("\x07")) onBell();
-          handleOutput(term, message.data);
+          if (replayDraining()) replayBufferedOutput.push(message.data);
+          else handleOutput(term, message.data);
         }
         if (message.type === "exit") {
+          finishReplayDrainNow(term);
           flushQueuedTerminalText(term);
           term.write(`\r\n[wmux] process exited with code ${message.code}. Press any key to restart.\r\n`);
           awaitingRestart = true;
         }
         if (message.type === "removed") {
+          finishReplayDrainNow(term);
           flushQueuedTerminalText(term);
           removed = true;
           ws.close();
@@ -598,6 +662,7 @@ export function TerminalPane({
     return () => {
       cancelled = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (replayDrainTimer !== undefined) window.clearTimeout(replayDrainTimer);
       scrollDisposable?.dispose();
       renderDisposable?.dispose();
       if (terminalOutputTimer !== undefined) window.clearTimeout(terminalOutputTimer);
@@ -724,7 +789,7 @@ export function TerminalPane({
       ) : null}
     </section>
   );
-}
+});
 
 function MediaPreview({ item, onDismiss }: { item: TerminalMedia; onDismiss: () => void }) {
   const src = `data:${item.mimeType};base64,${item.data}`;
@@ -796,6 +861,9 @@ const SYNCHRONIZED_OUTPUT_SEQUENCES = [SYNCHRONIZED_OUTPUT_START, SYNCHRONIZED_O
 const MAX_SYNCHRONIZED_OUTPUT_BUFFER_CHARS = 512 * 1024;
 const MAX_SYNCHRONIZED_OUTPUT_HOLD_MS = 500;
 const TERMINAL_OUTPUT_BATCH_MS = 16;
+// Replay chunk size in UTF-16 code units; ~128 KiB keeps each drain step
+// well under a frame budget while a 2 MiB replay finishes in ~16 steps.
+const REPLAY_CHUNK_CHARS = 128 * 1024;
 const CONTEXT_COPY_BRIDGE_TIMEOUT_MS = 30_000;
 
 const createSynchronizedOutputState = (): SynchronizedOutputState => ({

@@ -408,6 +408,23 @@ export function App() {
     .filter(Boolean)
     .join(" / ");
 
+  const activatePaneInTab = useCallback(async (tabId: string, paneId: string) => {
+    clearBellPanes([paneId]);
+    await refresh(await api.activatePane(tabId, paneId));
+  }, [clearBellPanes, refresh]);
+
+  const splitPaneInTab = useCallback(async (tabId: string, paneId: string, direction: SplitDirection, machineId?: string) => {
+    await refresh((await api.splitPane(tabId, paneId, direction, machineId)).state);
+  }, [refresh]);
+
+  const resizeSplitInTab = useCallback(async (tabId: string, path: string, ratio: number) => {
+    await refresh((await api.updateSplitRatio(tabId, path, ratio)).state);
+  }, [refresh]);
+
+  const closePaneInTab = useCallback(async (tabId: string, paneId: string) => {
+    await refresh((await api.closePane(tabId, paneId)).state);
+  }, [refresh]);
+
   const recordPaneBell = useCallback((paneId: string) => {
     const snapshot = stateRef.current;
     if (!snapshot) return;
@@ -1282,23 +1299,11 @@ export function App() {
                     unreadByPaneId={unreadByPaneId}
                     mediaByPaneId={mediaByPaneId}
                     focusActivePaneSignal={terminalFocusRequest?.key === view.key ? terminalFocusRequest.token : 0}
-                    onActivatePane={async (paneId) => {
-                      clearBellPanes([paneId]);
-                      await refresh(await api.activatePane(view.tabId, paneId));
-                    }}
+                    onActivatePane={activatePaneInTab}
                     onBell={recordPaneBell}
-                    onSplit={async (paneId, direction, machineId) => {
-                      const response = await api.splitPane(view.tabId, paneId, direction, machineId);
-                      await refresh(response.state);
-                    }}
-                    onResizeSplit={async (path, ratio) => {
-                      const response = await api.updateSplitRatio(view.tabId, path, ratio);
-                      await refresh(response.state);
-                    }}
-                    onClosePane={async (paneId) => {
-                      const response = await api.closePane(view.tabId, paneId);
-                      await refresh(response.state);
-                    }}
+                    onSplit={splitPaneInTab}
+                    onResizeSplit={resizeSplitInTab}
+                    onClosePane={closePaneInTab}
                     onDismissMedia={dismissMedia}
                     runsByPaneId={latestRunByPaneId}
                   />

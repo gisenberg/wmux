@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { api } from "./api";
+import { reconcile } from "./reconcile";
 import {
   activateWorkspaceTabInState,
   applyRouteTargetToState,
@@ -56,7 +57,10 @@ export function useAppRouting(options: UseAppRoutingOptions) {
     async (nextState?: BootstrapPayload) => {
       const incoming = nextState ?? (await api.bootstrap());
       const pending = pendingActiveRoute.current;
-      const applied = applyRouteTargetToState(incoming, pending ?? parseRouteTarget(window.location.pathname));
+      const routed = applyRouteTargetToState(incoming, pending ?? parseRouteTarget(window.location.pathname));
+      // Structural sharing: keep previous object identities for unchanged
+      // subtrees so memoized panes/tabs skip re-rendering on resyncs.
+      const applied = reconcile(stateRef.current, routed);
       stateRef.current = applied;
       setState(applied);
     },
