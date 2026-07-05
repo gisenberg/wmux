@@ -9,6 +9,7 @@ import {
   buildWindowsHealthProbeScript,
   buildWindowsPowerShellBootstrapUrl,
   encodePowerShellCommand,
+  expectedWindowsAgentVersion,
 } from "./windows-helpers.js";
 import { probeWindowsAgent, shouldUseWindowsAgent } from "./windows-agent.js";
 
@@ -1098,7 +1099,12 @@ const parseWindowsHealth = (stdout: string): Record<string, unknown> | undefined
 
 const windowsBackendDetail = (health: Record<string, unknown>): string => {
   const version = typeof health.powerShellVersion === "string" ? `pwsh ${health.powerShellVersion}` : "pwsh";
-  const helpers = health.helpersReady === true ? "helpers ready" : `helpers ${health.helperCount ?? 0}/${health.helperTotal ?? "?"}`;
+  const helpers =
+    health.helpersReady !== true
+      ? `helpers ${health.helperCount ?? 0}/${health.helperTotal ?? "?"}`
+      : health.helpersCurrent === false
+        ? "helpers stale (respawn a pane to restage)"
+        : "helpers ready";
   const streamTask = typeof health.streamTaskState === "string" ? `stream task ${health.streamTaskState}` : "stream task unknown";
   const agentTask = typeof health.agentTaskState === "string" ? `agent task ${health.agentTaskState}` : "agent task unknown";
   const sunshine =
@@ -1261,8 +1267,13 @@ const windowsStatusDetail = (
   const backend = agent.health?.backend ? ` ${agent.health.backend}` : "";
   const dependency =
     agent.health?.backend === "conpty" && agent.health.conptyAvailable === false ? "; pywinpty missing" : "";
+  const expectedVersion = expectedWindowsAgentVersion();
+  const versionNote =
+    agent.reachable && expectedVersion && agent.health?.version && agent.health.version !== expectedVersion
+      ? ` (expected ${expectedVersion} — restart the agent task to update)`
+      : "";
   const agentDetail = agent.reachable
-    ? `agent ${agent.health?.version ?? "ready"}${backend} at ${agent.url}${dependency}`
+    ? `agent ${agent.health?.version ?? "ready"}${versionNote}${backend} at ${agent.url}${dependency}`
     : `agent unavailable at ${agent.url ?? "unknown URL"}`;
   return `${detail}; ${agentDetail}`;
 };

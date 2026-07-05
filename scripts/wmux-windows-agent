@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-VERSION = "0.1"
+VERSION = "0.2"
 DEFAULT_REPLAY_BYTES = 2 * 1024 * 1024
 BACKEND_CONPTY = "conpty"
 BACKEND_STDIO = "stdio"

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { streamPathForMachine } from "./streams.js";
@@ -30,16 +31,34 @@ export const encodePowerShellCommand = (script: string): string =>
   Buffer.from(script, "utf16le").toString("base64");
 
 export interface WindowsHelperBundle {
-  files: Array<{ name: string; dataBase64: string }>;
+  // Content hash over every helper file; the bootstrap records it in
+  // bundle-version.json and the health probe reports it back so wmux can
+  // tell current helpers from stale ones instead of just counting files.
+  bundleVersion: string;
+  files: Array<{ name: string; dataBase64: string; sha256: string }>;
   streamConfig: Record<string, unknown>;
   agentConfig: Record<string, unknown>;
 }
 
+const sha256Hex = (data: Buffer): string => crypto.createHash("sha256").update(data).digest("hex");
+
+const windowsHelperBundleFiles = (): WindowsHelperBundle["files"] =>
+  windowsHelperFiles().map(({ name, content }) => {
+    const buffer = Buffer.from(content, "utf8");
+    return { name, dataBase64: buffer.toString("base64"), sha256: sha256Hex(buffer) };
+  });
+
+export const windowsHelperBundleVersion = (): string => {
+  const manifest = windowsHelperBundleFiles()
+    .map((file) => `${file.name}:${file.sha256}`)
+    .sort()
+    .join("\n");
+  return sha256Hex(Buffer.from(manifest, "utf8")).slice(0, 16);
+};
+
 export const buildWindowsHelperBundle = (machine: MachineConfig, bindHost = "127.0.0.1"): WindowsHelperBundle => ({
-  files: windowsHelperFiles().map(({ name, content }) => ({
-    name,
-    dataBase64: Buffer.from(content, "utf8").toString("base64"),
-  })),
+  bundleVersion: windowsHelperBundleVersion(),
+  files: windowsHelperBundleFiles(),
   streamConfig: windowsStreamConfig(machine, bindHost),
   agentConfig: windowsAgentConfig(machine),
 });
@@ -107,10 +126,35 @@ $WmuxHeaders = @{}
 if ($env:WMUX_TOKEN) { $WmuxHeaders['Authorization'] = "Bearer $($env:WMUX_TOKEN)" }
 try {
   $Bundle = Invoke-RestMethod -Method Get -Uri $BundleUrl -Headers $WmuxHeaders -TimeoutSec 20
+  # Stage-verify-swap: decode everything into a scratch directory, check each
+  # file's SHA-256 against the manifest, and only then move files into place.
+  # A truncated download or mid-write failure never leaves a broken helper.
+  $Staging = Join-Path $HelperDir (".staging-" + $PID)
+  New-Item -ItemType Directory -Force -Path $Staging | Out-Null
+  $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $StagedOk = $true
   foreach ($File in @($Bundle.files)) {
-    $Target = Join-Path $HelperDir ([string]$File.name)
-    [System.IO.File]::WriteAllBytes($Target, [Convert]::FromBase64String([string]$File.dataBase64))
+    $Bytes = [Convert]::FromBase64String([string]$File.dataBase64)
+    if ($File.sha256) {
+      $Hash = ([System.BitConverter]::ToString($Sha256.ComputeHash($Bytes)) -replace '-', '').ToLowerInvariant()
+      if ($Hash -ne ([string]$File.sha256).ToLowerInvariant()) {
+        Write-Warning "wmux helper $($File.name) failed hash verification; keeping existing helpers"
+        $StagedOk = $false
+        break
+      }
+    }
+    [System.IO.File]::WriteAllBytes((Join-Path $Staging ([string]$File.name)), $Bytes)
   }
+  if ($StagedOk) {
+    foreach ($File in @($Bundle.files)) {
+      Move-Item -LiteralPath (Join-Path $Staging ([string]$File.name)) -Destination (Join-Path $HelperDir ([string]$File.name)) -Force
+    }
+    if ($Bundle.bundleVersion) {
+      $VersionPath = Join-Path $HelperDir 'bundle-version.json'
+      [System.IO.File]::WriteAllText($VersionPath, ((@{ bundleVersion = [string]$Bundle.bundleVersion } | ConvertTo-Json) + [Environment]::NewLine), $Utf8NoBom)
+    }
+  }
+  Remove-Item -Recurse -Force -LiteralPath $Staging -ErrorAction SilentlyContinue
   $StreamDefaultsPath = Join-Path $StateDir 'stream-agent.defaults.json'
   [System.IO.File]::WriteAllText($StreamDefaultsPath, (($Bundle.streamConfig | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $Utf8NoBom)
   $AgentDefaultsPath = Join-Path $StateDir 'windows-agent.defaults.json'
@@ -189,6 +233,12 @@ export const buildWindowsHealthProbeScript = (wmuxUrl: string): string => `
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 $HelperDir = Join-Path $env:LOCALAPPDATA 'wmux\\bin'
+$ExpectedBundleVersion = ${psSingleQuote(windowsHelperBundleVersion())}
+$BundleVersion = $null
+try {
+  $VersionDoc = Get-Content -LiteralPath (Join-Path $HelperDir 'bundle-version.json') -Raw | ConvertFrom-Json
+  $BundleVersion = [string]$VersionDoc.bundleVersion
+} catch {}
 $HelperNames = @(${windowsRequiredHelperNames.map((name) => psSingleQuote(`${name}.ps1`)).join(", ")})
 $Helpers = [ordered]@{}
 $HelperCount = 0
@@ -251,6 +301,9 @@ try {
   helperCount = $HelperCount
   helperTotal = $HelperNames.Count
   helpers = $Helpers
+  bundleVersion = $BundleVersion
+  expectedBundleVersion = $ExpectedBundleVersion
+  helpersCurrent = ($BundleVersion -eq $ExpectedBundleVersion)
   wmuxUrl = ${psSingleQuote(wmuxUrl)}
   wmuxReachable = $WmuxReachable
   ffmpeg = [bool](Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)
@@ -340,6 +393,14 @@ const windowsAgentConfig = (machine: MachineConfig): Record<string, unknown> => 
 // embeds a byte-identical copy (it must run standalone on the Windows host);
 // test/osc7.test.ts asserts the two never drift.
 export const windowsCwdPromptSnippet = (): string => localWindowsHelperScript("wmux-cwd-prompt.ps1");
+
+// The agent version wmux expects: the VERSION constant of the agent script
+// this server ships in its helper bundle. A running agent reporting an older
+// version predates the last bundle restage.
+export const expectedWindowsAgentVersion = (): string => {
+  const match = localScript("wmux-windows-agent").match(/^VERSION = "([^"]+)"/m);
+  return match?.[1] ?? "";
+};
 
 const localWindowsHelperScript = (name: string): string => {
   try {

@@ -12,7 +12,7 @@
 
 3. Windows agent lifecycle control still needs hardening.
 
-   Layout, tabs, pane metadata, and machine affinity are persisted. Local and SSH panes can survive wmux service restarts when the target has `tmux` or `screen`, because wmux reattaches to a durable per-pane multiplexer session. Windows panes launched through the experimental pywinpty/ConPTY agent can survive wmux server restarts while the Windows agent remains running, but restarting the Windows agent still kills those processes. Graceful process-tree shutdown, recovery after agent restart, and broader full-screen terminal app validation are still pending.
+   Layout, tabs, pane metadata, and machine affinity are persisted. Local and SSH panes can survive wmux service restarts when the target has `tmux` or `screen`, because wmux reattaches to a durable per-pane multiplexer session. Windows panes launched through the experimental pywinpty/ConPTY agent can survive wmux server restarts while the Windows agent remains running, but restarting the Windows agent still kills those processes. The helper bundle now stages atomically with SHA-256 verification and a version handshake (stale helpers and outdated agents are called out in machine status), and the stream agent backs off exponentially on errors, but graceful process-tree shutdown, recovery after agent restart, and broader full-screen terminal app validation are still pending. The handshake/staging changes have not yet been re-validated on the 9800x3d box itself.
 
 4. Machine management is file-based.
 

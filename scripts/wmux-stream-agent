@@ -240,6 +240,7 @@ def run_screencapture_publisher(
     print(f"wmux-stream-agent: publishing {machine_id} to {rtsp_url} with screencapture", file=sys.stderr)
     process = subprocess.Popen(command, stdin=subprocess.PIPE)
     stopped_by_request = False
+    capture_failures = 0
     try:
         with tempfile.TemporaryDirectory(prefix="wmux-stream-") as tmpdir:
             frame_path = os.path.join(tmpdir, "frame.jpg")
@@ -257,19 +258,23 @@ def run_screencapture_publisher(
                 if capture.returncode != 0:
                     error = capture.stderr.decode("utf-8", "replace").strip()
                     print(f"wmux-stream-agent: screencapture failed: {error or capture.returncode}", file=sys.stderr)
-                    time.sleep(1)
+                    capture_failures += 1
+                    time.sleep(min(30, 2 ** min(capture_failures, 5)))
                     continue
                 try:
                     with open(frame_path, "rb") as handle:
                         frame = handle.read()
                 except OSError as error:
                     print(f"wmux-stream-agent: could not read captured frame: {error}", file=sys.stderr)
-                    time.sleep(1)
+                    capture_failures += 1
+                    time.sleep(min(30, 2 ** min(capture_failures, 5)))
                     continue
                 if not frame:
                     print("wmux-stream-agent: captured frame was empty", file=sys.stderr)
-                    time.sleep(1)
+                    capture_failures += 1
+                    time.sleep(min(30, 2 ** min(capture_failures, 5)))
                     continue
+                capture_failures = 0
                 try:
                     process.stdin.write(frame)
                     process.stdin.flush()
@@ -304,27 +309,39 @@ def wmux_headers() -> dict:
     return {"authorization": "Bearer " + token} if token else {}
 
 
-def stream_requested(args: argparse.Namespace, machine_id: str) -> bool:
+def stream_requested(args: argparse.Namespace, machine_id: str):
+    """True/False when wmux answered; None when it was unreachable."""
     request = urllib.request.Request(request_status_url(args, machine_id), method="GET", headers=wmux_headers())
     try:
         with urllib.request.urlopen(request, timeout=max(2, min(10, args.poll_interval + 2))) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
-        return False
+        return None
     return bool(isinstance(payload, dict) and payload.get("requested"))
 
 
 def make_request_checker(args: argparse.Namespace, machine_id: str):
     next_check = 0.0
     requested = True
+    unreachable_since = None
 
     def should_continue() -> bool:
-        nonlocal next_check, requested
+        nonlocal next_check, requested, unreachable_since
         now = time.monotonic()
         if now < next_check:
             return requested
         next_check = now + max(1, args.poll_interval)
-        requested = stream_requested(args, machine_id)
+        status = stream_requested(args, machine_id)
+        if status is None:
+            # Ride out a brief wmux outage without dropping the stream, but
+            # never keep capturing indefinitely with no lease holder.
+            if unreachable_since is None:
+                unreachable_since = now
+            elif now - unreachable_since > max(15, args.poll_interval * 3):
+                requested = False
+            return requested
+        unreachable_since = None
+        requested = status
         return requested
 
     return should_continue
@@ -400,10 +417,20 @@ def run_on_demand(ffmpeg: str, args: argparse.Namespace, machine_id: str, rtsp_u
         f"wmux-stream-agent: waiting for wmux stream requests at {request_status_url(args, machine_id)}",
         file=sys.stderr,
     )
+    idle_delay = max(1, args.poll_interval)
+    unreachable_failures = 0
     while True:
         try:
-            if not stream_requested(args, machine_id):
-                time.sleep(max(1, args.poll_interval))
+            status = stream_requested(args, machine_id)
+            if status is None:
+                # wmux unreachable: back off exponentially (capped) instead of
+                # hammering a down/rebooting server at a flat interval.
+                unreachable_failures += 1
+                time.sleep(min(60, idle_delay * (2 ** min(unreachable_failures, 6))))
+                continue
+            unreachable_failures = 0
+            if not status:
+                time.sleep(idle_delay)
                 continue
             print(f"wmux-stream-agent: stream requested for {machine_id}", file=sys.stderr)
             result = run_publisher(
