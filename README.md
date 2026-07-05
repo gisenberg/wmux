@@ -16,6 +16,8 @@ npm run build
 npm run start -- --host 127.0.0.1 --port 3478
 ```
 
+For development, `npm run dev` serves the client through Vite with HMR. `npm run typecheck` covers the client and server TypeScript projects, and `npm test` runs the node:test suite in `test/`.
+
 To expose on Tailscale, bind to this machine's Tailscale IP:
 
 ```bash
@@ -77,7 +79,7 @@ Unix-like local and SSH machines default to `"sessionBackend": "auto"`, which at
 
 Use `kind: "powershell-ssh"` for Windows hosts reachable from a non-Windows wmux server. It starts the local `ssh` client with a forced TTY and launches `pwsh -NoLogo -NoProfile` on the Windows host, so the Windows host must have PowerShell 7 and OpenSSH Server configured for the target user. Reachability for this kind requires a local `ssh` client, a TCP response on SSH port 22, and a short PowerShell health probe that reports helper and stream readiness. This path does not use WSMan or the PowerShell SSH remoting subsystem.
 
-Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so an Ubuntu wmux server such as homelab cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. PowerShell panes are currently non-durable; they do not survive a wmux service restart the way local/SSH `tmux` or `screen` panes do. Durable Windows process persistence needs a Windows-side wmux agent/service.
+Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so an Ubuntu wmux server such as homelab cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. Plain `powershell-ssh` panes are non-durable; to let Windows panes survive wmux service restarts, opt the machine into the Windows session agent with `"sessionBackend": "agent"` (see [Experimental Windows Session Agent](#experimental-windows-session-agent)).
 
 For the full Windows registration checklist, see [docs/WINDOWS_NODE_REGISTRATION.md](docs/WINDOWS_NODE_REGISTRATION.md).
 
@@ -138,7 +140,7 @@ curl -fsS \
   "$WMUX_URL/api/notifications"
 ```
 
-`WMUX_TOKEN` is present in every pane's environment, so the bundled helpers (`wmux-notify`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`) send it automatically. See [Authentication](#authentication) below.
+`WMUX_TOKEN` is present in every pane's environment, so the bundled helpers (`wmux-notify`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`) send it automatically. For shells that predate those variables — durable sessions created before an upgrade, or agent hooks launched outside a pane — the helpers fall back to `~/.wmux/token` and `~/.wmux/url`, which wmux persists on the server host at startup and on every remote machine when a durable pane (re)attaches. See [Authentication](#authentication) above.
 
 Unread notifications light the workspace, tab, and pane. The browser notification button in the top bar requests browser notification permission.
 
@@ -384,7 +386,7 @@ The settings modal can quit local duplicate/orphan `tmux` or `screen` sessions a
 
 wmux persists workspace/tab/pane metadata in `~/.wmux/state.json`. For local and SSH machines using the default durable backend, each pane also maps to a stable `tmux`/`screen` session named from the pane ID. After a wmux service restart, reopening the pane attaches to that durable session instead of starting a fresh shell.
 
-Explicitly closing a pane, tab, or workspace from wmux kills the matching durable session. Windows SSH PowerShell panes do not yet have an equivalent durable backend.
+Explicitly closing a pane, tab, or workspace from wmux kills the matching durable session. Windows panes are durable across wmux service restarts only when the machine uses `"sessionBackend": "agent"`; restarting the Windows agent itself still ends its pane processes.
 
 ## Keyboard Shortcuts
 

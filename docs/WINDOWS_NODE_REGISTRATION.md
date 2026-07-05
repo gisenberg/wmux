@@ -4,8 +4,6 @@ This runbook is for registering a Windows machine, such as `9800x3d`, as a wmux 
 
 wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host. Do not use the legacy `kind: "powershell"` WSMan transport from homelab.
 
-For parallel host-local validation work, see [WINDOWS_HOST_HANDOFF.md](../WINDOWS_HOST_HANDOFF.md).
-
 References:
 
 - Microsoft OpenSSH Server setup for Windows: https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse

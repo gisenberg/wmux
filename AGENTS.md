@@ -121,14 +121,14 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Cwd preservation is best-effort outside tmux and wmux-managed shell bootstraps.
 - OpenTUI migration is partial and vendored.
 - Pixel streaming has the legacy MediaMTX helper path and an early Moonlight gateway path. Wayland, locked/logged-out Windows capture behavior, macOS permission automation, Sunshine app-launch automation, reconnect supervision, and a full wmux native agent remain gaps.
-- Keep `FEATURE_GAPS.md` current when a limitation is discovered or intentionally deferred.
+- Document newly discovered or intentionally deferred limitations in the relevant `README.md` section (or a `docs/` runbook) so they stay near the feature they qualify.
 
 ## Code Style
 
 - Keep server-only code under `src/server` and browser code under `src/client/src`.
 - Prefer structured JSON APIs over ad hoc message strings.
 - Use `apply_patch` for manual edits.
-- Keep durable project documentation in `README.md`, `AGENTS.md`, and `FEATURE_GAPS.md`; avoid committing one-off planning or handoff markdown unless it remains actively maintained.
+- Keep durable project documentation in `README.md`, `AGENTS.md`, and `docs/`; avoid committing one-off planning or handoff markdown unless it remains actively maintained.
 - Do not commit generated runtime output such as `dist/`, `node_modules/`, or `test-results/`.
 - Avoid broad refactors when making focused fixes; follow existing state/API patterns.
 - Keep comments sparse and useful, especially around protocol parsing, terminal lifecycle, and remote helper staging.
