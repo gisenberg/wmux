@@ -1,5 +1,12 @@
 export type MachineKind = "local" | "ssh" | "powershell" | "powershell-ssh" | "service";
 export type SessionBackend = "auto" | "pty" | "tmux" | "screen" | "agent";
+export type StreamProvider = "mediamtx" | "moonlight-gateway";
+
+export interface MachineStreamConfig {
+  provider?: StreamProvider;
+  gatewayUrl?: string;
+  gatewayOpenUrl?: string;
+}
 
 export interface MachineConfig {
   id: string;
@@ -15,6 +22,7 @@ export interface MachineConfig {
   agentUrl?: string;
   agentPort?: number;
   agentToken?: string;
+  stream?: MachineStreamConfig;
 }
 
 export interface MachineStatus extends MachineConfig {
@@ -125,13 +133,20 @@ export interface TerminalRun {
 
 export interface StreamStatus {
   machineId: string;
+  provider: StreamProvider;
   path: string;
   live: boolean;
+  requested: boolean;
+  requestCount: number;
+  requestedUntil?: string;
   viewerCount: number;
   startedAt?: string;
   webRtcUrl: string;
-  publishRtspUrl: string;
-  publishWhipUrl: string;
+  openUrl: string;
+  gatewayUrl?: string;
+  publishRtspUrl?: string;
+  publishWhipUrl?: string;
+  inputEnabled?: boolean;
   reason?: string;
 }
 

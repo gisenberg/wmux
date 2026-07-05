@@ -220,6 +220,33 @@ wmux-stream-agent-service logs
 
 On Windows hosts, `wmux-stream-agent-service install` creates a supervised per-user Scheduled Task at logon. The task runs in the logged-in user's desktop session but launches through a hidden PowerShell wrapper, so normal operation should not leave an empty console window on screen. `wmux-windows-setup install-deps` can install FFmpeg and Python with `winget`, installs `pywinpty`, and `wmux-stream-agent --probe-capture` can test a direct one-frame FFmpeg capture. Direct SSH capture may fail with Windows desktop access errors; the scheduled task is the intended path because it runs in the logged-in interactive user context.
 
+As an alternate interactive remote-control path, a machine can use a browser-native Moonlight/Sunshine gateway instead of MediaMTX:
+
+```json
+{
+  "id": "9800x3d",
+  "name": "9800x3d",
+  "kind": "powershell-ssh",
+  "host": "9800x3d",
+  "user": "gisen",
+  "stream": {
+    "provider": "moonlight-gateway",
+    "gatewayUrl": "http://100.x.y.z:3490"
+  }
+}
+```
+
+Run the gateway near the Sunshine host or near a browser-native Moonlight bridge:
+
+```bash
+WMUX_MOONLIGHT_WEB_URL=http://127.0.0.1:8080 \
+  scripts/wmux-moonlight-gateway --host 100.x.y.z --port 3490
+```
+
+The gateway exposes `/api/wmux/health` for wmux and proxies HTTP/WebSocket traffic to the Moonlight Web upstream. See [docs/MOONLIGHT_GATEWAY.md](docs/MOONLIGHT_GATEWAY.md) for setup notes and the implementation risks found while reviewing Moonlight Web Stream.
+
+For Windows hosts, `wmux-windows-setup install-sunshine` installs Sunshine with `winget`; `configure-sunshine` sets Sunshine credentials from `WMUX_SUNSHINE_USER` and `WMUX_SUNSHINE_PASSWORD`; `start-sunshine` starts it in the logged-in user session. The gateway can then automate pairing by calling `/api/wmux/setup/pair`, which generates the Moonlight Web PIN and submits it to Sunshine's `/api/pin`.
+
 ## Experimental Windows Session Agent
 
 Windows hosts can run `wmux-windows-agent` as a per-user Scheduled Task:

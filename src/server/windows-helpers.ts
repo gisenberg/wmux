@@ -227,6 +227,27 @@ $Task = Get-ScheduledTask -TaskName 'wmux-stream-agent' -ErrorAction SilentlyCon
 $TaskInfo = if ($Task) { Get-ScheduledTaskInfo -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue } else { $null }
 $AgentTask = Get-ScheduledTask -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue
 $AgentTaskInfo = if ($AgentTask) { Get-ScheduledTaskInfo -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue } else { $null }
+$SunshineCommand = Get-Command sunshine.exe -ErrorAction SilentlyContinue
+if (-not $SunshineCommand) {
+  $SunshineCandidates = @()
+  foreach ($Root in @(\${env:ProgramFiles}, \${env:ProgramFiles(x86)})) {
+    if (-not $Root) { continue }
+    $SunshineCandidates += Join-Path $Root 'Sunshine\\sunshine.exe'
+    $SunshineCandidates += Join-Path $Root 'LizardByte\\Sunshine\\sunshine.exe'
+  }
+  foreach ($Candidate in $SunshineCandidates) {
+    if ($Candidate -and (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+      $SunshineCommand = [pscustomobject]@{ Source = $Candidate }
+      break
+    }
+  }
+}
+$SunshineReachable = $false
+try {
+  $SunshineUrl = if ($env:WMUX_SUNSHINE_URL) { $env:WMUX_SUNSHINE_URL.TrimEnd('/') } else { 'https://127.0.0.1:47990' }
+  $Response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri "$SunshineUrl/api/configLocale" -SkipCertificateCheck -TimeoutSec 3
+  $SunshineReachable = [int]$Response.StatusCode -ge 200 -and [int]$Response.StatusCode -lt 500
+} catch {}
 $WmuxReachable = $false
 try {
   $Response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri ${psSingleQuote(`${wmuxUrl.replace(/\/+$/, "")}/api/health`)} -TimeoutSec 3
@@ -258,6 +279,9 @@ try {
   py = [bool](Get-Command py.exe -ErrorAction SilentlyContinue)
   pywinpty = $Pywinpty
   winget = [bool](Get-Command winget.exe -ErrorAction SilentlyContinue)
+  sunshine = [bool]$SunshineCommand
+  sunshinePath = $(if ($SunshineCommand) { [string]$SunshineCommand.Source } else { $null })
+  sunshineApiReachable = $SunshineReachable
   streamConfigExists = [bool]$StreamConfig
   streamTaskState = $(if ($Task) { [string]$Task.State } else { 'missing' })
   streamTaskLastRunTime = $(if ($TaskInfo) { $TaskInfo.LastRunTime.ToString('o') } else { $null })

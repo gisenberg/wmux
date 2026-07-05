@@ -17,8 +17,23 @@ export function ScreenStreamViewer({ machine, stream, onRequest, onRelease, onCl
   const machineId = machine?.id ?? stream?.machineId ?? "unknown";
   const machineName = machine?.name ?? machineId;
   const requestId = useMemo(() => createRequestId(), []);
-  const streamUrl = stream ? `${stream.webRtcUrl}?controls=false&muted=true&autoplay=true&playsInline=true` : "";
-  const streamStateLabel = stream?.live ? "live" : stream?.requested ? "starting agent" : "requesting stream";
+  const isMoonlightGateway = stream?.provider === "moonlight-gateway";
+  const streamUrl = stream
+    ? isMoonlightGateway
+      ? stream.openUrl
+      : `${stream.openUrl}?controls=false&muted=true&autoplay=true&playsInline=true`
+    : "";
+  const streamStateLabel = isMoonlightGateway
+    ? stream?.live
+      ? "gateway ready"
+      : stream?.reason
+        ? "upstream offline"
+        : "gateway offline"
+    : stream?.live
+      ? "live"
+      : stream?.requested
+        ? "starting agent"
+        : "requesting stream";
 
   useEffect(() => {
     if (!machineId || machineId === "unknown") return;
@@ -45,7 +60,13 @@ export function ScreenStreamViewer({ machine, stream, onRequest, onRelease, onCl
           </div>
           <div className="stream-actions">
             {stream ? (
-              <a className="stream-link" href={stream.webRtcUrl} target="_blank" rel="noreferrer" title="Open MediaMTX stream">
+              <a
+                className="stream-link"
+                href={stream.openUrl}
+                target="_blank"
+                rel="noreferrer"
+                title={isMoonlightGateway ? "Open Moonlight gateway" : "Open MediaMTX stream"}
+              >
                 <ExternalLink size={15} />
                 <span>open</span>
               </a>
@@ -57,19 +78,41 @@ export function ScreenStreamViewer({ machine, stream, onRequest, onRelease, onCl
         </div>
         <div className="stream-video-shell">
           {stream?.live ? (
-            <iframe className="stream-frame" src={streamUrl} title={`${machineName} WebRTC stream`} allow="autoplay; fullscreen; picture-in-picture" />
+            <iframe
+              className="stream-frame"
+              src={streamUrl}
+              title={`${machineName} ${isMoonlightGateway ? "Moonlight gateway" : "WebRTC stream"}`}
+              allow="autoplay; fullscreen; picture-in-picture; gamepad; clipboard-read; clipboard-write"
+            />
           ) : (
             <div className="stream-empty">
               <ScreenShare size={30} />
-              <strong>{stream?.requested ? "Starting pixel stream" : "No active pixel stream"}</strong>
+              <strong>
+                {isMoonlightGateway
+                  ? stream?.reason
+                    ? "Moonlight upstream unavailable"
+                    : "Moonlight gateway unavailable"
+                  : stream?.requested
+                    ? "Starting pixel stream"
+                    : "No active pixel stream"}
+              </strong>
               <span>
-                Keep `wmux-stream-agent-service` running on {machineName}; capture starts only while this dialog is open.
+                {isMoonlightGateway
+                  ? `Run wmux-moonlight-gateway for ${machineName}; Sunshine and the gateway own the remote-control stream.`
+                  : `Keep wmux-stream-agent-service running on ${machineName}; capture starts only while this dialog is open.`}
               </span>
               {stream?.reason ? <span>{stream.reason}</span> : null}
             </div>
           )}
         </div>
-        {stream ? (
+        {stream && isMoonlightGateway ? (
+          <div className="stream-agent-hint">
+            <span>gateway</span>
+            <code>{stream.gatewayUrl ?? stream.openUrl}</code>
+            <span>control</span>
+            <code>{stream.inputEnabled ? "keyboard, pointer, touch, and gamepad flow through the browser gateway" : "view only"}</code>
+          </div>
+        ) : stream && stream.publishRtspUrl && stream.publishWhipUrl ? (
           <div className="stream-agent-hint">
             <span>RTSP publish</span>
             <code>{stream.publishRtspUrl}</code>

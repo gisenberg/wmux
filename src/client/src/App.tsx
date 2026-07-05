@@ -932,11 +932,20 @@ export function App() {
       {
         id: "open-stream",
         title: `Open stream: ${activeStreamMachine?.name ?? activeStreamMachineId}`,
-        subtitle: activeStream?.live ? `${activeStream.viewerCount} viewers` : "Waiting for wmux-stream-agent",
+        subtitle:
+          activeStream?.provider === "moonlight-gateway"
+            ? activeStream.live
+              ? "Moonlight gateway ready"
+              : activeStream.reason
+                ? "Moonlight upstream offline"
+                : "Moonlight gateway offline"
+            : activeStream?.live
+              ? `${activeStream.viewerCount} viewers`
+              : "Waiting for wmux-stream-agent",
         section: "View",
         disabled: !canOpenStream,
         run: () => setStreamOpen(true),
-        keywords: ["screen", "display", "webrtc", "pixels"],
+        keywords: ["screen", "display", "webrtc", "pixels", "moonlight", "sunshine"],
       },
       {
         id: "switch-chrome-mode",

@@ -969,12 +969,18 @@ const windowsBackendDetail = (health: Record<string, unknown>): string => {
   const helpers = health.helpersReady === true ? "helpers ready" : `helpers ${health.helperCount ?? 0}/${health.helperTotal ?? "?"}`;
   const streamTask = typeof health.streamTaskState === "string" ? `stream task ${health.streamTaskState}` : "stream task unknown";
   const agentTask = typeof health.agentTaskState === "string" ? `agent task ${health.agentTaskState}` : "agent task unknown";
+  const sunshine =
+    health.sunshine === true
+      ? health.sunshineApiReachable === true
+        ? "sunshine ready"
+        : "sunshine installed"
+      : "sunshine missing";
   const captureTools = [
     health.ffmpeg === true ? "ffmpeg" : "",
     health.python === true || health.py === true ? "python" : "",
   ].filter(Boolean);
   const tools = captureTools.length ? captureTools.join("+") : "capture tools missing";
-  return `SSH-launched PowerShell; ${version}; ${helpers}; ${streamTask}; ${agentTask}; ${tools}`;
+  return `SSH-launched PowerShell; ${version}; ${helpers}; ${streamTask}; ${agentTask}; ${sunshine}; ${tools}`;
 };
 
 const trimProbeError = (stderr: string): string => {

@@ -1,20 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { MachineConfig } from "./types.js";
-
-export interface StreamStatus {
-  machineId: string;
-  path: string;
-  live: boolean;
-  requested: boolean;
-  requestCount: number;
-  requestedUntil?: string;
-  viewerCount: number;
-  startedAt?: string;
-  webRtcUrl: string;
-  publishRtspUrl: string;
-  publishWhipUrl: string;
-  reason?: string;
-}
+import type { MachineConfig, StreamProvider, StreamStatus } from "./types.js";
 
 export interface StreamRequestStatus {
   machineId: string;
@@ -36,9 +21,21 @@ interface MediaMtxPathList {
   items?: MediaMtxPath[];
 }
 
+interface MoonlightGatewayHealth {
+  ok?: boolean;
+  startedAt?: string;
+  viewerCount?: number;
+  upstream?: {
+    ok?: boolean;
+    status?: number;
+    reason?: string;
+  };
+}
+
 const DEFAULT_REQUEST_TTL_MS = 20_000;
 const MIN_REQUEST_TTL_MS = 5_000;
 const MAX_REQUEST_TTL_MS = 60_000;
+const GATEWAY_HEALTH_TIMEOUT_MS = 1_500;
 
 export class StreamRequestStore extends EventEmitter {
   private requests = new Map<string, Map<string, number>>();
@@ -115,40 +112,130 @@ export const resolveStreamStatuses = async (
   host: string,
   requests?: StreamRequestStore,
 ): Promise<StreamStatus[]> => {
-  const base = mediaMtxBase(host);
-  const paths = await readMediaMtxPaths(base.apiUrl).catch((error: unknown) => ({
-    error: error instanceof Error ? error.message : "MediaMTX status unavailable",
-    items: [] as MediaMtxPath[],
-  }));
-
-  const pathItems = "items" in paths ? paths.items ?? [] : [];
-  const errorReason = "error" in paths ? paths.error : undefined;
-  const byName = new Map(pathItems.map((path) => [path.name, path]));
   const requestStatuses = requests?.snapshotMany(machines.map((machine) => machine.id)) ?? new Map<string, StreamRequestStatus>();
-  return machines.map((machine) => {
-    const path = streamPathForMachine(machine.id);
-    const status = byName.get(path);
-    const live = Boolean(status?.online ?? status?.ready);
-    const requestStatus = requestStatuses.get(machine.id) ?? {
-      machineId: machine.id,
-      requested: false,
-      requestCount: 0,
-    };
-    return {
-      machineId: machine.id,
-      path,
-      live,
-      requested: requestStatus.requested,
-      requestCount: requestStatus.requestCount,
-      requestedUntil: requestStatus.requestedUntil,
-      viewerCount: status?.readers?.length ?? 0,
-      startedAt: status?.onlineTime ?? status?.readyTime,
-      webRtcUrl: `${base.webRtcOrigin}/${path}`,
-      publishRtspUrl: `rtsp://${base.host}:8554/${path}`,
-      publishWhipUrl: `${base.webRtcOrigin}/${path}/whip`,
-      reason: live ? undefined : errorReason,
-    };
-  });
+  const mediaBase = mediaMtxBase(host);
+  const hasMediaMtxStreams = machines.some((machine) => streamProviderForMachine(machine) === "mediamtx");
+  const paths = hasMediaMtxStreams
+    ? await readMediaMtxPaths(mediaBase.apiUrl).catch((error: unknown) => ({
+        error: error instanceof Error ? error.message : "MediaMTX status unavailable",
+        items: [] as MediaMtxPath[],
+      }))
+    : { items: [] as MediaMtxPath[] };
+  const pathItems = "items" in paths ? paths.items ?? [] : [];
+  const mediaErrorReason = "error" in paths && typeof paths.error === "string" ? paths.error : undefined;
+  const mediaByName = new Map(pathItems.map((path) => [path.name, path]));
+
+  return Promise.all(
+    machines.map(async (machine) => {
+      const requestStatus = requestStatuses.get(machine.id) ?? {
+        machineId: machine.id,
+        requested: false,
+        requestCount: 0,
+      };
+      return streamProviderForMachine(machine) === "moonlight-gateway"
+        ? resolveMoonlightGatewayStatus(machine, host, requestStatus)
+        : resolveMediaMtxStatus(machine, mediaBase, mediaByName, requestStatus, mediaErrorReason);
+    }),
+  );
+};
+
+const resolveMediaMtxStatus = (
+  machine: MachineConfig,
+  base: { host: string; apiUrl: string; webRtcOrigin: string },
+  paths: Map<string | undefined, MediaMtxPath>,
+  requestStatus: StreamRequestStatus,
+  errorReason?: string,
+): StreamStatus => {
+  const path = streamPathForMachine(machine.id);
+  const status = paths.get(path);
+  const live = Boolean(status?.online ?? status?.ready);
+  const webRtcUrl = `${base.webRtcOrigin}/${path}`;
+  return {
+    machineId: machine.id,
+    provider: "mediamtx",
+    path,
+    live,
+    requested: requestStatus.requested,
+    requestCount: requestStatus.requestCount,
+    requestedUntil: requestStatus.requestedUntil,
+    viewerCount: status?.readers?.length ?? 0,
+    startedAt: status?.onlineTime ?? status?.readyTime,
+    webRtcUrl,
+    openUrl: webRtcUrl,
+    publishRtspUrl: `rtsp://${base.host}:8554/${path}`,
+    publishWhipUrl: `${base.webRtcOrigin}/${path}/whip`,
+    inputEnabled: false,
+    reason: live ? undefined : errorReason,
+  };
+};
+
+const resolveMoonlightGatewayStatus = async (
+  machine: MachineConfig,
+  host: string,
+  requestStatus: StreamRequestStatus,
+): Promise<StreamStatus> => {
+  const gatewayUrl = moonlightGatewayUrl(machine, host);
+  const openUrl = normalizeUrl(machine.stream?.gatewayOpenUrl ?? gatewayUrl);
+  const healthUrl = joinUrl(gatewayUrl, "/api/wmux/health");
+  const health = await readMoonlightGatewayHealth(healthUrl).catch((error: unknown) => ({
+    error: error instanceof Error ? error.message : "Moonlight gateway status unavailable",
+  }));
+  const path = streamPathForMachine(machine.id);
+  const live = "ok" in health ? Boolean(health.ok) && health.upstream?.ok !== false : false;
+  const upstreamReason =
+    "ok" in health && health.upstream && health.upstream.ok === false
+      ? health.upstream.reason ?? `Moonlight Web upstream returned ${health.upstream.status ?? "an error"}`
+      : undefined;
+  const errorReason = "error" in health ? health.error : undefined;
+  return {
+    machineId: machine.id,
+    provider: "moonlight-gateway",
+    path,
+    live,
+    requested: requestStatus.requested,
+    requestCount: requestStatus.requestCount,
+    requestedUntil: requestStatus.requestedUntil,
+    viewerCount: "ok" in health && typeof health.viewerCount === "number" ? health.viewerCount : requestStatus.requestCount,
+    startedAt: "ok" in health ? health.startedAt : undefined,
+    webRtcUrl: openUrl,
+    openUrl,
+    gatewayUrl,
+    inputEnabled: true,
+    reason: live ? upstreamReason : errorReason,
+  };
+};
+
+const streamProviderForMachine = (machine: MachineConfig): StreamProvider =>
+  machine.stream?.provider ?? "mediamtx";
+
+const readMoonlightGatewayHealth = async (url: string): Promise<MoonlightGatewayHealth> =>
+  fetchJsonWithTimeout<MoonlightGatewayHealth>(url, GATEWAY_HEALTH_TIMEOUT_MS);
+
+const fetchJsonWithTimeout = async <T>(url: string, timeoutMs: number): Promise<T> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const moonlightGatewayUrl = (machine: MachineConfig, host: string): string => {
+  if (machine.stream?.gatewayUrl) return normalizeUrl(machine.stream.gatewayUrl);
+  const gatewayHost = process.env.WMUX_MOONLIGHT_GATEWAY_HOST || machine.host || host;
+  const gatewayPort = process.env.WMUX_MOONLIGHT_GATEWAY_PORT || "3490";
+  return `http://${gatewayHost}:${gatewayPort}`;
+};
+
+const normalizeUrl = (value: string): string => value.replace(/\/+$/, "");
+
+const joinUrl = (base: string, pathname: string): string => {
+  const url = new URL(normalizeUrl(base));
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/${pathname.replace(/^\/+/, "")}`;
+  return url.toString();
 };
 
 const readMediaMtxPaths = async (apiUrl: string): Promise<MediaMtxPathList> => {

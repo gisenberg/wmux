@@ -1,0 +1,777 @@
+#!/usr/bin/env node
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
+import tls from "node:tls";
+import { spawn } from "node:child_process";
+
+const DEFAULT_PORT = 3490;
+const DEFAULT_UPSTREAM = "http://127.0.0.1:8080";
+const DEFAULT_SUNSHINE_URL = "https://127.0.0.1:47990";
+const DEFAULT_SUNSHINE_HTTP_PORT = 47989;
+const DEFAULT_SETUP_TIMEOUT_MS = 60_000;
+
+const startedAt = new Date().toISOString();
+const options = parseArgs(process.argv.slice(2));
+const host = String(options.host || process.env.WMUX_MOONLIGHT_GATEWAY_HOST || "127.0.0.1");
+const port = intOption(options.port || process.env.WMUX_MOONLIGHT_GATEWAY_PORT, DEFAULT_PORT);
+const upstreamUrl = normalizeBaseUrl(String(options.upstream || process.env.WMUX_MOONLIGHT_WEB_URL || DEFAULT_UPSTREAM));
+const upstream = new URL(upstreamUrl);
+const managedBin = options.bin || process.env.WMUX_MOONLIGHT_WEB_BIN || "";
+const managedArgs = [
+  ...envArgs(process.env.WMUX_MOONLIGHT_WEB_ARGS),
+  ...arrayOption(options["bin-arg"]),
+];
+
+assertSafeBindHost(host);
+
+let managedProcess = null;
+let managedExit = null;
+let activeWebSockets = 0;
+
+if (managedBin) {
+  managedProcess = spawn(String(managedBin), managedArgs, {
+    stdio: ["ignore", "inherit", "inherit"],
+    env: process.env,
+  });
+  managedProcess.on("exit", (code, signal) => {
+    managedExit = { code, signal, at: new Date().toISOString() };
+    managedProcess = null;
+  });
+}
+
+const server = http.createServer((request, response) => {
+  void handleRequest(request, response).catch((error) => {
+    sendJson(response, 500, { error: "gateway_error", message: error instanceof Error ? error.message : String(error) });
+  });
+});
+
+server.on("upgrade", (request, socket, head) => {
+  if (request.url && request.url.startsWith("/api/wmux/")) {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  activeWebSockets += 1;
+  socket.on("close", () => {
+    activeWebSockets = Math.max(0, activeWebSockets - 1);
+  });
+  proxyUpgrade(request, socket, head);
+});
+
+server.listen(port, host, () => {
+  console.log(`wmux-moonlight-gateway listening on http://${host}:${port}`);
+  console.log(`proxying Moonlight Web upstream at ${upstreamUrl}`);
+});
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+async function handleRequest(request, response) {
+  const url = new URL(request.url || "/", `http://${request.headers.host || `${host}:${port}`}`);
+  if (url.pathname === "/api/wmux/health" && request.method === "GET") {
+    sendJson(response, 200, await healthPayload());
+    return;
+  }
+  if (url.pathname === "/api/wmux/sessions" && request.method === "GET") {
+    sendJson(response, 200, {
+      sessions: [
+        {
+          id: "moonlight-web",
+          state: activeWebSockets > 0 ? "active" : "idle",
+          viewerCount: activeWebSockets,
+          upstream: upstreamUrl,
+        },
+      ],
+    });
+    return;
+  }
+  if (url.pathname === "/api/wmux/config" && request.method === "GET") {
+    sendJson(response, 200, {
+      bind: { host, port },
+      upstream: upstreamUrl,
+      managedProcess: processSummary(),
+      setup: setupSummary(),
+    });
+    return;
+  }
+  if (url.pathname === "/api/wmux/setup/status" && request.method === "GET") {
+    sendJson(response, 200, await setupStatus());
+    return;
+  }
+  if (url.pathname === "/api/wmux/setup/pair" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    sendJson(response, 200, await runPairSetup(body));
+    return;
+  }
+  await proxyHttp(request, response);
+}
+
+async function healthPayload() {
+  return {
+    ok: true,
+    service: "wmux-moonlight-gateway",
+    startedAt,
+    bind: { host, port },
+    upstream: await checkUpstream(),
+    managedProcess: processSummary(),
+    viewerCount: activeWebSockets,
+    setup: setupSummary(),
+  };
+}
+
+function processSummary() {
+  return {
+    enabled: Boolean(managedBin),
+    command: managedBin || undefined,
+    args: managedArgs,
+    pid: managedProcess?.pid,
+    exited: managedExit,
+  };
+}
+
+function setupSummary() {
+  return {
+    moonlightWebConfigured: Boolean(process.env.WMUX_MOONLIGHT_WEB_USER && process.env.WMUX_MOONLIGHT_WEB_PASSWORD),
+    sunshineConfigured: Boolean(process.env.WMUX_SUNSHINE_USER && process.env.WMUX_SUNSHINE_PASSWORD),
+    sunshineUrl: process.env.WMUX_SUNSHINE_URL || DEFAULT_SUNSHINE_URL,
+    moonlightHost: process.env.WMUX_MOONLIGHT_HOST || "127.0.0.1",
+    moonlightHostHttpPort: intOption(process.env.WMUX_MOONLIGHT_HOST_HTTP_PORT, DEFAULT_SUNSHINE_HTTP_PORT),
+  };
+}
+
+async function setupStatus() {
+  const setup = setupSummary();
+  return {
+    ok: true,
+    setup,
+    upstream: await checkUpstream(),
+    sunshine: await checkSunshine(setup.sunshineUrl).catch((error) => ({
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    })),
+  };
+}
+
+async function runPairSetup(rawBody) {
+  const body = rawBody && typeof rawBody === "object" ? rawBody : {};
+  const moonlight = body.moonlight && typeof body.moonlight === "object" ? body.moonlight : {};
+  const sunshine = body.sunshine && typeof body.sunshine === "object" ? body.sunshine : {};
+  const moonlightUser = stringOption(moonlight.user || moonlight.username || process.env.WMUX_MOONLIGHT_WEB_USER);
+  const moonlightPassword = stringOption(moonlight.password || process.env.WMUX_MOONLIGHT_WEB_PASSWORD);
+  const sunshineUser = stringOption(sunshine.user || sunshine.username || process.env.WMUX_SUNSHINE_USER);
+  const sunshinePassword = stringOption(sunshine.password || process.env.WMUX_SUNSHINE_PASSWORD);
+  const sunshineUrl = normalizeBaseUrl(stringOption(sunshine.url || process.env.WMUX_SUNSHINE_URL || DEFAULT_SUNSHINE_URL));
+  const moonlightHostAddress = stringOption(
+    moonlight.host ||
+      moonlight.address ||
+      process.env.WMUX_MOONLIGHT_HOST ||
+      stripBrackets(new URL(sunshineUrl).hostname) ||
+      "127.0.0.1",
+  );
+  const moonlightHostHttpPort = intOption(
+    moonlight.httpPort || moonlight.http_port || process.env.WMUX_MOONLIGHT_HOST_HTTP_PORT,
+    DEFAULT_SUNSHINE_HTTP_PORT,
+  );
+  const clientName = stringOption(
+    sunshine.clientName ||
+      sunshine.name ||
+      process.env.WMUX_SUNSHINE_CLIENT_NAME ||
+      `wmux-${moonlightHostAddress}`,
+  );
+  const insecure = boolOption(sunshine.insecure ?? process.env.WMUX_SUNSHINE_INSECURE, isLocalUrl(sunshineUrl));
+  const timeoutMs = intOption(body.timeoutMs || process.env.WMUX_MOONLIGHT_SETUP_TIMEOUT_MS, DEFAULT_SETUP_TIMEOUT_MS);
+
+  if (!moonlightUser || !moonlightPassword) {
+    throw new Error("Moonlight Web credentials are required via request.moonlight or WMUX_MOONLIGHT_WEB_USER/WMUX_MOONLIGHT_WEB_PASSWORD");
+  }
+  if (!sunshineUser || !sunshinePassword) {
+    throw new Error("Sunshine API credentials are required via request.sunshine or WMUX_SUNSHINE_USER/WMUX_SUNSHINE_PASSWORD");
+  }
+
+  const cookie = await moonlightLogin(moonlightUser, moonlightPassword);
+  const hostResult = await ensureMoonlightHost(cookie, moonlightHostAddress, moonlightHostHttpPort);
+  const pairResult = await pairMoonlightHost({
+    cookie,
+    hostId: hostResult.host.host_id,
+    sunshineUrl,
+    sunshineUser,
+    sunshinePassword,
+    clientName,
+    insecure,
+    timeoutMs,
+  });
+  return {
+    ok: true,
+    moonlight: {
+      hostId: hostResult.host.host_id,
+      hostName: hostResult.host.name,
+      hostAddress: hostResult.host.address,
+      hostHttpPort: hostResult.host.http_port,
+      createdHost: hostResult.created,
+      paired: pairResult.paired,
+    },
+    sunshine: {
+      url: sunshineUrl,
+      clientName,
+      pinSubmitted: pairResult.pinSubmitted,
+    },
+  };
+}
+
+async function moonlightLogin(name, password) {
+  const response = await upstreamJsonRequest("/api/login", {
+    method: "POST",
+    json: { name, password },
+    expectJson: false,
+  });
+  const cookies = response.headers["set-cookie"] || [];
+  const cookie = cookies.map((value) => String(value).split(";", 1)[0]).join("; ");
+  if (!cookie) throw new Error("Moonlight Web login did not return a session cookie");
+  return cookie;
+}
+
+async function ensureMoonlightHost(cookie, address, httpPort) {
+  const existing = await findMoonlightHost(cookie, address, httpPort);
+  if (existing) return { created: false, host: existing };
+  const response = await upstreamJsonRequest("/api/host", {
+    method: "POST",
+    cookie,
+    json: { address, http_port: httpPort },
+  });
+  return { created: true, host: response.body.host };
+}
+
+async function findMoonlightHost(cookie, address, httpPort) {
+  const initial = await upstreamNdjsonInitial("/api/hosts", { method: "GET", cookie });
+  const hosts = Array.isArray(initial?.hosts) ? initial.hosts : [];
+  for (const host of hosts) {
+    if (!Number.isFinite(host?.host_id)) continue;
+    const detail = await upstreamJsonRequest(`/api/host?host_id=${encodeURIComponent(host.host_id)}`, {
+      method: "GET",
+      cookie,
+    }).catch(() => null);
+    const detailedHost = detail?.body?.host;
+    if (!detailedHost) continue;
+    if (String(detailedHost.address).toLowerCase() === String(address).toLowerCase() && Number(detailedHost.http_port) === Number(httpPort)) {
+      return detailedHost;
+    }
+  }
+  return null;
+}
+
+async function pairMoonlightHost({ cookie, hostId, sunshineUrl, sunshineUser, sunshinePassword, clientName, insecure, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    let buffered = "";
+    let pinSubmitted = false;
+    let pairedObserved = false;
+    let pinPromise = null;
+    let pairRequest;
+    const timeout = setTimeout(() => {
+      if (pairRequest) pairRequest.destroy(new Error("Moonlight pairing timed out"));
+      reject(new Error("Moonlight pairing timed out"));
+    }, timeoutMs);
+
+    const finish = (value) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      reject(error);
+    };
+    const finishPaired = () => {
+      pairedObserved = true;
+      if (!pinPromise) {
+        finish({ paired: true, pinSubmitted });
+        return;
+      }
+      pinPromise
+        .then(() => finish({ paired: true, pinSubmitted }))
+        .catch(fail);
+    };
+
+    pairRequest = upstreamRawRequest("/api/pair", {
+      method: "POST",
+      cookie,
+      json: { host_id: hostId },
+    }, (response) => {
+      if (!response.ok) {
+        fail(new Error(`Moonlight Web pair returned HTTP ${response.statusCode}`));
+        response.resume();
+        return;
+      }
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        buffered += chunk;
+        const lines = buffered.split("\n");
+        buffered = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let message;
+          try {
+            message = JSON.parse(line);
+          } catch (error) {
+            fail(error);
+            return;
+          }
+          if (typeof message === "string") {
+            if (message === "PairError") fail(new Error("Moonlight Web pairing failed"));
+            continue;
+          }
+          if (message.Pin) {
+            pinPromise = submitSunshinePin({
+              sunshineUrl,
+              username: sunshineUser,
+              password: sunshinePassword,
+              pin: String(message.Pin),
+              clientName,
+              insecure,
+            })
+              .then(() => {
+                pinSubmitted = true;
+              })
+              .catch(fail);
+          } else if (message.Paired) {
+            finishPaired();
+          } else if (message.PairError) {
+            fail(new Error("Moonlight Web pairing failed"));
+          }
+        }
+      });
+      response.on("end", () => {
+        if (!resolved && !pairedObserved) fail(new Error("Moonlight Web pairing ended before completion"));
+      });
+      response.on("error", fail);
+    });
+    pairRequest.on("error", fail);
+  });
+}
+
+async function submitSunshinePin({ sunshineUrl, username, password, pin, clientName, insecure }) {
+  const response = await urlJsonRequest(sunshineUrl, "/api/pin", {
+    method: "POST",
+    json: { pin, name: clientName },
+    basicAuth: { username, password },
+    insecure,
+    expectJson: false,
+  });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`Sunshine /api/pin returned HTTP ${response.statusCode}`);
+  }
+}
+
+async function checkSunshine(sunshineUrl) {
+  const response = await urlJsonRequest(sunshineUrl, "/api/configLocale", {
+    method: "GET",
+    insecure: boolOption(process.env.WMUX_SUNSHINE_INSECURE, isLocalUrl(sunshineUrl)),
+    expectJson: false,
+  });
+  return { ok: response.statusCode >= 200 && response.statusCode < 500, status: response.statusCode };
+}
+
+function proxyHttp(request, response) {
+  return new Promise((resolve) => {
+    const target = targetUrl(request.url || "/");
+    const client = target.protocol === "https:" ? https : http;
+    const proxyRequest = client.request(
+      target,
+      {
+        method: request.method,
+        headers: proxyHeaders(request.headers, target),
+      },
+      (proxyResponse) => {
+        response.writeHead(proxyResponse.statusCode || 502, responseHeaders(proxyResponse.headers));
+        proxyResponse.pipe(response);
+        proxyResponse.on("end", resolve);
+      },
+    );
+    proxyRequest.on("error", (error) => {
+      if ((request.url || "/") === "/") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        response.end(fallbackPage(error));
+      } else {
+        sendJson(response, 502, {
+          error: "upstream_unavailable",
+          upstream: upstreamUrl,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      resolve();
+    });
+    request.pipe(proxyRequest);
+  });
+}
+
+function proxyUpgrade(request, clientSocket, head) {
+  const target = targetUrl(request.url || "/");
+  const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+  const connect = target.protocol === "https:" ? tls.connect : net.connect;
+  const upstreamSocket = connect({ host: target.hostname, port, servername: target.hostname }, () => {
+    const path = `${target.pathname}${target.search}`;
+    upstreamSocket.write(`${request.method} ${path} HTTP/${request.httpVersion}\r\n`);
+    const headers = proxyHeaders(request.headers, target);
+    for (const [name, value] of Object.entries(headers)) {
+      if (Array.isArray(value)) {
+        for (const item of value) upstreamSocket.write(`${name}: ${item}\r\n`);
+      } else if (value !== undefined) {
+        upstreamSocket.write(`${name}: ${value}\r\n`);
+      }
+    }
+    upstreamSocket.write("\r\n");
+    if (head.length) upstreamSocket.write(head);
+    clientSocket.pipe(upstreamSocket).pipe(clientSocket);
+  });
+  upstreamSocket.on("error", () => {
+    clientSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    clientSocket.destroy();
+  });
+}
+
+function targetUrl(rawPath) {
+  const incoming = new URL(rawPath, "http://wmux-moonlight-gateway.local");
+  const target = new URL(upstreamUrl);
+  const prefix = target.pathname.replace(/\/+$/, "");
+  target.pathname = `${prefix}/${incoming.pathname.replace(/^\/+/, "")}`;
+  target.search = incoming.search;
+  return target;
+}
+
+function proxyHeaders(headers, target) {
+  return {
+    ...headers,
+    host: target.host,
+  };
+}
+
+function responseHeaders(headers) {
+  const copy = { ...headers };
+  delete copy["x-frame-options"];
+  delete copy["content-security-policy"];
+  return copy;
+}
+
+function checkUpstream() {
+  return new Promise((resolve) => {
+    const target = targetUrl("/");
+    const client = target.protocol === "https:" ? https : http;
+    const request = client.request(
+      target,
+      { method: "GET", headers: { host: target.host }, timeout: 1200 },
+      (response) => {
+        response.resume();
+        resolve({ ok: response.statusCode ? response.statusCode < 500 : false, status: response.statusCode });
+      },
+    );
+    request.on("timeout", () => {
+      request.destroy(new Error("upstream health check timed out"));
+    });
+    request.on("error", (error) => {
+      resolve({ ok: false, reason: error instanceof Error ? error.message : String(error) });
+    });
+    request.end();
+  });
+}
+
+function upstreamRawRequest(pathname, options, onResponse) {
+  return rawJsonRequest(targetUrl(pathname), options, onResponse);
+}
+
+async function upstreamJsonRequest(pathname, options = {}) {
+  return urlJsonRequest(upstreamUrl, pathname, options);
+}
+
+async function upstreamNdjsonInitial(pathname, options = {}) {
+  return new Promise((resolve, reject) => {
+    let buffered = "";
+    let settled = false;
+    const request = upstreamRawRequest(pathname, options, (response) => {
+      if (!response.ok) {
+        settled = true;
+        reject(new Error(`Moonlight Web returned HTTP ${response.statusCode}`));
+        response.resume();
+        return;
+      }
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        if (settled) return;
+        buffered += chunk;
+        const newline = buffered.indexOf("\n");
+        if (newline < 0) return;
+        const line = buffered.slice(0, newline).trim();
+        settled = true;
+        request.destroy();
+        try {
+          resolve(line ? JSON.parse(line) : null);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      response.on("end", () => {
+        if (settled) return;
+        settled = true;
+        try {
+          resolve(buffered.trim() ? JSON.parse(buffered.trim()) : null);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      response.on("error", (error) => {
+        if (!settled) reject(error);
+      });
+    });
+    request.on("error", (error) => {
+      if (!settled && error.message !== "socket hang up") reject(error);
+    });
+  });
+}
+
+async function urlJsonRequest(baseUrl, pathname, options = {}) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    const request = rawJsonRequest(buildUrl(baseUrl, pathname), options, (response) => {
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        let parsed = null;
+        if (options.expectJson !== false && body.trim()) {
+          try {
+            parsed = JSON.parse(body);
+          } catch (error) {
+            reject(error);
+            return;
+          }
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`HTTP ${response.statusCode}${body ? `: ${body.slice(0, 200)}` : ""}`));
+          return;
+        }
+        resolve({
+          statusCode: response.statusCode,
+          headers: response.headers,
+          body: parsed,
+          text: body,
+        });
+      });
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+  });
+}
+
+function rawJsonRequest(target, options = {}, onResponse) {
+  const client = target.protocol === "https:" ? https : http;
+  const jsonBody = options.json === undefined ? null : JSON.stringify(options.json);
+  const headers = {
+    accept: options.expectJson === false ? "*/*" : "application/json, application/x-ndjson",
+    ...(options.cookie ? { cookie: options.cookie } : {}),
+    ...(jsonBody ? { "content-type": "application/json", "content-length": Buffer.byteLength(jsonBody) } : {}),
+    ...(options.basicAuth ? { authorization: basicAuthHeader(options.basicAuth.username, options.basicAuth.password) } : {}),
+    ...(options.headers || {}),
+  };
+  const request = client.request(
+    target,
+    {
+      method: options.method || "GET",
+      headers,
+      rejectUnauthorized: target.protocol === "https:" ? !options.insecure : undefined,
+    },
+    (response) => {
+      response.ok = Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300);
+      onResponse(response);
+    },
+  );
+  if (jsonBody) request.write(jsonBody);
+  request.end();
+  return request;
+}
+
+function buildUrl(baseUrl, pathname) {
+  const target = new URL(normalizeBaseUrl(baseUrl));
+  const incoming = new URL(pathname, "http://wmux-moonlight-gateway.local");
+  const prefix = target.pathname.replace(/\/+$/, "");
+  target.pathname = `${prefix}/${incoming.pathname.replace(/^\/+/, "")}`;
+  target.search = incoming.search;
+  return target;
+}
+
+function basicAuthHeader(username, password) {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8").trim();
+      if (!raw) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function fallbackPage(error) {
+  const escapedError = escapeHtml(error instanceof Error ? error.message : String(error));
+  const escapedUpstream = escapeHtml(upstreamUrl);
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>wmux Moonlight Gateway</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #050505; color: #f4efe1; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      body { display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+      main { max-width: 760px; border: 1px solid #6f5a2b; padding: 22px; background: #0b0b0a; }
+      h1 { margin: 0 0 12px; color: #f0c86a; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; }
+      p { line-height: 1.55; color: #b9ad97; }
+      code { color: #f4efe1; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Moonlight upstream unavailable</h1>
+      <p>The gateway is running, but it cannot reach <code>${escapedUpstream}</code>.</p>
+      <p>Run Moonlight Web Stream on this host, or start this gateway with <code>WMUX_MOONLIGHT_WEB_URL</code> pointing at an existing instance. Sunshine must be installed and paired from the Moonlight Web UI.</p>
+      <p><code>${escapedError}</code></p>
+    </main>
+  </body>
+</html>`;
+}
+
+function sendJson(response, status, payload) {
+  response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+  response.end(JSON.stringify(payload));
+}
+
+function normalizeBaseUrl(value) {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("WMUX_MOONLIGHT_WEB_URL must be http or https");
+  }
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+function parseArgs(argv) {
+  const result = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg.startsWith("--")) continue;
+    const body = arg.slice(2);
+    const equals = body.indexOf("=");
+    const key = equals >= 0 ? body.slice(0, equals) : body;
+    const value = equals >= 0 ? body.slice(equals + 1) : argv[index + 1]?.startsWith("--") ? "true" : argv[++index] || "true";
+    if (result[key] === undefined) {
+      result[key] = value;
+    } else if (Array.isArray(result[key])) {
+      result[key].push(value);
+    } else {
+      result[key] = [result[key], value];
+    }
+  }
+  return result;
+}
+
+function arrayOption(value) {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value.map(String) : [String(value)];
+}
+
+function envArgs(value) {
+  if (!value) return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  }
+  return trimmed.split(/\s+/);
+}
+
+function intOption(value, fallback) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function stringOption(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function boolOption(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(text)) return true;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  return fallback;
+}
+
+function stripBrackets(value) {
+  return String(value || "").replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function isLocalUrl(value) {
+  try {
+    const hostname = stripBrackets(new URL(value).hostname).toLowerCase();
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
+    if (hostname.startsWith("127.")) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function assertSafeBindHost(value) {
+  if (value === "localhost") return;
+  const version = net.isIP(value);
+  if (!version) throw new Error(`Refusing to bind to non-IP host ${value}; use a loopback, Tailscale, or RFC1918 address`);
+  if (version === 4 && isSafeIpv4(value)) return;
+  if (version === 6 && isSafeIpv6(value)) return;
+  throw new Error(`Refusing to bind wmux-moonlight-gateway to public address ${value}`);
+}
+
+function isSafeIpv4(value) {
+  const [a, b] = value.split(".").map((part) => Number.parseInt(part, 10));
+  if (a === 127) return true;
+  if (a === 10) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+function isSafeIpv6(value) {
+  const normalized = value.toLowerCase();
+  return normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:");
+}
+
+function escapeHtml(value) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function shutdown() {
+  server.close(() => process.exit(0));
+  if (managedProcess) managedProcess.kill("SIGTERM");
+  setTimeout(() => process.exit(0), 1500).unref();
+}

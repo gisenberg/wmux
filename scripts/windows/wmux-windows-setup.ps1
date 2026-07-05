@@ -8,6 +8,21 @@ function Get-CommandPath([string]$Name) {
   return $null
 }
 
+function Get-SunshineCommand {
+  $Command = Get-CommandPath 'sunshine.exe'
+  if ($Command) { return $Command }
+  $Candidates = @()
+  foreach ($Root in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
+    if (-not $Root) { continue }
+    $Candidates += Join-Path $Root 'Sunshine\sunshine.exe'
+    $Candidates += Join-Path $Root 'LizardByte\Sunshine\sunshine.exe'
+  }
+  foreach ($Candidate in $Candidates) {
+    if (Test-Path -LiteralPath $Candidate -PathType Leaf) { return $Candidate }
+  }
+  return $null
+}
+
 function Update-ProcessPath {
   $MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
   $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -96,6 +111,27 @@ function Test-WmuxUrl([string]$Url) {
   }
 }
 
+function Test-SunshineApi([string]$Url, [string]$User, [string]$Password) {
+  if (-not $Url) { $Url = 'https://127.0.0.1:47990' }
+  $Headers = @{}
+  if ($User -and $Password) {
+    $Bytes = [Text.Encoding]::UTF8.GetBytes("${User}:${Password}")
+    $Headers['Authorization'] = 'Basic ' + [Convert]::ToBase64String($Bytes)
+  }
+  try {
+    $Response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri ($Url.TrimEnd('/') + '/api/configLocale') -Headers $Headers -SkipCertificateCheck -TimeoutSec 5
+    return [ordered]@{
+      reachable = $true
+      statusCode = [int]$Response.StatusCode
+    }
+  } catch {
+    return [ordered]@{
+      reachable = $false
+      error = $_.Exception.Message
+    }
+  }
+}
+
 function Get-WindowsWmuxReport {
   $WmuxUrl = $env:WMUX_URL
   if (-not $WmuxUrl) { $WmuxUrl = 'http://127.0.0.1:3478' }
@@ -129,6 +165,8 @@ function Get-WindowsWmuxReport {
   $TaskInfo = if ($Task) { Get-ScheduledTaskInfo -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue } else { $null }
   $AgentTask = Get-ScheduledTask -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue
   $AgentTaskInfo = if ($AgentTask) { Get-ScheduledTaskInfo -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue } else { $null }
+  $SunshineCommand = Get-SunshineCommand
+  $SunshineUrl = if ($env:WMUX_SUNSHINE_URL) { $env:WMUX_SUNSHINE_URL } else { 'https://127.0.0.1:47990' }
   [ordered]@{
     computerName = $env:COMPUTERNAME
     userName = $env:USERNAME
@@ -156,6 +194,13 @@ function Get-WindowsWmuxReport {
       py = Get-CommandPath 'py.exe'
       winget = Get-CommandPath 'winget.exe'
       sshd = Get-CommandPath 'sshd.exe'
+      sunshine = $SunshineCommand
+    }
+    sunshine = [ordered]@{
+      installed = [bool]$SunshineCommand
+      command = $SunshineCommand
+      url = $SunshineUrl
+      api = Test-SunshineApi $SunshineUrl $env:WMUX_SUNSHINE_USER $env:WMUX_SUNSHINE_PASSWORD
     }
     pythonModules = [ordered]@{
       pywinpty = Test-PythonModule 'winpty'
@@ -203,13 +248,72 @@ function Install-WmuxDependencies {
   Install-PythonPackage 'pywinpty' 'winpty'
 }
 
+function Install-Sunshine {
+  if (Get-SunshineCommand) {
+    Write-Output 'Sunshine is already installed.'
+    return
+  }
+  $Winget = Get-CommandPath 'winget.exe'
+  if (-not $Winget) {
+    Write-Error 'winget.exe is required for install-sunshine. Install Sunshine manually, then rerun sunshine-status.'
+    exit 127
+  }
+  & $Winget install --id LizardByte.Sunshine --exact --accept-package-agreements --accept-source-agreements
+  Update-ProcessPath
+  if (-not (Get-SunshineCommand)) {
+    Write-Error 'Sunshine install completed but sunshine.exe was not found.'
+    exit 1
+  }
+  Write-Output 'Sunshine installed.'
+}
+
+function Set-SunshineCredentials {
+  $Sunshine = Get-SunshineCommand
+  if (-not $Sunshine) {
+    Write-Error 'sunshine.exe was not found. Run wmux-windows-setup install-sunshine first.'
+    exit 127
+  }
+  $User = $env:WMUX_SUNSHINE_USER
+  $Password = $env:WMUX_SUNSHINE_PASSWORD
+  if (-not $User -or -not $Password) {
+    Write-Error 'Set WMUX_SUNSHINE_USER and WMUX_SUNSHINE_PASSWORD before running configure-sunshine.'
+    exit 2
+  }
+  & $Sunshine --creds $User $Password
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "sunshine.exe --creds failed with exit code $LASTEXITCODE."
+    exit $LASTEXITCODE
+  }
+  Write-Output 'Sunshine credentials configured.'
+}
+
+function Start-Sunshine {
+  $Sunshine = Get-SunshineCommand
+  if (-not $Sunshine) {
+    Write-Error 'sunshine.exe was not found. Run wmux-windows-setup install-sunshine first.'
+    exit 127
+  }
+  $Existing = Get-Process -Name 'sunshine' -ErrorAction SilentlyContinue
+  if ($Existing) {
+    Write-Output 'Sunshine is already running.'
+    return
+  }
+  Start-Process -FilePath $Sunshine -WindowStyle Hidden
+  Start-Sleep -Seconds 2
+  Write-Output 'Sunshine start requested.'
+}
+
 function Show-Usage {
   Write-Error @'
-usage: wmux-windows-setup [validate|persist-path|install-deps|install-stream|stream-status|install-agent|agent-status|agent-logs|install-hooks|status]
+usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-stream|stream-status|install-agent|agent-status|agent-logs|install-hooks|status]
 
 validate       Print a JSON report for Windows wmux prerequisites and helper state.
 persist-path   Add %LOCALAPPDATA%\wmux\bin to the persistent user PATH.
 install-deps   Install ffmpeg, Python, and pywinpty when missing.
+install-sunshine Install Sunshine with winget when missing.
+configure-sunshine Set Sunshine credentials from WMUX_SUNSHINE_USER/WMUX_SUNSHINE_PASSWORD.
+start-sunshine Start sunshine.exe for the current logged-in user session.
+sunshine-status Print the Sunshine section of the validation report.
 install-stream Install/start the per-user wmux stream-agent Scheduled Task.
 stream-status  Show the wmux stream-agent Scheduled Task status.
 install-agent  Install/start the per-user wmux Windows session agent Scheduled Task.
@@ -234,6 +338,18 @@ switch ($Action) {
   }
   'install-deps' {
     Install-WmuxDependencies
+  }
+  'install-sunshine' {
+    Install-Sunshine
+  }
+  'configure-sunshine' {
+    Set-SunshineCredentials
+  }
+  'start-sunshine' {
+    Start-Sunshine
+  }
+  'sunshine-status' {
+    (Get-WindowsWmuxReport).sunshine | ConvertTo-Json -Depth 8
   }
   'install-stream' {
     Invoke-WmuxHelper 'wmux-stream-agent-service' @('install')

@@ -56,9 +56,10 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Windows `powershell-ssh` panes fetch helper scripts from `/api/helpers/windows/:machineId`, stage them into `%LOCALAPPDATA%\wmux\bin`, prepend that directory to `PATH`, and install a temporary PowerShell prompt function for OSC 7 cwd reporting.
 - POSIX SSH helper staging must run under POSIX `sh`; do not rely on zsh/bash-specific word splitting in `src/server/machines.ts`.
 - Session audit cleanup must remain limited to local `wmux_` tmux/screen sessions that the audit marks duplicate or orphan. Never add automatic cleanup of active sessions or non-wmux multiplexer sessions.
-- Machine screen streams are machine-local captures, not browser captures. The active host publishes its own pixels to the MediaMTX service on homelab, and wmux viewers embed the active machine's WebRTC path. Do not replace this with `getDisplayMedia` from the viewing browser.
-- Stream capture should remain on-demand. The browser requests/releases a short stream lease through the existing `/ws/events` socket, while `wmux-stream-agent` polls the wmux lease endpoint and only runs `screencapture`/ffmpeg while a lease is active.
+- Machine screen streams are machine-local or gateway-local captures, not browser captures. The MediaMTX helper path has the active host publish its own pixels to the MediaMTX service on homelab, and wmux viewers embed the active machine's WebRTC path. The Moonlight gateway path proxies a browser-native Moonlight/Sunshine bridge. Do not replace either path with `getDisplayMedia` from the viewing browser.
+- MediaMTX helper capture should remain on-demand. The browser requests/releases a short stream lease through the existing `/ws/events` socket, while `wmux-stream-agent` polls the wmux lease endpoint and only runs `screencapture`/ffmpeg while a lease is active.
 - MediaMTX should bind RTSP/WebRTC only to the Tailscale/internal interface and keep its API on loopback. Use `scripts/install-stream-service.sh` for repeatable setup.
+- `wmux-moonlight-gateway` should bind only to loopback, Tailscale, or RFC1918/internal addresses. It is a clean process boundary around browser-native Moonlight bridges such as Moonlight Web Stream; do not vendor or copy GPL implementation code into wmux without an explicit license decision. Its setup API may automate the supported pairing flow by generating the Moonlight Web PIN and submitting it to Sunshine's `/api/pin`, but it should not edit Sunshine's paired-client state directly.
 
 ## UI And Interaction Notes
 
@@ -118,7 +119,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Command run tracking is explicit through `wmux-run`; arbitrary shell command detection is not implemented.
 - Cwd preservation is best-effort outside tmux and wmux-managed shell bootstraps.
 - OpenTUI migration is partial and vendored.
-- Pixel streaming is helper-based. Wayland, locked/logged-out Windows capture behavior, macOS permission automation, reconnect supervision, and a full wmux native agent remain gaps.
+- Pixel streaming has the legacy MediaMTX helper path and an early Moonlight gateway path. Wayland, locked/logged-out Windows capture behavior, macOS permission automation, Sunshine app-launch automation, reconnect supervision, and a full wmux native agent remain gaps.
 - Keep `FEATURE_GAPS.md` current when a limitation is discovered or intentionally deferred.
 
 ## Code Style

@@ -5,6 +5,12 @@ import { z } from "zod";
 import { localMachine } from "./machines.js";
 import type { MachineConfig } from "./types.js";
 
+const streamSchema = z.object({
+  provider: z.enum(["mediamtx", "moonlight-gateway"]).optional(),
+  gatewayUrl: z.string().url().optional(),
+  gatewayOpenUrl: z.string().url().optional(),
+});
+
 const machineSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -19,6 +25,7 @@ const machineSchema = z.object({
   agentUrl: z.string().url().optional(),
   agentPort: z.number().int().positive().optional(),
   agentToken: z.string().optional(),
+  stream: streamSchema.optional(),
 });
 
 const configSchema = z.object({
