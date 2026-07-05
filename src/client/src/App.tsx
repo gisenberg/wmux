@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Activity, Bell, BellRing, CheckCheck, CirclePlus, Clipboard, Command as CommandIcon, GripVertical, Link2, MessageSquare, PanelLeft, PanelLeftClose, PanelLeftOpen, Plus, ScreenShare, Search, Server, Settings, TerminalSquare, Trash2, X } from "lucide-react";
 import { api, UnauthorizedError } from "./api";
+import { createAppStore, useAppState } from "./app-store";
 import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
 import { LayoutView } from "./LayoutView";
 import { LoginView } from "./LoginView";
@@ -82,7 +83,8 @@ interface TerminalFocusRequest {
 export function App() {
   const openTuiMode = useMemo(() => new URLSearchParams(window.location.search).get("legacy") !== "1", []);
   const mobileViewport = useMobileViewportState();
-  const [state, setState] = useState<BootstrapPayload | null>(null);
+  const store = useMemo(createAppStore, []);
+  const state = useAppState(store);
   const [newMachineId, setNewMachineId] = useState("local");
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
@@ -107,25 +109,20 @@ export function App() {
   const [bellPaneIds, setBellPaneIds] = useState<Set<string>>(() => new Set());
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
-  const stateRef = useRef<BootstrapPayload | null>(null);
   const terminalFocusToken = useRef(0);
-
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
 
   const loadBootstrap = useCallback(async () => {
     try {
       const payload = await api.bootstrap();
       const routed = await activateRouteTarget(payload);
       setAuthRequired(false);
-      setState(routed);
+      store.set(routed);
     } catch (nextError) {
       // An auth failure routes to the login screen instead of the fatal overlay.
       if (nextError instanceof UnauthorizedError) setAuthRequired(true);
       else setError(String(nextError));
     }
-  }, []);
+  }, [store]);
 
   useEffect(() => {
     void loadBootstrap();
@@ -143,7 +140,7 @@ export function App() {
     const refreshStreams = async () => {
       try {
         const response = await api.streams();
-        if (!closed) setState((current) => (current ? { ...current, streams: response.streams } : current));
+        if (!closed) store.update((current) => (current ? { ...current, streams: response.streams } : current));
       } catch {
         // Stream status is advisory; terminal service status is tracked separately.
       }
@@ -339,8 +336,7 @@ export function App() {
   }, []);
 
   const { refresh, activateWorkspaceTab, chromePath } = useAppRouting({
-    stateRef,
-    setState,
+    store,
     openTuiMode,
     activeWorkspace,
     activeTab,
@@ -357,7 +353,7 @@ export function App() {
   const updateSettings = async (nextSettings: WmuxSettings) => {
     const response = await api.updateSettings(nextSettings);
     setPreviewSettings(null);
-    setState(response.state);
+    store.set(response.state);
     setSettingsOpen(false);
   };
 
@@ -426,7 +422,7 @@ export function App() {
   }, [refresh]);
 
   const recordPaneBell = useCallback((paneId: string) => {
-    const snapshot = stateRef.current;
+    const snapshot = store.get();
     if (!snapshot) return;
     const context = findPaneContextInState(snapshot, paneId);
     if (!context) return;
@@ -440,7 +436,7 @@ export function App() {
       next.add(paneId);
       return next;
     });
-  }, []);
+  }, [store]);
 
   // Wrap a mutating action so a transient API failure surfaces as a toast
   // instead of an unhandled rejection that silently drops the action.
@@ -618,11 +614,11 @@ export function App() {
       api
         .requestStream(machineId, requestId, ttlMs)
         .then((response) =>
-          setState((current) => (current ? { ...current, streams: response.streams } : current)),
+          store.update((current) => (current ? { ...current, streams: response.streams } : current)),
         )
         .catch(() => undefined);
     },
-    [sendEventSocketMessage],
+    [sendEventSocketMessage, store],
   );
 
   const releaseStream = useCallback(
@@ -632,11 +628,11 @@ export function App() {
       api
         .releaseStream(machineId, requestId)
         .then((response) =>
-          setState((current) => (current ? { ...current, streams: response.streams } : current)),
+          store.update((current) => (current ? { ...current, streams: response.streams } : current)),
         )
         .catch(() => undefined);
     },
-    [sendEventSocketMessage],
+    [sendEventSocketMessage, store],
   );
 
   const commands = useMemo<PaletteCommand[]>(() => {

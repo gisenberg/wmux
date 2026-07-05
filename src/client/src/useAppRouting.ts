@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { api } from "./api";
+import type { AppStore } from "./app-store";
 import { reconcile } from "./reconcile";
 import {
   activateWorkspaceTabInState,
@@ -22,8 +23,7 @@ export interface ActivateWorkspaceTabOptions {
 }
 
 interface UseAppRoutingOptions {
-  stateRef: MutableRefObject<BootstrapPayload | null>;
-  setState: Dispatch<SetStateAction<BootstrapPayload | null>>;
+  store: AppStore;
   openTuiMode: boolean;
   activeWorkspace: Workspace | undefined;
   activeTab: SurfaceTab | undefined;
@@ -40,7 +40,7 @@ interface UseAppRoutingOptions {
 // request-id guarded persistence, history push/replace bookkeeping, and
 // popstate handling. The pure state transforms live in route-state.ts.
 export function useAppRouting(options: UseAppRoutingOptions) {
-  const { stateRef, setState, openTuiMode, activeWorkspace, activeTab } = options;
+  const { store, openTuiMode, activeWorkspace, activeTab } = options;
   const lastSyncedPath = useRef("");
   const activeRouteRequestId = useRef(0);
   const pendingActiveRoute = useRef<PendingActiveRoute | null>(null);
@@ -60,11 +60,9 @@ export function useAppRouting(options: UseAppRoutingOptions) {
       const routed = applyRouteTargetToState(incoming, pending ?? parseRouteTarget(window.location.pathname));
       // Structural sharing: keep previous object identities for unchanged
       // subtrees so memoized panes/tabs skip re-rendering on resyncs.
-      const applied = reconcile(stateRef.current, routed);
-      stateRef.current = applied;
-      setState(applied);
+      store.set(reconcile(store.get(), routed));
     },
-    [setState, stateRef],
+    [store],
   );
 
   const persistActiveRoute = useCallback(
@@ -91,18 +89,16 @@ export function useAppRouting(options: UseAppRoutingOptions) {
       if (activeRouteRequestId.current !== requestId) return;
       pendingActiveRoute.current = null;
       if (nextState) {
-        const applied = activateWorkspaceTabInState(nextState, workspaceId, tabId);
-        stateRef.current = applied;
-        setState(applied);
+        store.set(activateWorkspaceTabInState(nextState, workspaceId, tabId));
       }
     },
-    [refresh, setState, stateRef],
+    [refresh, store],
   );
 
   const activateWorkspaceTab = useCallback(
     (workspaceId: string, tabId: string | undefined, activateOptions: ActivateWorkspaceTabOptions = {}) => {
       const { onError, onMobileNavigate, isMobile, clearBellPanes, requestTerminalFocus } = optionsRef.current;
-      const current = stateRef.current;
+      const current = store.get();
       if (!current) return;
       const target = findWorkspaceTab(current, workspaceId, tabId);
       if (!target) return;
@@ -118,14 +114,9 @@ export function useAppRouting(options: UseAppRoutingOptions) {
       if (isMobile) onMobileNavigate();
       clearBellPanes(target.tab.panes.map((pane) => pane.id));
 
-      const optimistic = activateWorkspaceTabInState(current, workspaceId, target.tab.id);
-      stateRef.current = optimistic;
-      setState((snapshot) => {
-        if (!snapshot) return snapshot;
-        const next = activateWorkspaceTabInState(snapshot, workspaceId, target.tab.id);
-        stateRef.current = next;
-        return next;
-      });
+      store.update((snapshot) =>
+        snapshot ? activateWorkspaceTabInState(snapshot, workspaceId, target.tab.id) : snapshot,
+      );
       if (activateOptions.focusTerminal) requestTerminalFocus(workspaceId, target.tab.id);
 
       const shouldActivateWorkspace = current.activeWorkspaceId !== workspaceId;
@@ -143,12 +134,12 @@ export function useAppRouting(options: UseAppRoutingOptions) {
       pendingActiveRoute.current = { requestId, workspaceId, tabId: target.tab.id };
       void persistActiveRoute(workspaceId, target.tab.id, requestId, shouldActivateWorkspace, shouldActivateTab);
     },
-    [chromePath, persistActiveRoute, refresh, setState, stateRef],
+    [chromePath, persistActiveRoute, refresh, store],
   );
 
   // Keep the address bar in sync with the active workspace/tab.
   useEffect(() => {
-    if (!stateRef.current) return;
+    if (!store.get()) return;
     if (!activeWorkspace || !activeTab) {
       const nextPath = chromePath("/");
       if (currentChromePath() !== nextPath) {
@@ -166,7 +157,7 @@ export function useAppRouting(options: UseAppRoutingOptions) {
     const replace = lastSyncedPath.current === "" || currentPath !== lastSyncedPath.current;
     window.history[replace ? "replaceState" : "pushState"](null, "", nextChromePath);
     lastSyncedPath.current = nextChromePath;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stateRef is read, not depended on
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- store is read, not depended on
   }, [activeWorkspace, activeTab, chromePath]);
 
   useEffect(() => {
