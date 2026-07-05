@@ -69,7 +69,8 @@ sed \
   "${ROOT_DIR}/deploy/wmux.service.example" > "${HOME}/.config/systemd/user/wmux.service"
 
 systemctl --user daemon-reload
-systemctl --user enable --now wmux.service
+systemctl --user enable wmux.service
+systemctl --user restart wmux.service
 
 echo "wmux.service installed and started on http://${HOST}:${PORT}"
 echo "wmux helper shims installed in ${HOME}/.local/bin"

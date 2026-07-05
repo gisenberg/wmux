@@ -6,10 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/gisenberg/git/gisenberg/wmux
-Environment=NODE_ENV=production
+Environment=NODE_ENV=development
 Environment=WMUX_HOST=100.107.241.79
 Environment=WMUX_PORT=3478
-ExecStart=/usr/bin/npm run start -- --host ${WMUX_HOST} --port ${WMUX_PORT}
+ExecStart=/usr/bin/npm run dev -- --host ${WMUX_HOST} --port ${WMUX_PORT}
 Restart=on-failure
 RestartSec=2
 
