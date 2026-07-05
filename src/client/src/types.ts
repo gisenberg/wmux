@@ -133,6 +133,7 @@ export interface StreamStatus {
 
 export interface WmuxSettings {
   terminalFontSize: number;
+  terminalScrollbackRows: number;
   machineAliases: Record<string, string>;
 }
 

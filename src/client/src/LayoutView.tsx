@@ -6,6 +6,7 @@ interface Props {
   tab: SurfaceTab;
   machines: MachineStatus[];
   terminalFontSize: number;
+  terminalScrollbackRows: number;
   unreadByPaneId: Map<string, number>;
   mediaByPaneId: Map<string, TerminalMedia[]>;
   runsByPaneId: Map<string, TerminalRun>;
@@ -22,6 +23,7 @@ export function LayoutView({
   tab,
   machines,
   terminalFontSize,
+  terminalScrollbackRows,
   unreadByPaneId,
   mediaByPaneId,
   runsByPaneId,
@@ -96,12 +98,13 @@ export function LayoutView({
       if (!pane) return <div className="missing-pane">Missing pane</div>;
       return (
         <TerminalPane
-          key={pane.id}
+          key={`${pane.id}:${terminalScrollbackRows}`}
           pane={pane}
           active={tab.activePaneId === pane.id}
           unreadCount={unreadByPaneId.get(pane.id) ?? 0}
           machines={machines}
           terminalFontSize={terminalFontSize}
+          terminalScrollbackRows={terminalScrollbackRows}
           mediaItems={mediaByPaneId.get(pane.id) ?? []}
           lastRun={runsByPaneId.get(pane.id)}
           focusSignal={tab.activePaneId === pane.id ? focusActivePaneSignal : 0}

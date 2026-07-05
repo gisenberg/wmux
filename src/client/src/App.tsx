@@ -7,6 +7,7 @@ import { MobileAgentSurface } from "./MobileAgentSurface";
 import { OpenTuiActivityPanel } from "./OpenTuiActivityPanel";
 import type { OpenTuiActivityRow } from "./OpenTuiActivityPanel";
 import { OpenTuiCommandPalette } from "./OpenTuiCommandPalette";
+import { OpenTuiSettingsModal } from "./OpenTuiSettingsModal";
 import { OpenTuiSidebar } from "./OpenTuiSidebar";
 import type { OpenTuiSidebarMachine, OpenTuiSidebarWorkspace } from "./OpenTuiSidebar";
 import { OpenTuiTopbar } from "./OpenTuiTopbar";
@@ -27,6 +28,7 @@ import type {
 
 type ServiceConnection = "connecting" | "online" | "offline";
 type MobileSurfaceMode = "agent" | "terminal";
+type SettingsSurface = "opentui" | "dom";
 
 interface PaletteCommand {
   id: string;
@@ -41,6 +43,7 @@ interface PaletteCommand {
 
 const defaultSettings: WmuxSettings = {
   terminalFontSize: 14,
+  terminalScrollbackRows: 10_000,
   machineAliases: {},
 };
 
@@ -90,6 +93,7 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const [mediaItems, setMediaItems] = useState<TerminalMedia[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSurface, setSettingsSurface] = useState<SettingsSurface>("dom");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
   const [previewSettings, setPreviewSettings] = useState<WmuxSettings | null>(null);
@@ -381,6 +385,11 @@ export function App() {
     setState(response.state);
     setSettingsOpen(false);
   };
+
+  const openSettings = useCallback(() => {
+    setSettingsSurface(openTuiMode ? "opentui" : "dom");
+    setSettingsOpen(true);
+  }, [openTuiMode]);
 
   const cancelSettings = () => {
     setPreviewSettings(null);
@@ -902,14 +911,14 @@ export function App() {
         subtitle: "Ghostty settings, host aliases, durable session audit",
         section: "System",
         shortcut: "Cmd+,",
-        run: () => setSettingsOpen(true),
+        run: openSettings,
       },
       {
         id: "audit-sessions",
         title: "Open session audit",
         subtitle: "Review local tmux/screen durable sessions",
         section: "System",
-        run: () => setSettingsOpen(true),
+        run: openSettings,
         keywords: ["tmux", "screen", "durable", "orphan", "duplicate"],
       },
       {
@@ -1136,6 +1145,7 @@ export function App() {
     machines,
     newMachineId,
     openTuiMode,
+    openSettings,
     activeStream,
     activeStreamMachine,
     activeStreamMachineId,
@@ -1361,7 +1371,7 @@ export function App() {
               <button type="button" title="Command palette" onClick={openCommandPalette}>
                 <CommandIcon size={17} />
               </button>
-              <button type="button" title="Settings" onClick={() => setSettingsOpen(true)}>
+              <button type="button" title="Settings" onClick={openSettings}>
                 <Settings size={17} />
               </button>
             </div>
@@ -1415,7 +1425,7 @@ export function App() {
             onActivateTab={activateTabFromChrome}
             onCreate={() => (activeWorkspace ? createTab(newMachineId) : createWorkspace(newMachineId))}
             onOpenCommandPalette={openCommandPalette}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={openSettings}
             onToggleActivity={() => setActivityOpen((value) => !value)}
             onOpenStream={() => setStreamOpen(true)}
             onCopyLink={copyActiveLink}
@@ -1461,7 +1471,7 @@ export function App() {
             </button>
             <button
               title="Settings"
-              onClick={() => setSettingsOpen(true)}
+              onClick={openSettings}
             >
               <Settings size={16} />
             </button>
@@ -1533,6 +1543,7 @@ export function App() {
                     tab={view.tab}
                     machines={displayMachines}
                     terminalFontSize={settings.terminalFontSize}
+                    terminalScrollbackRows={persistedSettings.terminalScrollbackRows}
                     unreadByPaneId={unreadByPaneId}
                     mediaByPaneId={mediaByPaneId}
                     focusActivePaneSignal={terminalFocusRequest?.key === view.key ? terminalFocusRequest.token : 0}
@@ -1591,9 +1602,12 @@ export function App() {
         <SettingsModal
           machines={machines}
           settings={persistedSettings}
+          surface={openTuiMode ? settingsSurface : "dom"}
           onPreview={setPreviewSettings}
           onSave={updateSettings}
           onCancel={cancelSettings}
+          onUseDomFallback={openTuiMode ? () => setSettingsSurface("dom") : undefined}
+          onUseOpenTui={openTuiMode ? () => setSettingsSurface("opentui") : undefined}
         />
       ) : null}
       {commandPaletteOpen ? (
@@ -2061,15 +2075,21 @@ const buildActivityItems = (agentEvents: AgentActivity[], runs: TerminalRun[]): 
 function SettingsModal({
   machines,
   settings,
+  surface = "dom",
   onPreview,
   onSave,
   onCancel,
+  onUseDomFallback,
+  onUseOpenTui,
 }: {
   machines: MachineStatus[];
   settings: WmuxSettings;
+  surface?: SettingsSurface;
   onPreview: (settings: WmuxSettings | null) => void;
   onSave: (settings: WmuxSettings) => void | Promise<void>;
   onCancel: () => void;
+  onUseDomFallback?: () => void;
+  onUseOpenTui?: () => void;
 }) {
   const [draft, setDraft] = useState<WmuxSettings>(() => normalizeSettings(settings));
   const [saving, setSaving] = useState(false);
@@ -2082,12 +2102,13 @@ function SettingsModal({
   }, [settings]);
 
   useEffect(() => {
+    if (surface !== "dom") return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onCancel();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onCancel]);
+  }, [onCancel, surface]);
 
   const applyDraft = (nextSettings: WmuxSettings) => {
     const normalized = normalizeSettings(nextSettings);
@@ -2106,10 +2127,10 @@ function SettingsModal({
     applyDraft({ ...draft, machineAliases });
   };
 
-  const save = async () => {
+  const save = async (nextDraft = draft) => {
     setSaving(true);
     try {
-      await onSave(normalizeSettings(draft));
+      await onSave(normalizeSettings(nextDraft));
     } finally {
       setSaving(false);
     }
@@ -2141,8 +2162,33 @@ function SettingsModal({
     }
   };
 
+  const openTuiSurface = surface === "opentui";
+
+  if (openTuiSurface) {
+    return (
+      <OpenTuiSettingsModal
+        machines={machines}
+        draft={draft}
+        defaultSettings={defaultSettings}
+        sessionAudit={sessionAudit}
+        sessionAuditError={sessionAuditError}
+        sessionAuditLoading={sessionAuditLoading}
+        saving={saving}
+        onApplyDraft={applyDraft}
+        onSave={save}
+        onCancel={onCancel}
+        onUseDomFallback={onUseDomFallback}
+        onRunSessionAudit={runSessionAudit}
+        onCleanupSession={cleanupSession}
+      />
+    );
+  }
+
   return (
-    <div className="settings-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onCancel()}>
+    <div
+      className="settings-backdrop"
+      onMouseDown={(event) => event.currentTarget === event.target && onCancel()}
+    >
       <form
         className="settings-panel"
         aria-labelledby="settings-title"
@@ -2155,9 +2201,20 @@ function SettingsModal({
       >
         <div className="settings-header">
           <h2 id="settings-title">Settings</h2>
-          <button type="button" title="Cancel settings" onClick={onCancel}>
-            <X size={16} />
-          </button>
+          <div className="settings-header-actions">
+            {openTuiSurface && onUseDomFallback ? (
+              <button type="button" title="Use DOM settings fallback" onClick={onUseDomFallback}>
+                DOM
+              </button>
+            ) : !openTuiSurface && onUseOpenTui ? (
+              <button type="button" title="Use OpenTUI settings experiment" onClick={onUseOpenTui}>
+                TUI
+              </button>
+            ) : null}
+            <button type="button" title="Cancel settings" onClick={onCancel}>
+              <X size={16} />
+            </button>
+          </div>
         </div>
         <div className="settings-body">
           <section className="settings-section">
@@ -2186,6 +2243,36 @@ function SettingsModal({
                   applyDraft({
                     ...draft,
                     terminalFontSize: clampFontSize(Number(event.target.value)),
+                  })
+                }
+              />
+            </label>
+            <label className="settings-row">
+              <span>Scrollback rows</span>
+              <input
+                type="range"
+                min="1000"
+                max="200000"
+                step="1000"
+                value={draft.terminalScrollbackRows}
+                onChange={(event) =>
+                  applyDraft({
+                    ...draft,
+                    terminalScrollbackRows: clampScrollbackRows(Number(event.target.value)),
+                  })
+                }
+              />
+              <input
+                className="settings-number"
+                type="number"
+                min="1000"
+                max="200000"
+                step="1000"
+                value={draft.terminalScrollbackRows}
+                onChange={(event) =>
+                  applyDraft({
+                    ...draft,
+                    terminalScrollbackRows: clampScrollbackRows(Number(event.target.value)),
                   })
                 }
               />
@@ -2280,6 +2367,7 @@ function SettingsModal({
 
 const normalizeSettings = (settings: WmuxSettings): WmuxSettings => ({
   terminalFontSize: clampFontSize(settings.terminalFontSize),
+  terminalScrollbackRows: clampScrollbackRows(settings.terminalScrollbackRows),
   machineAliases: Object.fromEntries(
     Object.entries(settings.machineAliases ?? {})
       .map(([machineId, alias]) => [machineId, cleanAlias(alias)] as const)
@@ -2291,6 +2379,12 @@ const clampFontSize = (value: number): number => {
   const fallback = defaultSettings.terminalFontSize;
   const numeric = Number.isFinite(value) ? value : fallback;
   return Math.min(24, Math.max(10, Math.round(numeric)));
+};
+
+const clampScrollbackRows = (value: number): number => {
+  const fallback = defaultSettings.terminalScrollbackRows;
+  const numeric = Number.isFinite(value) ? value : fallback;
+  return Math.min(200_000, Math.max(1_000, Math.round(numeric)));
 };
 
 const loadSidebarWidth = (): number => {

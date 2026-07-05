@@ -2274,6 +2274,12 @@ button.active-tool {
   padding: 7px 8px 7px 14px;
 }
 
+.settings-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .settings-header h2,
 .settings-section h3 {
   margin: 0;
@@ -2306,7 +2312,7 @@ button.active-tool {
 }
 
 .settings-row:has(.settings-number) {
-  grid-template-columns: 148px minmax(0, 1fr) 72px;
+  grid-template-columns: 148px minmax(0, 1fr) 92px;
 }
 
 .settings-row span {
@@ -2419,6 +2425,38 @@ button.active-tool {
   min-width: 74px;
   border-color: rgba(212, 180, 95, 0.48);
   color: var(--gold-hot);
+}
+
+.open-tui-settings-backdrop {
+  background:
+    linear-gradient(rgba(5, 5, 5, 0.78), rgba(5, 5, 5, 0.78)),
+    repeating-linear-gradient(0deg, rgba(244, 211, 94, 0.05) 0 1px, transparent 1px 4px);
+}
+
+.open-tui-settings-dialog {
+  position: relative;
+  width: min(720px, calc(100vw - 28px));
+  height: min(760px, calc(var(--wmux-viewport-height, 100vh) - 28px));
+  outline: 0;
+  background: #050505;
+  box-shadow:
+    0 0 0 1px rgba(244, 211, 94, 0.44),
+    0 22px 80px rgba(0, 0, 0, 0.72);
+}
+
+.open-tui-settings-dialog:focus-visible {
+  box-shadow:
+    0 0 0 1px rgba(244, 211, 94, 0.74),
+    0 0 0 4px rgba(244, 211, 94, 0.12),
+    0 22px 80px rgba(0, 0, 0, 0.72);
+}
+
+.open-tui-settings-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
 }
 
 @media (max-width: 800px) {

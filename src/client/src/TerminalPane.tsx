@@ -26,6 +26,7 @@ interface Props {
   unreadCount: number;
   machines: MachineStatus[];
   terminalFontSize: number;
+  terminalScrollbackRows: number;
   mediaItems: TerminalMedia[];
   lastRun?: TerminalRun;
   focusSignal?: number;
@@ -78,6 +79,7 @@ export function TerminalPane({
   unreadCount,
   machines,
   terminalFontSize,
+  terminalScrollbackRows,
   mediaItems,
   lastRun,
   focusSignal = 0,
@@ -462,7 +464,7 @@ export function TerminalPane({
         cursorBlink: true,
         fontSize: terminalFontSize,
         fontFamily: WMUX_MONO_FONT_FAMILY,
-        scrollback: 10000,
+        scrollback: terminalScrollbackRows,
         theme: {
           background: "#101114",
           foreground: "#d8dee9",

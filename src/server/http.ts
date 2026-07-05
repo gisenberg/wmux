@@ -182,10 +182,12 @@ export const createHttpServer = (
       if (url.pathname === "/api/settings" && request.method === "POST") {
         const body = (await readBody(request)) as {
           terminalFontSize?: number;
+          terminalScrollbackRows?: number;
           machineAliases?: Record<string, string>;
         };
         settings.update({
           terminalFontSize: body.terminalFontSize,
+          terminalScrollbackRows: body.terminalScrollbackRows,
           machineAliases: body.machineAliases,
         });
         sendJson(response, 200, { settings: settings.snapshot(), state: await bootstrap() });

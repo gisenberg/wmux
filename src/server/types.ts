@@ -146,6 +146,7 @@ export interface PersistedState {
 
 export interface WmuxSettings {
   terminalFontSize: number;
+  terminalScrollbackRows: number;
   machineAliases: Record<string, string>;
 }
 

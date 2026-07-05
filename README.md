@@ -83,7 +83,7 @@ For the full Windows registration checklist, see [docs/WINDOWS_NODE_REGISTRATION
 
 ## Settings
 
-The settings modal writes to `~/.wmux/settings.json` on the wmux server. Current settings cover terminal font size and host display aliases, so aliases follow you across browsers without changing the underlying machine IDs used for connections.
+The settings modal writes to `~/.wmux/settings.json` on the wmux server. Current settings cover terminal font size, browser scrollback rows, and host display aliases, so aliases follow you across browsers without changing the underlying machine IDs used for connections.
 
 ## Notifications
 

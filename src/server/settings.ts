@@ -8,6 +8,7 @@ const defaultPath = (): string => path.join(os.homedir(), ".wmux", "settings.jso
 
 export const defaultSettings: WmuxSettings = {
   terminalFontSize: 14,
+  terminalScrollbackRows: 10_000,
   machineAliases: {},
 };
 
@@ -27,6 +28,7 @@ export class SettingsStore extends EventEmitter {
   update(input: Partial<WmuxSettings>): WmuxSettings {
     this.settings = normalizeSettings({
       terminalFontSize: input.terminalFontSize ?? this.settings.terminalFontSize,
+      terminalScrollbackRows: input.terminalScrollbackRows ?? this.settings.terminalScrollbackRows,
       machineAliases: input.machineAliases ?? this.settings.machineAliases,
     });
     this.save(true);
@@ -48,12 +50,18 @@ export class SettingsStore extends EventEmitter {
 
 const normalizeSettings = (input: Partial<WmuxSettings>): WmuxSettings => ({
   terminalFontSize: clampFontSize(input.terminalFontSize),
+  terminalScrollbackRows: clampScrollbackRows(input.terminalScrollbackRows),
   machineAliases: cleanAliases(input.machineAliases),
 });
 
 const clampFontSize = (value: unknown): number => {
   const numeric = typeof value === "number" && Number.isFinite(value) ? value : defaultSettings.terminalFontSize;
   return Math.min(24, Math.max(10, Math.round(numeric)));
+};
+
+const clampScrollbackRows = (value: unknown): number => {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : defaultSettings.terminalScrollbackRows;
+  return Math.min(200_000, Math.max(1_000, Math.round(numeric)));
 };
 
 const cleanAliases = (aliases: unknown): Record<string, string> => {
