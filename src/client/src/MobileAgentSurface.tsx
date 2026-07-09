@@ -12,6 +12,7 @@ import type {
   TerminalRun,
   Workspace,
 } from "./types";
+import { mobileAgentLaunchCommand, type MobileAgentLauncher } from "./mobile-agent-launch";
 
 interface MobileAgentSurfaceProps {
   state: BootstrapPayload;
@@ -26,7 +27,7 @@ interface MobileAgentSurfaceProps {
 }
 
 type MobileAgentStatus = "running" | "completed" | "failed" | "updated";
-type AgentLauncher = "codex" | "claude";
+type AgentLauncher = MobileAgentLauncher;
 
 type LocalMobileMessage = {
   kind: "user";
@@ -356,9 +357,9 @@ export function MobileAgentSurface({
     setSendError("");
     setSendNotice("");
     try {
-      await onSendInput(pane.id, `${agent}\r`);
+      await onSendInput(pane.id, `${mobileAgentLaunchCommand(agent, machine?.kind)}\r`);
       setTrustedAgentLaunch({ paneId: pane.id, agent, createdAt: Date.now() });
-      setSendNotice(`Started ${agent}. Wait for its prompt before sending a chat message.`);
+      setSendNotice(`Started ${agent} with permission prompts disabled. Wait for its prompt before sending a chat message.`);
     } catch (error) {
       setSendError(error instanceof Error ? error.message : `Could not start ${agent}`);
     } finally {
@@ -409,6 +410,7 @@ export function MobileAgentSurface({
               <span>
                 <strong>No agent detected</strong>
                 <small>{agentSession.reason}</small>
+                <small className="mobile-agent-launch-access">Agents start with full access on this private machine.</small>
               </span>
             </div>
             <div className="mobile-agent-launch-actions">

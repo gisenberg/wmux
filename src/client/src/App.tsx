@@ -23,7 +23,7 @@ import { Toasts, useToasts } from "./Toasts";
 import { useAppRouting } from "./useAppRouting";
 import { useEventStream } from "./useEventStream";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
-import { maxSidebarWidth, useSidebar } from "./useSidebar";
+import { maxSidebarWidth, mobileViewportMediaQuery, useSidebar } from "./useSidebar";
 import { writeBrowserClipboard } from "./clipboard";
 import type {
   AgentActivity,
@@ -114,6 +114,15 @@ export function App() {
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
   const terminalFocusToken = useRef(0);
+
+  useEffect(() => {
+    if (!mobileViewport.isMobile || sidebarCollapsed) return;
+    const closeNavigation = (event: KeyboardEvent) => {
+      if (event.key === "Escape") collapseSidebar();
+    };
+    window.addEventListener("keydown", closeNavigation);
+    return () => window.removeEventListener("keydown", closeNavigation);
+  }, [collapseSidebar, mobileViewport.isMobile, sidebarCollapsed]);
 
   const loadBootstrap = useCallback(async () => {
     try {
@@ -464,6 +473,7 @@ export function App() {
   const createWorkspace = guard("Create workspace", async (machineId: string) => {
     const response = await api.createWorkspace(machineId);
     await refresh(response.state);
+    if (mobileViewport.isMobile) collapseSidebar();
   });
 
   const activateWorkspaceLink = (
@@ -477,10 +487,12 @@ export function App() {
     }
     event.preventDefault();
     activateWorkspaceTab(workspaceId, tabId, options);
+    if (mobileViewport.isMobile) collapseSidebar();
   };
 
   const activateWorkspaceFromChrome = (workspaceId: string, tabId: string) => {
     activateWorkspaceTab(workspaceId, tabId, { focusTerminal: true });
+    if (mobileViewport.isMobile) collapseSidebar();
   };
 
   const activateTabFromChrome = (tabId: string) => {
@@ -942,7 +954,7 @@ export function App() {
           onActivateWorkspace={activateWorkspaceFromChrome}
         />
       ) : (
-      <aside className="sidebar">
+      <aside id="wmux-sidebar" className="sidebar" aria-label="Workspace navigation">
         <div className="brand">
           <PanelLeft size={18} />
           <span>wmux</span>
@@ -1095,25 +1107,25 @@ export function App() {
       </div>
       {mobileViewport.isMobile ? (
         <>
-          {!showMobileModeBar ? (
-            <button
-              type="button"
-              className="mobile-sidebar-toggle"
-              title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
-              aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
-              aria-expanded={!sidebarCollapsed}
-              onClick={toggleSidebar}
-            >
-              <PanelLeft size={16} />
-            </button>
-          ) : null}
           {!sidebarCollapsed ? (
-            <button
-              type="button"
-              className="mobile-sidebar-backdrop"
-              aria-label="Close navigation"
-              onClick={collapseSidebar}
-            />
+            <>
+              <button
+                type="button"
+                className="mobile-sidebar-backdrop"
+                aria-label="Close navigation"
+                onClick={collapseSidebar}
+              />
+              <button
+                type="button"
+                className="mobile-sidebar-close"
+                title="Close navigation"
+                aria-label="Close navigation"
+                aria-controls="wmux-sidebar"
+                onClick={collapseSidebar}
+              >
+                <X size={20} />
+              </button>
+            </>
           ) : null}
         </>
       ) : null}
@@ -1126,6 +1138,7 @@ export function App() {
               title={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
               aria-label={sidebarCollapsed ? "Show navigation" : "Hide navigation"}
               aria-expanded={!sidebarCollapsed}
+              aria-controls="wmux-sidebar"
               onClick={toggleSidebar}
             >
               <PanelLeft size={20} />
@@ -1140,17 +1153,26 @@ export function App() {
               </span>
             </div>
             <div className="mobile-header-actions">
-              <button type="button" title="Command palette" onClick={openCommandPalette}>
+              <button type="button" title="Open actions" aria-label="Open actions" onClick={openCommandPalette}>
                 <CommandIcon size={17} />
-              </button>
-              <button type="button" title="Settings" onClick={openSettings}>
-                <Settings size={17} />
               </button>
             </div>
           </header>
         ) : null}
         {showMobileModeBar ? (
           <div className="mobile-mode-bar">
+            <button
+              type="button"
+              className="mobile-mode-navigation"
+              title="Workspaces and hosts"
+              aria-label="Open workspaces and hosts"
+              aria-expanded={!sidebarCollapsed}
+              aria-controls="wmux-sidebar"
+              onClick={toggleSidebar}
+            >
+              <PanelLeft size={17} />
+              <span>Workspaces</span>
+            </button>
             <div className="mobile-mode-tabs" role="tablist" aria-label="Mobile surface">
               <button
                 type="button"
@@ -1437,7 +1459,7 @@ const useMobileViewportState = (): MobileViewportState => {
 };
 
 const measureMobileViewport = (maxMobileViewportHeight = 0): MobileViewportMetrics => {
-  const isMobile = window.matchMedia("(max-width: 800px)").matches;
+  const isMobile = window.matchMedia(mobileViewportMediaQuery).matches;
   const viewport = window.visualViewport;
   const viewportHeight = viewport?.height ?? window.innerHeight;
   const viewportWidth = viewport?.width ?? window.innerWidth;

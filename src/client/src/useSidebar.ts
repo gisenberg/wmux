@@ -5,11 +5,12 @@ const defaultSidebarWidth = 288;
 const minSidebarWidth = 220;
 export const maxSidebarWidth = 520;
 const collapseSidebarDragThreshold = 128;
+export const mobileViewportMediaQuery = "(max-width: 800px), (max-height: 500px) and (pointer: coarse)";
 
 // Sidebar chrome state: collapse toggle, persisted width, pointer-drag resize
 // (with drag-to-collapse), and the keyboard-accessible resizer.
 export function useSidebar(isMobile: boolean) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.matchMedia("(max-width: 800px)").matches);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.matchMedia(mobileViewportMediaQuery).matches);
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const previousIsMobile = useRef(isMobile);
 

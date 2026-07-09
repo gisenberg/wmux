@@ -197,7 +197,7 @@ export function OpenTuiSidebar({
   };
 
   return (
-    <aside className="sidebar open-tui-sidebar" aria-label="OpenTUI workspace navigation">
+    <aside id="wmux-sidebar" className="sidebar open-tui-sidebar" aria-label="OpenTUI workspace navigation">
       <canvas ref={canvasRef} className="open-tui-canvas" onClick={onClick} onPointerMove={onPointerMove} />
     </aside>
   );
