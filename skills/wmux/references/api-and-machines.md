@@ -97,16 +97,40 @@ Use `scripts/wmuxctl.py run <machine> --line '<shell line>'` to create a workspa
 
 Give automated work a descriptive `--title`. `wmuxctl open`, `run`, and `ps` reuse the latest workspace with the same machine/title by default, which prevents a diagnostic loop from creating many generic `win-ci N` workspaces. Pass `--new` only for intentionally separate sessions.
 
+For a newly created workspace, `run` and `ps` wait until the shell prompt is visible before sending input. This avoids losing or duplicating input during SSH/PowerShell bootstrap. Use `--no-wait-ready` only when deliberately testing that startup path.
+
+When a reused workspace has multiple tabs, `run` and `ps` require an explicit `--tab` or `--pane`. Inspect and manage tabs without raw API calls:
+
+```bash
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tabs --machine win-ci --title "Runner repair"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tab-open --workspace ws_abc123 --target-machine win-ci --tab-title "Codex"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tab-title --workspace ws_abc123 --tab tab_abc123 --tab-title "Codex - Repair"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tab-close --workspace ws_abc123 --tab tab_unused
+```
+
 For multi-step Windows work, prefer the PowerShell helper:
 
 ```bash
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py ps win-ci \
   --title "Runner repair" \
   --summary "Check runner task and toolchain" \
-  --script "Get-ScheduledTask -TaskName gitea-act-runner | Select-Object TaskName,State"
+  --script "Get-ScheduledTask -TaskName gitea-act-runner | Select-Object TaskName,State" \
+  --wait
 ```
 
-`wmuxctl ps` sends a child `pwsh -EncodedCommand`, appends a completion sentinel, and records a running agent event. This is less brittle than pasting long raw PowerShell blocks into an interactive prompt.
+`wmuxctl ps` sends a child `pwsh -EncodedCommand` and appends a completion sentinel. `--wait` confirms that the unique sentinel reached pane output; without it, the JSON response only confirms input delivery. Keep encoded scripts short: Windows Defender may reject encoded commands, and long prompts should be bracketed-pasted into an already-running agent TUI instead.
+
+`wmuxctl run` and `wmuxctl ps` intentionally do not create a `running` agent event unless `--agent-event` is passed. For spawned process progress, wrap the pane command with `wmux-run -- ...`; that records start/completion/exit status and clears when the process exits. Use `--agent-event` only for agent-level work that will call `wmuxctl finish` or post a final `wmux-agent-event completed|failed|stopped`.
+
+Inspect or wait for pane output through the authenticated output-only websocket:
+
+```bash
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py output pane_abc123 --tail-chars 8000
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py wait pane_abc123 --pattern "Do you trust|task_complete" --timeout 30 --show-output
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "npm test" --wait-for "Tests passed" --timeout 120
+```
+
+Treat `sentBytes`, a process id, and a `running` event as delivery/lifecycle metadata, not proof of active work. Verify the current pane output or agent transcript, and remember that an interactive agent process can remain alive and idle after its latest turn reports `task_complete`.
 
 When an agent-created, one-shot workspace completes successfully and no user inspection is needed, record the final event and close it:
 

@@ -1,5 +1,21 @@
 $ErrorActionPreference = 'Stop'
 
+function Read-WmuxFileValue([string]$PathValue) {
+  if (-not $PathValue) { return '' }
+  try {
+    if (Test-Path -LiteralPath $PathValue -PathType Leaf) {
+      return ([System.IO.File]::ReadAllText($PathValue)).Trim()
+    }
+  } catch {}
+  return ''
+}
+
+function Get-WmuxToken {
+  if ($env:WMUX_TOKEN) { return $env:WMUX_TOKEN }
+  $TokenPath = if ($env:WMUX_TOKEN_PATH) { $env:WMUX_TOKEN_PATH } else { Join-Path $HOME '.wmux\token' }
+  return Read-WmuxFileValue $TokenPath
+}
+
 $WmuxUrl = $env:WMUX_URL
 if (-not $WmuxUrl) { $WmuxUrl = 'http://127.0.0.1:3478' }
 $WorkspaceId = $env:WMUX_WORKSPACE_ID
@@ -54,4 +70,7 @@ if ($Manual) {
 }
 
 $Json = $Payload | ConvertTo-Json -Depth 8 -Compress
-Invoke-RestMethod -Method Post -Uri ($WmuxUrl.TrimEnd('/') + $Path) -ContentType 'application/json' -Body $Json | Out-Null
+$Headers = @{}
+$WmuxToken = Get-WmuxToken
+if ($WmuxToken) { $Headers['Authorization'] = "Bearer $WmuxToken" }
+Invoke-RestMethod -Method Post -Uri ($WmuxUrl.TrimEnd('/') + $Path) -Headers $Headers -ContentType 'application/json' -Body $Json | Out-Null

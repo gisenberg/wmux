@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
+import re
+import socket
+import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +21,63 @@ from typing import Any
 
 
 DEFAULT_URL = "https://homelab.tail2fcc57.ts.net:3478"
+WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _read_exact(stream: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = stream.recv(remaining)
+        if not chunk:
+            raise OSError("unexpected websocket EOF")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_http_headers(stream: socket.socket) -> str:
+    data = bytearray()
+    while b"\r\n\r\n" not in data:
+        chunk = stream.recv(1)
+        if not chunk:
+            raise OSError("unexpected EOF during websocket upgrade")
+        data.extend(chunk)
+        if len(data) > 64 * 1024:
+            raise OSError("websocket upgrade headers are too large")
+    headers, _separator, _remainder = bytes(data).partition(b"\r\n\r\n")
+    return headers.decode("iso-8859-1")
+
+
+def _read_websocket_frame(stream: socket.socket) -> tuple[int, bytes]:
+    first, second = _read_exact(stream, 2)
+    opcode = first & 0x0F
+    masked = bool(second & 0x80)
+    length = second & 0x7F
+    if length == 126:
+        length = int.from_bytes(_read_exact(stream, 2), "big")
+    elif length == 127:
+        length = int.from_bytes(_read_exact(stream, 8), "big")
+    if length > 4 * 1024 * 1024:
+        raise OSError("websocket frame is too large")
+    mask = _read_exact(stream, 4) if masked else b""
+    payload = _read_exact(stream, length)
+    if mask:
+        payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+    return opcode, payload
+
+
+def _write_websocket_frame(stream: socket.socket, opcode: int, payload: bytes) -> None:
+    mask = os.urandom(4)
+    length = len(payload)
+    if length < 126:
+        header = bytes((0x80 | opcode, 0x80 | length))
+    elif length < 65536:
+        header = bytes((0x80 | opcode, 0x80 | 126)) + length.to_bytes(2, "big")
+    else:
+        header = bytes((0x80 | opcode, 0x80 | 127)) + length.to_bytes(8, "big")
+    masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+    stream.sendall(header + mask + masked)
 
 
 def read_text(path: str | Path) -> str:
@@ -26,7 +88,7 @@ def read_text(path: str | Path) -> str:
 
 
 def default_url() -> str:
-    return read_text("~/.wmux/url") or os.environ.get("WMUX_URL") or DEFAULT_URL
+    return os.environ.get("WMUX_URL") or read_text("~/.wmux/url") or DEFAULT_URL
 
 
 def default_token(token_path: str | None) -> str:
@@ -68,8 +130,28 @@ class WmuxClient:
         result = self.request("POST", "/api/workspaces", {"machineId": machine_id})
         return result["workspace"], result["state"]
 
+    def create_tab(self, workspace_id: str, machine_id: str, source_pane_id: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+        body = {"machineId": machine_id}
+        if source_pane_id:
+            body["sourcePaneId"] = source_pane_id
+        result = self.request("POST", f"/api/workspaces/{urllib.parse.quote(workspace_id)}/tabs", body)
+        return result["tab"], result["state"]
+
     def set_workspace_title(self, workspace_id: str, title: str) -> None:
         self.request("POST", f"/api/workspaces/{urllib.parse.quote(workspace_id)}/title", {"title": title})
+
+    def set_tab_title(self, workspace_id: str, tab_id: str, title: str) -> None:
+        self.request(
+            "POST",
+            f"/api/workspaces/{urllib.parse.quote(workspace_id)}/tabs/{urllib.parse.quote(tab_id)}/title",
+            {"title": title},
+        )
+
+    def close_tab(self, workspace_id: str, tab_id: str) -> dict[str, Any]:
+        return self.request(
+            "DELETE",
+            f"/api/workspaces/{urllib.parse.quote(workspace_id)}/tabs/{urllib.parse.quote(tab_id)}",
+        )
 
     def close_workspace(self, workspace_id: str) -> dict[str, Any]:
         return self.request("DELETE", f"/api/workspaces/{urllib.parse.quote(workspace_id)}")
@@ -105,6 +187,64 @@ class WmuxClient:
             {"data": data, "cols": cols, "rows": rows},
         )
 
+    def read_pane_output(self, pane_id: str, cols: int, rows: int, timeout: float = 10) -> dict[str, Any]:
+        parsed = urllib.parse.urlsplit(self.url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise SystemExit(f"wmuxctl: unsupported wmux URL for websocket output: {self.url}")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path_prefix = parsed.path.rstrip("/")
+        query = urllib.parse.urlencode({"cols": cols, "rows": rows})
+        path = f"{path_prefix}/ws/panes/{urllib.parse.quote(pane_id)}/output?{query}"
+        host = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{port}"
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        headers = [
+            f"GET {path} HTTP/1.1",
+            f"Host: {host}",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            f"Sec-WebSocket-Key: {key}",
+            "Sec-WebSocket-Version: 13",
+        ]
+        if self.token:
+            headers.append(f"Authorization: Bearer {self.token}")
+        headers.extend(["", ""])
+
+        raw_socket = socket.create_connection((parsed.hostname, port), timeout=timeout)
+        stream: socket.socket
+        if parsed.scheme == "https":
+            stream = ssl.create_default_context().wrap_socket(raw_socket, server_hostname=parsed.hostname)
+        else:
+            stream = raw_socket
+        stream.settimeout(timeout)
+        try:
+            stream.sendall("\r\n".join(headers).encode("ascii"))
+            response = _read_http_headers(stream)
+            status_line, _, header_block = response.partition("\r\n")
+            if " 101 " not in f" {status_line} ":
+                raise SystemExit(f"wmuxctl: pane output websocket upgrade failed: {status_line}")
+            accept_match = re.search(r"(?im)^sec-websocket-accept:\s*(\S+)\s*$", header_block)
+            expected_accept = base64.b64encode(
+                hashlib.sha1((key + WEBSOCKET_GUID).encode("ascii")).digest()
+            ).decode("ascii")
+            if not accept_match or accept_match.group(1) != expected_accept:
+                raise SystemExit("wmuxctl: pane output websocket returned an invalid handshake")
+            while True:
+                opcode, payload = _read_websocket_frame(stream)
+                if opcode == 0x8:
+                    raise SystemExit("wmuxctl: pane output websocket closed before sending ready state")
+                if opcode == 0x9:
+                    _write_websocket_frame(stream, 0xA, payload)
+                    continue
+                if opcode != 0x1:
+                    continue
+                message = json.loads(payload.decode("utf-8"))
+                if message.get("type") == "ready":
+                    return message
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise SystemExit(f"wmuxctl: cannot read pane output: {error}") from error
+        finally:
+            stream.close()
+
 
 def active_tab(workspace: dict[str, Any]) -> dict[str, Any]:
     active_id = workspace.get("activeTabId")
@@ -126,6 +266,47 @@ def active_pane(tab: dict[str, Any]) -> dict[str, Any]:
     if panes:
         return panes[0]
     raise SystemExit("wmuxctl: active tab has no panes")
+
+
+def select_tab(workspace: dict[str, Any], tab_id: str = "") -> dict[str, Any]:
+    if not tab_id:
+        return active_tab(workspace)
+    for tab in workspace.get("tabs", []):
+        if tab.get("id") == tab_id:
+            return tab
+    raise SystemExit(f"wmuxctl: tab not found in workspace {workspace.get('id')}: {tab_id}")
+
+
+def select_pane(
+    workspace: dict[str, Any], tab: dict[str, Any], pane_id: str = "", explicit_tab_id: str = ""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not pane_id:
+        return tab, active_pane(tab)
+    for candidate_tab in workspace.get("tabs", []):
+        for pane in candidate_tab.get("panes", []):
+            if pane.get("id") != pane_id:
+                continue
+            if explicit_tab_id and explicit_tab_id != candidate_tab.get("id"):
+                raise SystemExit(f"wmuxctl: pane {pane_id} does not belong to tab {explicit_tab_id}")
+            return candidate_tab, pane
+    raise SystemExit(f"wmuxctl: pane not found in workspace {workspace.get('id')}: {pane_id}")
+
+
+def target_tab_and_pane(
+    workspace: dict[str, Any],
+    tab_id: str = "",
+    pane_id: str = "",
+    require_explicit_multi_tab: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    tabs = workspace.get("tabs", [])
+    if require_explicit_multi_tab and len(tabs) > 1 and not tab_id and not pane_id:
+        choices = ", ".join(f"{tab.get('id')} ({tab.get('title') or 'untitled'})" for tab in tabs)
+        raise SystemExit(
+            "wmuxctl: reused workspace has multiple tabs; choose --tab or --pane explicitly. "
+            f"Available tabs: {choices}"
+        )
+    tab = select_tab(workspace, tab_id)
+    return select_pane(workspace, tab, pane_id, tab_id)
 
 
 def workspace_url(base_url: str, workspace_id: str, tab_id: str) -> str:
@@ -154,9 +335,14 @@ def cmd_bootstrap(client: WmuxClient, _args: argparse.Namespace) -> int:
     return 0
 
 
-def describe_workspace(base_url: str, workspace: dict[str, Any]) -> dict[str, Any]:
-    tab = active_tab(workspace)
-    pane = active_pane(tab)
+def describe_workspace(
+    base_url: str,
+    workspace: dict[str, Any],
+    tab_id: str = "",
+    pane_id: str = "",
+    require_explicit_multi_tab: bool = False,
+) -> dict[str, Any]:
+    tab, pane = target_tab_and_pane(workspace, tab_id, pane_id, require_explicit_multi_tab)
     return {
         "workspaceId": workspace["id"],
         "tabId": tab["id"],
@@ -164,6 +350,64 @@ def describe_workspace(base_url: str, workspace: dict[str, Any]) -> dict[str, An
         "machineId": workspace["machineId"],
         "url": workspace_url(base_url, workspace["id"], tab["id"]),
     }
+
+
+ANSI_ESCAPE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
+
+
+def clean_terminal_text(value: str) -> str:
+    value = ANSI_ESCAPE.sub("", value).replace("\r\n", "\n").replace("\r", "\n")
+    output: list[str] = []
+    for character in value:
+        if character == "\b":
+            if output and output[-1] != "\n":
+                output.pop()
+            continue
+        if character == "\n" or character == "\t" or ord(character) >= 32:
+            output.append(character)
+    return "".join(output)
+
+
+def wait_for_output(
+    client: WmuxClient,
+    pane_id: str,
+    pattern: str,
+    timeout: float,
+    cols: int,
+    rows: int,
+    raw: bool = False,
+) -> tuple[re.Match[str], str, float]:
+    try:
+        compiled = re.compile(pattern, re.MULTILINE)
+    except re.error as error:
+        raise SystemExit(f"wmuxctl: invalid wait pattern: {error}") from error
+    started = time.monotonic()
+    while True:
+        replay = str(client.read_pane_output(pane_id, cols, rows, timeout=min(10, max(timeout, 1))).get("replay") or "")
+        candidate = replay if raw else clean_terminal_text(replay)
+        match = compiled.search(candidate)
+        if match:
+            return match, candidate, time.monotonic() - started
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout:
+            raise SystemExit(f"wmuxctl: timed out after {timeout:g}s waiting for {pattern!r} in pane {pane_id}")
+        time.sleep(min(0.5, timeout - elapsed))
+
+
+def wait_for_shell_ready(
+    client: WmuxClient,
+    pane_id: str,
+    machine_id: str,
+    timeout: float,
+    cols: int,
+    rows: int,
+) -> float:
+    payload = client.bootstrap()
+    machine = next((candidate for candidate in payload.get("machines", []) if candidate.get("id") == machine_id), {})
+    kind = machine.get("kind")
+    pattern = r"(?m)^PS [^\n>]*>\s*$" if kind in {"powershell", "powershell-ssh"} else r"(?m)^.*(?:[$#%❯])\s*$"
+    _match, _output, elapsed = wait_for_output(client, pane_id, pattern, timeout, cols, rows)
+    return elapsed
 
 
 def workspace_title(workspace: dict[str, Any]) -> str:
@@ -217,7 +461,7 @@ def resolve_workspace(client: WmuxClient, args: argparse.Namespace) -> dict[str,
 
 
 def maybe_record_running_event(client: WmuxClient, args: argparse.Namespace, info: dict[str, Any], summary: str) -> None:
-    if args.no_event:
+    if not getattr(args, "agent_event", False) or getattr(args, "no_event", False):
         return
     client.record_agent_event(
         info["workspaceId"],
@@ -232,10 +476,99 @@ def maybe_record_running_event(client: WmuxClient, args: argparse.Namespace, inf
 
 def cmd_open(client: WmuxClient, args: argparse.Namespace) -> int:
     workspace, reused = get_or_create_workspace(client, args.machine, args.title, args.new)
-    info = describe_workspace(client.url, workspace)
+    info = describe_workspace(client.url, workspace, args.tab, args.pane)
     info["reused"] = reused
+    info["activeTabId"] = workspace.get("activeTabId")
+    info["tabs"] = [
+        {
+            "id": tab.get("id"),
+            "title": tab.get("title"),
+            "activePaneId": tab.get("activePaneId"),
+            "url": workspace_url(client.url, workspace["id"], tab["id"]),
+        }
+        for tab in workspace.get("tabs", [])
+    ]
     print_json(info)
     return 0
+
+
+def cmd_tabs(client: WmuxClient, args: argparse.Namespace) -> int:
+    workspace = resolve_workspace(client, args)
+    print_json(
+        {
+            "workspaceId": workspace["id"],
+            "activeTabId": workspace.get("activeTabId"),
+            "tabs": [
+                {
+                    "id": tab.get("id"),
+                    "title": tab.get("title"),
+                    "active": tab.get("id") == workspace.get("activeTabId"),
+                    "activePaneId": tab.get("activePaneId"),
+                    "panes": [pane.get("id") for pane in tab.get("panes", [])],
+                    "url": workspace_url(client.url, workspace["id"], tab["id"]),
+                }
+                for tab in workspace.get("tabs", [])
+            ],
+        }
+    )
+    return 0
+
+
+def cmd_tab_open(client: WmuxClient, args: argparse.Namespace) -> int:
+    workspace = resolve_workspace(client, args)
+    tab, _state = client.create_tab(workspace["id"], args.target_machine, args.source_pane)
+    if args.tab_title:
+        client.set_tab_title(workspace["id"], tab["id"], args.tab_title)
+        tab["title"] = args.tab_title
+    pane = active_pane(tab)
+    print_json(
+        {
+            "workspaceId": workspace["id"],
+            "tabId": tab["id"],
+            "paneId": pane["id"],
+            "machineId": pane["machineId"],
+            "title": tab.get("title"),
+            "url": workspace_url(client.url, workspace["id"], tab["id"]),
+        }
+    )
+    return 0
+
+
+def cmd_tab_title(client: WmuxClient, args: argparse.Namespace) -> int:
+    workspace = resolve_workspace(client, args)
+    select_tab(workspace, args.tab)
+    client.set_tab_title(workspace["id"], args.tab, args.tab_title)
+    print_json(
+        {
+            "workspaceId": workspace["id"],
+            "tabId": args.tab,
+            "title": args.tab_title,
+            "url": workspace_url(client.url, workspace["id"], args.tab),
+        }
+    )
+    return 0
+
+
+def cmd_tab_close(client: WmuxClient, args: argparse.Namespace) -> int:
+    workspace = resolve_workspace(client, args)
+    select_tab(workspace, args.tab)
+    result = client.close_tab(workspace["id"], args.tab)
+    print_json({"workspaceId": workspace["id"], "tabId": args.tab, "closed": bool(result.get("removed"))})
+    return 0
+
+
+def append_wait_result(client: WmuxClient, args: argparse.Namespace, info: dict[str, Any], pattern: str) -> None:
+    match, _output, elapsed = wait_for_output(
+        client,
+        info["paneId"],
+        pattern,
+        args.timeout,
+        args.cols,
+        args.rows,
+        getattr(args, "raw_wait", False),
+    )
+    info["matched"] = match.group(0)
+    info["elapsedSeconds"] = round(elapsed, 3)
 
 
 def cmd_send(client: WmuxClient, args: argparse.Namespace) -> int:
@@ -243,13 +576,20 @@ def cmd_send(client: WmuxClient, args: argparse.Namespace) -> int:
     if args.enter and not line.endswith("\r"):
         line += "\r"
     client.send_input(args.pane, line, args.cols, args.rows)
-    print_json({"paneId": args.pane, "sentBytes": len(line.encode("utf-8"))})
+    info = {"paneId": args.pane, "sentBytes": len(line.encode("utf-8"))}
+    if args.wait_for:
+        append_wait_result(client, args, info, args.wait_for)
+    print_json(info)
     return 0
 
 
 def cmd_run(client: WmuxClient, args: argparse.Namespace) -> int:
     workspace, reused = get_or_create_workspace(client, args.machine, args.title, args.new)
-    info = describe_workspace(client.url, workspace)
+    info = describe_workspace(client.url, workspace, args.tab, args.pane, require_explicit_multi_tab=reused)
+    if not reused and not args.no_wait_ready:
+        info["shellReadySeconds"] = round(
+            wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows), 3
+        )
     line = args.line
     if args.enter and not line.endswith("\r"):
         line += "\r"
@@ -257,17 +597,42 @@ def cmd_run(client: WmuxClient, args: argparse.Namespace) -> int:
     client.send_input(info["paneId"], line, args.cols, args.rows)
     info["reused"] = reused
     info["sentBytes"] = len(line.encode("utf-8"))
+    if args.wait_for:
+        append_wait_result(client, args, info, args.wait_for)
     print_json(info)
+    return 0
+
+
+def cmd_output(client: WmuxClient, args: argparse.Namespace) -> int:
+    ready = client.read_pane_output(args.pane, args.cols, args.rows, args.timeout)
+    replay = str(ready.get("replay") or "")
+    output = replay if args.raw else clean_terminal_text(replay)
+    if args.tail_chars > 0:
+        output = output[-args.tail_chars :]
+    sys.stdout.write(output)
+    if output and not output.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
+
+
+def cmd_wait(client: WmuxClient, args: argparse.Namespace) -> int:
+    match, output, elapsed = wait_for_output(
+        client, args.pane, args.pattern, args.timeout, args.cols, args.rows, args.raw
+    )
+    result: dict[str, Any] = {
+        "paneId": args.pane,
+        "matched": match.group(0),
+        "elapsedSeconds": round(elapsed, 3),
+    }
+    if args.show_output:
+        result["output"] = output[-args.tail_chars :] if args.tail_chars > 0 else output
+    print_json(result)
     return 0
 
 
 def cmd_finish(client: WmuxClient, args: argparse.Namespace) -> int:
     workspace = resolve_workspace(client, args)
-    info = describe_workspace(client.url, workspace)
-    if args.pane:
-        info["paneId"] = args.pane
-    if args.tab:
-        info["tabId"] = args.tab
+    info = describe_workspace(client.url, workspace, args.tab, args.pane)
     client.record_agent_event(
         info["workspaceId"],
         info["tabId"],
@@ -305,7 +670,11 @@ def powershell_encoded_command(script: str, sentinel: str) -> str:
 
 def cmd_ps(client: WmuxClient, args: argparse.Namespace) -> int:
     workspace, reused = get_or_create_workspace(client, args.machine, args.title, args.new)
-    info = describe_workspace(client.url, workspace)
+    info = describe_workspace(client.url, workspace, args.tab, args.pane, require_explicit_multi_tab=reused)
+    if not reused and not args.no_wait_ready:
+        info["shellReadySeconds"] = round(
+            wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows), 3
+        )
     script = read_script_arg(args)
     sentinel = "" if args.no_sentinel else f"__WMUX_DONE_{info['paneId']}_{os.getpid()}__"
     encoded = powershell_encoded_command(script, sentinel)
@@ -318,6 +687,10 @@ def cmd_ps(client: WmuxClient, args: argparse.Namespace) -> int:
     info["sentBytes"] = len(line.encode("utf-8"))
     if sentinel:
         info["sentinel"] = sentinel
+    if args.wait:
+        if not sentinel:
+            raise SystemExit("wmuxctl: --wait requires the completion sentinel; omit --no-sentinel")
+        append_wait_result(client, args, info, re.escape(sentinel))
     print_json(info)
     return 0
 
@@ -340,12 +713,47 @@ def build_parser() -> argparse.ArgumentParser:
     open_workspace.add_argument("machine", help="machine id, for example away-team or 9800x3d")
     open_workspace.add_argument("--title", default="", help="manual workspace title")
     open_workspace.add_argument("--new", action="store_true", help="force a new workspace even when --title already exists")
+    open_workspace.add_argument("--tab", default="", help="select a specific existing tab")
+    open_workspace.add_argument("--pane", default="", help="select a specific existing pane")
     open_workspace.set_defaults(func=cmd_open)
+
+    tabs = subparsers.add_parser("tabs", help="list tabs and direct URLs for a workspace")
+    tabs.add_argument("--workspace", default="", help="workspace id")
+    tabs.add_argument("--machine", default="", help="machine id for --title lookup")
+    tabs.add_argument("--title", default="", help="workspace title for --machine lookup")
+    tabs.set_defaults(func=cmd_tabs)
+
+    tab_open = subparsers.add_parser("tab-open", help="create and name a tab in an existing workspace")
+    tab_open.add_argument("--workspace", default="", help="workspace id")
+    tab_open.add_argument("--machine", default="", help="workspace machine id for --title lookup")
+    tab_open.add_argument("--title", default="", help="workspace title for --machine lookup")
+    tab_open.add_argument("--target-machine", required=True, help="machine id for the new tab")
+    tab_open.add_argument("--tab-title", default="", help="manual title for the new tab")
+    tab_open.add_argument("--source-pane", default="", help="pane whose cwd should seed the new tab")
+    tab_open.set_defaults(func=cmd_tab_open)
+
+    tab_title = subparsers.add_parser("tab-title", help="set a manual tab title")
+    tab_title.add_argument("--workspace", default="", help="workspace id")
+    tab_title.add_argument("--machine", default="", help="workspace machine id for --title lookup")
+    tab_title.add_argument("--title", default="", help="workspace title for --machine lookup")
+    tab_title.add_argument("--tab", required=True, help="tab id")
+    tab_title.add_argument("--tab-title", required=True, help="new manual tab title")
+    tab_title.set_defaults(func=cmd_tab_title)
+
+    tab_close = subparsers.add_parser("tab-close", help="close a tab and kill its pane sessions")
+    tab_close.add_argument("--workspace", default="", help="workspace id")
+    tab_close.add_argument("--machine", default="", help="workspace machine id for --title lookup")
+    tab_close.add_argument("--title", default="", help="workspace title for --machine lookup")
+    tab_close.add_argument("--tab", required=True, help="tab id")
+    tab_close.set_defaults(func=cmd_tab_close)
 
     send = subparsers.add_parser("send", help="send one terminal input line to an existing pane")
     send.add_argument("pane", help="pane id")
     send.add_argument("--line", required=True, help="text to send exactly, before optional Enter")
     send.add_argument("--no-enter", dest="enter", action="store_false", help="do not append Enter")
+    send.add_argument("--wait-for", default="", help="wait until this regular expression appears in pane output")
+    send.add_argument("--timeout", type=float, default=30, help="wait timeout in seconds")
+    send.add_argument("--raw-wait", action="store_true", help="match --wait-for against raw terminal output")
     send.add_argument("--cols", type=int, default=120)
     send.add_argument("--rows", type=int, default=36)
     send.set_defaults(func=cmd_send, enter=True)
@@ -355,13 +763,41 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--line", required=True, help="text to send exactly, before optional Enter")
     run.add_argument("--title", default="", help="manual workspace title")
     run.add_argument("--new", action="store_true", help="force a new workspace even when --title already exists")
+    run.add_argument("--tab", default="", help="target tab when reusing a multi-tab workspace")
+    run.add_argument("--pane", default="", help="target pane when reusing a multi-tab workspace")
     run.add_argument("--agent", default="codex", help="agent name for the running event")
     run.add_argument("--summary", default="", help="running event summary")
-    run.add_argument("--no-event", action="store_true", help="do not record a running agent event")
+    run.add_argument("--agent-event", action="store_true", help="record a running agent event; call finish later")
+    run.add_argument("--no-event", action="store_true", help="deprecated no-op; running agent events are opt-in")
     run.add_argument("--no-enter", dest="enter", action="store_false", help="do not append Enter")
+    run.add_argument("--wait-for", default="", help="wait until this regular expression appears in pane output")
+    run.add_argument("--timeout", type=float, default=30, help="wait timeout in seconds")
+    run.add_argument("--raw-wait", action="store_true", help="match --wait-for against raw terminal output")
+    run.add_argument("--ready-timeout", type=float, default=30, help="new-pane shell readiness timeout in seconds")
+    run.add_argument("--no-wait-ready", action="store_true", help="send immediately without waiting for a new shell prompt")
     run.add_argument("--cols", type=int, default=120)
     run.add_argument("--rows", type=int, default=36)
     run.set_defaults(func=cmd_run, enter=True)
+
+    output = subparsers.add_parser("output", help="print the bounded replay buffer for a pane")
+    output.add_argument("pane", help="pane id")
+    output.add_argument("--raw", action="store_true", help="preserve terminal escape sequences")
+    output.add_argument("--tail-chars", type=int, default=12000, help="print only the last N characters; 0 prints all")
+    output.add_argument("--timeout", type=float, default=10, help="websocket timeout in seconds")
+    output.add_argument("--cols", type=int, default=120)
+    output.add_argument("--rows", type=int, default=36)
+    output.set_defaults(func=cmd_output)
+
+    wait = subparsers.add_parser("wait", help="wait for a regular expression in pane replay output")
+    wait.add_argument("pane", help="pane id")
+    wait.add_argument("--pattern", required=True, help="regular expression to wait for")
+    wait.add_argument("--timeout", type=float, default=30, help="wait timeout in seconds")
+    wait.add_argument("--raw", action="store_true", help="match against raw terminal output")
+    wait.add_argument("--show-output", action="store_true", help="include recent pane output in the JSON result")
+    wait.add_argument("--tail-chars", type=int, default=12000, help="output characters included with --show-output")
+    wait.add_argument("--cols", type=int, default=120)
+    wait.add_argument("--rows", type=int, default=36)
+    wait.set_defaults(func=cmd_wait)
 
     ps = subparsers.add_parser("ps", help="send a PowerShell script through a child pwsh -EncodedCommand")
     ps.add_argument("machine", help="Windows machine id, for example win-ci")
@@ -369,10 +805,18 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--file", default="", help="read PowerShell script from this file")
     ps.add_argument("--title", required=True, help="manual workspace title; reused by default")
     ps.add_argument("--new", action="store_true", help="force a new workspace even when --title already exists")
+    ps.add_argument("--tab", default="", help="target tab when reusing a multi-tab workspace")
+    ps.add_argument("--pane", default="", help="target pane when reusing a multi-tab workspace")
     ps.add_argument("--agent", default="codex", help="agent name for the running event")
     ps.add_argument("--summary", default="", help="running event summary")
-    ps.add_argument("--no-event", action="store_true", help="do not record a running agent event")
+    ps.add_argument("--agent-event", action="store_true", help="record a running agent event; call finish later")
+    ps.add_argument("--no-event", action="store_true", help="deprecated no-op; running agent events are opt-in")
     ps.add_argument("--no-sentinel", action="store_true", help="do not append a completion marker")
+    ps.add_argument("--wait", action="store_true", help="wait for the generated completion sentinel")
+    ps.add_argument("--timeout", type=float, default=120, help="sentinel wait timeout in seconds")
+    ps.add_argument("--raw-wait", action="store_true", help="match the sentinel against raw terminal output")
+    ps.add_argument("--ready-timeout", type=float, default=30, help="new-pane shell readiness timeout in seconds")
+    ps.add_argument("--no-wait-ready", action="store_true", help="send immediately without waiting for a new shell prompt")
     ps.add_argument("--cols", type=int, default=120)
     ps.add_argument("--rows", type=int, default=36)
     ps.set_defaults(func=cmd_ps)
