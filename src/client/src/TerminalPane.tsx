@@ -148,6 +148,7 @@ export const TerminalPane = memo(function TerminalPane({
     let pendingCursorPlacement: { sequence: string; x: number; y: number } | null = null;
     let contextCopyBridge: HTMLTextAreaElement | undefined;
     let contextCopyBridgeTimer: number | undefined;
+    let selectionRestoreTimer: number | undefined;
     let removeContextCopyBridgeDismissListeners: (() => void) | undefined;
     let terminalOutputTimer: number | undefined;
     let queuedTerminalOutput = "";
@@ -589,6 +590,14 @@ export const TerminalPane = memo(function TerminalPane({
       };
       term.element?.addEventListener("mousedown", mouseDownListener, { capture: true });
       mouseUpListener = (event) => {
+        const selectionPosition = readTerminalSelectionPosition(term);
+        if (selectionPosition) {
+          if (selectionRestoreTimer !== undefined) window.clearTimeout(selectionRestoreTimer);
+          selectionRestoreTimer = window.setTimeout(() => {
+            selectionRestoreTimer = undefined;
+            if (!cancelled && !term.hasSelection()) restoreTerminalSelection(term, selectionPosition);
+          }, 0);
+        }
         const pending = pendingCursorPlacement;
         pendingCursorPlacement = null;
         if (!pending || event.button !== 0) return;
@@ -708,6 +717,7 @@ export const TerminalPane = memo(function TerminalPane({
       scrollDisposable?.dispose();
       renderDisposable?.dispose();
       if (terminalOutputTimer !== undefined) window.clearTimeout(terminalOutputTimer);
+      if (selectionRestoreTimer !== undefined) window.clearTimeout(selectionRestoreTimer);
       clearContextCopyBridge();
       if (mouseDownListener) terminalRef.current?.element?.removeEventListener("mousedown", mouseDownListener, { capture: true });
       if (mouseUpListener) terminalRef.current?.element?.removeEventListener("mouseup", mouseUpListener, { capture: true });
@@ -1055,6 +1065,26 @@ const partialSuffixLength = (input: string, prefix: string): number => {
     if (input.slice(-length) === prefix.slice(0, length)) return length;
   }
   return 0;
+};
+
+interface TerminalSelectionPosition {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
+// Mouse-aware apps clear Ghostty's selection when the release is encoded as
+// terminal input. Preserve its viewport range so browser selection still wins.
+const readTerminalSelectionPosition = (term: Terminal): TerminalSelectionPosition | undefined => {
+  if (!term.hasSelection()) return undefined;
+  return (term as unknown as {
+    selectionManager?: { getSelectionPosition: () => TerminalSelectionPosition | undefined };
+  }).selectionManager?.getSelectionPosition();
+};
+
+const restoreTerminalSelection = (term: Terminal, position: TerminalSelectionPosition): void => {
+  const rows = Math.max(0, position.end.y - position.start.y);
+  const length = rows * Math.max(1, term.cols) + position.end.x - position.start.x + 1;
+  if (length > 0) term.select(position.start.x, position.start.y, length);
 };
 
 const shellCursorPlacementSequence = (
