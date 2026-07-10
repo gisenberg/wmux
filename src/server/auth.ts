@@ -63,26 +63,26 @@ const resolveSharedToken = (): string => {
   return generated;
 };
 
-const DEFAULT_USERNAME = "wmux";
-const DEFAULT_PASSWORD = "wmux";
-
 const loadCredentials = (): AuthCredentials | null => {
   const authPath = process.env.WMUX_AUTH_PATH ?? defaultAuthPath();
   try {
     const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Partial<AuthCredentials>;
     if (typeof parsed.username === "string" && parsed.username && typeof parsed.passwordHash === "string" && parsed.passwordHash) {
-      return { username: parsed.username, passwordHash: parsed.passwordHash };
+      const credentials = { username: parsed.username, passwordHash: parsed.passwordHash };
+      if (credentials.username === "wmux" && verifyPasswordHash("wmux", credentials.passwordHash)) {
+        if (process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN === "1") {
+          console.warn(`wmux: allowing the legacy default wmux/wmux login in ${authPath} by explicit opt-in.`);
+          return credentials;
+        }
+        console.warn(`wmux: refusing the legacy default wmux/wmux login in ${authPath}; run wmux-set-password to enable browser login.`);
+        return null;
+      }
+      return credentials;
     }
   } catch {
-    /* fall through to seeding defaults below */
+    /* Missing or invalid credentials leave browser password login disabled. */
   }
-  // Seed default wmux/wmux credentials on first run so browser login works out
-  // of the box. The plaintext default is intentionally weak — the startup log
-  // warns to change it, and editing auth.json (or wmux-set-password) replaces it.
-  const seeded: AuthCredentials = { username: DEFAULT_USERNAME, passwordHash: hashPassword(DEFAULT_PASSWORD) };
-  persistSecretFile(authPath, `${JSON.stringify(seeded, null, 2)}\n`);
-  console.warn(`wmux: seeded default login ${DEFAULT_USERNAME}/${DEFAULT_PASSWORD} in ${authPath} — change it with wmux-set-password.`);
-  return seeded;
+  return null;
 };
 
 const loadOrCreateSessionSecret = (): string => {

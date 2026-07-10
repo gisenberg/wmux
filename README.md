@@ -100,11 +100,15 @@ For the full Windows registration checklist, see [docs/WINDOWS_NODE_REGISTRATION
 
 wmux gates every API and WebSocket endpoint behind a bearer token, on top of the bind-address and Host/Origin checks. There are two ways to get a token, and both are accepted on every request:
 
-**Browser login (people).** On first start wmux seeds default credentials `wmux` / `wmux` in `~/.wmux/auth.json` and logs a warning to change them. The browser shows a login form; signing in mints a stateless, signed session token (30-day expiry) that the client stores in `localStorage`. Change the credentials with:
+**Browser login (people).** Password login is disabled until credentials are explicitly configured. Set them with:
 
 ```bash
 scripts/wmux-set-password --username you   # prompts for a new password
 ```
+
+The browser then shows a login form; signing in mints a stateless, signed session token (30-day expiry) that the client stores in `localStorage`. Older installations that still contain the legacy `wmux` / `wmux` default are treated as token-only until the password is changed.
+
+On an explicitly isolated network, set `WMUX_ALLOW_INSECURE_DEFAULT_LOGIN=1` to opt back into the legacy `wmux` / `wmux` login. The known default remains rejected unless that override is present.
 
 Session tokens are HMAC-signed with a secret persisted to `~/.wmux/session-secret`, so they survive restarts. Deleting that file rotates the secret and logs everyone out.
 

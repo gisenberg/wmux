@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { FitAddon, Terminal } from "ghostty-web";
-import { WMUX_MONO_FONT_FAMILY } from "./fonts";
-import { LoginView } from "./LoginView";
+import { api } from "./api";
 import { ensureGhostty } from "./terminal-loader";
+import { setToken } from "./token";
 
 interface C64BootScreenProps {
   authRequired: boolean;
@@ -13,12 +13,12 @@ interface C64BootScreenProps {
 
 const C64_BLUE = "#40318d";
 const C64_LIGHT_BLUE = "#7869c4";
+const C64_FONT_FAMILY = '"C64 Pro Mono", monospace';
 
 export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete }: C64BootScreenProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const authRequiredRef = useRef(authRequired);
   const readyRef = useRef(ready);
-  const [showCredentials, setShowCredentials] = useState(false);
   const [status, setStatus] = useState("Starting Ghostty");
 
   useEffect(() => {
@@ -33,13 +33,90 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
     let cancelled = false;
     let terminal: Terminal | null = null;
     let fitAddon: FitAddon | null = null;
+    let authStage: "idle" | "username" | "password" | "submitting" = "idle";
+    let username = "";
+    let credentialInput = "";
+    let previousInputWasCarriageReturn = false;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const pause = (milliseconds: number) =>
       new Promise<void>((resolve) => window.setTimeout(resolve, reducedMotion ? 0 : milliseconds));
     const write = (text: string) => terminal?.write(text.replaceAll("\n", "\r\n"));
 
+    const promptForUsername = () => {
+      username = "";
+      credentialInput = "";
+      authStage = "username";
+      write("USERNAME> ");
+      requestAnimationFrame(() => terminal?.focus());
+    };
+
+    const submitCredentials = async () => {
+      const password = credentialInput;
+      credentialInput = "";
+      authStage = "submitting";
+      setStatus("Verifying credentials");
+      write("VERIFYING...\n");
+      try {
+        const result = await api.login(username, password);
+        if (cancelled) return;
+        setToken(result.token);
+        onAuthenticated();
+      } catch {
+        if (cancelled) return;
+        write("?LOGIN FAILED ERROR\n");
+        setStatus("Authentication failed");
+        promptForUsername();
+      }
+    };
+
+    const finishCredentialLine = () => {
+      write("\n");
+      if (authStage === "username") {
+        username = credentialInput;
+        credentialInput = "";
+        authStage = "password";
+        write("PASSWORD> ");
+        return;
+      }
+      if (authStage === "password") void submitCredentials();
+    };
+
+    const acceptCredentialInput = (data: string) => {
+      if (authStage !== "username" && authStage !== "password") return;
+      if (data.includes("\x1b")) return;
+      for (const character of data) {
+        if (authStage !== "username" && authStage !== "password") return;
+        if (character === "\r") {
+          previousInputWasCarriageReturn = true;
+          finishCredentialLine();
+          continue;
+        }
+        if (character === "\n") {
+          if (previousInputWasCarriageReturn) {
+            previousInputWasCarriageReturn = false;
+            continue;
+          }
+          finishCredentialLine();
+          continue;
+        }
+        previousInputWasCarriageReturn = false;
+        if (character === "\b" || character === "\x7f") {
+          if (!credentialInput) continue;
+          credentialInput = credentialInput.slice(0, -1);
+          if (authStage === "username") write("\b \b");
+          continue;
+        }
+        if ((character.codePointAt(0) ?? 0) < 0x20 || credentialInput.length >= 128) continue;
+        credentialInput += character;
+        if (authStage === "username") write(character);
+      }
+    };
+
     const start = async () => {
-      await ensureGhostty();
+      await Promise.all([
+        ensureGhostty(),
+        "fonts" in document ? document.fonts.load(`400 16px ${C64_FONT_FAMILY}`) : Promise.resolve(),
+      ]);
       if (cancelled || !hostRef.current) return;
 
       terminal = new Terminal({
@@ -47,9 +124,9 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
         rows: 25,
         cursorBlink: true,
         cursorStyle: "block",
-        disableStdin: true,
+        disableStdin: false,
         fontSize: window.matchMedia("(max-width: 600px)").matches ? 13 : 17,
-        fontFamily: WMUX_MONO_FONT_FAMILY,
+        fontFamily: C64_FONT_FAMILY,
         scrollback: 0,
         theme: {
           background: C64_BLUE,
@@ -63,6 +140,7 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
       fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.open(hostRef.current);
+      terminal.onData(acceptCredentialInput);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       if (cancelled) return;
       fitAddon.fit();
@@ -123,22 +201,35 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
       setStatus("Waiting for wmux service");
       write("\nREADY.\nRUN\n");
       let challenged = false;
-      const showAuthChallenge = () => {
+      const showAuthChallenge = async () => {
         if (challenged || !authRequiredRef.current) return;
         challenged = true;
-        write("\n?AUTHENTICATION REQUIRED\nENTER CREDENTIALS BELOW\n");
         setStatus("Authentication required");
-        setShowCredentials(true);
+        write("\n?AUTHENTICATION REQUIRED\n");
+        try {
+          const info = await api.authInfo();
+          if (cancelled) return;
+          if (!info.loginEnabled) {
+            write("ACCESS TOKEN REQUIRED.\nOPEN THE STARTUP URL WITH ?TOKEN=...\n");
+            setStatus("Access token required");
+            return;
+          }
+          promptForUsername();
+        } catch {
+          if (!cancelled) {
+            write("?AUTH SERVICE UNAVAILABLE ERROR\n");
+            setStatus("Authentication service unavailable");
+          }
+        }
       };
-      showAuthChallenge();
+      void showAuthChallenge();
       while (!readyRef.current && !cancelled) {
-        showAuthChallenge();
+        void showAuthChallenge();
         await pause(80);
       }
       if (cancelled) return;
 
       setStatus("Running wmux");
-      setShowCredentials(false);
       write(challenged ? "\nACCESS GRANTED.\nWMUX READY.\n" : "\nWMUX READY.\n");
       await pause(260);
       if (!cancelled) onComplete();
@@ -155,8 +246,7 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
   return (
     <main className="c64-boot-screen">
       <section className="c64-boot-bezel" aria-label="wmux loading">
-        <div ref={hostRef} className="c64-boot-terminal" aria-hidden="true" />
-        {showCredentials ? <LoginView embedded onAuthenticated={onAuthenticated} /> : null}
+        <div ref={hostRef} className="c64-boot-terminal" aria-label="C64 authentication console" />
         <span className="visually-hidden" role="status" aria-live="polite">
           {status}
         </span>

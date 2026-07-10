@@ -36,6 +36,7 @@ const withIsolatedHome = (run: (dir: string) => void): void => {
   process.env.WMUX_AUTH_PATH = path.join(dir, "auth.json");
   process.env.WMUX_SESSION_SECRET_PATH = path.join(dir, "session-secret");
   delete process.env.WMUX_DISABLE_AUTH;
+  delete process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN;
   delete process.env.WMUX_TOKEN;
   try {
     run(dir);
@@ -101,16 +102,51 @@ test("loadAuthConfig honors WMUX_DISABLE_AUTH", () => {
   }
 });
 
-test("loadAuthConfig seeds default login and persists secrets", () => {
+test("loadAuthConfig starts token-only without configured credentials", () => {
   withIsolatedHome((dir) => {
     const auth = loadAuthConfig();
     assert.equal(auth.enabled, true);
-    assert.equal(auth.loginEnabled, true);
+    assert.equal(auth.loginEnabled, false);
     assert.ok(auth.token.length >= 16);
     assert.ok(auth.sessionSecret.length >= 16);
-    // Default wmux/wmux credentials work out of the box.
-    assert.equal(verifyCredentials(auth, "wmux", "wmux"), true);
-    assert.ok(fs.existsSync(path.join(dir, "auth.json")));
+    assert.equal(fs.existsSync(path.join(dir, "auth.json")), false);
     assert.ok(fs.existsSync(path.join(dir, "session-secret")));
+  });
+});
+
+test("loadAuthConfig refuses legacy default credentials", () => {
+  withIsolatedHome((dir) => {
+    fs.writeFileSync(
+      path.join(dir, "auth.json"),
+      JSON.stringify({ username: "wmux", passwordHash: hashPassword("wmux") }),
+    );
+    const auth = loadAuthConfig();
+    assert.equal(auth.loginEnabled, false);
+    assert.equal(verifyCredentials(auth, "wmux", "wmux"), false);
+  });
+});
+
+test("loadAuthConfig allows legacy default credentials only by explicit opt-in", () => {
+  withIsolatedHome((dir) => {
+    fs.writeFileSync(
+      path.join(dir, "auth.json"),
+      JSON.stringify({ username: "wmux", passwordHash: hashPassword("wmux") }),
+    );
+    process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN = "1";
+    const auth = loadAuthConfig();
+    assert.equal(auth.loginEnabled, true);
+    assert.equal(verifyCredentials(auth, "wmux", "wmux"), true);
+  });
+});
+
+test("loadAuthConfig enables explicitly configured credentials", () => {
+  withIsolatedHome((dir) => {
+    fs.writeFileSync(
+      path.join(dir, "auth.json"),
+      JSON.stringify({ username: "operator", passwordHash: hashPassword("not-the-default") }),
+    );
+    const auth = loadAuthConfig();
+    assert.equal(auth.loginEnabled, true);
+    assert.equal(verifyCredentials(auth, "operator", "not-the-default"), true);
   });
 });
