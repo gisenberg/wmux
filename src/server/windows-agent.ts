@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import http from "node:http";
 import https from "node:https";
 import type { MachineConfig, PaneState } from "./types.js";
+import { buildWindowsHelperBundle } from "./windows-helpers.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
 import { captureOsc7 } from "./osc7.js";
 import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./terminal-checkpoint.js";
@@ -39,6 +40,7 @@ export interface WindowsAgentHealth {
   pid?: number;
   sessions?: number;
   backend?: string;
+  helperBundleVersion?: string;
   conptyAvailable?: boolean;
   pywinptyAvailable?: boolean;
 }
@@ -89,6 +91,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private pidValue = 0;
   private cwd = "";
   private cwdCaptureBuffer = "";
+  private observedCwdFromOutput = false;
   private stopped = false;
   private paused = false;
   private lastTransportWarningAt = 0;
@@ -170,11 +173,13 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   private async start(): Promise<void> {
     try {
+      const helperBundle = buildWindowsHelperBundle(this.machine);
       const response = await this.post<AgentSessionResponse>(`/sessions/${encodeURIComponent(this.pane.id)}`, {
         cols: this.cols,
         rows: this.rows,
         cwd: this.cwd || this.machine.cwd || "",
         shell: this.machine.shell || "",
+        helperBundle: { bundleVersion: helperBundle.bundleVersion, files: helperBundle.files },
         env: {
           WMUX_MACHINE_ID: this.machine.id,
           WMUX_MACHINE_NAME: this.machine.name,
@@ -208,13 +213,16 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
           20_000,
         );
         if (typeof response.cursor === "number") this.cursor = response.cursor;
+        // Agent versions before 0.5 report the session's startup cwd forever.
+        // Accept that value only until the shell has emitted an OSC 7 update;
+        // otherwise every output poll immediately reverts the live cwd.
+        if (!this.observedCwdFromOutput && response.cwd && response.cwd !== this.cwd) {
+          this.cwd = response.cwd;
+          this.emit("cwd", response.cwd);
+        }
         if (response.dataBase64) {
           const data = Buffer.from(response.dataBase64, "base64").toString("utf8");
           this.appendAndEmit(data);
-        }
-        if (response.cwd && response.cwd !== this.cwd) {
-          this.cwd = response.cwd;
-          this.emit("cwd", response.cwd);
         }
         if (response.exited) {
           this.exited = true;
@@ -264,6 +272,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const { cwds, pending } = captureOsc7(this.cwdCaptureBuffer, data);
     this.cwdCaptureBuffer = pending;
     for (const cwd of cwds) {
+      this.observedCwdFromOutput = true;
       if (cwd === this.cwd) continue;
       this.cwd = cwd;
       this.emit("cwd", cwd);

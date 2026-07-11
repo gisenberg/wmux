@@ -128,3 +128,57 @@ test("Windows agent detach preserves the remote session while kill deletes it", 
   server.close();
   await once(server, "close");
 });
+
+test("OSC 7 cwd wins over a stale cwd returned by an older Windows agent", async () => {
+  let outputRequests = 0;
+  const server = http.createServer((request, response) => {
+    const path = request.url ?? "";
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.method === "POST" && path === "/sessions/pane_cwd") {
+      response.end(JSON.stringify({ id: "pane_cwd", pid: 123, base: 0, cwd: "C:\\Users\\gisen" }));
+      return;
+    }
+    if (request.method === "GET" && path.includes("/output")) {
+      outputRequests += 1;
+      const data = outputRequests === 1 ? "\x1b]7;file://WIN/C%3A/Windows\x07" : "";
+      response.end(JSON.stringify({
+        cursor: data.length,
+        dataBase64: Buffer.from(data).toString("base64"),
+        cwd: "C:\\Users\\gisen",
+        exited: false,
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ removed: true }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_cwd",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+    },
+    80,
+    24,
+  );
+  const cwds: string[] = [];
+  session.on("cwd", (cwd) => cwds.push(cwd));
+  await waitUntil(() => outputRequests >= 2);
+  assert.equal(cwds.at(-1), "C:/Windows");
+  session.detach();
+  server.close();
+  await once(server, "close");
+});

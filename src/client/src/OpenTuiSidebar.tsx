@@ -35,6 +35,7 @@ export interface OpenTuiSidebarWorkspace {
 export interface OpenTuiSidebarMachine {
   id: string;
   name: string;
+  version?: string;
   reachable: boolean;
   detail: string;
 }
@@ -272,7 +273,8 @@ const drawSidebarGrid = (
       fillRow(row, activeTarget ? rgba.active : rgba.black);
       write(row, 2, activeTarget ? ">" : " ", activeTarget ? rgba.gold : rgba.faint, 700);
       write(row, 4, statusBullet, reachColor(machine.reachable), 700);
-      write(row, 6, machine.name, machine.reachable ? rgba.text : rgba.muted, activeTarget ? 700 : 600);
+      const versionedName = machine.version ? `${machine.name}@${machine.version}` : machine.name;
+      write(row, 6, versionedName, machine.reachable ? rgba.text : rgba.muted, activeTarget ? 700 : 600);
       actionCells(row, 0, cols, `Target ${machine.name}`, { type: "target-machine", machineId: machine.id });
       row++;
       write(row, 6, machine.detail, machine.reachable ? rgba.faint : rgba.red);

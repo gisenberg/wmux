@@ -25,6 +25,8 @@ export interface MachineStatus {
   checkedAt: string;
   endpoint?: string;
   backendDetail?: string;
+  runtimeVersion?: string;
+  helperBundleVersion?: string;
   health?: Record<string, unknown>;
 }
 

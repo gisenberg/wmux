@@ -354,6 +354,8 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - `wmux-windows-setup validate` reports the `wmux-windows-agent` helper and agent config present.
 - `curl http://100.68.206.111:3481/health` reports the Windows session agent as healthy.
 - A direct `/sessions/:id` create/input/output/delete smoke test returns command output.
+- `wmux-windows-setup install-hooks` reports Claude and Codex hooks installed; `/hooks` in a new Codex session shows the direct PowerShell command ready for review/trust.
+- Changing directories in PowerShell updates the pane cwd, and a same-host split starts in that directory.
 
 ## Known Limits
 

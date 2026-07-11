@@ -1196,6 +1196,8 @@ export const resolveMachineStatuses = async (
             checkedAt,
             endpoint: agent?.url ?? `${machine.host}:${machine.agentPort ?? 3481}`,
             backendDetail: windowsStatusDetail(backendDetail(machine), agent),
+            runtimeVersion: agent?.health?.version,
+            helperBundleVersion: agent?.health?.helperBundleVersion,
             reason: agentReachable ? undefined : `Windows agent unavailable: ${agent?.reason ?? "unknown error"}`,
             health: {
               sshReachable,

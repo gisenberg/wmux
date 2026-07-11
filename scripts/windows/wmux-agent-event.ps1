@@ -189,6 +189,10 @@ if ($CodexHook -and $HookInput) {
 }
 
 if (-not $Force -and -not $PaneId -and -not $WorkspaceId) {
+  if ($ClaudeHook -or $CodexHook) {
+    [Console]::Error.WriteLine('wmux-agent-event: hook is missing WMUX_PANE_ID and WMUX_WORKSPACE_ID; start the agent from a newly bootstrapped wmux pane')
+    exit 2
+  }
   exit 0
 }
 
@@ -209,7 +213,8 @@ $Headers = @{}
 $WmuxToken = Get-WmuxToken
 if ($WmuxToken) { $Headers['Authorization'] = "Bearer $WmuxToken" }
 try {
-  Invoke-RestMethod -Method Post -Uri ($WmuxUrl.TrimEnd('/') + '/api/agent-events') -Headers $Headers -ContentType 'application/json' -Body $Json | Out-Null
+  Invoke-RestMethod -Method Post -Uri ($WmuxUrl.TrimEnd('/') + '/api/agent-events') -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec 10 | Out-Null
 } catch {
   [Console]::Error.WriteLine("wmux-agent-event: delivery failed: $($_.Exception.Message)")
+  exit 1
 }

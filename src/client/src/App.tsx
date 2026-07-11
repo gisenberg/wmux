@@ -7,7 +7,7 @@ import { DiagnosticsModal } from "./DiagnosticsModal";
 // boot screen owns the initial Ghostty startup while the API bootstrap runs.
 const LayoutView = lazy(() => import("./LayoutView").then((m) => ({ default: m.LayoutView })));
 import { createAppStore, useAppState } from "./app-store";
-import { C64BootScreen } from "./C64BootScreen";
+import { RetroBootScreen } from "./RetroBootScreen";
 import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
 import { MobileAgentSurface } from "./MobileAgentSurface";
 import { OpenTuiActivityPanel } from "./OpenTuiActivityPanel";
@@ -325,6 +325,7 @@ export function App() {
       displayMachines.map((machine) => ({
         id: machine.id,
         name: machine.name,
+        version: machine.runtimeVersion,
         reachable: machine.reachable,
         detail: machineStatusDetail(machine),
       })),
@@ -995,7 +996,7 @@ export function App() {
   if (error) return <div className="load-state">wmux failed to load: {error}</div>;
   if (!state || !bootComplete || authRequired) {
     return (
-      <C64BootScreen
+      <RetroBootScreen
         authRequired={authRequired}
         ready={Boolean(state) && !authRequired}
         onAuthenticated={() => void loadBootstrap()}
@@ -1165,7 +1166,7 @@ export function App() {
               title={[machine.name, machine.reason, machine.backendDetail, machine.endpoint].filter(Boolean).join(" / ") || machine.kind}
             >
               <Server size={14} />
-              <span className="machine-name">{machine.name}</span>
+              <span className="machine-name">{machine.runtimeVersion ? `${machine.name}@${machine.runtimeVersion}` : machine.name}</span>
               <span className={`reach-dot ${machine.reachable ? "on" : ""}`} />
               <span className="machine-detail">{machineStatusDetail(machine)}</span>
             </div>
@@ -1688,7 +1689,8 @@ const openTuiActivityStatus = (status: string): OpenTuiActivityRow["status"] => 
 const machineStatusDetail = (machine: MachineStatus): string => {
   const endpoint = machine.endpoint ?? machine.host ?? machine.kind;
   const checked = machine.checkedAt ? `checked ${formatRelativeTime(machine.checkedAt)}` : "";
-  return [machine.reachable ? endpoint : machine.reason ?? endpoint, machine.backendDetail, checked]
+  const helpers = machine.helperBundleVersion ? `helpers ${machine.helperBundleVersion.slice(0, 8)}` : "";
+  return [machine.reachable ? endpoint : machine.reason ?? endpoint, helpers, machine.backendDetail, checked]
     .filter(Boolean)
     .join(" / ");
 };

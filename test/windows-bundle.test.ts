@@ -46,6 +46,18 @@ test("agent-event helper sends bearer auth and maps Claude start hooks to runnin
   assert.ok(content.includes(".wmux\\url"), "agent-event helper must fall back to the staged URL");
   assert.ok(content.includes("$HookEvent -eq 'UserPromptSubmit'"), "Claude start hooks must be recognized");
   assert.ok(content.includes("$Summary = 'claude running'"), "Claude start hooks must emit a running summary fallback");
+  assert.ok(content.includes("-TimeoutSec 10"), "agent events must not hang indefinitely during delivery");
+  assert.ok(content.includes("hook is missing WMUX_PANE_ID"), "missing hook context must be observable");
+});
+
+test("Windows Codex hooks bypass the cmd shim and migrate wmux-owned entries", () => {
+  const bundle = buildWindowsHelperBundle(machine);
+  const helper = bundle.files.find((file) => file.name === "wmux-hooks.ps1");
+  assert.ok(helper, "bundle includes wmux-hooks.ps1");
+  const content = Buffer.from(helper.dataBase64, "base64").toString("utf8");
+  assert.ok(content.includes("commandWindows"), "Codex hook must provide a Windows command override");
+  assert.ok(content.includes("wmux-agent-event.ps1"), "Codex hook must invoke PowerShell directly");
+  assert.ok(content.includes("$OwnedCommand"), "installer must migrate existing wmux hook entries");
 });
 
 test("bootstrap stages, verifies, then swaps and records the bundle version", () => {

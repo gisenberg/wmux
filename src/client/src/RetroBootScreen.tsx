@@ -1,25 +1,46 @@
-import { useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { FitAddon, Terminal } from "ghostty-web";
 import { api } from "./api";
+import { RetroBootArtwork } from "./RetroBootArtwork";
+import { playRetroPostSound } from "./retro-boot-audio";
+import { selectRetroBootProfile } from "./retro-boot-profiles";
 import { ensureGhostty } from "./terminal-loader";
 import { setToken } from "./token";
 
-interface C64BootScreenProps {
+interface RetroBootScreenProps {
   authRequired: boolean;
   ready: boolean;
   onAuthenticated: () => void;
   onComplete: () => void;
 }
 
-const C64_BLUE = "#40318d";
-const C64_LIGHT_BLUE = "#7869c4";
-const C64_FONT_FAMILY = '"C64 Pro Mono", monospace';
+const LAST_BOOT_PROFILE_KEY = "wmux:last-retro-boot-profile";
 
-export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete }: C64BootScreenProps) {
+const chooseBootProfile = () => {
+  let previousId: string | null = null;
+  try {
+    previousId = window.sessionStorage.getItem(LAST_BOOT_PROFILE_KEY);
+  } catch {
+    // Private browsing can make session storage unavailable.
+  }
+  const profile = selectRetroBootProfile(Math.random(), previousId);
+  try {
+    window.sessionStorage.setItem(LAST_BOOT_PROFILE_KEY, profile.id);
+  } catch {
+    // The random profile still works without persistence.
+  }
+  return profile;
+};
+
+export function RetroBootScreen({ authRequired, ready, onAuthenticated, onComplete }: RetroBootScreenProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const authRequiredRef = useRef(authRequired);
   const readyRef = useRef(ready);
-  const [status, setStatus] = useState("Starting Ghostty");
+  const onAuthenticatedRef = useRef(onAuthenticated);
+  const onCompleteRef = useRef(onComplete);
+  const [profile] = useState(chooseBootProfile);
+  const [showArtwork, setShowArtwork] = useState(true);
+  const [status, setStatus] = useState(`Starting ${profile.name}`);
 
   useEffect(() => {
     authRequiredRef.current = authRequired;
@@ -30,6 +51,15 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
   }, [ready]);
 
   useEffect(() => {
+    onAuthenticatedRef.current = onAuthenticated;
+  }, [onAuthenticated]);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useEffect(() => {
+    const stopPostSound = playRetroPostSound(profile.id);
     let cancelled = false;
     let terminal: Terminal | null = null;
     let fitAddon: FitAddon | null = null;
@@ -46,7 +76,7 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
       username = "";
       credentialInput = "";
       authStage = "username";
-      write("USERNAME> ");
+      write(profile.auth.usernamePrompt);
       requestAnimationFrame(() => terminal?.focus());
     };
 
@@ -55,15 +85,15 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
       credentialInput = "";
       authStage = "submitting";
       setStatus("Verifying credentials");
-      write("VERIFYING...\n");
+      write(profile.auth.verifying);
       try {
         const result = await api.login(username, password);
         if (cancelled) return;
         setToken(result.token);
-        onAuthenticated();
+        onAuthenticatedRef.current();
       } catch {
         if (cancelled) return;
-        write("?LOGIN FAILED ERROR\n");
+        write(profile.auth.failed);
         setStatus("Authentication failed");
         promptForUsername();
       }
@@ -75,7 +105,7 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
         username = credentialInput;
         credentialInput = "";
         authStage = "password";
-        write("PASSWORD> ");
+        write(profile.auth.passwordPrompt);
         return;
       }
       if (authStage === "password") void submitCredentials();
@@ -115,26 +145,27 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
     const start = async () => {
       await Promise.all([
         ensureGhostty(),
-        "fonts" in document ? document.fonts.load(`400 16px ${C64_FONT_FAMILY}`) : Promise.resolve(),
+        "fonts" in document ? document.fonts.load(`400 16px ${profile.fontFamily}`) : Promise.resolve(),
       ]);
       if (cancelled || !hostRef.current) return;
 
+      const mobile = window.matchMedia("(max-width: 600px)").matches;
       terminal = new Terminal({
-        cols: 40,
-        rows: 25,
+        cols: profile.columns,
+        rows: profile.rows,
         cursorBlink: true,
         cursorStyle: "block",
         disableStdin: false,
-        fontSize: window.matchMedia("(max-width: 600px)").matches ? 13 : 17,
-        fontFamily: C64_FONT_FAMILY,
+        fontSize: mobile ? profile.fontSize.mobile : profile.fontSize.desktop,
+        fontFamily: profile.fontFamily,
         scrollback: 0,
         theme: {
-          background: C64_BLUE,
-          foreground: C64_LIGHT_BLUE,
-          cursor: C64_LIGHT_BLUE,
-          cursorAccent: C64_BLUE,
-          selectionBackground: C64_LIGHT_BLUE,
-          selectionForeground: C64_BLUE,
+          background: profile.colors.background,
+          foreground: profile.colors.foreground,
+          cursor: profile.colors.foreground,
+          cursorAccent: profile.colors.background,
+          selectionBackground: profile.colors.foreground,
+          selectionForeground: profile.colors.background,
         },
       });
       fitAddon = new FitAddon();
@@ -146,78 +177,36 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
       fitAddon.fit();
       fitAddon.observeResize();
 
-      setStatus("Reading wmux disk directory");
+      await pause(700);
+      if (cancelled) return;
+      setShowArtwork(false);
+      setStatus(profile.bootStatus);
       write("\x1b[2J\x1b[H");
-      write("    **** COMMODORE 64 BASIC V2 ****\n\n");
-      write(" 64K RAM SYSTEM  38911 BASIC BYTES FREE\n\n");
-      write("READY.\n");
-      await pause(130);
-      write('LOAD "$",8\n\n');
-      await pause(100);
-      write("SEARCHING FOR $\nLOADING\nREADY.\n");
-      await pause(120);
-      write("LIST\n\n");
-
-      const directory = [
-        '0 "WMUX BOOT DISK" 64 2A',
-        '4    "GHOSTTY"          PRG',
-        '8    "MACHINES"         SEQ',
-        '12   "WORKSPACES"       SEQ',
-        '16   "SESSIONS"         PRG',
-        '20   "EVENTS"           REL',
-        "644 BLOCKS FREE.",
-      ];
-      for (const line of directory) {
+      for (const bootStep of profile.boot) {
         if (cancelled) return;
-        write(`${line}\n`);
-        await pause(55);
-      }
-
-      setStatus("Loading wmux bootstrap program");
-      await pause(100);
-      write("\nREADY.\n");
-      write('LOAD "*",8\n\n');
-      await pause(120);
-      write("SEARCHING FOR *\nLOADING\nREADY.\n");
-      await pause(120);
-      write("LIST\n\n");
-
-      const program = [
-        '10 PRINT "WMUX LOADING"',
-        "20 SYS 49152 : REM START GHOSTTY",
-        "30 GOSUB 100 : REM MACHINES",
-        "40 GOSUB 200 : REM WORKSPACES",
-        "50 GOSUB 300 : REM SESSIONS",
-        "60 GOSUB 400 : REM EVENTS",
-        '70 PRINT "READY."',
-        "80 END",
-      ];
-      for (const line of program) {
-        if (cancelled) return;
-        write(`${line}\n`);
-        await pause(45);
+        write(bootStep.text);
+        await pause(bootStep.delay);
       }
 
       setStatus("Waiting for wmux service");
-      write("\nREADY.\nRUN\n");
       let challenged = false;
       const showAuthChallenge = async () => {
         if (challenged || !authRequiredRef.current) return;
         challenged = true;
         setStatus("Authentication required");
-        write("\n?AUTHENTICATION REQUIRED\n");
+        write(profile.auth.required);
         try {
           const info = await api.authInfo();
           if (cancelled) return;
           if (!info.loginEnabled) {
-            write("ACCESS TOKEN REQUIRED.\nOPEN THE STARTUP URL WITH ?TOKEN=...\n");
+            for (const line of profile.auth.tokenRequired) write(line);
             setStatus("Access token required");
             return;
           }
           promptForUsername();
         } catch {
           if (!cancelled) {
-            write("?AUTH SERVICE UNAVAILABLE ERROR\n");
+            write(profile.auth.unavailable);
             setStatus("Authentication service unavailable");
           }
         }
@@ -230,23 +219,34 @@ export function C64BootScreen({ authRequired, ready, onAuthenticated, onComplete
       if (cancelled) return;
 
       setStatus("Running wmux");
-      write(challenged ? "\nACCESS GRANTED.\nWMUX READY.\n" : "\nWMUX READY.\n");
-      await pause(260);
-      if (!cancelled) onComplete();
+      await pause(650);
+      if (cancelled) return;
+      write(challenged ? `${profile.auth.granted}${profile.auth.ready}` : `\n${profile.auth.ready}`);
+      await pause(3_500);
+      if (!cancelled) onCompleteRef.current();
     };
 
     void start();
     return () => {
       cancelled = true;
+      stopPostSound();
       fitAddon?.dispose();
       terminal?.dispose();
     };
-  }, [onComplete]);
+  }, [profile]);
+
+  const style = {
+    "--retro-page": profile.colors.page,
+    "--retro-border": profile.colors.border,
+    "--retro-background": profile.colors.background,
+    "--retro-foreground": profile.colors.foreground,
+  } as CSSProperties;
 
   return (
-    <main className="c64-boot-screen">
-      <section className="c64-boot-bezel" aria-label="wmux loading">
-        <div ref={hostRef} className="c64-boot-terminal" aria-label="C64 authentication console" />
+    <main className={`retro-boot-screen retro-boot-${profile.id}`} style={style} data-boot-profile={profile.id}>
+      <section className="retro-boot-bezel" aria-label={`${profile.name} wmux loading`}>
+        <div ref={hostRef} className="retro-boot-terminal" aria-label={profile.ariaLabel} />
+        {showArtwork ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
         <span className="visually-hidden" role="status" aria-live="polite">
           {status}
         </span>

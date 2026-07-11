@@ -6,6 +6,94 @@
   font-display: block;
 }
 
+@font-face {
+  font-family: "Retro BBC Micro";
+  src: url("./assets/retro/BBC_Micro.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Spectrum";
+  src: url("./assets/retro/Spectrum.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Atari ST";
+  src: url("./assets/retro/Atari_8_bit.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Amiga Topaz";
+  src: url("./assets/retro/Amiga_Topaz_v1.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro VT100";
+  src: url("./assets/retro/VT100.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Amstrad CPC";
+  src: url("./assets/retro/Amstrad_CPC.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Apple II";
+  src: url("./assets/retro/Apple_2.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro IBM CGA";
+  src: url("./assets/retro/IBM_CGA.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro IBM 2915";
+  src: url("./assets/retro/IBM_2915.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro MSX";
+  src: url("./assets/retro/MSX_1.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Lisa Console";
+  src: url("./assets/retro/Lisa_Console.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
 :root {
   color-scheme: dark;
   font-family:
@@ -2080,37 +2168,91 @@ button.active-tool {
   text-transform: uppercase;
 }
 
-.c64-boot-screen {
+.retro-boot-screen {
   display: grid;
   place-items: center;
   width: 100%;
   height: var(--wmux-viewport-height, 100dvh);
   overflow: hidden;
-  background: #7869c4;
+  background: var(--retro-page);
   padding: clamp(14px, 4vw, 52px);
 }
 
-.c64-boot-bezel {
+.retro-boot-bezel {
   position: relative;
   width: min(920px, 100%);
   height: min(680px, 100%);
   min-height: 0;
   overflow: hidden;
-  border: clamp(14px, 3vw, 42px) solid #7869c4;
-  background: #40318d;
+  border: clamp(14px, 3vw, 42px) solid var(--retro-border);
+  background: var(--retro-background);
 }
 
-.c64-boot-terminal {
+.retro-boot-terminal {
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #40318d;
+  background: var(--retro-background);
 }
 
-.c64-boot-terminal canvas {
+.retro-boot-terminal canvas {
   display: block;
+}
+
+.retro-boot-artwork {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: var(--retro-background);
+  color: var(--retro-foreground);
+}
+
+.retro-boot-artwork svg {
+  width: clamp(104px, 24vw, 190px);
+  height: auto;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  shape-rendering: crispEdges;
+}
+
+.retro-boot-artwork-asset {
+  display: block;
+  width: min(48%, 240px);
+  max-height: 28%;
+  object-fit: contain;
+}
+
+.retro-boot-commodore-64 .retro-boot-artwork-asset,
+.retro-boot-commodore-128 .retro-boot-artwork-asset,
+.retro-boot-amiga-workbench .retro-boot-artwork-asset,
+.retro-boot-amstrad-cpc .retro-boot-artwork-asset,
+.retro-boot-msx2 .retro-boot-artwork-asset {
+  box-sizing: content-box;
+  padding: 12px;
+  background: rgba(248, 246, 238, 0.94);
+}
+
+.retro-boot-sinclair-ql .retro-boot-artwork-asset,
+.retro-boot-trs-80-model-4 .retro-boot-artwork-asset {
+  filter: invert(1);
+}
+
+.retro-boot-artwork text {
+  fill: currentColor;
+  stroke: none;
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .visually-hidden {
@@ -2124,11 +2266,11 @@ button.active-tool {
 }
 
 @media (max-width: 600px) {
-  .c64-boot-screen {
+  .retro-boot-screen {
     padding: 0;
   }
 
-  .c64-boot-bezel {
+  .retro-boot-bezel {
     width: 100%;
     height: 100%;
     border-width: 18px 12px;

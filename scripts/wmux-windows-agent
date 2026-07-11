@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import hashlib
 import hmac
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -15,7 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-VERSION = "0.4"
+VERSION = "0.5"
 DEFAULT_REPLAY_BYTES = 2 * 1024 * 1024
 BACKEND_CONPTY = "conpty"
 BACKEND_STDIO = "stdio"
@@ -25,6 +27,39 @@ LOCAL_TERMINAL_QUERY_RESPONSES = {
     b"\x1b[0c": b"\x1b[?62;22c",
     b"\x1b[5n": b"\x1b[0n",
 }
+
+OSC7_PATTERN = re.compile(rb"\x1b\]7;file://([^\x07\x1b]*)(?:\x07|\x1b\\)")
+
+
+class CwdReporter:
+    def __init__(self) -> None:
+        self.pending = b""
+
+    def feed(self, data: bytes) -> list[str]:
+        combined = self.pending + data
+        pending_start = combined.rfind(b"\x1b]7;")
+        searchable = combined
+        self.pending = b""
+        if pending_start >= 0:
+            tail = combined[pending_start:]
+            if b"\x07" not in tail and b"\x1b\\" not in tail:
+                searchable = combined[:pending_start]
+                self.pending = tail[-8192:]
+
+        values: list[str] = []
+        for match in OSC7_PATTERN.finditer(searchable):
+            raw = match.group(1).decode("utf-8", errors="replace")
+            slash = raw.find("/")
+            if slash < 0:
+                continue
+            path = unquote(raw[slash:])
+            if re.match(r"^/[A-Za-z]:[\\/]", path):
+                path = path[1:]
+            if len(path) > 4096 or re.search(r"[\x00-\x1f\x7f]", path):
+                continue
+            if re.match(r"^[A-Za-z]:[\\/]", path) or path.startswith("/"):
+                values.append(path)
+        return values
 
 
 class TerminalQueryResponder:
@@ -95,6 +130,59 @@ def configured_backend(config: dict[str, Any]) -> str:
     if value == "auto":
         return BACKEND_CONPTY if conpty_available() else BACKEND_STDIO
     return BACKEND_CONPTY
+
+
+def helper_bundle_version(config: dict[str, Any]) -> str:
+    helper_dir = os.path.expandvars(config_string(config, "helperDir"))
+    version_path = os.path.join(helper_dir, "bundle-version.json") if helper_dir else ""
+    if not version_path or not os.path.isfile(version_path):
+        return ""
+    try:
+        with open(version_path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return str(value.get("bundleVersion") or "") if isinstance(value, dict) else ""
+    except Exception:
+        return ""
+
+
+def stage_helper_bundle(config: dict[str, Any], payload: dict[str, Any]) -> None:
+    bundle = payload.get("helperBundle")
+    if not isinstance(bundle, dict) or not isinstance(bundle.get("files"), list):
+        return
+    helper_dir = os.path.expandvars(config_string(config, "helperDir"))
+    if not helper_dir:
+        return
+    os.makedirs(helper_dir, exist_ok=True)
+    staging = os.path.join(helper_dir, f".staging-agent-{os.getpid()}-{threading.get_ident()}")
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    try:
+        staged_names: list[str] = []
+        for entry in bundle["files"]:
+            if not isinstance(entry, dict):
+                raise ValueError("helper manifest entry must be an object")
+            name = str(entry.get("name") or "")
+            if not name or os.path.basename(name) != name:
+                raise ValueError("helper manifest contains an invalid file name")
+            data = base64.b64decode(str(entry.get("dataBase64") or ""), validate=True)
+            expected = str(entry.get("sha256") or "").lower()
+            if not expected or not hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected):
+                raise ValueError(f"helper hash verification failed for {name}")
+            with open(os.path.join(staging, name), "wb") as handle:
+                handle.write(data)
+            staged_names.append(name)
+        for name in staged_names:
+            os.replace(os.path.join(staging, name), os.path.join(helper_dir, name))
+        version = str(bundle.get("bundleVersion") or "")
+        if version:
+            version_path = os.path.join(helper_dir, "bundle-version.json")
+            temporary_version = version_path + ".tmp"
+            with open(temporary_version, "w", encoding="utf-8") as handle:
+                json.dump({"bundleVersion": version}, handle)
+                handle.write("\n")
+            os.replace(temporary_version, version_path)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def is_private_bind_host(host: str) -> bool:
@@ -368,6 +456,7 @@ class Session:
         self.buffer = bytearray()
         self.base = 0
         self.condition = threading.Condition()
+        self.cwd_reporter = CwdReporter()
         self.exited = False
         self.exit_code: int | None = None
         self.backend = self._create_backend(payload)
@@ -453,6 +542,9 @@ class Session:
                 self.condition.notify_all()
 
     def _append(self, data: bytes) -> None:
+        reported_cwds = self.cwd_reporter.feed(data)
+        if reported_cwds:
+            self.cwd = reported_cwds[-1]
         with self.condition:
             self.buffer.extend(data)
             if len(self.buffer) > self.max_replay:
@@ -523,6 +615,7 @@ class Handler(BaseHTTPRequestHandler):
                     "pid": os.getpid(),
                     "sessions": len(self.state.sessions),
                     "backend": self.state.backend,
+                    "helperBundleVersion": helper_bundle_version(self.state.config),
                     "conptyAvailable": conpty_available(),
                     "pywinptyAvailable": pywinpty_available(),
                 }
@@ -553,7 +646,9 @@ class Handler(BaseHTTPRequestHandler):
         parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
         if len(parts) == 2 and parts[0] == "sessions":
             try:
-                session = self.state.get_or_create(parts[1], self.read_json())
+                payload = self.read_json()
+                stage_helper_bundle(self.state.config, payload)
+                session = self.state.get_or_create(parts[1], payload)
             except Exception as error:
                 self.send_json({"error": "session_start_failed", "message": str(error)}, status=500)
                 return

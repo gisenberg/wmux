@@ -186,9 +186,12 @@ wmux-windows-setup persist-path
 wmux-windows-setup install-deps
 wmux-windows-setup install-stream
 wmux-windows-setup install-agent
+wmux-windows-setup install-hooks
 ```
 
 `install-deps` uses `winget` to install FFmpeg and Python when missing, then installs `pywinpty` for the Windows session agent's ConPTY backend. The dependency check executes Python instead of trusting the Microsoft Store app-execution alias. `install-stream` creates the per-user Scheduled Task that runs the on-demand screen stream agent. `install-agent` creates a per-user Scheduled Task for the experimental Windows session agent, which uses ConPTY by default. Agent tasks use interactive logon when a desktop user is present and S4U logon on headless hosts; set `WMUX_WINDOWS_AGENT_LOGON_TYPE=Interactive` or `S4U` to override detection. Both Scheduled Tasks start when available, restart after failure, run without the default 72-hour execution cutoff, and launch through hidden PowerShell wrappers instead of visible `cmd.exe` windows.
+
+Windows agent hosts show their running agent version beside the host name (for example, `win-ci@0.5`). Agent 0.5 and later also report the staged helper-bundle version in host details, making a current agent with stale helpers distinguishable from an outdated agent process. Agent-backed pane creation sends the current helper bundle through the authenticated agent API; the agent verifies every file hash before swapping it into `%LOCALAPPDATA%\wmux\bin`, so this backend does not depend on an SSH bootstrap to receive helper updates.
 
 ## Agent Events
 
@@ -209,7 +212,7 @@ wmux-hooks install codex
 
 This merges `UserPromptSubmit`, `Stop`, and `Notification` hooks into `~/.claude/settings.json`. Claude `UserPromptSubmit` marks the workspace as running for the sidebar activity spinner. Claude Stop hooks read the transcript path from hook input, derive a short workspace title from the latest user prompt, derive the descriptor from the latest assistant text, and create a completion notification. Restart Claude Code after installing hooks.
 
-The Codex installer merges `UserPromptSubmit` and `Stop` hooks into `~/.codex/hooks.json`. Codex requires you to run `/hooks` inside Codex and trust the new command hook before it will run. Start a new Codex session after installing or trusting hooks if an existing session does not pick up the config.
+The Codex installer merges `UserPromptSubmit` and `Stop` hooks into `~/.codex/hooks.json`. On Windows it migrates older wmux entries to a direct PowerShell `commandWindows`, avoiding the extra CMD shim in Codex's stdin hook path. Codex requires you to run `/hooks` inside Codex and trust the new command hook before it will run. Start a new Codex session after installing or trusting hooks if an existing session does not pick up the config. Hook invocations without wmux pane/workspace context and failed HTTP deliveries return an error instead of silently succeeding.
 
 OpenCode wrappers can call `wmux-agent-event` manually until wmux has verified a stable hook config surface for that tool.
 
@@ -392,7 +395,7 @@ Workspace, tab, and pane selection are browser-local. The route selects the work
 
 ## Current Directory Preservation
 
-When you create a new workspace, tab, or split on the same host as the source pane, wmux starts the new pane in that source pane's current working directory. With the default durable backend this is resolved from tmux's live `pane_current_path`, so it follows normal `cd` usage without requiring a shell helper. If tmux is unavailable, wmux falls back to the last cwd reported by OSC 7. Local and SSH panes launched through wmux install a temporary zsh/bash prompt hook for this when the backend passes OSC 7 through. Windows `powershell-ssh` panes install a temporary PowerShell prompt function that emits OSC 7 for filesystem locations.
+When you create a new workspace, tab, or split on the same host as the source pane, wmux starts the new pane in that source pane's current working directory. With the default durable backend this is resolved from tmux's live `pane_current_path`, so it follows normal `cd` usage without requiring a shell helper. If tmux is unavailable, wmux falls back to the last cwd reported by OSC 7. Local and SSH panes launched through wmux install a temporary zsh/bash prompt hook for this when the backend passes OSC 7 through. Windows `powershell-ssh` panes install a temporary PowerShell prompt function that emits OSC 7 for filesystem locations. Agent-backed Windows panes treat that live OSC 7 value as authoritative and the Windows agent also exposes it through its session API, so an older startup cwd cannot overwrite it before a split.
 
 ## Command Palette
 
