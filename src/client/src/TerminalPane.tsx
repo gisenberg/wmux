@@ -17,6 +17,7 @@ import {
 } from "./kitty-graphics";
 import { ensureWmuxFonts, WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
+import { configureTerminalInput } from "./terminal-input";
 import { isTerminalProtocolResponse } from "./terminal-protocol";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { withTokenParam } from "./token";
@@ -962,21 +963,6 @@ const renderMedia = (item: TerminalMedia, src: string) => {
 
 const safeCols = (cols: number): number => (Number.isFinite(cols) && cols >= 2 ? Math.floor(cols) : 80);
 const safeRows = (rows: number): number => (Number.isFinite(rows) && rows >= 1 ? Math.floor(rows) : 24);
-
-const configureTerminalInput = (term: Terminal): void => {
-  const textarea = term.textarea;
-  if (!textarea) return;
-  textarea.setAttribute("autocomplete", "off");
-  textarea.setAttribute("autocorrect", "off");
-  textarea.setAttribute("autocapitalize", "none");
-  textarea.setAttribute("spellcheck", "false");
-  textarea.setAttribute("enterkeyhint", "enter");
-  textarea.setAttribute("aria-autocomplete", "none");
-  textarea.setAttribute("data-form-type", "other");
-  textarea.setAttribute("data-lpignore", "true");
-  textarea.setAttribute("data-gramm", "false");
-  textarea.setAttribute("data-ms-editor", "false");
-};
 
 const sendInput = (ws: WebSocket | null, data: string, terminalResponse = false): void => {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data, terminalResponse }));

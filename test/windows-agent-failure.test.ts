@@ -182,3 +182,71 @@ test("OSC 7 cwd wins over a stale cwd returned by an older Windows agent", async
   server.close();
   await once(server, "close");
 });
+
+test("Windows agent queues initial resize and input until session creation completes", async () => {
+  let created = false;
+  let earlyRequests = 0;
+  const operations: string[] = [];
+  const server = http.createServer((request, response) => {
+    const path = request.url ?? "";
+    if (request.method === "POST" && path === "/sessions/pane_startup") {
+      setTimeout(() => {
+        created = true;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "pane_startup", pid: 123, base: 0 }));
+      }, 50);
+      return;
+    }
+    if (request.method === "POST" && path.endsWith("/resize")) {
+      if (!created) earlyRequests += 1;
+      operations.push("resize");
+      response.writeHead(created ? 200 : 404, { "content-type": "application/json" });
+      response.end(JSON.stringify(created ? { ok: true } : { error: "unknown_session" }));
+      return;
+    }
+    if (request.method === "POST" && path.endsWith("/input")) {
+      if (!created) earlyRequests += 1;
+      operations.push("input");
+      response.writeHead(created ? 200 : 404, { "content-type": "application/json" });
+      response.end(JSON.stringify(created ? { ok: true } : { error: "unknown_session" }));
+      return;
+    }
+    if (request.method === "GET" && path.includes("/output")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ cursor: 0, exited: false }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_startup",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+    },
+    80,
+    24,
+  );
+  session.resize(120, 40);
+  session.write("echo ready\r");
+  await waitUntil(() => operations.length === 2);
+  assert.equal(earlyRequests, 0);
+  assert.deepEqual(operations, ["resize", "input"]);
+  session.detach();
+  server.close();
+  await once(server, "close");
+});

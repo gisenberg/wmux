@@ -17,6 +17,14 @@ const DEFAULT_TERM = "xterm-256color";
 const remotePathBootstrap = (): string => `export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"`;
 const WINDOWS_HEALTH_CACHE_MS = 15_000;
 const POSIX_RUNTIME_VERSION = "v1";
+const WMUX_SERVER_VERSION = (() => {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof packageJson.version === "string" && packageJson.version ? packageJson.version : "dev";
+  } catch {
+    return "dev";
+  }
+})();
 
 interface WindowsHealthProbe {
   reachable: boolean;
@@ -1158,6 +1166,7 @@ export const resolveMachineStatuses = async (
           reachable: true,
           checkedAt,
           endpoint: localEndpoint === "localhost" ? "127.0.0.1" : localEndpoint,
+          runtimeVersion: WMUX_SERVER_VERSION,
           backendDetail: localBackendDetail(machine),
         };
       }
@@ -1221,6 +1230,10 @@ export const resolveMachineStatuses = async (
           checkedAt,
           endpoint: `${machine.host}:${port}`,
           backendDetail: windowsStatusDetail(health.backendDetail ?? backendDetail(machine), agent),
+          runtimeVersion:
+            typeof health.health?.bundleVersion === "string" && health.health.bundleVersion
+              ? health.health.bundleVersion
+              : undefined,
           reason: health.reason,
           health: {
             ...(health.health ?? {}),
@@ -1242,6 +1255,7 @@ export const resolveMachineStatuses = async (
         reachable,
         checkedAt,
         endpoint: `${machine.host}:${port}`,
+        runtimeVersion: machine.kind === "ssh" ? POSIX_RUNTIME_VERSION : undefined,
         backendDetail: backendDetail(machine),
         reason: reachable ? undefined : `no TCP response on ${machine.host}:${port}`,
       };

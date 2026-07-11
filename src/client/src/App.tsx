@@ -325,7 +325,7 @@ export function App() {
       displayMachines.map((machine) => ({
         id: machine.id,
         name: machine.name,
-        version: machine.runtimeVersion,
+        version: machine.runtimeVersion ?? "unknown",
         reachable: machine.reachable,
         detail: machineStatusDetail(machine),
       })),
@@ -1028,7 +1028,7 @@ export function App() {
       {openTuiMode ? (
         <OpenTuiSidebar
           targetMachineId={newMachineId}
-          targetMachineName={selectedMachine?.name ?? newMachineId}
+          targetMachineName={selectedMachine ? versionedMachineName(selectedMachine) : newMachineId}
           targetMachineReachable={Boolean(selectedMachine?.reachable)}
           workspaces={openTuiWorkspaces}
           machines={openTuiMachines}
@@ -1051,7 +1051,7 @@ export function App() {
             <select title="Target host for new workspaces and tabs" value={newMachineId} onChange={(event) => setNewMachineId(event.target.value)}>
             {displayMachines.map((machine) => (
               <option key={machine.id} value={machine.id} disabled={!machine.reachable}>
-                {machine.name}
+                {versionedMachineName(machine)}
               </option>
               ))}
             </select>
@@ -1074,7 +1074,7 @@ export function App() {
             <option value="all">All hosts</option>
             {displayMachines.map((machine) => (
               <option key={machine.id} value={machine.id}>
-                {machine.name}
+                {versionedMachineName(machine)}
               </option>
             ))}
           </select>
@@ -1166,7 +1166,7 @@ export function App() {
               title={[machine.name, machine.reason, machine.backendDetail, machine.endpoint].filter(Boolean).join(" / ") || machine.kind}
             >
               <Server size={14} />
-              <span className="machine-name">{machine.runtimeVersion ? `${machine.name}@${machine.runtimeVersion}` : machine.name}</span>
+              <span className="machine-name">{versionedMachineName(machine)}</span>
               <span className={`reach-dot ${machine.reachable ? "on" : ""}`} />
               <span className="machine-detail">{machineStatusDetail(machine)}</span>
             </div>
@@ -1600,6 +1600,12 @@ const withMachineAlias = (machine: MachineStatus, settings: WmuxSettings): Machi
   return alias ? { ...machine, name: alias } : machine;
 };
 
+const compactRuntimeVersion = (version: string): string =>
+  /^[0-9a-f]{12,}$/i.test(version) ? version.slice(0, 8) : version;
+
+const versionedMachineName = (machine: MachineStatus): string =>
+  `${machine.name}@${machine.runtimeVersion ? compactRuntimeVersion(machine.runtimeVersion) : "unknown"}`;
+
 const displayWorkspaceDescriptor = (
   descriptor: string | undefined,
   displayMachine: MachineStatus | undefined,
@@ -1618,7 +1624,11 @@ const displayWorkspaceHost = (
   displayMachine: MachineStatus | undefined,
   sourceMachine: MachineStatus | undefined,
   machineId: string,
-): string => displayMachine?.name ?? sourceMachine?.name ?? machineId;
+): string => displayMachine
+  ? versionedMachineName(displayMachine)
+  : sourceMachine
+    ? versionedMachineName(sourceMachine)
+    : machineId;
 
 const compactWorkspaceDescription = (value: string | undefined, limit: number): string => {
   const cleaned = stripMarkdown(value ?? "");

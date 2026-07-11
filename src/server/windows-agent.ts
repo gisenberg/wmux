@@ -92,6 +92,9 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private cwd = "";
   private cwdCaptureBuffer = "";
   private observedCwdFromOutput = false;
+  private ready = false;
+  private pendingResize: { cols: number; rows: number } | undefined;
+  private pendingInput: Array<{ data: string; terminalResponse: boolean }> = [];
   private stopped = false;
   private paused = false;
   private lastTransportWarningAt = 0;
@@ -135,6 +138,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   private postInput(data: string, terminalResponse: boolean): void {
     if (this.exited || this.stopped) return;
+    if (!this.ready) {
+      this.pendingInput.push({ data, terminalResponse });
+      return;
+    }
     void this.post(`/sessions/${encodeURIComponent(this.pane.id)}/input`, {
       dataBase64: Buffer.from(data, "utf8").toString("base64"),
       terminalResponse,
@@ -144,6 +151,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   resize(cols: number, rows: number): void {
     if (this.exited || this.stopped || cols < 2 || rows < 1) return;
     this.checkpoint.resize(cols, rows);
+    if (!this.ready) {
+      this.pendingResize = { cols, rows };
+      return;
+    }
     void this.post(`/sessions/${encodeURIComponent(this.pane.id)}/resize`, { cols, rows })
       .catch((error) => this.reportTransportFailure("resize", error));
   }
@@ -188,13 +199,22 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       });
       this.pidValue = response.pid ?? 0;
       this.cursor = typeof response.base === "number" ? response.base : 0;
+      this.ready = true;
       if (response.cwd) {
         this.cwd = response.cwd;
         this.emit("cwd", response.cwd);
       }
+      const pendingResize = this.pendingResize;
+      this.pendingResize = undefined;
+      if (pendingResize) this.resize(pendingResize.cols, pendingResize.rows);
+      const pendingInput = this.pendingInput;
+      this.pendingInput = [];
+      for (const input of pendingInput) this.postInput(input.data, input.terminalResponse);
       this.emit("title", this.machine.name);
       void this.poll();
     } catch (error) {
+      this.pendingResize = undefined;
+      this.pendingInput = [];
       this.appendAndEmit(`\r\n[wmux] Windows agent attach failed: ${formatError(error)}\r\n`);
       this.exited = true;
       this.emit("exit", 1);

@@ -2,9 +2,11 @@ import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { FitAddon, Terminal } from "ghostty-web";
 import { api } from "./api";
 import { RetroBootArtwork } from "./RetroBootArtwork";
+import { RetroGraphicalBootScreen } from "./RetroGraphicalBootScreen";
 import { playRetroPostSound } from "./retro-boot-audio";
-import { selectRetroBootProfile } from "./retro-boot-profiles";
+import { selectRetroBootProfile, type RetroBootProfile } from "./retro-boot-profiles";
 import { ensureGhostty } from "./terminal-loader";
+import { configureTerminalInput } from "./terminal-input";
 import { setToken } from "./token";
 
 interface RetroBootScreenProps {
@@ -15,6 +17,7 @@ interface RetroBootScreenProps {
 }
 
 const LAST_BOOT_PROFILE_KEY = "wmux:last-retro-boot-profile";
+type BootVisualPhase = "blank" | "artwork" | "terminal";
 
 const chooseBootProfile = () => {
   let previousId: string | null = null;
@@ -32,14 +35,28 @@ const chooseBootProfile = () => {
   return profile;
 };
 
-export function RetroBootScreen({ authRequired, ready, onAuthenticated, onComplete }: RetroBootScreenProps) {
+export function RetroBootScreen(props: RetroBootScreenProps) {
+  const [profile] = useState(chooseBootProfile);
+  if (profile.graphicalShell) return <RetroGraphicalBootScreen profile={profile} {...props} />;
+  return <RetroTerminalBootScreen profile={profile} {...props} />;
+}
+
+function RetroTerminalBootScreen({
+  profile,
+  authRequired,
+  ready,
+  onAuthenticated,
+  onComplete,
+}: RetroBootScreenProps & { profile: RetroBootProfile }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const authRequiredRef = useRef(authRequired);
   const readyRef = useRef(ready);
   const onAuthenticatedRef = useRef(onAuthenticated);
   const onCompleteRef = useRef(onComplete);
-  const [profile] = useState(chooseBootProfile);
-  const [showArtwork, setShowArtwork] = useState(true);
+  const hasBootArtwork = profile.showBootArtwork !== false;
+  const [visualPhase, setVisualPhase] = useState<BootVisualPhase>(() =>
+    !hasBootArtwork ? "terminal" : profile.id === "amiga-workbench" ? "blank" : "artwork",
+  );
   const [status, setStatus] = useState(`Starting ${profile.name}`);
 
   useEffect(() => {
@@ -70,7 +87,16 @@ export function RetroBootScreen({ authRequired, ready, onAuthenticated, onComple
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const pause = (milliseconds: number) =>
       new Promise<void>((resolve) => window.setTimeout(resolve, reducedMotion ? 0 : milliseconds));
-    const write = (text: string) => terminal?.write(text.replaceAll("\n", "\r\n"));
+    const terminalText = (text: string) => text.replaceAll("\n", "\r\n");
+    const write = (text: string) => terminal?.write(terminalText(text));
+    const writeCommitted = (text: string) =>
+      new Promise<void>((resolve) => {
+        if (!terminal || !text) {
+          resolve();
+          return;
+        }
+        terminal.write(terminalText(text), resolve);
+      });
 
     const promptForUsername = () => {
       username = "";
@@ -171,20 +197,40 @@ export function RetroBootScreen({ authRequired, ready, onAuthenticated, onComple
       fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.open(hostRef.current);
+      configureTerminalInput(terminal);
       terminal.onData(acceptCredentialInput);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       if (cancelled) return;
       fitAddon.fit();
       fitAddon.observeResize();
 
-      await pause(700);
+      if (!hasBootArtwork) {
+        setVisualPhase("terminal");
+      } else if (profile.id === "amiga-workbench") {
+        await pause(600);
+        if (cancelled) return;
+        setStatus("Waiting for Workbench disk");
+        setVisualPhase("artwork");
+        await pause(1_600);
+      } else {
+        await pause(700);
+      }
       if (cancelled) return;
-      setShowArtwork(false);
+      setVisualPhase("terminal");
       setStatus(profile.bootStatus);
       write("\x1b[2J\x1b[H");
       for (const bootStep of profile.boot) {
         if (cancelled) return;
-        write(bootStep.text);
+        if (bootStep.typedFrom === undefined) {
+          write(bootStep.text);
+        } else {
+          await writeCommitted(bootStep.text.slice(0, bootStep.typedFrom));
+          for (const character of bootStep.text.slice(bootStep.typedFrom)) {
+            if (cancelled) return;
+            await writeCommitted(character);
+            if (character !== "\n") await pause(character === " " ? 22 : 38);
+          }
+        }
         await pause(bootStep.delay);
       }
 
@@ -233,7 +279,7 @@ export function RetroBootScreen({ authRequired, ready, onAuthenticated, onComple
       fitAddon?.dispose();
       terminal?.dispose();
     };
-  }, [profile]);
+  }, [hasBootArtwork, profile]);
 
   const style = {
     "--retro-page": profile.colors.page,
@@ -245,8 +291,18 @@ export function RetroBootScreen({ authRequired, ready, onAuthenticated, onComple
   return (
     <main className={`retro-boot-screen retro-boot-${profile.id}`} style={style} data-boot-profile={profile.id}>
       <section className="retro-boot-bezel" aria-label={`${profile.name} wmux loading`}>
-        <div ref={hostRef} className="retro-boot-terminal" aria-label={profile.ariaLabel} />
-        {showArtwork ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
+        <div className="retro-boot-terminal-frame">
+          {profile.id === "amiga-workbench" ? (
+            <div className="retro-amiga-shell-titlebar" aria-hidden="true">
+              <span className="retro-amiga-shell-gadget">0</span>
+              <span>AmigaShell</span>
+              <span className="retro-amiga-shell-depth-gadget" />
+            </div>
+          ) : null}
+          <div ref={hostRef} className="retro-boot-terminal" aria-label={profile.ariaLabel} />
+        </div>
+        {visualPhase === "blank" ? <div className="retro-boot-amiga-blank" aria-hidden="true" /> : null}
+        {visualPhase === "artwork" ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
         <span className="visually-hidden" role="status" aria-live="polite">
           {status}
         </span>

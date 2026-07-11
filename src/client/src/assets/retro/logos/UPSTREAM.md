@@ -1,8 +1,11 @@
 # Retro boot logos
 
-These unmodified SVG files are embedded only as identification artwork for
-wmux's historical boot-screen profiles. The source file description pages are
-the authoritative license records.
+These SVG files are embedded only as identification artwork for wmux's
+historical boot-screen profiles. The source file description pages are the
+authoritative license records. The SGI counters and DEC tile field are locally
+normalized as transparent knockouts so the marks composite correctly on their
+simulated display backgrounds; their visible geometry and colors are otherwise
+unchanged.
 
 | Local file | Source | Author | License recorded by source |
 | --- | --- | --- | --- |
@@ -22,8 +25,9 @@ the authoritative license records.
 | `sun.svg` | [1980s Sun Microsystems logo](https://commons.wikimedia.org/wiki/File:Sun_Microsystems_1980s_logo.svg) | Sun Microsystems | Public-domain text/geometric logo |
 | `sgi.svg` | [Silicon Graphics cube logo](https://commons.wikimedia.org/wiki/File:SGI_Logo.svg) | Aonc | CC BY-SA 3.0 |
 | `next.svg` | [NeXT logo](https://commons.wikimedia.org/wiki/File:NeXT_logo.svg) | Paul Rand / NeXT | Public-domain text/geometric logo |
+| `os2-warp.png` | [IBM OS/2 Warp logo](https://commons.wikimedia.org/wiki/File:OS2warp.svg), rasterized by Wikimedia at 330 × 272 | IBM | Public-domain text/geometric logo |
 
 Public-domain status does not remove trademark restrictions. These marks identify
 the historical systems they represent and do not imply endorsement. The
-CC BY-SA assets remain available under their source licenses; wmux does not
-modify them.
+CC BY-SA assets remain available under their source licenses. Local transparency
+normalization remains under the same source license.

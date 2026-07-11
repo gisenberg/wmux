@@ -22,6 +22,7 @@ test("browser-facing machine status excludes server-only configuration", async (
   ]);
 
   assert.equal(status.id, "local");
+  assert.match(status.runtimeVersion ?? "", /^\d+\.\d+\.\d+$/);
   assert.equal(status.stream?.gatewayUrl, "https://gateway.example");
   const serialized = JSON.stringify(status);
   assert.doesNotMatch(serialized, /agent-secret|gateway-secret|private-command|private-shell|secret\/worktree/);

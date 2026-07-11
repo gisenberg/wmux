@@ -130,6 +130,28 @@ To run without any token — relying solely on the network boundary, as earlier 
 
 The optional Windows session agent and Moonlight gateway run as separate services and enforce their own tokens when configured: set a machine's `agentToken` in `wmux.config.json` for the Windows agent, and `WMUX_MOONLIGHT_GATEWAY_TOKEN` (mirrored by the machine's `stream.gatewayToken`) for the gateway. When enabling auth, provide `WMUX_TOKEN` to any `wmux-stream-agent` service so it can read the stream lease.
 
+### Retro login startup fidelity
+
+The randomized login screen separates historical startup behavior from the
+fictional wmux loading and authentication that follows it. Macintosh System 6,
+Acorn RISC OS, Atari TOS/GEM, Lisa Office System, SGI IRIX, NeXTSTEP, and OS/2
+remain graphical through authentication instead of falling through to a generic
+terminal. Amiga Workbench keeps its intentional Workbench-to-AmigaShell one-off;
+MSX2 and PICO-8 retain their native logo-to-command-console transitions. Other
+text/firmware machines enter their native display immediately; brand logos are
+not inserted merely because an asset exists. In particular, the C64
+starts directly at its BASIC V2 display, consistent with the
+[C64 User's Guide](https://www.commodore.ca/manuals/c64_users_guide/c64-users_guide-02-getting_started.pdf),
+while the Atari ST uses the animated-logo startup treatment associated with
+TOS 1.04 ("Rainbow TOS").
+Machine responses arrive as complete output while commands entered at native
+prompts are animated character-by-character.
+
+Artwork is rasterized once at the selected hardware framebuffer resolution and
+older bitmap modes use hard alpha edges and device-limited palettes. The short
+audio cues and wmux-specific disk, network, and authentication messages remain
+deliberately evocative rather than claims of literal ROM output.
+
 ## Settings
 
 The settings modal writes to `~/.wmux/settings.json` on the wmux server. Current settings cover terminal font size, browser scrollback rows, and host display aliases, so aliases follow you across browsers without changing the underlying machine IDs used for connections.
@@ -191,7 +213,7 @@ wmux-windows-setup install-hooks
 
 `install-deps` uses `winget` to install FFmpeg and Python when missing, then installs `pywinpty` for the Windows session agent's ConPTY backend. The dependency check executes Python instead of trusting the Microsoft Store app-execution alias. `install-stream` creates the per-user Scheduled Task that runs the on-demand screen stream agent. `install-agent` creates a per-user Scheduled Task for the experimental Windows session agent, which uses ConPTY by default. Agent tasks use interactive logon when a desktop user is present and S4U logon on headless hosts; set `WMUX_WINDOWS_AGENT_LOGON_TYPE=Interactive` or `S4U` to override detection. Both Scheduled Tasks start when available, restart after failure, run without the default 72-hour execution cutoff, and launch through hidden PowerShell wrappers instead of visible `cmd.exe` windows.
 
-Windows agent hosts show their running agent version beside the host name (for example, `win-ci@0.5`). Agent 0.5 and later also report the staged helper-bundle version in host details, making a current agent with stale helpers distinguishable from an outdated agent process. Agent-backed pane creation sends the current helper bundle through the authenticated agent API; the agent verifies every file hash before swapping it into `%LOCALAPPDATA%\wmux\bin`, so this backend does not depend on an SSH bootstrap to receive helper updates.
+Host versions are shown consistently in the target picker, Host Status list, and workspace host labels. The local host uses the wmux package version (for example, `homelab@0.1.0`), POSIX SSH hosts use their bootstrap runtime version, Windows SSH hosts use their staged helper version, and Windows agent hosts use the running agent version (for example, `win-ci@0.5`); hosts that cannot currently report a version show `@unknown`. Agent 0.5 and later also report the staged helper-bundle version in host details, making a current agent with stale helpers distinguishable from an outdated agent process. Agent-backed pane creation sends the current helper bundle through the authenticated agent API; the agent verifies every file hash before swapping it into `%LOCALAPPDATA%\wmux\bin`, so this backend does not depend on an SSH bootstrap to receive helper updates.
 
 ## Agent Events
 

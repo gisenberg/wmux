@@ -31,6 +31,14 @@
 }
 
 @font-face {
+  font-family: "Retro Atari 8-bit";
+  src: url("./assets/retro/Atari_8_bit.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
   font-family: "Retro Amiga Topaz";
   src: url("./assets/retro/Amiga_Topaz_v1.woff2") format("woff2");
   font-style: normal;
@@ -89,6 +97,54 @@
 @font-face {
   font-family: "Retro Lisa Console";
   src: url("./assets/retro/Lisa_Console.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro VIC-20";
+  src: url("./assets/retro/Commodore_VIC-20.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Memotech MTX";
+  src: url("./assets/retro/Memotech_MTX512.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro SAA 5050";
+  src: url("./assets/retro/Mullard_SAA_5050.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Oric Atmos";
+  src: url("./assets/retro/Oric_Atmos.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro SAM Coupe";
+  src: url("./assets/retro/SAM_Coupe.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Retro Tatung Einstein";
+  src: url("./assets/retro/Tatung_Einstein.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
   font-display: block;
@@ -2197,8 +2253,73 @@ button.active-tool {
   background: var(--retro-background);
 }
 
+.retro-boot-terminal-frame {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.retro-boot-amiga-workbench .retro-boot-terminal-frame {
+  display: grid;
+  grid-template-rows: 22px minmax(0, 1fr);
+  box-sizing: border-box;
+  border: 2px solid #000;
+  background: #aaa;
+}
+
+.retro-amiga-shell-titlebar {
+  display: grid;
+  grid-template-columns: 20px 1fr 24px;
+  align-items: center;
+  min-width: 0;
+  height: 22px;
+  border-bottom: 2px solid #000;
+  background: #6b8fc0;
+  color: #000;
+  font-family: "Retro Amiga Topaz", monospace;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.retro-amiga-shell-gadget,
+.retro-amiga-shell-depth-gadget {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  border-right: 2px solid #000;
+  background: #aaa;
+}
+
+.retro-amiga-shell-depth-gadget {
+  position: relative;
+  border-right: 0;
+  border-left: 2px solid #000;
+}
+
+.retro-amiga-shell-depth-gadget::before,
+.retro-amiga-shell-depth-gadget::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 7px;
+  border: 2px solid #000;
+}
+
+.retro-amiga-shell-depth-gadget::before {
+  translate: -2px -2px;
+}
+
+.retro-amiga-shell-depth-gadget::after {
+  translate: 2px 2px;
+}
+
 .retro-boot-terminal canvas {
   display: block;
+}
+
+.retro-boot-terminal textarea {
+  caret-color: transparent;
 }
 
 .retro-boot-artwork {
@@ -2210,6 +2331,17 @@ button.active-tool {
   pointer-events: none;
   background: var(--retro-background);
   color: var(--retro-foreground);
+}
+
+.retro-boot-amiga-blank {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: #fff;
+}
+
+.retro-boot-amiga-workbench .retro-boot-artwork {
+  background: #fff;
 }
 
 .retro-boot-artwork svg {
@@ -2224,26 +2356,13 @@ button.active-tool {
   shape-rendering: crispEdges;
 }
 
-.retro-boot-artwork-asset {
+.retro-boot-artwork-framebuffer {
   display: block;
-  width: min(48%, 240px);
-  max-height: 28%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-}
-
-.retro-boot-commodore-64 .retro-boot-artwork-asset,
-.retro-boot-commodore-128 .retro-boot-artwork-asset,
-.retro-boot-amiga-workbench .retro-boot-artwork-asset,
-.retro-boot-amstrad-cpc .retro-boot-artwork-asset,
-.retro-boot-msx2 .retro-boot-artwork-asset {
-  box-sizing: content-box;
-  padding: 12px;
-  background: rgba(248, 246, 238, 0.94);
-}
-
-.retro-boot-sinclair-ql .retro-boot-artwork-asset,
-.retro-boot-trs-80-model-4 .retro-boot-artwork-asset {
-  filter: invert(1);
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
 }
 
 .retro-boot-artwork text {
@@ -2253,6 +2372,577 @@ button.active-tool {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
+}
+
+.retro-graphical-boot {
+  outline: 0;
+}
+
+.retro-graphical-display {
+  position: relative;
+  width: min(920px, 100%);
+  height: min(680px, 100%);
+  overflow: hidden;
+  background: var(--retro-background);
+  color: var(--retro-foreground);
+  image-rendering: pixelated;
+}
+
+.retro-graphical-full-frame,
+.retro-graphical-blank,
+.retro-mac-desktop,
+.retro-atari-desktop,
+.retro-riscos-desktop,
+.retro-lisa-desktop,
+.retro-irix-desktop,
+.retro-next-desktop,
+.retro-os2-desktop,
+.retro-graphical-logo-boot {
+  position: absolute;
+  inset: 0;
+}
+
+.retro-graphical-full-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.retro-graphical-logo-boot {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 28px;
+  background: #bcbcbc;
+  color: #111;
+  font: 16px "Retro IBM 2915", monospace;
+}
+
+.retro-graphical-logo-boot img {
+  width: min(24%, 180px);
+  max-height: 34%;
+}
+
+.retro-next-boot {
+  background: #aaa;
+  font-family: "Retro Lisa Console", monospace;
+}
+
+.retro-next-boot img {
+  width: min(13%, 110px);
+}
+
+.retro-os2-boot {
+  background: #101a4b;
+}
+
+.retro-os2-boot img {
+  width: min(42.5vw, 390px);
+  max-height: none;
+}
+
+.retro-mac-desktop,
+.retro-lisa-desktop {
+  background-color: #fff;
+  background-image: repeating-linear-gradient(0deg, #fff 0 1px, #bbb 1px 2px);
+  color: #000;
+  font: 16px "Retro Lisa Console", monospace;
+}
+
+.retro-mac-menu,
+.retro-lisa-menu,
+.retro-atari-menu,
+.retro-next-menu {
+  height: 24px;
+  border-bottom: 2px solid #000;
+  background: #fff;
+  padding: 2px 9px;
+  color: #000;
+  white-space: nowrap;
+}
+
+.retro-mac-disk,
+.retro-atari-disk {
+  position: absolute;
+  top: 54px;
+  right: 30px;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  font-size: 34px;
+}
+
+.retro-atari-disk i {
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 28px;
+  border: 3px solid #111;
+  background: #fff;
+}
+
+.retro-atari-drive i::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 5px;
+  width: 18px;
+  height: 8px;
+  border: 2px solid #111;
+}
+
+.retro-atari-trash {
+  top: auto;
+  bottom: 28px;
+}
+
+.retro-atari-trash i {
+  width: 25px;
+  height: 31px;
+  border-top-width: 5px;
+  background: repeating-linear-gradient(90deg, #fff 0 3px, #111 3px 5px);
+}
+
+.retro-mac-disk small,
+.retro-atari-disk small {
+  font-size: 11px;
+}
+
+.retro-atari-desktop {
+  background: #169b91;
+  color: #000;
+  font: 16px "Retro Atari ST", monospace;
+}
+
+.retro-atari-menu {
+  background: #fff;
+}
+
+.retro-riscos-desktop {
+  background: #728a9c;
+  color: #000;
+  font: 16px "Retro BBC Micro", monospace;
+}
+
+.retro-riscos-iconbar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  border-top: 2px solid #fff;
+  background: #d7d7d7;
+  padding: 4px 8px;
+}
+
+.retro-riscos-apps,
+.retro-riscos-drive,
+.retro-riscos-acorn {
+  display: grid;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.retro-riscos-apps i,
+.retro-riscos-drive i,
+.retro-riscos-acorn i {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 2px outset #eee;
+  background: #eee;
+}
+
+.retro-riscos-apps i {
+  background: linear-gradient(135deg, #e33 0 33%, #edc92d 33% 66%, #356bd1 66%);
+}
+
+.retro-riscos-drive i {
+  position: relative;
+  border-radius: 2px;
+  background: #ddd;
+}
+
+.retro-riscos-drive i::after {
+  content: "";
+  position: absolute;
+  inset: 7px 4px auto;
+  height: 4px;
+  background: #222;
+}
+
+.retro-riscos-acorn {
+  margin-left: auto;
+}
+
+.retro-riscos-acorn i {
+  border: 0;
+  background: #d6d6d6;
+  clip-path: polygon(18% 18%, 42% 7%, 72% 14%, 89% 36%, 75% 67%, 54% 92%, 31% 77%, 13% 47%);
+  box-shadow: inset 0 0 0 4px #43598a;
+}
+
+.retro-lisa-menu {
+  background: transparent;
+}
+
+.retro-lisa-icons {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.retro-lisa-icon {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+
+.retro-lisa-icon i {
+  position: relative;
+  display: block;
+  width: 30px;
+  height: 34px;
+  border: 2px solid #111;
+  background: #fff;
+}
+
+.retro-lisa-clock i {
+  border-radius: 50%;
+}
+
+.retro-lisa-clock i::before,
+.retro-lisa-clock i::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  bottom: 15px;
+  width: 2px;
+  height: 10px;
+  background: #111;
+  transform-origin: bottom;
+}
+
+.retro-lisa-clock i::after {
+  rotate: 120deg;
+  height: 8px;
+}
+
+.retro-lisa-calculator i::before {
+  content: "888";
+  display: block;
+  margin: 3px;
+  border: 1px solid #111;
+  font-size: 7px;
+  text-align: center;
+}
+
+.retro-lisa-terminal i::before {
+  content: ">_";
+  position: absolute;
+  inset: 5px 3px 9px;
+  border: 2px solid #111;
+  padding: 2px;
+  font-size: 8px;
+}
+
+.retro-lisa-wastebasket i {
+  width: 25px;
+  border-top-width: 5px;
+  background: repeating-linear-gradient(90deg, #fff 0 3px, #111 3px 5px);
+}
+
+.retro-irix-desktop {
+  background: #5b59a7;
+  font: 16px "Retro IBM 2915", monospace;
+}
+
+.retro-irix-toolchest {
+  width: fit-content;
+  margin: 9px;
+  border: 2px outset #ddd;
+  background: #c8c8c8;
+  color: #111;
+  padding: 4px 15px;
+}
+
+.retro-next-desktop {
+  background: #aaa;
+  color: #000;
+  font: 15px "Retro Lisa Console", monospace;
+}
+
+.retro-next-menu {
+  width: 240px;
+  height: auto;
+  margin: 12px;
+  border: 2px solid #111;
+  background: #d2d2d2;
+  white-space: normal;
+}
+
+.retro-next-dock {
+  position: absolute;
+  right: 15px;
+  top: 15px;
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  background: #111;
+  color: #fff;
+}
+
+.retro-next-dock img {
+  width: 42px;
+  height: 50px;
+  object-fit: contain;
+}
+
+.retro-os2-desktop {
+  display: flex;
+  align-items: start;
+  gap: 18px;
+  background: #2c8093;
+  padding: 26px;
+  color: #fff;
+  font: 15px "Retro IBM CGA", monospace;
+}
+
+.retro-os2-icon {
+  display: grid;
+  place-items: center;
+  width: 88px;
+  min-height: 58px;
+  border: 1px solid transparent;
+  text-align: center;
+}
+
+.retro-os2-icon i {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 31px;
+  margin-bottom: 5px;
+  border: 2px outset #eee;
+  background: #d7d7d7;
+}
+
+.retro-os2-system i::before {
+  content: "OS/2";
+  position: absolute;
+  inset: 7px 2px auto;
+  color: #111;
+  font-size: 8px;
+  text-align: center;
+}
+
+.retro-os2-connections i::before,
+.retro-os2-connections i::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #111;
+}
+
+.retro-os2-connections i::before { left: 4px; }
+.retro-os2-connections i::after { right: 4px; }
+
+.retro-os2-launchpad {
+  position: absolute;
+  right: 20px;
+  bottom: 18px;
+  border: 3px outset #d2d2d2;
+  background: #c8c8c8;
+  color: #111;
+  padding: 8px 12px;
+}
+
+.retro-os2-launchpad img {
+  width: 58px;
+  height: 42px;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
+.retro-os2-launch-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+
+.retro-os2-launch-icons i {
+  position: relative;
+  display: inline-block;
+  width: 15px;
+  height: 14px;
+  border: 2px outset #eee;
+  background: #ddd;
+  color: #111;
+  font-style: normal;
+  font-size: 11px;
+  text-align: center;
+}
+
+.retro-os2-window-icon::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 1px solid #111;
+}
+
+.retro-os2-folder-icon::before {
+  content: "";
+  position: absolute;
+  inset: 5px 2px 2px;
+  border: 1px solid #111;
+  background: #eee;
+}
+
+.retro-graphical-login {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  grid-template-columns: max-content minmax(130px, 1fr);
+  gap: 9px 12px;
+  width: min(440px, calc(100% - 32px));
+  translate: -50% -50%;
+  border: 3px solid #111;
+  background: #d6d6d6;
+  box-shadow: 8px 8px 0 rgba(0, 0, 0, 0.32);
+  padding: 36px 18px 14px;
+  color: #111;
+  font: 15px "Retro IBM 2915", monospace;
+}
+
+.retro-graphical-login-title {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 25px;
+  border-bottom: 2px solid #111;
+  background: #fff;
+  padding: 3px 8px;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retro-graphical-login-logo {
+  grid-column: 1 / -1;
+  justify-self: center;
+  max-width: 92px;
+  max-height: 58px;
+  margin-bottom: 4px;
+}
+
+.retro-graphical-field-row {
+  display: contents;
+}
+
+.retro-graphical-field-row > span:first-child {
+  align-self: center;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.retro-graphical-field {
+  position: relative;
+  min-height: 25px;
+  overflow: hidden;
+  border: 2px inset #eee;
+  background: #fff;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+.retro-graphical-field.is-active::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  background: currentColor;
+  vertical-align: -0.15em;
+  animation: retro-graphical-caret 1s steps(1) infinite;
+}
+
+.retro-graphical-message,
+.retro-graphical-actions {
+  grid-column: 1 / -1;
+}
+
+.retro-graphical-message {
+  min-height: 34px;
+  color: #222;
+  font-size: 12px;
+  text-align: center;
+}
+
+.retro-graphical-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.retro-graphical-actions span {
+  min-width: 70px;
+  border: 2px outset #eee;
+  padding: 3px 10px;
+  text-align: center;
+}
+
+.retro-graphical-actions .is-default {
+  outline: 2px solid #111;
+  outline-offset: 2px;
+}
+
+.retro-graphical-input {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 1px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  border: 0;
+  opacity: 0;
+  padding: 0;
+  caret-color: transparent;
+  resize: none;
+}
+
+.retro-graphical-macintosh .retro-graphical-login,
+.retro-graphical-lisa .retro-graphical-login,
+.retro-graphical-nextstep .retro-graphical-login {
+  font-family: "Retro Lisa Console", monospace;
+}
+
+.retro-graphical-atari-st .retro-graphical-login {
+  font-family: "Retro Atari ST", monospace;
+}
+
+.retro-graphical-risc-os .retro-graphical-login {
+  font-family: "Retro BBC Micro", monospace;
+}
+
+@keyframes retro-graphical-caret {
+  50% { opacity: 0; }
 }
 
 .visually-hidden {
@@ -2274,6 +2964,18 @@ button.active-tool {
     width: 100%;
     height: 100%;
     border-width: 18px 12px;
+  }
+
+  .retro-graphical-display {
+    width: 100%;
+    height: 100%;
+  }
+
+  .retro-graphical-login {
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 7px 8px;
+    padding-inline: 10px;
+    font-size: 12px;
   }
 }
 
