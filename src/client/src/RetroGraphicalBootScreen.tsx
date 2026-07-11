@@ -164,50 +164,52 @@ export function RetroGraphicalBootScreen({
       onPointerDown={() => inputRef.current?.focus()}
     >
       <section className="retro-graphical-display" aria-label={`${profile.name} graphical startup`}>
-        <GraphicalDesktop shell={shell} booting={phase === "boot"} />
-        {phase !== "boot" ? (
-          <div className="retro-graphical-login" role="group" aria-label={copy.title}>
-            <div className="retro-graphical-login-title">{copy.title}</div>
-            {shell === "irix" ? <img className="retro-graphical-login-logo retro-graphical-sgi-logo" src={sgiLogo} alt="SGI" /> : null}
-            <div className="retro-graphical-field-row">
-              <span>{copy.user}</span>
-              <span className={`retro-graphical-field ${phase === "username" ? "is-active" : ""}`}>{username}</span>
+        <div className="retro-graphical-framebuffer">
+          <GraphicalDesktop shell={shell} booting={phase === "boot"} />
+          {phase !== "boot" ? (
+            <div className="retro-graphical-login" role="group" aria-label={copy.title}>
+              <div className="retro-graphical-login-title">{copy.title}</div>
+              {shell === "irix" ? <img className="retro-graphical-login-logo retro-graphical-sgi-logo" src={sgiLogo} alt="SGI" /> : null}
+              <div className="retro-graphical-field-row">
+                <span>{copy.user}</span>
+                <span className={`retro-graphical-field ${phase === "username" ? "is-active" : ""}`}>{username}</span>
+              </div>
+              <div className="retro-graphical-field-row">
+                <span>{copy.password}</span>
+                <span className={`retro-graphical-field ${phase === "password" ? "is-active" : ""}`}>{"•".repeat(password.length)}</span>
+              </div>
+              <div className="retro-graphical-message">
+                {phase === "verifying" ? "Checking credentials…" : null}
+                {phase === "failed" ? "Name or password not recognized." : null}
+                {phase === "token" ? "This server requires an access token. Open its startup URL with ?token=…" : null}
+                {phase === "ready" ? "WMUX READY" : null}
+              </div>
+              <div className="retro-graphical-actions" aria-hidden="true">
+                <span>Cancel</span>
+                <span className="is-default">{copy.action}</span>
+              </div>
             </div>
-            <div className="retro-graphical-field-row">
-              <span>{copy.password}</span>
-              <span className={`retro-graphical-field ${phase === "password" ? "is-active" : ""}`}>{"•".repeat(password.length)}</span>
-            </div>
-            <div className="retro-graphical-message">
-              {phase === "verifying" ? "Checking credentials…" : null}
-              {phase === "failed" ? "Name or password not recognized." : null}
-              {phase === "token" ? "This server requires an access token. Open its startup URL with ?token=…" : null}
-              {phase === "ready" ? "WMUX READY" : null}
-            </div>
-            <div className="retro-graphical-actions" aria-hidden="true">
-              <span>Cancel</span>
-              <span className="is-default">{copy.action}</span>
-            </div>
-          </div>
-        ) : null}
-        <textarea
-          ref={inputRef}
-          className="retro-graphical-input"
-          aria-label="Authentication input"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          enterKeyHint="next"
-          onInput={(event) => {
-            if (phase !== "username" && phase !== "password") return;
-            const characters = event.currentTarget.value.replace(/[\r\n]/g, "");
-            event.currentTarget.value = "";
-            if (!characters) return;
-            if (phase === "username") setUsername((value) => `${value}${characters}`.slice(0, 128));
-            else setPassword((value) => `${value}${characters}`.slice(0, 128));
-          }}
-        />
-        <span className="visually-hidden" role="status" aria-live="polite">{status}</span>
+          ) : null}
+          <textarea
+            ref={inputRef}
+            className="retro-graphical-input"
+            aria-label="Authentication input"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            enterKeyHint="next"
+            onInput={(event) => {
+              if (phase !== "username" && phase !== "password") return;
+              const characters = event.currentTarget.value.replace(/[\r\n]/g, "");
+              event.currentTarget.value = "";
+              if (!characters) return;
+              if (phase === "username") setUsername((value) => `${value}${characters}`.slice(0, 128));
+              else setPassword((value) => `${value}${characters}`.slice(0, 128));
+            }}
+          />
+          <span className="visually-hidden" role="status" aria-live="polite">{status}</span>
+        </div>
       </section>
     </main>
   );

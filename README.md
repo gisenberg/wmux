@@ -156,6 +156,9 @@ Both graphical and terminal profiles are contained within that native framebuffe
 aspect ratio. Terminal profiles retain their declared row and column grids, then
 uniformly scale the completed terminal surface inside the machine framebuffer
 without stretching glyphs or adding rows and columns to fill the browser viewport.
+On narrow mobile viewports, the emulated display background fills the full visual
+viewport while that native framebuffer remains uniformly scaled and centered
+inside it.
 
 ## Settings
 
@@ -503,6 +506,24 @@ wmux implements the cmux shortcuts that fit a browser app. Use `Cmd` on macOS an
 - `Cmd/Ctrl+Shift+U`: jump to latest unread notification
 
 Some browser or OS-reserved shortcuts may not reach wmux on every platform.
+
+## Mobile Experience
+
+Phone-sized viewports, portrait tablets, and short coarse-pointer landscape
+views use dedicated mobile chrome. The top surface switcher keeps Chat, Term,
+workspace navigation, and the command palette reachable without covering the
+terminal; the selected Chat/Term surface is remembered in the browser. The
+navigation drawer uses real, scrollable controls and includes the active
+workspace's tabs and split panes, so panes hidden by the single-pane mobile
+layout remain selectable.
+
+Interactive mobile overlays use semantic DOM controls even when the default
+OpenTUI chrome is enabled. Navigation, commands, activity, diagnostics, and
+settings therefore support touch scrolling, software-keyboard editing, safe
+areas, and at least 44px primary targets. When an editable field opens the
+software keyboard, surrounding chrome collapses while mounted terminals stay
+alive; orientation and responsive viewport changes reset the keyboard baseline
+instead of leaving the app in that collapsed state.
 
 ## Design Direction
 

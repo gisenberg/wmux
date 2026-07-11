@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { Copy, PanelBottom, PanelRight, Play, RefreshCw, X } from "lucide-react";
 import type { SplitDirection, TerminalRun } from "./types";
 import {
   createGrid,
@@ -146,6 +147,60 @@ export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
   return (
     <div className="pane-toolbar open-tui-pane-toolbar">
       <canvas ref={canvasRef} className="open-tui-canvas" onClick={onClick} onPointerMove={onPointerMove} />
+      <div className="mobile-pane-toolbar">
+        <button
+          type="button"
+          className="mobile-pane-toolbar-identity"
+          title={`${props.title} on ${props.machineLabel}`}
+          aria-label={`Focus ${props.title} on ${props.machineLabel}`}
+          onClick={props.onActivate}
+        >
+          <span className={props.connected ? "connected" : "disconnected"} aria-hidden="true">
+            {props.connected ? "[on]" : "[--]"}
+          </span>
+          <strong>{props.title}</strong>
+          <small>{props.machineLabel}</small>
+          {props.unreadCount > 0 ? <span className="badge">{Math.min(99, props.unreadCount)}</span> : null}
+        </button>
+        <div className="mobile-pane-toolbar-actions" aria-label="Pane actions">
+          {props.run && props.canCopyLastCommand ? (
+            <button type="button" title="Copy last command" aria-label="Copy last command" onClick={props.onCopyLastCommand}>
+              <Copy size={17} />
+            </button>
+          ) : null}
+          {props.run && props.canRerunLastCommand ? (
+            <button type="button" title="Rerun last command" aria-label="Rerun last command" onClick={props.onRerunLastCommand}>
+              <Play size={17} />
+            </button>
+          ) : null}
+          {props.canReconnect ? (
+            <button type="button" title={props.connectionIssue ?? "Reconnect pane"} aria-label="Reconnect pane" onClick={props.onReconnect}>
+              <RefreshCw size={17} />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            title={`Split right on ${props.machineLabel}`}
+            aria-label="Split pane right"
+            disabled={!props.canSplit}
+            onClick={() => props.onSplit("vertical")}
+          >
+            <PanelRight size={17} />
+          </button>
+          <button
+            type="button"
+            title={`Split down on ${props.machineLabel}`}
+            aria-label="Split pane down"
+            disabled={!props.canSplit}
+            onClick={() => props.onSplit("horizontal")}
+          >
+            <PanelBottom size={17} />
+          </button>
+          <button type="button" className="danger" title="Close pane and kill process" aria-label="Close pane" onClick={props.onClose}>
+            <X size={18} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

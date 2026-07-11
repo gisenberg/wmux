@@ -301,29 +301,31 @@ function RetroTerminalBootScreen({
   return (
     <main ref={screenRef} className={`retro-boot-screen retro-boot-${profile.id}`} style={style} data-boot-profile={profile.id}>
       <section className="retro-boot-bezel" aria-label={`${profile.name} wmux loading`}>
-        <div className="retro-boot-terminal-frame">
-          {isAmiga ? (
-            <div className="retro-amiga-shell-titlebar" aria-hidden="true">
-              <span className="retro-amiga-shell-gadget">0</span>
-              <span>AmigaShell</span>
-              <span className="retro-amiga-shell-depth-gadget" />
+        <div className="retro-boot-framebuffer">
+          <div className="retro-boot-terminal-frame">
+            {isAmiga ? (
+              <div className="retro-amiga-shell-titlebar" aria-hidden="true">
+                <span className="retro-amiga-shell-gadget">0</span>
+                <span>AmigaShell</span>
+                <span className="retro-amiga-shell-depth-gadget" />
+              </div>
+            ) : null}
+            <div ref={hostRef} className="retro-boot-terminal" aria-label={profile.ariaLabel} />
+          </div>
+          {visualPhase === "blank" ? <div className="retro-boot-amiga-blank" aria-hidden="true" /> : null}
+          {visualPhase === "guru" ? (
+            <div className="retro-amiga-guru" role="img" aria-label="Amiga Guru Meditation software failure">
+              <div className="retro-amiga-guru-alert">
+                <span>Software Failure. Press left mouse button to continue.</span>
+                <span>Guru Meditation #0000000B.00C01570</span>
+              </div>
             </div>
           ) : null}
-          <div ref={hostRef} className="retro-boot-terminal" aria-label={profile.ariaLabel} />
+          {visualPhase === "artwork" ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
+          <span className="visually-hidden" role="status" aria-live="polite">
+            {status}
+          </span>
         </div>
-        {visualPhase === "blank" ? <div className="retro-boot-amiga-blank" aria-hidden="true" /> : null}
-        {visualPhase === "guru" ? (
-          <div className="retro-amiga-guru" role="img" aria-label="Amiga Guru Meditation software failure">
-            <div className="retro-amiga-guru-alert">
-              <span>Software Failure. Press left mouse button to continue.</span>
-              <span>Guru Meditation #0000000B.00C01570</span>
-            </div>
-          </div>
-        ) : null}
-        {visualPhase === "artwork" ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
-        <span className="visually-hidden" role="status" aria-live="polite">
-          {status}
-        </span>
       </section>
     </main>
   );

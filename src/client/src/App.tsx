@@ -11,6 +11,7 @@ import { RetroBootScreen } from "./RetroBootScreen";
 import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
 import { MobileAgentSurface } from "./MobileAgentSurface";
 import { OpenTuiActivityPanel } from "./OpenTuiActivityPanel";
+import { OpenTuiMobileChrome } from "./OpenTuiMobileChrome";
 import type { OpenTuiActivityRow } from "./OpenTuiActivityPanel";
 import { OpenTuiCommandPalette } from "./OpenTuiCommandPalette";
 import { OpenTuiSettingsModal } from "./OpenTuiSettingsModal";
@@ -26,6 +27,12 @@ import { useEventStream } from "./useEventStream";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { maxSidebarWidth, mobileViewportMediaQuery, useSidebar } from "./useSidebar";
 import { writeBrowserClipboard } from "./clipboard";
+import {
+  isEditableViewportTarget,
+  mobileKeyboardLikelyOpen,
+  mobileViewportShapeChanged,
+  type MobileViewportBaseline,
+} from "./mobile-viewport";
 import type {
   AgentActivity,
   BootstrapPayload,
@@ -62,6 +69,7 @@ const defaultSettings: WmuxSettings = {
 };
 
 const maxMountedTabViews = 6;
+const mobileSurfaceModeStorageKey = "wmux.mobileSurfaceMode";
 
 interface MobileViewportState {
   isMobile: boolean;
@@ -121,14 +129,21 @@ export function App() {
   const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
   const [doctorError, setDoctorError] = useState("");
-  const [mobileSurfaceMode, setMobileSurfaceMode] = useState<MobileSurfaceMode>("agent");
+  const [mobileSurfaceMode, setMobileSurfaceMode] = useState<MobileSurfaceMode>(loadMobileSurfaceMode);
   const [bellPaneIds, setBellPaneIds] = useState<Set<string>>(() => new Set());
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const pendingActionKeys = useRef(new Set<string>());
   const terminalFocusToken = useRef(0);
+  const mobileSidebarRef = useRef<HTMLElement | null>(null);
+  const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
+  const previousMobileSidebarCollapsed = useRef(sidebarCollapsed);
   const finishBoot = useCallback(() => setBootComplete(true), []);
+
+  useEffect(() => {
+    window.localStorage.setItem(mobileSurfaceModeStorageKey, mobileSurfaceMode);
+  }, [mobileSurfaceMode]);
 
   useEffect(() => {
     if (!mobileViewport.isMobile || sidebarCollapsed) return;
@@ -138,6 +153,25 @@ export function App() {
     window.addEventListener("keydown", closeNavigation);
     return () => window.removeEventListener("keydown", closeNavigation);
   }, [collapseSidebar, mobileViewport.isMobile, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (mobileSidebarRef.current) mobileSidebarRef.current.inert = mobileViewport.isMobile && sidebarCollapsed;
+  }, [mobileViewport.isMobile, sidebarCollapsed]);
+
+  useEffect(() => {
+    const wasCollapsed = previousMobileSidebarCollapsed.current;
+    previousMobileSidebarCollapsed.current = sidebarCollapsed;
+    if (!mobileViewport.isMobile || wasCollapsed === sidebarCollapsed) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!sidebarCollapsed) {
+        mobileSidebarCloseRef.current?.focus();
+        return;
+      }
+      const triggers = Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-controls="wmux-sidebar"]'));
+      triggers.find((trigger) => trigger.getClientRects().length > 0)?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mobileViewport.isMobile, sidebarCollapsed]);
 
   const runPending = useCallback(
     async <T,>(key: string, label: string, action: () => Promise<T>): Promise<T | undefined> => {
@@ -424,9 +458,9 @@ export function App() {
   };
 
   const openSettings = useCallback(() => {
-    setSettingsSurface(openTuiMode ? "opentui" : "dom");
+    setSettingsSurface(openTuiMode && !mobileViewport.isMobile ? "opentui" : "dom");
     setSettingsOpen(true);
-  }, [openTuiMode]);
+  }, [mobileViewport.isMobile, openTuiMode]);
 
   const cancelSettings = () => {
     setPreviewSettings(null);
@@ -466,7 +500,13 @@ export function App() {
         ? "failed"
         : "updated";
   const mobileHeaderStatusLabel = mobileHeaderAgent?.status ?? activePane?.status ?? "idle";
-  const mobileHeaderSubtitle = [activeTab?.title, mobileHeaderMachine?.name ?? activeWorkspace?.machineId]
+  const mobilePaneIndex = activeTab && activePane
+    ? activeTab.panes.findIndex((candidate) => candidate.id === activePane.id)
+    : -1;
+  const mobilePaneContext = activeTab && activeTab.panes.length > 1 && mobilePaneIndex >= 0
+    ? `pane ${mobilePaneIndex + 1}/${activeTab.panes.length}`
+    : "";
+  const mobileHeaderSubtitle = [activeTab?.title, mobilePaneContext, mobileHeaderMachine?.name ?? activeWorkspace?.machineId]
     .filter(Boolean)
     .join(" / ");
 
@@ -562,6 +602,7 @@ export function App() {
     const response = await api.createTab(activeWorkspace.id, machineId, activePane?.id);
     await refresh(response.state);
     activateWorkspaceTab(activeWorkspace.id, response.tab.id, { replaceHistory: false });
+    if (mobileViewport.isMobile) collapseSidebar();
   });
 
   const splitPane = guard((paneId: string, _direction: SplitDirection, _machineId?: string) => `pane:${paneId}:split`, "Splitting pane...", async (paneId: string, direction: SplitDirection, machineId?: string) => {
@@ -1026,7 +1067,7 @@ export function App() {
           {pendingActions.length > 1 ? <span className="mutation-status-count">+{pendingActions.length - 1}</span> : null}
         </div>
       ) : null}
-      {openTuiMode ? (
+      {openTuiMode && !mobileViewport.isMobile ? (
         <OpenTuiSidebar
           targetMachineId={newMachineId}
           targetMachineName={selectedMachine ? versionedMachineName(selectedMachine) : newMachineId}
@@ -1038,7 +1079,13 @@ export function App() {
           onActivateWorkspace={activateWorkspaceFromChrome}
         />
       ) : (
-      <aside id="wmux-sidebar" className="sidebar" aria-label="Workspace navigation">
+      <aside
+        ref={mobileSidebarRef}
+        id="wmux-sidebar"
+        className={`sidebar ${openTuiMode ? "mobile-open-tui-sidebar" : ""}`}
+        aria-label="Workspace navigation"
+        aria-hidden={mobileViewport.isMobile && sidebarCollapsed}
+      >
         <div className="brand">
           <PanelLeft size={18} />
           <span>wmux</span>
@@ -1127,6 +1174,7 @@ export function App() {
                 key={workspace.id}
                 href={workspaceTabPath(workspace.id, tab.id)}
                 title={tooltip}
+                aria-current={workspace.id === activeWorkspace?.id ? "page" : undefined}
                 className={`workspace-item ${workspace.id === activeWorkspace?.id ? "active" : ""} ${
                   machine?.reachable ? "" : "disabled"
                 } ${workspace.createdBy === "agent" ? "agent-created" : ""} ${
@@ -1157,6 +1205,66 @@ export function App() {
                 </a>
               );
             })}
+            {mobileViewport.isMobile && activeWorkspace ? (
+              <div className="mobile-session-navigation" aria-label={`Sessions in ${activeWorkspace.name}`}>
+                <div className="mobile-session-navigation-header">
+                  <span>Tabs</span>
+                  <button
+                    type="button"
+                    title={`New tab on ${selectedMachine?.name ?? newMachineId}`}
+                    aria-label={`New tab on ${selectedMachine?.name ?? newMachineId}`}
+                    disabled={!selectedMachine?.reachable}
+                    onClick={() => createTab(newMachineId)}
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
+                <div className="mobile-tab-navigation">
+                  {activeWorkspace.tabs.map((tab) => (
+                    <a
+                      key={tab.id}
+                      href={workspaceTabPath(activeWorkspace.id, tab.id)}
+                      className={tab.id === activeTab?.id ? "active" : ""}
+                      aria-current={tab.id === activeTab?.id ? "page" : undefined}
+                      onClick={(event) => activateWorkspaceLink(event, activeWorkspace.id, tab.id)}
+                    >
+                      <TerminalSquare size={16} aria-hidden="true" />
+                      <span>{tab.title}</span>
+                      {(unreadByTabId.get(tab.id) ?? 0) > 0 ? <span className="badge">{unreadByTabId.get(tab.id)}</span> : null}
+                    </a>
+                  ))}
+                </div>
+                {activeTab && activeTab.panes.length > 1 ? (
+                  <div className="mobile-pane-navigation" aria-label={`Panes in ${activeTab.title}`}>
+                    <span className="mobile-pane-navigation-label">Panes</span>
+                    {activeTab.panes.map((pane, index) => {
+                      const paneMachine = machineFor(displayMachines, pane.machineId);
+                      const paneActive = pane.id === activePane?.id;
+                      return (
+                        <button
+                          key={pane.id}
+                          type="button"
+                          className={paneActive ? "active" : ""}
+                          aria-pressed={paneActive}
+                          onClick={() => {
+                            activatePaneInTab(activeTab.id, pane.id);
+                            collapseSidebar();
+                            if (mobileSurfaceMode === "terminal") {
+                              requestTerminalFocus(activeWorkspace.id, activeTab.id);
+                            }
+                          }}
+                        >
+                          <span>Pane {index + 1}</span>
+                          <strong>{pane.title}</strong>
+                          <small>{paneMachine?.name ?? pane.machineId}</small>
+                          {(unreadByPaneId.get(pane.id) ?? 0) > 0 ? <span className="badge">{unreadByPaneId.get(pane.id)}</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
         </nav>
         <div className="sidebar-label host-label">Host status</div>
         <div className="machine-list">
@@ -1213,6 +1321,7 @@ export function App() {
                 onClick={collapseSidebar}
               />
               <button
+                ref={mobileSidebarCloseRef}
                 type="button"
                 className="mobile-sidebar-close"
                 title="Close navigation"
@@ -1226,8 +1335,22 @@ export function App() {
           ) : null}
         </>
       ) : null}
-      <section className={`workspace ${showMobileModeBar ? "mobile-workspace" : ""} ${showMobileAgentSurface ? "mobile-agent-active" : ""}`}>
-        {showMobileModeBar ? (
+      <section className={`workspace ${showMobileModeBar ? "mobile-workspace" : ""} ${showMobileAgentSurface ? "mobile-agent-active" : ""} ${showMobileModeBar && openTuiMode ? "mobile-open-tui" : ""}`}>
+        {showMobileModeBar && openTuiMode ? (
+          <OpenTuiMobileChrome
+            workspaceName={activeWorkspace?.name ?? "wmux"}
+            subtitle={mobileHeaderSubtitle}
+            status={mobileHeaderStatus}
+            statusLabel={mobileHeaderStatusLabel}
+            serviceConnection={serviceConnection}
+            surfaceMode={mobileSurfaceMode}
+            navigationOpen={!sidebarCollapsed}
+            onToggleNavigation={toggleSidebar}
+            onSurfaceModeChange={setMobileSurfaceMode}
+            onOpenActions={openCommandPalette}
+          />
+        ) : null}
+        {showMobileModeBar && !openTuiMode ? (
           <header className="mobile-shell-header">
             <button
               type="button"
@@ -1256,7 +1379,7 @@ export function App() {
             </div>
           </header>
         ) : null}
-        {showMobileModeBar ? (
+        {showMobileModeBar && !openTuiMode ? (
           <div className="mobile-mode-bar">
             <button
               type="button"
@@ -1458,7 +1581,7 @@ export function App() {
         )}
       </section>
       {activityOpen ? (
-        openTuiMode ? (
+        openTuiMode && !mobileViewport.isMobile ? (
           <OpenTuiActivityPanel
             rows={openTuiActivityRows}
             onClose={() => setActivityOpen(false)}
@@ -1493,16 +1616,16 @@ export function App() {
         <SettingsModal
           machines={machines}
           settings={persistedSettings}
-          surface={openTuiMode ? settingsSurface : "dom"}
+          surface={openTuiMode && !mobileViewport.isMobile ? settingsSurface : "dom"}
           onPreview={setPreviewSettings}
           onSave={updateSettings}
           onCancel={cancelSettings}
-          onUseDomFallback={openTuiMode ? () => setSettingsSurface("dom") : undefined}
-          onUseOpenTui={openTuiMode ? () => setSettingsSurface("opentui") : undefined}
+          onUseDomFallback={openTuiMode && !mobileViewport.isMobile ? () => setSettingsSurface("dom") : undefined}
+          onUseOpenTui={openTuiMode && !mobileViewport.isMobile ? () => setSettingsSurface("opentui") : undefined}
         />
       ) : null}
       {commandPaletteOpen ? (
-        openTuiMode ? (
+        openTuiMode && !mobileViewport.isMobile ? (
           <OpenTuiCommandPalette
             commands={commands}
             query={commandPaletteQuery}
@@ -1515,6 +1638,7 @@ export function App() {
             query={commandPaletteQuery}
             onQueryChange={setCommandPaletteQuery}
             onClose={() => setCommandPaletteOpen(false)}
+            autoFocus={!mobileViewport.isMobile}
           />
         )
       ) : null}
@@ -1528,13 +1652,27 @@ const useMobileViewportState = (): MobileViewportState => {
     isMobile: initialMetrics.isMobile,
     keyboardOpen: initialMetrics.keyboardOpen,
   }));
-  const maxMobileViewportHeight = useRef(initialMetrics.isMobile ? initialMetrics.height : 0);
+  const viewportBaseline = useRef<MobileViewportBaseline>({
+    width: initialMetrics.isMobile ? initialMetrics.width : 0,
+    height: initialMetrics.isMobile ? initialMetrics.height : 0,
+  });
 
   useEffect(() => {
-    const update = () => {
-      const metrics = measureMobileViewport(maxMobileViewportHeight.current);
+    const update = (resetBaseline = false) => {
+      const viewport = window.visualViewport;
+      const viewportHeight = viewport?.height ?? window.innerHeight;
+      const viewportWidth = viewport?.width ?? window.innerWidth;
+      if (
+        resetBaseline ||
+        mobileViewportShapeChanged(viewportBaseline.current, viewportWidth)
+      ) {
+        viewportBaseline.current = { width: viewportWidth, height: viewportHeight };
+      }
+      const metrics = measureMobileViewport(viewportBaseline.current);
       if (metrics.isMobile && !metrics.keyboardOpen) {
-        maxMobileViewportHeight.current = Math.max(maxMobileViewportHeight.current, metrics.height);
+        viewportBaseline.current = { width: metrics.width, height: metrics.height };
+      } else if (!metrics.isMobile) {
+        viewportBaseline.current = { width: 0, height: 0 };
       }
       const next = metrics.isMobile
         ? { isMobile: metrics.isMobile, keyboardOpen: metrics.keyboardOpen }
@@ -1549,30 +1687,37 @@ const useMobileViewportState = (): MobileViewportState => {
     };
     update();
     const visualViewport = window.visualViewport;
-    window.addEventListener("resize", update);
-    window.addEventListener("orientationchange", update);
-    visualViewport?.addEventListener("resize", update);
-    visualViewport?.addEventListener("scroll", update);
+    const updateViewport = () => update(false);
+    const resetForOrientation = () => update(true);
+    window.addEventListener("resize", updateViewport);
+    window.addEventListener("orientationchange", resetForOrientation);
+    visualViewport?.addEventListener("resize", updateViewport);
+    visualViewport?.addEventListener("scroll", updateViewport);
     return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("orientationchange", update);
-      visualViewport?.removeEventListener("resize", update);
-      visualViewport?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", updateViewport);
+      window.removeEventListener("orientationchange", resetForOrientation);
+      visualViewport?.removeEventListener("resize", updateViewport);
+      visualViewport?.removeEventListener("scroll", updateViewport);
     };
   }, []);
 
   return state;
 };
 
-const measureMobileViewport = (maxMobileViewportHeight = 0): MobileViewportMetrics => {
+const measureMobileViewport = (
+  baseline: MobileViewportBaseline = { width: 0, height: 0 },
+): MobileViewportMetrics => {
   const isMobile = window.matchMedia(mobileViewportMediaQuery).matches;
   const viewport = window.visualViewport;
   const viewportHeight = viewport?.height ?? window.innerHeight;
   const viewportWidth = viewport?.width ?? window.innerWidth;
-  const keyboardOpen =
-    isMobile &&
-    (window.innerHeight - viewportHeight > 80 ||
-      (maxMobileViewportHeight > 0 && maxMobileViewportHeight - viewportHeight > 120));
+  const keyboardOpen = mobileKeyboardLikelyOpen({
+    isMobile,
+    layoutHeight: window.innerHeight,
+    viewportHeight,
+    viewportWidth,
+    editableFocused: isEditableViewportTarget(document.activeElement),
+  }, baseline);
   return {
     isMobile,
     keyboardOpen,
@@ -1592,6 +1737,9 @@ const settleMobileViewportAfterNavigation = (): void => {
   window.setTimeout(sync, 120);
   window.setTimeout(sync, 320);
 };
+
+const loadMobileSurfaceMode = (): MobileSurfaceMode =>
+  window.localStorage.getItem(mobileSurfaceModeStorageKey) === "terminal" ? "terminal" : "agent";
 
 const machineFor = (machines: MachineStatus[], machineId: string): MachineStatus | undefined =>
   machines.find((machine) => machine.id === machineId);
@@ -1745,20 +1893,27 @@ function CommandPalette({
   query,
   onQueryChange,
   onClose,
+  autoFocus = true,
 }: {
   commands: PaletteCommand[];
   query: string;
   onQueryChange: (query: string) => void;
   onClose: () => void;
+  autoFocus?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
   const selectableCommands = filteredCommands.filter((command) => !command.disabled);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (autoFocus) inputRef.current?.focus();
+    else panelRef.current?.focus();
+    return () => returnFocusRef.current?.focus();
+  }, [autoFocus]);
 
   useEffect(() => {
     const firstEnabled = filteredCommands.findIndex((command) => !command.disabled);
@@ -1786,10 +1941,12 @@ function CommandPalette({
   return (
     <div className="command-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
       <div
+        ref={panelRef}
         className="command-panel"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
@@ -1813,13 +1970,28 @@ function CommandPalette({
         }}
       >
         <div className="command-input-row">
-          <Search size={17} />
+          <Search size={17} aria-hidden="true" />
           <input
             ref={inputRef}
+            type="search"
+            aria-label="Search commands"
             value={query}
             placeholder="Search commands, workspaces, tabs, hosts"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             onChange={(event) => onQueryChange(event.target.value)}
           />
+          <button
+            type="button"
+            className="command-close"
+            title="Close command palette"
+            aria-label="Close command palette"
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
         </div>
         <div className="command-list">
           {filteredCommands.length ? (
@@ -1878,11 +2050,20 @@ function ActivityPanel({
   onClose: () => void;
 }) {
   const items = useMemo(() => buildActivityItems(state.agentEvents, state.runs).slice(0, 100), [state.agentEvents, state.runs]);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => returnFocusRef.current?.focus();
+  }, []);
+
   return (
-    <aside className="activity-panel" aria-label="Activity">
+    <aside className="activity-panel" aria-label="Activity" role="dialog" aria-modal="true">
       <div className="activity-header">
         <h2>Activity</h2>
-        <button title="Close activity" onClick={onClose}>
+        <button ref={closeRef} title="Close activity" onClick={onClose}>
           <X size={16} />
         </button>
       </div>

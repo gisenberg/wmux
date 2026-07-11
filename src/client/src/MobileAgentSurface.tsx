@@ -167,8 +167,9 @@ export function MobileAgentSurface({
   useEffect(() => {
     const composer = composerRef.current;
     if (!composer) return;
+    const minHeight = Number.parseFloat(window.getComputedStyle(composer).minHeight) || 44;
     composer.style.height = "0px";
-    composer.style.height = `${Math.min(132, Math.max(44, composer.scrollHeight))}px`;
+    composer.style.height = `${draft ? Math.min(132, Math.max(minHeight, composer.scrollHeight)) : minHeight}px`;
   }, [draft]);
 
   useEffect(
@@ -294,7 +295,7 @@ export function MobileAgentSurface({
       optimisticMessageAdded = true;
       setDraft("");
       setPendingImages([]);
-      await onSendInput(pane.id, `${formatComposerTextInput(text, sentAttachments)}\r`);
+      await sendMobileComposerInput(onSendInput, pane.id, formatComposerTextInput(text, sentAttachments));
       setLocalMessages((current) =>
         current.map((message) => message.id === localMessageId ? { ...message, delivery: "sent" } : message),
       );
@@ -445,7 +446,12 @@ export function MobileAgentSurface({
                   <strong>{attachment.name}</strong>
                   <span>{formatBytes(attachment.bytes)}</span>
                 </div>
-                <button type="button" title="Remove image" onClick={() => removePendingImage(attachment.id)}>
+                <button
+                  type="button"
+                  title="Remove image"
+                  aria-label={`Remove ${attachment.name}`}
+                  onClick={() => removePendingImage(attachment.id)}
+                >
                   <X size={14} />
                 </button>
               </div>
@@ -456,7 +462,8 @@ export function MobileAgentSurface({
           <textarea
             ref={composerRef}
             value={draft}
-            placeholder={pane ? (agentSession.canSend ? `Message ${agentSession.agent ?? "agent"} or paste images` : "Start an agent before sending") : "No active session"}
+            aria-label="Agent message"
+            placeholder={pane ? (agentSession.canSend ? `Message ${agentSession.agent ?? "agent"} or paste images` : "Start an agent to chat") : "No active session"}
             disabled={!pane}
             rows={1}
             autoComplete="off"
@@ -481,6 +488,7 @@ export function MobileAgentSurface({
             type="button"
             className="mobile-agent-stop"
             title="Interrupt"
+            aria-label="Interrupt agent"
             disabled={!pane || !agentRunning || sending}
             onClick={() => void sendInterrupt()}
           >
@@ -880,6 +888,15 @@ const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[
   }
   const normalized = messageParts.join("\n");
   return normalized.includes("\n") ? `\x1b[200~${normalized}\x1b[201~` : normalized;
+};
+
+export const sendMobileComposerInput = async (
+  sendInput: (paneId: string, data: string) => Promise<void>,
+  paneId: string,
+  message: string,
+) => {
+  await sendInput(paneId, message);
+  await sendInput(paneId, "\r");
 };
 
 const imagesFromClipboard = (clipboardData: DataTransfer): File[] => {

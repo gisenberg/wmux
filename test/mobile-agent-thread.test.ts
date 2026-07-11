@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentResponseMessage, buildMobileThreadItems } from "../src/client/src/MobileAgentSurface";
+import { agentResponseMessage, buildMobileThreadItems, sendMobileComposerInput } from "../src/client/src/MobileAgentSurface";
 import type { AgentActivity } from "../src/client/src/types";
 
 const event = (input: Partial<AgentActivity> & Pick<AgentActivity, "id" | "status" | "createdAt">): AgentActivity => ({
@@ -61,4 +61,15 @@ test("only settled successful events expose assistant response text", () => {
     agentResponseMessage(event({ id: "completed", status: "completed", createdAt: new Date().toISOString(), message: "fresh" })),
     "fresh",
   );
+});
+
+test("mobile composer sends Enter as a distinct sequential terminal input", async () => {
+  const writes: Array<{ paneId: string; data: string }> = [];
+  await sendMobileComposerInput(async (paneId, data) => {
+    writes.push({ paneId, data });
+  }, "pane-1", "hello agent");
+  assert.deepEqual(writes, [
+    { paneId: "pane-1", data: "hello agent" },
+    { paneId: "pane-1", data: "\r" },
+  ]);
 });
