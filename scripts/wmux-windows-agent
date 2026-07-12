@@ -18,7 +18,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-VERSION = "0.7"
+VERSION = "0.8"
 DEFAULT_REPLAY_BYTES = 2 * 1024 * 1024
 BACKEND_CONPTY = "conpty"
 BACKEND_STDIO = "stdio"
@@ -409,6 +409,7 @@ class StdioBackend:
 
     def __init__(self, config: dict[str, Any], payload: dict[str, Any], cwd: str):
         command = session_command(config, payload, cwd)
+        self.last_output_byte_was_cr = False
         self.process = subprocess.Popen(
             command,
             cwd=cwd if os.path.isdir(cwd) else None,
@@ -460,7 +461,11 @@ class StdioBackend:
                 chunk = os.read(self.process.stdout.fileno(), 4096) if self.process.stdout else b""
                 if not chunk:
                     break
-                append(chunk)
+                output, self.last_output_byte_was_cr = terminalize_stdio_output(
+                    chunk,
+                    self.last_output_byte_was_cr,
+                )
+                append(output)
             return self.process.poll()
         finally:
             if self.process_tree:
@@ -468,6 +473,24 @@ class StdioBackend:
                     self.process_tree.terminate()
                 except Exception:
                     pass
+
+
+def terminalize_stdio_output(data: bytes, previous_ended_with_cr: bool = False) -> tuple[bytes, bool]:
+    """Make pipe output obey terminal newline semantics.
+
+    A PTY/ConPTY normally maps line feeds into a cursor-return plus line-feed.
+    Plain stdout pipes from PowerShell often emit bare LF, which leaves a web
+    terminal cursor at the previous column and makes the next prompt drift
+    right. Preserve existing CRLF and only insert CR before bare LF.
+    """
+    output = bytearray()
+    previous_was_cr = previous_ended_with_cr
+    for byte in data:
+        if byte == 0x0A and not previous_was_cr:
+            output.append(0x0D)
+        output.append(byte)
+        previous_was_cr = byte == 0x0D
+    return bytes(output), previous_was_cr
 
 
 class ConptyBackend:

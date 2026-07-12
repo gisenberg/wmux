@@ -34,6 +34,10 @@ test("bundle stages heartbeat helpers and reports them as required", () => {
   assert.match(healthProbe, /wmux-heartbeat-service\.ps1/);
 });
 
+test("Windows agent config prefers ConPTY with stdio fallback", () => {
+  assert.equal(buildWindowsHelperBundle(machine).agentConfig.backend, "auto");
+});
+
 test("clipboard helper sends bearer auth and reads staged fallback files", () => {
   const bundle = buildWindowsHelperBundle(machine);
   const helper = bundle.files.find((file) => file.name === "wmux-copy.ps1");

@@ -370,13 +370,15 @@ Expected:
 ```json
 {
   "ok": true,
-  "version": "0.1",
+  "version": "0.8",
   "machine": "9800x3d",
   "backend": "conpty",
   "conptyAvailable": true,
   "pywinptyAvailable": true
 }
 ```
+
+New managed configs use `backend: "auto"`. Bootstrap merges preserve an existing `backend` value, so hosts previously staged with `"conpty"` remain pinned until `%USERPROFILE%\.wmux\windows-agent.json` is changed to `"auto"` and the agent is safely restarted with `wmux-windows-agent-service activate-update`.
 
 Run a direct lifecycle smoke test:
 
@@ -437,7 +439,7 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 
 ## Known Limits
 
-- Legacy Windows SSH PowerShell panes are not durable. Agent-backed Windows panes are owned by `wmux-windows-agent`; wmux service shutdown detaches its client while explicit pane closure deletes the owned ConPTY and its Windows Job Object, terminating detached descendants.
+- Legacy Windows SSH PowerShell panes are not durable. Agent-backed Windows panes are owned by `wmux-windows-agent`; wmux service shutdown detaches its client while explicit pane closure deletes the owned pane process and its Windows Job Object, terminating detached descendants.
 - Windows helper staging and cwd reporting require a new pane after the wmux service has been updated.
 - Windows screen streaming is validated on 9800x3d through FFmpeg/gdigrab and the supervised per-user Scheduled Task. Locked/logged-out behavior and a fuller Windows wmux agent are still not implemented.
-- The Windows session agent uses pywinpty-backed ConPTY by default. It is restart-durable across `wmux.service` restarts while the Windows agent keeps running. Agent 0.7 adds non-destructive staged-update draining, but a forced Windows-agent restart still kills owned ConPTY processes; process preservation across an unexpected agent crash and broad full-screen app validation remain pending.
+- The managed Windows session agent uses `backend: "auto"`, preferring pywinpty-backed ConPTY and falling back to terminal-normalized stdio when pywinpty is unavailable. It is restart-durable across `wmux.service` restarts while the Windows agent keeps running. Agent 0.7 added non-destructive staged-update draining; agent 0.8 adds terminal-safe stdio newline handling. A forced Windows-agent restart still kills owned pane processes, so process preservation across an unexpected agent crash and broad full-screen app validation remain pending.
