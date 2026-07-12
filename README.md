@@ -24,10 +24,11 @@ wmux provides:
 ### Mobile
 
 <p>
-  <img src="docs/images/wmux-live-mobile.png" width="360" alt="wmux mobile terminal view running the same live Codex workspace">
+  <img src="docs/images/wmux-live-mobile.png" width="320" alt="wmux mobile terminal view running the same live Codex workspace">
+  <img src="docs/images/wmux-live-mobile-chat.png" width="320" alt="wmux mobile Chat view showing the live Codex task history and composer">
 </p>
 
-Both views show the same live Codex workspace at desktop and phone viewports.
+The desktop view and both mobile surfaces show the same live Codex workspace.
 
 ## Architecture
 
