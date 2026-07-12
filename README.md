@@ -437,8 +437,9 @@ Dependencies and historical assets retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the provenance files beside
 the assets.
 
-Fonts from Damien Guard's ZX Origins Micropack are used with permission from
-Damien Guard and remain outside the MIT license.
+Font files from Damien Guard's ZX Origins Micropack are used with permission
+from Damien Guard and remain outside the MIT license. This attribution applies
+to the font files, not the historical bitmap letterforms they represent.
 
 The retained Amiga Workbench historical screenshot is not covered by the MIT
 license; see the third-party notices for its provenance and status.

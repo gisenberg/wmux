@@ -1,4 +1,4 @@
-# DamienG Micropack system fonts
+# DamienG Micropack system font files
 
 The WOFF2 files in this directory are unmodified webfont conversions from
 Damien Guard's ZX Origins Micropack, downloaded from:
@@ -33,15 +33,16 @@ included because its download is disabled.
 
 ## License and repository permission
 
-These fonts are part of the ZX Origins font collection, copyright 1988–2023
-Damien Guard. The supplied license permits using an embedded font file on a
+The supplied archive identifies the ZX Origins font files as copyright
+1988–2023 Damien Guard. Its license permits using an embedded font file on a
 site and asks for credit to “DamienG https://damieng.com/zx-origins” when a
 credits section is available. It prohibits redistributing the files as a font,
 re-hosting them for direct font download, or bundling them with other art asset
 collections. Inclusion in this repository and use by wmux are with permission
-from Damien Guard. That project-specific permission does not relicense the
-fonts under MIT; other reuse remains governed by the upstream terms or separate
-permission from Damien Guard.
+from Damien Guard. The attribution and permission apply to the font files, not
+the historical bitmap letterforms they represent. That project-specific
+permission does not relicense the font files under MIT; other reuse remains
+governed by the upstream terms or separate permission from Damien Guard.
 
 See the complete upstream README and current project information at:
 

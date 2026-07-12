@@ -20,17 +20,19 @@ distributed under the custom terms preserved in
 [`src/client/src/assets/c64/license.txt`](src/client/src/assets/c64/license.txt).
 Those terms, rather than wmux's MIT license, govern the font.
 
-### DamienG system-font conversions
+### DamienG system-font files
 
-The WOFF2 files under `src/client/src/assets/retro/` are unmodified conversions
-from Damien Guard's ZX Origins Micropack system-font archive. Provenance is
-recorded in
+The WOFF2 font files under `src/client/src/assets/retro/` are unmodified
+conversions from Damien Guard's ZX Origins Micropack system-font archive.
+Provenance is recorded in
 [`src/client/src/assets/retro/UPSTREAM.md`](src/client/src/assets/retro/UPSTREAM.md).
 They are included in this repository and used by wmux with permission from
 Damien Guard. Credit: [DamienG / ZX Origins](https://damieng.com/zx-origins/).
-The fonts remain outside the MIT license; this project-specific permission does
-not grant permission to extract or reuse them independently. Other use remains
-subject to the upstream terms or separate permission from Damien Guard.
+This attribution and permission apply to the font files, not the historical
+bitmap letterforms they represent. The font files remain outside the MIT
+license; this project-specific permission does not grant permission to extract
+or reuse them independently. Other use remains subject to the upstream terms or
+separate permission from Damien Guard.
 
 Source: <https://damieng.com/typography/> and
 <https://damieng.com/typography/zx-origins/>.
