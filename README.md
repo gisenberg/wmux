@@ -283,7 +283,10 @@ wmux-windows-setup heartbeat-logs
 The systemd timer runs in the user manager; enable lingering with
 `loginctl enable-linger "$USER"` if it must run while that user is logged out.
 The Windows task is intentionally per-user and triggered at logon, so the host
-does not heartbeat before that user signs in.
+does not heartbeat before that user signs in. Install it from the same Windows
+account that should own the heartbeat. An access-denied result means Task
+Scheduler rejected that account or its current session; the installer exits
+nonzero and does not report the task as installed.
 
 Registrations default to a 90-second TTL (allowed range: 30 seconds through 24
 hours). A missed TTL keeps the machine visible but marks it offline; records are
