@@ -404,7 +404,7 @@ const windowsAgentConfig = (machine: MachineConfig): Record<string, unknown> => 
   cwd: machine.cwd ?? "",
   helperDir: "%LOCALAPPDATA%\\wmux\\bin",
   maxReplayBytes: 2 * 1024 * 1024,
-  backend: "conpty",
+  backend: "auto",
   // When set, the agent requires this bearer token on every request, closing
   // the unauthenticated-RCE exposure to other hosts on the tailnet.
   ...(machine.agentToken ? { token: machine.agentToken } : {}),
