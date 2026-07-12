@@ -680,7 +680,7 @@ export class StateStore extends EventEmitter {
       runs: [],
     };
     this.state = state;
-    const initialMachineId = machines[0]?.id;
+    const initialMachineId = machines.find((machine) => machine.source !== "registered")?.id;
     if (!initialMachineId) return state;
     const workspace = this.createWorkspace(initialMachineId);
     return { ...state, activeWorkspaceId: workspace.id };

@@ -120,7 +120,10 @@ export const createHttpServer = (
     requested?: string,
     fallback?: string,
   ): string => {
-    const machineId = requested ?? fallback ?? machines[0]?.id;
+    const preferredMachine =
+      machines.find((machine) => machine.source !== "registered") ??
+      machines.find((machine) => machine.online !== false);
+    const machineId = requested ?? fallback ?? preferredMachine?.id;
     if (!machineId) throw new HttpError(409, "no_machine_available");
     if (!machines.some((machine) => machine.id === machineId)) {
       throw new HttpError(400, "unknown_machine");

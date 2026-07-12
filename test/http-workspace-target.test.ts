@@ -9,19 +9,20 @@ import { createHttpServer } from "../src/server/http.js";
 import type { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
-import type { MachineConfig } from "../src/server/types.js";
+import type { MachineConfig, MachineSource } from "../src/server/types.js";
 
 const withServer = async (
-  machines: MachineConfig[],
+  initialMachines: MachineConfig[],
   run: (baseUrl: string) => Promise<void>,
+  machineSource: MachineSource = initialMachines,
 ): Promise<void> => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-target-"));
-  const state = new StateStore(machines, path.join(directory, "state.json"));
+  const state = new StateStore(initialMachines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
   const server = await createHttpServer(
     "127.0.0.1",
     state,
-    machines,
+    machineSource,
     {} as SessionManager,
     settings,
     { auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" } },
@@ -79,4 +80,33 @@ test("workspace creation reports when no machine target exists", async () => {
     assert.equal(response.status, 409);
     assert.deepEqual(await response.json(), { error: "no_machine_available" });
   });
+});
+
+test("workspace target validation follows a live dynamic machine source", async () => {
+  let liveMachines: MachineConfig[] = [
+    {
+      id: "dynamic",
+      name: "Dynamic",
+      kind: "ssh",
+      host: "100.70.0.8",
+      source: "registered",
+      online: false,
+    },
+  ];
+  await withServer([], async (baseUrl) => {
+    const offline = await postWorkspace(baseUrl);
+    assert.equal(offline.status, 409);
+    assert.deepEqual(await offline.json(), { error: "no_machine_available" });
+
+    liveMachines = [{ ...liveMachines[0], online: true }];
+    const created = await postWorkspace(baseUrl);
+    const payload = (await created.json()) as { workspace: { machineId: string } };
+    assert.equal(created.status, 201);
+    assert.equal(payload.workspace.machineId, "dynamic");
+
+    liveMachines = [];
+    const removed = await postWorkspace(baseUrl, { machineId: "dynamic" });
+    assert.equal(removed.status, 400);
+    assert.deepEqual(await removed.json(), { error: "unknown_machine" });
+  }, () => liveMachines);
 });

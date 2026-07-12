@@ -112,6 +112,25 @@ test("fresh store remains idle when no machines are configured", () => {
   });
 });
 
+test("fresh store does not pin a retained registered machine", () => {
+  withTempState((filePath) => {
+    const registeredMachines: MachineConfig[] = [
+      {
+        id: "stale-remote",
+        name: "Stale remote",
+        kind: "ssh",
+        host: "100.70.0.8",
+        source: "registered",
+        online: false,
+      },
+    ];
+    const snapshot = new StateStore(registeredMachines, filePath).snapshot();
+
+    assert.equal(snapshot.workspaces.length, 0);
+    assert.equal(snapshot.activeWorkspaceId, "");
+  });
+});
+
 test("mutations round-trip through flush and reload", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
