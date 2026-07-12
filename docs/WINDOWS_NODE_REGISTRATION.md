@@ -264,7 +264,10 @@ run `wmux-heartbeat-service restart`. Address changes are accepted for idle
 persisted panes, but any referenced pane pins the connection descriptor and
 agent token until it is closed. A live Windows-agent pane also pins its callback
 address. Close referenced panes before changing those pinned values, then run a
-one-shot heartbeat. The task runs only after this user logs on.
+one-shot heartbeat. The task runs only after this user logs on, and it should be
+installed from that same Windows account. If Task Scheduler reports access
+denied, the installer exits nonzero without claiming success; rerun it in an
+interactive session for the account that should own the heartbeat.
 
 Rotating `agentToken` is a coordinated agent update: drain/close active panes
 without forcing an agent restart, update the token in both

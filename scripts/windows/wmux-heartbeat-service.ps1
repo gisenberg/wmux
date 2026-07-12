@@ -73,19 +73,21 @@ switch ($ActionName) {
   'install' {
     Assert-HeartbeatState
     Write-Wrapper
+    $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $TaskAction = New-HiddenPowerShellAction
-    $TaskTrigger = New-ScheduledTaskTrigger -AtLogOn
-    $TaskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+    $TaskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $Identity
+    $TaskPrincipal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType Interactive
     $TaskSettings = New-WmuxTaskSettings
     $Task = New-ScheduledTask -Action $TaskAction -Trigger $TaskTrigger -Principal $TaskPrincipal -Settings $TaskSettings
-    Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
-    Start-ScheduledTask -TaskName $TaskName
+    Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
     Write-Output "Installed $TaskName"
     Write-Output "Logs: $OutLog and $ErrLog"
   }
   'restart' {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Start-ScheduledTask -TaskName $TaskName
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
   }
   'stop' {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue

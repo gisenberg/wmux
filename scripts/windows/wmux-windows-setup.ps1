@@ -98,15 +98,20 @@ function Get-WmuxHelperDir {
 function Invoke-WmuxHelper([string]$Name, [string[]]$HelperArgs) {
   $Command = Get-Command $Name -ErrorAction SilentlyContinue
   if ($Command) {
-    & $Command.Source @HelperArgs
-    return
+    $HelperPath = $Command.Source
+  } else {
+    $HelperPath = Join-Path (Get-WmuxHelperDir) "$Name.ps1"
+    if (-not (Test-Path -LiteralPath $HelperPath -PathType Leaf)) {
+      Write-Error "$Name was not found in PATH or at $HelperPath"
+      exit 127
+    }
   }
-  $ScriptPath = Join-Path (Get-WmuxHelperDir) "$Name.ps1"
-  if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
-    Write-Error "$Name was not found in PATH or at $ScriptPath"
-    exit 127
+  $global:LASTEXITCODE = 0
+  & $HelperPath @HelperArgs
+  $ExitCode = [int]$global:LASTEXITCODE
+  if ($ExitCode -ne 0) {
+    exit $ExitCode
   }
-  & $ScriptPath @HelperArgs
 }
 
 function Test-WmuxUrl([string]$Url) {

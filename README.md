@@ -200,9 +200,11 @@ scripts/install-heartbeat-service.sh
 ```
 
 Windows hosts use `wmux-windows-setup install-heartbeat` after their helpers
-are staged. wmux always dials the validated heartbeat source address and
-removes agent credentials from browser/status responses. Registered panes do
-not receive the broad wmux API token, so API-posting helpers need separately
+are staged. Run it as the Windows account that should own the logon-triggered
+task; Task Scheduler access-denied failures exit nonzero instead of reporting
+success. wmux always dials the validated heartbeat source address and removes
+agent credentials from browser/status responses. Registered panes do not
+receive the broad wmux API token, so API-posting helpers need separately
 provisioned authorization.
 
 ## Authentication and Network Safety
