@@ -31,17 +31,17 @@ The Commodore profiles continue to use the separately documented C64 Pro Mono
 asset under `../c64`. Damien Guard's Commodore 128 FontStruct recreation is not
 included because its download is disabled.
 
-## License supplied with Micropack
+## License and repository permission
 
 These fonts are part of the ZX Origins font collection, copyright 1988–2023
 Damien Guard. The supplied license permits using an embedded font file on a
 site and asks for credit to “DamienG https://damieng.com/zx-origins” when a
 credits section is available. It prohibits redistributing the files as a font,
 re-hosting them for direct font download, or bundling them with other art asset
-collections. Embedding them in the running application is permitted, but
-tracking the font files in a public source repository appears to redistribute
-them. Their source-redistribution status therefore remains unresolved; see the
-repository-level `THIRD_PARTY_NOTICES.md` before publishing the complete tree.
+collections. Inclusion in this repository and use by wmux are with permission
+from Damien Guard. That project-specific permission does not relicense the
+fonts under MIT; other reuse remains governed by the upstream terms or separate
+permission from Damien Guard.
 
 See the complete upstream README and current project information at:
 
@@ -55,7 +55,9 @@ insert-disk screen supplied as the visual reference for the Amiga boot profile:
 https://i0.wp.com/geekometry.com/wp-content/uploads/2013/11/workbench13_bootscreen.gif
 
 The image depicts the copyrighted Amiga user interface and is included as an
-application-internal historical screenshot, not as project branding.
+application-internal historical screenshot, not as project branding. No
+source-redistribution license has been identified for it, and it is not covered
+by wmux's MIT license.
 
 `tos-1.04-desktop.png` is the CC BY-SA 4.0
 [TOS 1.04 startup screenshot](https://commons.wikimedia.org/wiki/File:TOS_1.04_(Rainbow_TOS).png)

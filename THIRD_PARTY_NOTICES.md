@@ -26,10 +26,11 @@ The WOFF2 files under `src/client/src/assets/retro/` are unmodified conversions
 from Damien Guard's ZX Origins Micropack system-font archive. Provenance is
 recorded in
 [`src/client/src/assets/retro/UPSTREAM.md`](src/client/src/assets/retro/UPSTREAM.md).
-The archive permits using an embedded font in an application or site, but
-prohibits redistributing or re-hosting the font files themselves. These files
-therefore remain outside the MIT license and require resolution before this
-source checkout is redistributed publicly.
+They are included in this repository and used by wmux with permission from
+Damien Guard. Credit: [DamienG / ZX Origins](https://damieng.com/zx-origins/).
+The fonts remain outside the MIT license; this project-specific permission does
+not grant permission to extract or reuse them independently. Other use remains
+subject to the upstream terms or separate permission from Damien Guard.
 
 Source: <https://damieng.com/typography/> and
 <https://damieng.com/typography/zx-origins/>.
@@ -56,9 +57,8 @@ The Atari TOS 1.04 screenshot is by MJaap and remains available under
 
 The Amiga Workbench raster reference is documented in
 [`src/client/src/assets/retro/UPSTREAM.md`](src/client/src/assets/retro/UPSTREAM.md).
-It is not covered by wmux's MIT license, and redistribution permission has not
-yet been established. It requires resolution before this source checkout is
-redistributed publicly.
+No source-redistribution license has been identified for it, and it is not
+covered by wmux's MIT license.
 
 All product names and trademarks belong to their respective owners. Historical
 references identify the systems being simulated and do not imply affiliation

@@ -48,7 +48,8 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - `wmux.config.json` is runtime-local and ignored. Keep reusable examples in `wmux.config.example.json`; never commit live inventories, usernames tied to a private deployment, tokens, credentials, private-key paths, or personal service URLs.
 - wmux-owned code and artwork are MIT-licensed. Third-party dependencies and assets retain their own terms; keep `THIRD_PARTY_NOTICES.md` and the provenance files beside assets accurate.
 - Do not add code or assets without clear redistribution terms. A dependency being public on GitHub is not a license.
-- The retained DamienG font files and Amiga Workbench screenshot have unresolved source-redistribution status. Do not describe the complete checkout as ready for public redistribution until those entries in `THIRD_PARTY_NOTICES.md` are resolved.
+- Damien Guard's ZX Origins font files are included and used by wmux with his permission; preserve their credit and third-party notices.
+- The retained Amiga Workbench screenshot has no identified source-redistribution license and remains outside MIT; preserve its provenance and explicit notice.
 - Keep the architecture diagram in `README.md` synchronized when changing process boundaries, persistence ownership, session backends, or streaming paths.
 - Keep README screenshots reproducible through `npm run docs:screenshots`; do not capture private machine names, hosts, usernames, tokens, or terminal history.
 

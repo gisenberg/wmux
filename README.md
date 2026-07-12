@@ -437,8 +437,8 @@ Dependencies and historical assets retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the provenance files beside
 the assets.
 
-> [!WARNING]
-> The current checkout still contains DamienG font files and an Amiga Workbench
-> screenshot whose source-redistribution permission is unresolved. Do not
-> publish or redistribute the complete source tree until those notice entries
-> are resolved.
+Fonts from Damien Guard's ZX Origins Micropack are used with permission from
+Damien Guard and remain outside the MIT license.
+
+The retained Amiga Workbench historical screenshot is not covered by the MIT
+license; see the third-party notices for its provenance and status.
