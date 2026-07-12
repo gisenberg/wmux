@@ -21,6 +21,7 @@ const fixedEnv: Record<string, string> = {
   WMUX_STREAM_HOST: "10.0.0.1",
   WMUX_PUBLIC_URL: "http://10.0.0.1:3478",
   HOME: "/home/operator",
+  XDG_RUNTIME_DIR: "/run/user/1000",
 };
 
 const extraEnv = {

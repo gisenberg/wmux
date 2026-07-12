@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # GitHub-hosted runners expose user systemd, but the test process is not a
+  # durable wmux service and should not create nested transient scopes.
+  WMUX_RUNTIME_SCOPED: "1"
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
