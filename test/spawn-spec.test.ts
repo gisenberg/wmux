@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -12,6 +13,7 @@ import type { MachineConfig } from "../src/server/types.js";
 // proven behavior-preserving. Delete the golden file to regenerate.
 
 const goldenPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "spawn-spec.golden.json");
+const snapshotRuntimeDir = "/run/user/1000";
 
 // Fixed environment so generated bootstrap URLs / scripts are deterministic.
 const fixedEnv: Record<string, string> = {
@@ -21,7 +23,6 @@ const fixedEnv: Record<string, string> = {
   WMUX_STREAM_HOST: "10.0.0.1",
   WMUX_PUBLIC_URL: "http://10.0.0.1:3478",
   HOME: "/home/operator",
-  XDG_RUNTIME_DIR: "/run/user/1000",
 };
 
 const extraEnv = {
@@ -46,7 +47,8 @@ const machines: Array<{ label: string; machine: MachineConfig }> = [
 
 const sampleSpecs = () => {
   const saved = { ...process.env };
-  Object.assign(process.env, fixedEnv);
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-spawn-spec-"));
+  Object.assign(process.env, fixedEnv, { XDG_RUNTIME_DIR: runtimeDir });
   try {
     return machines.map(({ label, machine }) => {
       const spec = buildSpawnSpec(machine, 120, 40, extraEnv);
@@ -54,13 +56,17 @@ const sampleSpecs = () => {
       const { env: _env, ...rest } = spec;
       return {
         label,
-        spec: rest,
+        spec: {
+          ...rest,
+          args: rest.args.map((arg) => arg.replaceAll(runtimeDir, snapshotRuntimeDir)),
+        },
         canRefresh: canRefreshDurableSessionClient(machine),
         backendDetail: backendDetail(machine),
       };
     });
   } finally {
     process.env = saved;
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
   }
 };
 
