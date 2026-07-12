@@ -31,7 +31,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: Test
+        run: timeout 3m npm test
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Check scripts
+        run: npm run check:scripts
+      - name: Build
+        run: npm run build
 
   e2e:
     name: Browser E2E
