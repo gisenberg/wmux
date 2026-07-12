@@ -16,14 +16,14 @@
   "scripts": {
     "dev": "tsx src/server/index.ts --dev",
     "build": "npm run build:client && npm run build:server",
-    "build:client": "NODE_ENV=production vite build",
+    "build:client": "node scripts/build-client.mjs",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
     "audit:sessions": "node scripts/wmux-session-audit",
     "test": "node --import tsx --test test/*.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:chromium": "playwright test --project=chromium --project=mobile-chromium",
-    "docs:screenshots": "WMUX_CAPTURE_DOCS=1 playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
+    "docs:screenshots": "playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "check:scripts": "PYTHONPYCACHEPREFIX=test-results/pycache python3 -m py_compile scripts/wmux-agent-event scripts/wmux-copy scripts/wmux-run scripts/wmux-stream-agent scripts/wmux-windows-agent skills/wmux/scripts/wmuxctl.py test/windows-agent-drain-smoke.py && node --check scripts/wmux-hooks && node --check scripts/wmux-moonlight-gateway && bash -n scripts/install-user-service.sh scripts/install-stream-service.sh scripts/install-heartbeat-service.sh scripts/wmux-heartbeat scripts/wmux-media scripts/wmux-notify scripts/wmux-title",
     "check": "npm test && npm run typecheck && npm run check:scripts && npm run build"

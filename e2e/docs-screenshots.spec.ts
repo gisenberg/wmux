@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
-const captureEnabled = process.env.WMUX_CAPTURE_DOCS === "1";
+const captureEnabled =
+  process.env.WMUX_CAPTURE_DOCS === "1" || process.env.npm_lifecycle_event === "docs:screenshots";
 const imageDir = path.resolve("docs", "images");
 
 interface ScreenshotBootstrap {
