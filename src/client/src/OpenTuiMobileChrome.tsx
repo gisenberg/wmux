@@ -12,6 +12,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import type { MachineVersionStatus } from "./types";
 
 type MobileSurfaceMode = "agent" | "terminal";
 type MobileStatus = "running" | "completed" | "failed" | "updated";
@@ -21,6 +22,9 @@ interface OpenTuiMobileChromeProps {
   subtitle: string;
   status: MobileStatus;
   statusLabel: string;
+  versionStatus?: MachineVersionStatus;
+  versionLabel?: string;
+  versionDetail?: string;
   serviceConnection: "connecting" | "online" | "offline";
   surfaceMode: MobileSurfaceMode;
   navigationOpen: boolean;
@@ -31,7 +35,7 @@ interface OpenTuiMobileChromeProps {
 
 type MobileChromeRenderModel = Pick<
   OpenTuiMobileChromeProps,
-  "workspaceName" | "subtitle" | "status" | "statusLabel" | "serviceConnection" | "surfaceMode" | "navigationOpen"
+  "workspaceName" | "subtitle" | "status" | "statusLabel" | "versionStatus" | "versionLabel" | "versionDetail" | "serviceConnection" | "surfaceMode" | "navigationOpen"
 > & { animationTick: number };
 
 const colors = {
@@ -71,6 +75,9 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
     subtitle: props.subtitle,
     status: props.status,
     statusLabel: props.statusLabel,
+    versionStatus: props.versionStatus,
+    versionLabel: props.versionLabel,
+    versionDetail: props.versionDetail,
     serviceConnection: props.serviceConnection,
     surfaceMode: props.surfaceMode,
     navigationOpen: props.navigationOpen,
@@ -83,6 +90,9 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
     props.statusLabel,
     props.subtitle,
     props.surfaceMode,
+    props.versionDetail,
+    props.versionLabel,
+    props.versionStatus,
     props.workspaceName,
   ]);
   const modelRef = useRef(model);
@@ -119,7 +129,7 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
     <header className="open-tui-mobile-chrome" role="banner" aria-label="Mobile session controls">
       <canvas ref={canvasRef} className="open-tui-mobile-chrome-canvas" aria-hidden="true" />
       <div className="open-tui-mobile-chrome-status visually-hidden" aria-live="polite">
-        {props.workspaceName}, {props.statusLabel}, {props.subtitle}
+        {props.workspaceName}, {props.statusLabel}, {props.versionDetail ? `${props.versionDetail}, ` : ""}{props.subtitle}
       </div>
       <div className="open-tui-mobile-chrome-actions">
         <button
@@ -180,14 +190,21 @@ const drawMobileChrome = (
   const statusColor =
     model.status === "running" ? rgba.blue : model.status === "completed" ? rgba.green : model.status === "failed" ? rgba.red : rgba.muted;
   const statusMark = model.status === "running" ? runningFrames[model.animationTick] : "●";
+  const versionColor = model.versionStatus === "current"
+    ? rgba.green
+    : model.versionStatus === "outdated"
+      ? rgba.gold
+      : rgba.muted;
+  const versionText = model.versionLabel ? `[${model.versionLabel}]` : "";
   const actionRowCount = rows >= 5 ? 3 : 2;
   const actionRow = Math.max(0, rows - actionRowCount);
   if (actionRow >= 4) {
     write(1, 1, `> ${model.workspaceName}`, rgba.gold, true);
+    if (versionText) write(1, Math.max(1, cols - versionText.length - 1), versionText, versionColor, true);
     write(2, 1, `${statusMark} ${model.statusLabel}`, statusColor, true);
     if (model.subtitle) write(3, 1, model.subtitle, rgba.muted);
   } else if (actionRow >= 2) {
-    const context = [model.workspaceName, `${statusMark} ${model.statusLabel}`, model.subtitle].filter(Boolean).join(" / ");
+    const context = [model.workspaceName, versionText, `${statusMark} ${model.statusLabel}`, model.subtitle].filter(Boolean).join(" / ");
     write(1, 1, `> ${context}`, model.status === "running" ? statusColor : rgba.gold, true);
   }
 

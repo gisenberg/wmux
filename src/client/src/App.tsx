@@ -27,6 +27,7 @@ import { useEventStream } from "./useEventStream";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { maxSidebarWidth, mobileViewportMediaQuery, useSidebar } from "./useSidebar";
 import { writeBrowserClipboard } from "./clipboard";
+import { summarizeWorkspaceVersion } from "./workspace-version";
 import {
   isEditableViewportTarget,
   mobileKeyboardLikelyOpen,
@@ -326,6 +327,7 @@ export function App() {
         );
         const host = displayWorkspaceHost(machine, sourceMachine, workspace.machineId);
         const visibleDescriptor = compactWorkspaceDescription(descriptor, 72);
+        const version = summarizeWorkspaceVersion(workspace, displayMachines);
         return [
           {
             id: workspace.id,
@@ -340,6 +342,9 @@ export function App() {
             agentCreated: workspace.createdBy === "agent",
             agentName: latestAgentName,
             agentStatus: latestAgent ? agentStatusClass(latestAgent.status) : undefined,
+            versionStatus: version?.status,
+            versionLabel: version?.label,
+            versionDetail: version?.detail,
             bell: bellByWorkspaceId.has(workspace.id),
           },
         ];
@@ -509,6 +514,9 @@ export function App() {
   const mobileHeaderSubtitle = [activeTab?.title, mobilePaneContext, mobileHeaderMachine?.name ?? activeWorkspace?.machineId]
     .filter(Boolean)
     .join(" / ");
+  const mobileHeaderVersion = activeWorkspace
+    ? summarizeWorkspaceVersion(activeWorkspace, displayMachines)
+    : undefined;
 
   const activatePaneInTab = useCallback((tabId: string, paneId: string) => {
     clearBellPanes([paneId]);
@@ -1153,12 +1161,14 @@ export function App() {
               const hostContext = latestAgentName ? `${host} / ${latestAgentName}` : host;
               const visibleDescriptor = compactWorkspaceDescription(descriptor, 72);
               const tooltipDescriptor = compactWorkspaceDescription(descriptor, 200);
+              const version = summarizeWorkspaceVersion(workspace, displayMachines);
               const showDescriptor = visibleDescriptor && visibleDescriptor !== host && visibleDescriptor !== hostContext;
               const tooltip = [
                 workspace.name,
                 workspace.createdBy === "agent" ? "Agent-created" : "",
                 showDescriptor ? tooltipDescriptor : "",
                 hostContext,
+                version?.detail,
                 cwd,
               ].filter(Boolean).join(" / ");
               const latestAgentStatus = latestAgent ? agentStatusClass(latestAgent.status) : "";
@@ -1189,6 +1199,16 @@ export function App() {
                       <span className="workspace-origin-badge" title="Created by an agent">AI</span>
                     ) : null}
                     <span className="workspace-title-text">{workspace.name}</span>
+                    {version ? (
+                      <span
+                        className={`workspace-version-badge ${version.status}`}
+                        title={version.detail}
+                        aria-label={version.detail}
+                        data-version-status={version.status}
+                      >
+                        {version.label}
+                      </span>
+                    ) : null}
                   </span>
                   {unreadCount > 0 ? <span className="badge workspace-badge">{unreadCount}</span> : null}
                   <span className="workspace-meta">
@@ -1342,6 +1362,9 @@ export function App() {
             subtitle={mobileHeaderSubtitle}
             status={mobileHeaderStatus}
             statusLabel={mobileHeaderStatusLabel}
+            versionStatus={mobileHeaderVersion?.status}
+            versionLabel={mobileHeaderVersion?.label}
+            versionDetail={mobileHeaderVersion?.detail}
             serviceConnection={serviceConnection}
             surfaceMode={mobileSurfaceMode}
             navigationOpen={!sidebarCollapsed}
@@ -1368,6 +1391,16 @@ export function App() {
               <span>
                 <span className={`mobile-header-status ${mobileHeaderStatus}`} aria-hidden="true" />
                 <span className={`mobile-header-status-label ${mobileHeaderStatus}`}>{mobileHeaderStatusLabel}</span>
+                {mobileHeaderVersion ? (
+                  <span
+                    className={`workspace-version-badge mobile ${mobileHeaderVersion.status}`}
+                    title={mobileHeaderVersion.detail}
+                    aria-label={mobileHeaderVersion.detail}
+                    data-version-status={mobileHeaderVersion.status}
+                  >
+                    {mobileHeaderVersion.label}
+                  </span>
+                ) : null}
                 {mobileHeaderSubtitle ? <span className="mobile-header-divider">|</span> : null}
                 {mobileHeaderSubtitle ? <span>{mobileHeaderSubtitle}</span> : null}
               </span>

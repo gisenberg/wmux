@@ -15,6 +15,7 @@ import {
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { compactMiddlePath } from "./path-display";
+import type { MachineVersionStatus } from "./types";
 
 export interface OpenTuiSidebarWorkspace {
   id: string;
@@ -29,6 +30,9 @@ export interface OpenTuiSidebarWorkspace {
   agentCreated?: boolean;
   agentName?: string;
   agentStatus?: "running" | "completed" | "failed" | "updated";
+  versionStatus?: MachineVersionStatus;
+  versionLabel?: string;
+  versionDetail?: string;
   bell?: boolean;
 }
 
@@ -224,6 +228,17 @@ const drawSidebarGrid = (
     if (row < 0 || row >= rows || col >= cols) return;
     writeText(grid, row, col, fitText(text, Math.max(0, cols - col - 1)), color, weight >= 700 ? 1 : 0);
   };
+  const writeWithin = (
+    row: number,
+    col: number,
+    text: string,
+    maxCells: number,
+    color: RGBA,
+    weight: 400 | 600 | 700 = 600,
+  ) => {
+    if (row < 0 || row >= rows || col >= cols || maxCells <= 0) return;
+    writeText(grid, row, col, fitText(text, maxCells), color, weight >= 700 ? 1 : 0);
+  };
   const writeCompactPath = (row: number, col: number, pathValue: string) => {
     const maxPathCells = Math.max(0, cols - col - 1);
     const compact = compactMiddlePath(pathValue, maxPathCells);
@@ -323,8 +338,31 @@ const drawSidebarGrid = (
       write(row, 3, statusMarker, statusColor, 700);
       const titleCol = workspace.agentCreated ? 8 : 5;
       if (workspace.agentCreated) write(row, 5, "AI", rgba.agent, 700);
-      write(row, titleCol, workspace.title, workspace.reachable ? rgba.text : rgba.muted, 700);
-      if (workspace.unreadCount > 0) write(row, cols - 6, `(${workspace.unreadCount})`, rgba.gold, 700);
+      const unreadText = workspace.unreadCount > 0 ? `(${workspace.unreadCount})` : "";
+      const versionText = workspace.versionLabel ? `[${workspace.versionLabel}]` : "";
+      let suffixCol = cols - 1;
+      if (unreadText) {
+        suffixCol -= unreadText.length;
+        write(row, suffixCol, unreadText, rgba.gold, 700);
+      }
+      if (versionText) {
+        if (unreadText) suffixCol--;
+        suffixCol -= versionText.length;
+        const versionColor = workspace.versionStatus === "current"
+          ? rgba.green
+          : workspace.versionStatus === "outdated"
+            ? rgba.gold
+            : rgba.muted;
+        write(row, suffixCol, versionText, versionColor, 700);
+      }
+      writeWithin(
+        row,
+        titleCol,
+        workspace.title,
+        Math.max(0, suffixCol - titleCol - 1),
+        workspace.reachable ? rgba.text : rgba.muted,
+        700,
+      );
       row++;
       for (const line of descriptionLines) {
         if (workspace.bell && row === itemStart + 1) write(row, 3, "!", rgba.gold, 700);
@@ -340,7 +378,10 @@ const drawSidebarGrid = (
       actionRows(
         itemStart,
         itemRows,
-        workspace.agentCreated ? `${workspace.title} (agent-created)` : workspace.title,
+        [
+          workspace.agentCreated ? `${workspace.title} (agent-created)` : workspace.title,
+          workspace.versionDetail,
+        ].filter(Boolean).join(" / "),
         { type: "workspace", workspaceId: workspace.id, tabId: workspace.tabId },
       );
       visibleWorkspaceCount++;

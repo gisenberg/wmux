@@ -10,6 +10,7 @@ import {
   buildWindowsPowerShellBootstrapUrl,
   encodePowerShellCommand,
   expectedWindowsAgentVersion,
+  windowsHelperBundleVersion,
 } from "./windows-helpers.js";
 import { probeWindowsAgent, shouldUseWindowsAgent } from "./windows-agent.js";
 
@@ -25,6 +26,27 @@ const WMUX_SERVER_VERSION = (() => {
     return "dev";
   }
 })();
+
+export const resolveMachineVersionStatus = ({
+  reachable,
+  runtimeVersion,
+  expectedRuntimeVersion,
+  helperBundleVersion,
+  expectedHelperBundleVersion,
+}: {
+  reachable: boolean;
+  runtimeVersion?: string;
+  expectedRuntimeVersion?: string;
+  helperBundleVersion?: string;
+  expectedHelperBundleVersion?: string;
+}): MachineStatus["versionStatus"] => {
+  if (!reachable || !runtimeVersion || !expectedRuntimeVersion) return "unknown";
+  if (runtimeVersion !== expectedRuntimeVersion) return "outdated";
+  if (helperBundleVersion && expectedHelperBundleVersion && helperBundleVersion !== expectedHelperBundleVersion) {
+    return "outdated";
+  }
+  return "current";
+};
 
 interface WindowsHealthProbe {
   reachable: boolean;
@@ -1167,6 +1189,8 @@ export const resolveMachineStatuses = async (
           checkedAt,
           endpoint: localEndpoint === "localhost" ? "127.0.0.1" : localEndpoint,
           runtimeVersion: WMUX_SERVER_VERSION,
+          expectedRuntimeVersion: WMUX_SERVER_VERSION,
+          versionStatus: "current" as const,
           backendDetail: localBackendDetail(machine),
         };
       }
@@ -1199,14 +1223,27 @@ export const resolveMachineStatuses = async (
         if (shouldUseWindowsAgent(machine)) {
           const sshReachable = hasSsh ? await probeTcp(machine.host, port, 900) : false;
           const agentReachable = agent?.reachable === true;
+          const runtimeVersion = agent?.health?.version;
+          const helperBundleVersion = agent?.health?.helperBundleVersion;
+          const expectedRuntimeVersion = expectedWindowsAgentVersion();
+          const expectedHelperBundleVersion = windowsHelperBundleVersion();
           return {
             ...publicMachine,
             reachable: agentReachable,
             checkedAt,
             endpoint: agent?.url ?? `${machine.host}:${machine.agentPort ?? 3481}`,
             backendDetail: windowsStatusDetail(backendDetail(machine), agent),
-            runtimeVersion: agent?.health?.version,
-            helperBundleVersion: agent?.health?.helperBundleVersion,
+            runtimeVersion,
+            expectedRuntimeVersion,
+            helperBundleVersion,
+            expectedHelperBundleVersion,
+            versionStatus: resolveMachineVersionStatus({
+              reachable: agentReachable,
+              runtimeVersion,
+              expectedRuntimeVersion,
+              helperBundleVersion,
+              expectedHelperBundleVersion,
+            }),
             reason: agentReachable ? undefined : `Windows agent unavailable: ${agent?.reason ?? "unknown error"}`,
             health: {
               sshReachable,
@@ -1224,16 +1261,20 @@ export const resolveMachineStatuses = async (
               reachable: false,
               reason: hasSsh ? `no TCP response on ${machine.host}:${port}` : "local ssh client is not installed or not executable",
             };
+        const runtimeVersion =
+          typeof health.health?.bundleVersion === "string" && health.health.bundleVersion
+            ? health.health.bundleVersion
+            : undefined;
+        const expectedRuntimeVersion = windowsHelperBundleVersion();
         return {
           ...publicMachine,
           reachable: health.reachable,
           checkedAt,
           endpoint: `${machine.host}:${port}`,
           backendDetail: windowsStatusDetail(health.backendDetail ?? backendDetail(machine), agent),
-          runtimeVersion:
-            typeof health.health?.bundleVersion === "string" && health.health.bundleVersion
-              ? health.health.bundleVersion
-              : undefined,
+          runtimeVersion,
+          expectedRuntimeVersion,
+          versionStatus: resolveMachineVersionStatus({ reachable: health.reachable, runtimeVersion, expectedRuntimeVersion }),
           reason: health.reason,
           health: {
             ...(health.health ?? {}),
@@ -1250,12 +1291,17 @@ export const resolveMachineStatuses = async (
       }
       const port = machine.port ?? (machine.kind === "ssh" ? 22 : machine.kind === "powershell" ? 5985 : 3478);
       const reachable = await probeTcp(machine.host, port, 900);
+      const runtimeVersion = machine.kind === "ssh" ? POSIX_RUNTIME_VERSION : undefined;
       return {
         ...publicMachine,
         reachable,
         checkedAt,
         endpoint: `${machine.host}:${port}`,
-        runtimeVersion: machine.kind === "ssh" ? POSIX_RUNTIME_VERSION : undefined,
+        runtimeVersion,
+        expectedRuntimeVersion: runtimeVersion,
+        versionStatus: runtimeVersion
+          ? resolveMachineVersionStatus({ reachable, runtimeVersion, expectedRuntimeVersion: runtimeVersion })
+          : undefined,
         backendDetail: backendDetail(machine),
         reason: reachable ? undefined : `no TCP response on ${machine.host}:${port}`,
       };

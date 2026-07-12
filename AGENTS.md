@@ -72,6 +72,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Machine aliases are user-facing labels only. Underlying machine IDs and hosts must remain stable for links, state, and helper environment.
 - Host status should show useful network identity. Respect the current alias/IP display convention when adjusting host labels.
 - Workspace rows should show title, trimmed descriptor, and host context without overlapping. Use tooltips for longer descriptors.
+- Workspace version indicators use structured `MachineStatus` actual/expected version fields and aggregate every pane host in a mixed-host workspace. Do not infer freshness by parsing `backendDetail` text.
 - Workspace rows and tab pills are real links. Preserve `/workspaces/:workspaceId/tabs/:tabId` direct-link behavior.
 - The command palette is opened by `Cmd/Ctrl+K` and should remain the preferred entry point for actions that do not need permanent top-level controls.
 - The host filter in the workspace rail narrows navigation. The target host for creating new workspaces/tabs is controlled by explicit host selection. Splits default to the host of the pane being split.

@@ -2,6 +2,7 @@ export type MachineKind = "local" | "ssh" | "powershell" | "powershell-ssh" | "s
 export type SessionBackend = "auto" | "pty" | "tmux" | "screen" | "agent";
 export type StreamProvider = "mediamtx" | "moonlight-gateway";
 export type StreamReasonKind = "provider" | "gateway" | "upstream" | "target";
+export type MachineVersionStatus = "current" | "outdated" | "unknown";
 
 export interface MachineStreamConfig {
   provider?: StreamProvider;
@@ -44,7 +45,10 @@ export interface MachineStatus {
   endpoint?: string;
   backendDetail?: string;
   runtimeVersion?: string;
+  expectedRuntimeVersion?: string;
   helperBundleVersion?: string;
+  expectedHelperBundleVersion?: string;
+  versionStatus?: MachineVersionStatus;
   health?: Record<string, unknown>;
 }
 

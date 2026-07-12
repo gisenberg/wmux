@@ -568,6 +568,45 @@ button.active-tool {
   text-overflow: ellipsis;
 }
 
+.workspace-version-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 14px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 12px;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  white-space: nowrap;
+  border: 1px solid rgba(141, 130, 111, 0.38);
+  border-radius: 2px;
+  background: rgba(141, 130, 111, 0.08);
+}
+
+.workspace-version-badge.current {
+  color: var(--green);
+  border-color: rgba(71, 211, 124, 0.42);
+  background: rgba(71, 211, 124, 0.08);
+}
+
+.workspace-version-badge.outdated {
+  color: var(--gold);
+  border-color: rgba(244, 211, 94, 0.52);
+  background: rgba(244, 211, 94, 0.1);
+}
+
+.workspace-version-badge.unknown {
+  color: var(--muted);
+}
+
+.workspace-version-badge.mobile {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .workspace-origin-badge {
   flex: 0 0 auto;
   padding: 0 3px;
