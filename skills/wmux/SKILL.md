@@ -1,31 +1,31 @@
 ---
 name: wmux
-description: "Use when Codex needs to orchestrate visible or durable work through the user's wmux browser terminal multiplexer on homelab: inspecting configured machines, starting workspaces or tabs on specific hosts, sending terminal input to local/SSH/Windows panes, tracking remote commands, using wmux helper commands, validating reachability, or updating wmux machine configuration in ../wmux."
+description: "Use when Codex needs to orchestrate visible or durable work through a wmux browser terminal multiplexer: inspecting configured machines, starting workspaces or tabs, sending terminal input to local/SSH/Windows panes, tracking remote commands, using wmux helpers, or validating reachability."
 ---
 
 # wmux
 
 ## Purpose
 
-Use wmux when a task should run on a specific homelab/Tailscale machine with a visible browser terminal surface, durable local/SSH panes, wmux activity metadata, or helper commands such as `wmux-run`, `wmux-notify`, `wmux-copy`, and `wmux-agent-event`.
+Use wmux when a task should run on a specific private-network machine with a visible browser terminal surface, durable local/SSH panes, wmux activity metadata, or helper commands such as `wmux-run`, `wmux-notify`, `wmux-copy`, and `wmux-agent-event`.
 
 Prefer direct local tools or SSH only for quick invisible checks. Prefer wmux when the user asks to orchestrate remote work, wants to monitor the task in the browser, the task spans machines, or the command should remain attached to a wmux workspace.
 
 ## First Steps
 
-1. Read live machine state before acting. Static machines come from `/home/gisenberg/git/gisenberg/wmux/wmux.config.json`, dynamic hosts come from the heartbeat registry, and the live API usually runs at `https://homelab.tail2fcc57.ts.net:3478`.
+1. Read live machine state from `/api/bootstrap` before acting. Static machines come from the configured `wmux.config.json`; dynamic hosts come from the heartbeat registry. `WMUX_URL`, `~/.wmux/url`, and finally `http://127.0.0.1:3478` select the API.
 2. Use `references/api-and-machines.md` when you need exact endpoints, machine ids, or setup caveats.
 3. Use `scripts/wmuxctl.py` for common API actions:
 
 ```bash
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py machines
-python3 ~/.codex/skills/wmux/scripts/wmuxctl.py open away-team --title "Build check"
-python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tabs --machine win-ci --title "Runner repair"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py open linux-box --title "Build check"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tabs --machine windows-box --title "Runner repair"
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py output pane_abc123 --tail-chars 8000
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py wait pane_abc123 --pattern "ready|task_complete" --timeout 30
-python3 ~/.codex/skills/wmux/scripts/wmuxctl.py run 9800x3d --title "Windows smoke" --line "wmux-run -- pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion'"
-python3 ~/.codex/skills/wmux/scripts/wmuxctl.py ps win-ci --title "Runner repair" --script "Get-ScheduledTask -TaskName gitea-act-runner" --wait
-python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine win-ci --title "Runner repair" --status completed --summary "Runner repaired" --close
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py run windows-box --title "Windows smoke" --line "wmux-run -- pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion'"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py ps windows-box --title "Runner repair" --script "Get-ScheduledTask -TaskName build-runner" --wait
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine windows-box --title "Runner repair" --status completed --summary "Runner repaired" --close
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "wmux-agent-event --agent codex --status completed --title Done --summary 'Remote step finished'"
 ```
 
@@ -35,9 +35,9 @@ The helper reads `WMUX_URL`/`~/.wmux/url` and `WMUX_TOKEN`/`~/.wmux/token`; envi
 
 - Treat wmux as live infrastructure. Creating workspaces is usually safe; closing panes, tabs, or workspaces kills the matching session and must be intentional.
 - Do not expose bearer tokens in final answers, logs, code, or committed files.
-- Honor current repo and host instructions. In the homelab repo, shell commands are expected to be prefixed with `rtk`.
+- Honor the current repository and host instructions.
 - Do not weaken wmux bind, Host/Origin, token, CORS, or helper-staging protections.
-- For Windows machines from homelab, use `kind: "powershell-ssh"` behavior. Do not switch to legacy WSMan `powershell` unless explicitly debugging that path.
+- For Windows machines reached from a non-Windows wmux server, use `kind: "powershell-ssh"` behavior. Do not switch to legacy WSMan `powershell` unless explicitly debugging that path.
 - Prefer `wmux-windows-agent-service activate-update` for agent upgrades. It drains existing panes and restarts after the last pane closes; never use `restart --force` unless terminating every active agent-owned pane is explicitly intended.
 - Check `/api/bootstrap` for `reachable`, `reason`, and `backendDetail` before assuming a machine is ready. Windows status includes helper, stream, Python/FFmpeg, and agent health probes.
 - Use exact machine ids from `/api/bootstrap`; it merges static config with the dynamic heartbeat registry. Do not rely on stale docs if the live API differs.
@@ -78,7 +78,6 @@ For an interactive Codex or Claude TUI:
 
 ## References
 
-- `references/api-and-machines.md`: live endpoint, auth paths, current machine table, common API calls, and platform caveats.
-- `/home/gisenberg/git/gisenberg/wmux/README.md`: authoritative wmux user/service docs.
-- `/home/gisenberg/git/gisenberg/wmux/AGENTS.md`: project-specific engineering constraints.
-- `/home/gisenberg/git/gisenberg/homelab/README.md`: homelab inventory snapshot.
+- `references/api-and-machines.md`: auth paths, API calls, discovery workflow, and platform caveats.
+- The checkout's `README.md`: authoritative wmux user/service documentation.
+- The checkout's `AGENTS.md`: project-specific engineering constraints.

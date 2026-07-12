@@ -38,8 +38,10 @@ Damien Guard. The supplied license permits using an embedded font file on a
 site and asks for credit to “DamienG https://damieng.com/zx-origins” when a
 credits section is available. It prohibits redistributing the files as a font,
 re-hosting them for direct font download, or bundling them with other art asset
-collections. These copies are application-internal web assets and are not
-exposed as a font download collection.
+collections. Embedding them in the running application is permitted, but
+tracking the font files in a public source repository appears to redistribute
+them. Their source-redistribution status therefore remains unresolved; see the
+repository-level `THIRD_PARTY_NOTICES.md` before publishing the complete tree.
 
 See the complete upstream README and current project information at:
 

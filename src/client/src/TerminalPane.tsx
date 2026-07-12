@@ -122,6 +122,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [kittyInlineItems, setKittyInlineItems] = useState<KittyInlineImage[]>([]);
   const [terminalMetrics, setTerminalMetrics] = useState<CellMetrics>({ width: 8, height: 16 });
   const [viewportY, setViewportY] = useState(0);
+  const [terminalReady, setTerminalReady] = useState(false);
   const visibleMediaItems = [...kittyMediaItems, ...mediaItems];
   const visibleInlineItems = viewportY < 1 ? kittyInlineItems.filter((item) => item.data) : [];
 
@@ -424,6 +425,12 @@ export const TerminalPane = memo(function TerminalPane({
     // Live output arriving mid-drain is buffered to preserve ordering.
     const replayDraining = () => replayChunks.length > 0 || replayDrainTimer !== undefined;
 
+    const revealTerminal = () => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setTerminalReady(true);
+      });
+    };
+
     const resetReplayDrain = () => {
       if (replayDrainTimer !== undefined) {
         window.clearTimeout(replayDrainTimer);
@@ -440,6 +447,7 @@ export const TerminalPane = memo(function TerminalPane({
         handleOutput(term, replay);
         flushQueuedTerminalText(term);
         replayingTerminalOutput = false;
+        revealTerminal();
         return;
       }
       for (let index = 0; index < replay.length; index += REPLAY_CHUNK_CHARS) {
@@ -464,6 +472,8 @@ export const TerminalPane = memo(function TerminalPane({
         const buffered = replayBufferedOutput;
         replayBufferedOutput = [];
         for (const data of buffered) handleOutput(term, data);
+        flushQueuedTerminalText(term);
+        revealTerminal();
       }, 0);
     };
 
@@ -480,6 +490,8 @@ export const TerminalPane = memo(function TerminalPane({
       const buffered = replayBufferedOutput;
       replayBufferedOutput = [];
       for (const data of buffered) handleOutput(term, data);
+      flushQueuedTerminalText(term);
+      revealTerminal();
     };
 
     const scheduleReconnect = () => {
@@ -540,6 +552,7 @@ export const TerminalPane = memo(function TerminalPane({
         const message = JSON.parse(event.data);
         if (typeof message.paneId === "string" && message.paneId !== pane.id) return;
         if (message.type === "ready") {
+          setTerminalReady(false);
           outputCarryRef.current = "";
           queuedTerminalOutput = "";
           if (terminalOutputTimer !== undefined) {
@@ -551,6 +564,7 @@ export const TerminalPane = memo(function TerminalPane({
           term.clear();
           setKittyInlineItems([]);
           if (message.replay) startReplayDrain(term, message.replay);
+          else revealTerminal();
         }
         if (message.type === "output") {
           if (typeof message.data === "string" && message.data.includes("\x07")) onBell();
@@ -858,7 +872,7 @@ export const TerminalPane = memo(function TerminalPane({
 
   return (
     <section
-      className={`terminal-pane ${active ? "active" : ""} ${unreadCount > 0 ? "unread" : ""} ${
+      className={`terminal-pane ${active ? "active" : ""} ${terminalReady ? "terminal-ready" : ""} ${unreadCount > 0 ? "unread" : ""} ${
         visibleMediaItems.length > 0 ? "has-media" : ""
       }`}
       onMouseDown={onActivate}

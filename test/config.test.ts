@@ -11,7 +11,7 @@ const machine = (overrides: Record<string, unknown>) => ({
 
 test("accepts normal machine configs", () => {
   assert.ok(configSchema.safeParse(machine({})).success);
-  assert.ok(configSchema.safeParse(machine({ id: "away-team_2", name: "Away Team (9800x3d)" })).success);
+  assert.ok(configSchema.safeParse(machine({ id: "remote-box_2", name: "Remote Box (Windows)" })).success);
   assert.ok(configSchema.safeParse(machine({ host: "100.64.0.7" })).success);
   assert.ok(configSchema.safeParse(machine({ host: "fd7a::1234" })).success);
 });

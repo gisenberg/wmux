@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { resolveStreamStatuses, streamPathForMachine } from "../src/server/streams.js";
 import type { MachineConfig } from "../src/server/types.js";
 
-const localMachine: MachineConfig = { id: "local", name: "homelab", kind: "local" };
+const localMachine: MachineConfig = { id: "local", name: "Local Server", kind: "local" };
 const moonlightMachine: MachineConfig = {
   id: "gaming",
   name: "gaming",

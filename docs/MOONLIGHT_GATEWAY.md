@@ -36,22 +36,22 @@ To make Moonlight Web a browser secure context, serve both wmux and the gateway 
 
 ```bash
 tailscale cert \
-  --cert-file ~/.wmux/certs/homelab.tailnet.ts.net.crt \
-  --key-file ~/.wmux/certs/homelab.tailnet.ts.net.key \
-  homelab.tailnet.ts.net
+  --cert-file ~/.wmux/certs/wmux-host.tailnet.ts.net.crt \
+  --key-file ~/.wmux/certs/wmux-host.tailnet.ts.net.key \
+  wmux-host.tailnet.ts.net
 
 WMUX_MOONLIGHT_WEB_URL=http://127.0.0.1:8080 \
-WMUX_MOONLIGHT_GATEWAY_CERT_FILE=~/.wmux/certs/homelab.tailnet.ts.net.crt \
-WMUX_MOONLIGHT_GATEWAY_KEY_FILE=~/.wmux/certs/homelab.tailnet.ts.net.key \
+WMUX_MOONLIGHT_GATEWAY_CERT_FILE=~/.wmux/certs/wmux-host.tailnet.ts.net.crt \
+WMUX_MOONLIGHT_GATEWAY_KEY_FILE=~/.wmux/certs/wmux-host.tailnet.ts.net.key \
   scripts/wmux-moonlight-gateway --host 100.x.y.z --port 3490
 ```
 
 Health and status endpoints:
 
 ```bash
-curl https://homelab.tailnet.ts.net:3490/api/wmux/health
-curl https://homelab.tailnet.ts.net:3490/api/wmux/sessions
-curl https://homelab.tailnet.ts.net:3490/api/wmux/config
+curl https://wmux-host.tailnet.ts.net:3490/api/wmux/health
+curl https://wmux-host.tailnet.ts.net:3490/api/wmux/sessions
+curl https://wmux-host.tailnet.ts.net:3490/api/wmux/config
 ```
 
 ## Automated Pairing
@@ -153,10 +153,10 @@ On macOS, `wmux-sunshine-setup sunshine-status` reports `permissions.screenRecor
 
 ### Linux Host Setup
 
-For a headless Linux homelab host, Sunshine still needs a graphical session to capture. The validated path on Ubuntu 24.04 is:
+For a headless Linux wmux host, Sunshine still needs a graphical session to capture. The validated path on Ubuntu 24.04 is:
 
 - Install the official LizardByte Ubuntu 24.04 amd64 Sunshine `.deb`. Prefer the latest release if pairing reaches the PIN API but Moonlight times out afterward.
-- Run a real Xorg display, preferably on the GPU Sunshine will capture, plus XFCE. Run Sunshine in the same user service environment with `DISPLAY=:99`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `PULSE_SERVER` set. The homelab setup uses a root-owned Xorg server on `:99` with an NVIDIA config under `~/.wmux`, then starts the XFCE and Sunshine user services against that display.
+- Run a real Xorg display, preferably on the GPU Sunshine will capture, plus XFCE. Run Sunshine in the same user service environment with `DISPLAY=:99`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `PULSE_SERVER` set. A validated headless setup can use a root-owned Xorg server on `:99` with an NVIDIA config under `~/.wmux`, then start the XFCE and Sunshine user services against that display.
 - Avoid using `Xvfb` as the long-term Sunshine desktop for interactive Moonlight streams. Sunshine's Linux input path creates `/dev/uinput` devices; a real Xorg server can pick those up through libinput, but Xvfb does not. Xvfb can also leave Sunshine auto-selecting KMS capture from a different framebuffer, which shows up as a black stream with repeated `GL ... graphics.cpp:664` errors.
 - Grant the Sunshine user durable membership in `video`, `render`, and `input`. For the current login session, ACLs may still be needed on `/dev/dri/card*`, `/dev/dri/renderD*`, `/dev/uinput`, and `/dev/uhid`; restart Sunshine after applying them so virtual keyboard/mouse initialize.
 - Point `WMUX_MOONLIGHT_HOST` at the host's Tailscale or internal IP, not `127.0.0.1`, so Moonlight Web pairs and later streams against the same network identity.
@@ -201,11 +201,11 @@ Set a machine stream provider in `wmux.config.json` or `~/.wmux/config.json`:
 {
   "machines": [
     {
-      "id": "9800x3d",
-      "name": "9800x3d",
+      "id": "windows-box",
+      "name": "Windows Box",
       "kind": "powershell-ssh",
-      "host": "9800x3d",
-      "user": "gisen",
+      "host": "windows-box",
+      "user": "operator",
       "stream": {
         "provider": "moonlight-gateway",
         "gatewayUrl": "http://100.x.y.z:3490"

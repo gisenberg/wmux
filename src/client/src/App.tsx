@@ -831,11 +831,11 @@ export function App() {
       },
       {
         id: "switch-chrome-mode",
-        title: openTuiMode ? "Use legacy browser chrome" : "Use OpenTUI chrome",
-        subtitle: openTuiMode ? "Reload with the original React controls" : "Reload with the canvas TUI chrome",
+        title: openTuiMode ? "Use legacy browser chrome" : "Use canvas chrome",
+        subtitle: openTuiMode ? "Reload with the original React controls" : "Reload with the canvas-grid interface",
         section: "View",
         run: () => switchChromeMode(!openTuiMode),
-        keywords: ["opentui", "canvas", "chrome", "ui", "legacy"],
+        keywords: ["canvas", "grid", "chrome", "ui", "legacy"],
       },
       {
         id: "copy-link",
@@ -2333,7 +2333,7 @@ function SettingsModal({
                 DOM
               </button>
             ) : !openTuiSurface && onUseOpenTui ? (
-              <button type="button" title="Use OpenTUI settings experiment" onClick={onUseOpenTui}>
+              <button type="button" title="Use canvas settings surface" onClick={onUseOpenTui}>
                 TUI
               </button>
             ) : null}

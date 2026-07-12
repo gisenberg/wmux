@@ -7,7 +7,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
   && apt-get install -y --no-install-recommends g++ make python3 \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-COPY vendor/opentui-browser ./vendor/opentui-browser
 RUN npm ci
 
 FROM dependencies AS build
@@ -38,7 +37,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json package-lock.json ./
-COPY --chown=node:node vendor/opentui-browser ./vendor/opentui-browser
 COPY --chown=node:node scripts ./scripts
 COPY deploy/docker/docker-bind-host.mjs deploy/docker/docker-healthcheck.mjs /usr/local/lib/wmux/
 COPY deploy/docker/docker-entrypoint.sh /usr/local/bin/wmux-docker-entrypoint

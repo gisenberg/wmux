@@ -47,6 +47,7 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   await expect(chrome.getByRole("button", { name: "Open chat" })).toHaveAttribute("aria-pressed", "true");
   await chrome.getByRole("button", { name: "Open terminal" }).click();
   await expect(chrome.getByRole("button", { name: "Open terminal" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
 
   await chrome.getByRole("button", { name: "Open workspaces and hosts" }).click();
   const navigation = page.getByRole("complementary", { name: "Workspace navigation" });

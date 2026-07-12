@@ -1,8 +1,8 @@
 # Windows Node Registration
 
-This runbook is for registering a Windows machine, such as `9800x3d`, as a wmux node from the homelab Ubuntu wmux server.
+This runbook registers a Windows machine, such as `windows-box`, as a wmux node from a Linux server.
 
-wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host. Do not use the legacy `kind: "powershell"` WSMan transport from homelab.
+wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host. Do not use the legacy `kind: "powershell"` WSMan transport from the wmux server.
 
 References:
 
@@ -15,10 +15,10 @@ References:
 Collect these values before changing either host:
 
 ```text
-wmux server: homelab
-windows node id: 9800x3d
-windows node host: 100.68.206.111
-windows ssh user: gisen
+wmux server host: 100.64.0.10
+windows node id: windows-box
+windows node host: 100.64.0.30
+windows ssh user: operator
 windows ssh port: 22
 ```
 
@@ -26,13 +26,13 @@ If the Tailscale IP or Windows username differs, update the commands and `wmux.c
 
 ## 1. Prepare The wmux Server
 
-Run on homelab.
+Run on the wmux server.
 
 1. Confirm the Windows node is reachable over Tailscale:
 
 ```bash
-tailscale ping --timeout=3s --c 1 100.68.206.111
-timeout 3 bash -lc '</dev/tcp/100.68.206.111/22' && echo 'ssh reachable'
+tailscale ping --timeout=3s --c 1 100.64.0.30
+timeout 3 bash -lc '</dev/tcp/100.64.0.30/22' && echo 'ssh reachable'
 ```
 
 2. Confirm the local SSH client exists. `kind: "powershell-ssh"` is marked offline when this is missing:
@@ -50,7 +50,7 @@ test -f ~/.ssh/id_ed25519.pub && cat ~/.ssh/id_ed25519.pub
 If no key exists, create one:
 
 ```bash
-ssh-keygen -t ed25519 -C 'wmux homelab'
+ssh-keygen -t ed25519 -C 'wmux server'
 ```
 
 ## 2. Prepare The Windows Node
@@ -110,9 +110,9 @@ Get-Command pwsh.exe
 
 If `pwsh.exe` is not on the login-session `PATH`, add the PowerShell 7 install directory to the system PATH or set `"shell"` in the wmux machine config to a command path that OpenSSH can execute.
 
-6. Install the homelab public key for the Windows user.
+6. Install the wmux server public key for the Windows user.
 
-For a non-administrator user, append the public key from homelab to:
+For a non-administrator user, append the public key from the wmux server to:
 
 ```text
 $env:USERPROFILE\.ssh\authorized_keys
@@ -136,26 +136,26 @@ icacls.exe 'C:\ProgramData\ssh\administrators_authorized_keys' /inheritance:r /g
 Restart-Service sshd
 ```
 
-## 3. Validate From homelab
+## 3. Validate From The wmux Server
 
-Run on homelab.
+Run on the wmux server.
 
 1. Validate plain SSH:
 
 ```bash
-ssh gisen@100.68.206.111 hostname
+ssh operator@100.64.0.30 hostname
 ```
 
 2. Validate that PowerShell can run through SSH:
 
 ```bash
-ssh gisen@100.68.206.111 pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion'
+ssh operator@100.64.0.30 pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion'
 ```
 
 3. Validate an interactive PowerShell session through forced-PTY SSH:
 
 ```bash
-ssh -tt gisen@100.68.206.111 pwsh -NoLogo -NoProfile
+ssh -tt operator@100.64.0.30 pwsh -NoLogo -NoProfile
 ```
 
 If this prompts for a password, complete the first validation interactively, then fix key authentication before expecting wmux to open panes without manual prompts.
@@ -166,11 +166,11 @@ Update `wmux.config.json` or `~/.wmux/config.json`:
 
 ```json
 {
-  "id": "9800x3d",
-  "name": "9800x3d",
+  "id": "windows-box",
+  "name": "Windows Box",
   "kind": "powershell-ssh",
-  "host": "100.68.206.111",
-  "user": "gisen",
+  "host": "100.64.0.30",
+  "user": "operator",
   "port": 22
 }
 ```
@@ -185,18 +185,18 @@ systemctl --user restart wmux.service
 Check wmux status:
 
 ```bash
-curl -fsS http://100.107.241.79:3478/api/bootstrap |
-  jq '.machines[] | select(.id == "9800x3d")'
+curl -fsS http://100.64.0.10:3478/api/bootstrap |
+  jq '.machines[] | select(.id == "windows-box")'
 ```
 
 The node is registered correctly when wmux reports:
 
 ```json
 {
-  "id": "9800x3d",
+  "id": "windows-box",
   "kind": "powershell-ssh",
   "reachable": true,
-  "endpoint": "100.68.206.111:22",
+  "endpoint": "100.64.0.30:22",
   "backendDetail": "SSH-launched PowerShell; pwsh 7.6.1; helpers ready; stream task Running; ffmpeg+python"
 }
 ```
@@ -226,10 +226,10 @@ configured for the local `wmux-windows-agent` service:
 ```json
 {
   "machine": {
-    "id": "9800x3d",
-    "name": "9800x3d",
+    "id": "windows-box",
+    "name": "Windows Box",
     "kind": "powershell-ssh",
-    "user": "gisen",
+    "user": "operator",
     "sessionBackend": "agent",
     "agentPort": 3481,
     "agentToken": "replace-with-the-agent-token"
@@ -282,7 +282,7 @@ only when that trusted-host access is intentional, otherwise remove or rotate it
 
 ## 5. Finish Windows Helper Setup
 
-Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helper bundle from homelab and stages scripts plus CMD shims into:
+Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helper bundle from the wmux server and stages scripts plus CMD shims into:
 
 ```text
 %LOCALAPPDATA%\wmux\bin
@@ -329,10 +329,10 @@ The intended Windows streaming path is the per-user Scheduled Task. Validate tha
 wmux-stream-agent-service logs
 ```
 
-From homelab, request a short stream lease:
+From the wmux server, request a short stream lease:
 
 ```bash
-curl -fsS -X POST http://100.107.241.79:3478/api/streams/9800x3d/request \
+curl -fsS -X POST http://100.64.0.10:3478/api/streams/windows-box/request \
   -H 'content-type: application/json' \
   -d '{"requestId":"windows-smoke","ttlMs":12000}' | jq .
 ```
@@ -340,21 +340,21 @@ curl -fsS -X POST http://100.107.241.79:3478/api/streams/9800x3d/request \
 The Windows logs should show:
 
 ```text
-wmux-stream-agent: stream requested for 9800x3d
-wmux-stream-agent: publishing 9800x3d to rtsp://100.107.241.79:8554/wmux-9800x3d
+wmux-stream-agent: stream requested for windows-box
+wmux-stream-agent: publishing windows-box to rtsp://100.64.0.10:8554/wmux-windows-box
 ```
 
 MediaMTX/wmux should report the stream as live while the lease is active:
 
 ```bash
-curl -fsS http://100.107.241.79:3478/api/streams |
-  jq '.streams[] | select(.machineId == "9800x3d")'
+curl -fsS http://100.64.0.10:3478/api/streams |
+  jq '.streams[] | select(.machineId == "windows-box")'
 ```
 
 Release the smoke lease when done:
 
 ```bash
-curl -fsS -X DELETE http://100.107.241.79:3478/api/streams/9800x3d/request/windows-smoke
+curl -fsS -X DELETE http://100.64.0.10:3478/api/streams/windows-box/request/windows-smoke
 ```
 
 ## 7. Validate The Windows Session Agent
@@ -362,7 +362,7 @@ curl -fsS -X DELETE http://100.107.241.79:3478/api/streams/9800x3d/request/windo
 The experimental session agent listens on the configured Tailscale/internal host, defaulting to port `3481`:
 
 ```bash
-curl -fsS http://100.68.206.111:3481/health | jq .
+curl -fsS http://100.64.0.30:3481/health | jq .
 ```
 
 Expected:
@@ -371,7 +371,7 @@ Expected:
 {
   "ok": true,
   "version": "0.1",
-  "machine": "9800x3d",
+  "machine": "windows-box",
   "backend": "conpty",
   "conptyAvailable": true,
   "pywinptyAvailable": true
@@ -382,30 +382,30 @@ Run a direct lifecycle smoke test:
 
 ```bash
 session="windows-agent-smoke"
-curl -fsS -X POST "http://100.68.206.111:3481/sessions/$session" \
+curl -fsS -X POST "http://100.64.0.30:3481/sessions/$session" \
   -H 'content-type: application/json' \
-  -d '{"cols":120,"rows":30,"cwd":"C:\\Users\\gisen"}'
+  -d '{"cols":120,"rows":30,"cwd":"C:\\Users\\operator"}'
 da=$(printf '\033[?64;1;2;6;9;15;18;21;22c' | base64 -w0)
-curl -fsS -X POST "http://100.68.206.111:3481/sessions/$session/input" \
+curl -fsS -X POST "http://100.64.0.30:3481/sessions/$session/input" \
   -H 'content-type: application/json' \
   -d "{\"dataBase64\":\"$da\"}"
-curl -fsS -X POST "http://100.68.206.111:3481/sessions/$session/input" \
+curl -fsS -X POST "http://100.64.0.30:3481/sessions/$session/input" \
   -H 'content-type: application/json' \
   -d '{"dataBase64":"V3JpdGUtT3V0cHV0ICJoZWxsby1mcm9tLWFnZW50Ig0="}'
-curl -fsS "http://100.68.206.111:3481/sessions/$session/output?cursor=0&timeoutMs=1000" |
+curl -fsS "http://100.64.0.30:3481/sessions/$session/output?cursor=0&timeoutMs=1000" |
   jq -r '.dataBase64' | base64 -d
-curl -fsS -X DELETE "http://100.68.206.111:3481/sessions/$session"
+curl -fsS -X DELETE "http://100.64.0.30:3481/sessions/$session"
 ```
 
 To make wmux use the agent for new panes, opt in explicitly:
 
 ```json
 {
-  "id": "9800x3d",
-  "name": "9800x3d",
+  "id": "windows-box",
+  "name": "Windows Box",
   "kind": "powershell-ssh",
-  "host": "100.68.206.111",
-  "user": "gisen",
+  "host": "100.64.0.30",
+  "user": "operator",
   "port": 22,
   "sessionBackend": "agent",
   "agentPort": 3481
@@ -418,18 +418,18 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 
 ## Definition Of Done
 
-- homelab can SSH to the Windows user on `100.68.206.111:22` without a password prompt.
-- `ssh -tt gisen@100.68.206.111 pwsh -NoLogo -NoProfile` opens an interactive prompt from homelab.
+- The wmux server can SSH to the Windows user on `100.64.0.30:22` without a password prompt.
+- `ssh -tt operator@100.64.0.30 pwsh -NoLogo -NoProfile` opens an interactive prompt from the wmux server.
 - Windows firewall exposes SSH only to Tailscale/internal clients.
 - `wmux.config.json` uses `kind: "powershell-ssh"`, not legacy `kind: "powershell"`.
-- `/api/bootstrap` reports `9800x3d` as reachable.
-- Creating a wmux workspace on `9800x3d` opens an interactive PowerShell session.
+- `/api/bootstrap` reports `windows-box` as reachable.
+- Creating a wmux workspace on `windows-box` opens an interactive PowerShell session.
 - New Windows panes stage helper scripts into `%LOCALAPPDATA%\wmux\bin`.
 - `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, `wmux-clip`, `wclip`, `wmclip`, `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup` resolve inside new Windows panes.
 - `wmux-windows-setup validate` reports `wmuxApi.reachable: true`, helper scripts present, FFmpeg/Python/pywinpty available, and the stream task running.
-- A short `/api/streams/9800x3d/request` lease causes the Windows stream agent to publish `wmux-9800x3d`, then return idle after release.
+- A short `/api/streams/windows-box/request` lease causes the Windows stream agent to publish `wmux-windows-box`, then return idle after release.
 - `wmux-windows-setup validate` reports the `wmux-windows-agent` helper and agent config present.
-- `curl http://100.68.206.111:3481/health` reports the Windows session agent as healthy.
+- `curl http://100.64.0.30:3481/health` reports the Windows session agent as healthy.
 - A direct `/sessions/:id` create/input/output/delete smoke test returns command output.
 - `wmux-windows-agent-service activate-update` drains existing sessions and automatically restarts only after the last pane closes; `cancel-update` cancels the drain.
 - `wmux-windows-setup install-hooks` reports Claude and Codex hooks installed; `/hooks` in a new Codex session shows the direct PowerShell command ready for review/trust.
@@ -439,5 +439,5 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 
 - Legacy Windows SSH PowerShell panes are not durable. Agent-backed Windows panes are owned by `wmux-windows-agent`; wmux service shutdown detaches its client while explicit pane closure deletes the owned ConPTY and its Windows Job Object, terminating detached descendants.
 - Windows helper staging and cwd reporting require a new pane after the wmux service has been updated.
-- Windows screen streaming is validated on 9800x3d through FFmpeg/gdigrab and the supervised per-user Scheduled Task. Locked/logged-out behavior and a fuller Windows wmux agent are still not implemented.
+- Windows screen streaming is validated on a dogfood Windows host through FFmpeg/gdigrab and the supervised per-user Scheduled Task. Locked/logged-out behavior and a fuller Windows wmux agent are still not implemented.
 - The Windows session agent uses pywinpty-backed ConPTY by default. It is restart-durable across `wmux.service` restarts while the Windows agent keeps running. Agent 0.7 adds non-destructive staged-update draining, but a forced Windows-agent restart still kills owned ConPTY processes; process preservation across an unexpected agent crash and broad full-screen app validation remain pending.

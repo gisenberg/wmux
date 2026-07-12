@@ -10,7 +10,7 @@ wmux is a browser terminal multiplexer for one user's Tailscale or internal netw
 - durable `tmux`/`screen` backing for local and SSH panes,
 - browser-aware media, clipboard, and mobile ergonomics.
 
-This is intentionally not a multi-tenant SaaS app. Authentication currently relies on the private network boundary plus bind/Host/Origin checks.
+This is intentionally not a multi-tenant SaaS app. Bearer authentication is defense-in-depth on top of the required private-network boundary and bind/Host/Origin checks; it does not make a public-Internet deployment supported.
 
 ## Commands
 
@@ -18,6 +18,9 @@ This is intentionally not a multi-tenant SaaS app. Authentication currently reli
 - `npm run dev -- --host 127.0.0.1 --port 3478` starts the app in development mode with Vite middleware.
 - `npm run typecheck` runs client and server TypeScript checks.
 - `npm run build` builds the client and server.
+- `npm run check` runs tests, TypeScript checks, script validation, and the production build.
+- `npm run test:e2e` runs the isolated desktop and mobile Playwright suite.
+- `npm run docs:screenshots` regenerates the tracked desktop and mobile README screenshots from the isolated Playwright fixture.
 - `npm run start -- --host 127.0.0.1 --port 3478` runs the built service.
 - `npm run audit:sessions` audits local wmux-managed durable `tmux`/`screen` sessions.
 - `npm run audit:sessions -- --json` emits the same audit as JSON.
@@ -40,12 +43,21 @@ For MagicDNS names or reverse-proxy hostnames, set `WMUX_ALLOWED_HOSTS` to a com
 
 Keep websocket, media, clipboard, hook, and run endpoints behind the same network boundary. Do not add CORS broadening or public callback endpoints without also adding an auth story.
 
+## Public Repository Hygiene
+
+- `wmux.config.json` is runtime-local and ignored. Keep reusable examples in `wmux.config.example.json`; never commit live inventories, usernames tied to a private deployment, tokens, credentials, private-key paths, or personal service URLs.
+- wmux-owned code and artwork are MIT-licensed. Third-party dependencies and assets retain their own terms; keep `THIRD_PARTY_NOTICES.md` and the provenance files beside assets accurate.
+- Do not add code or assets without clear redistribution terms. A dependency being public on GitHub is not a license.
+- The retained DamienG font files and historical screenshots have unresolved source-redistribution status. Do not describe the complete checkout as ready for public redistribution until those entries in `THIRD_PARTY_NOTICES.md` are resolved.
+- Keep the architecture diagram in `README.md` synchronized when changing process boundaries, persistence ownership, session backends, or streaming paths.
+- Keep README screenshots reproducible through `npm run docs:screenshots`; do not capture private machine names, hosts, usernames, tokens, or terminal history.
+
 ## Architecture Notes
 
 - Server state lives in `~/.wmux/state.json` unless `WMUX_STATE_PATH` is set.
 - Server-backed UI settings live in `~/.wmux/settings.json` unless `WMUX_SETTINGS_PATH` is set.
 - State and settings use explicit schema versions, atomic owner-only writes, validated rolling backups, and downgrade refusal. Add a migration before changing a persisted shape.
-- Machine definitions are read from `./wmux.config.json` first, then `~/.wmux/config.json`; `WMUX_CONFIG_PATH` selects one explicit file and disables fallback.
+- Machine definitions are read from ignored `./wmux.config.json` first, then `~/.wmux/config.json`; `WMUX_CONFIG_PATH` selects one explicit file and disables fallback. `wmux.config.example.json` is the tracked template.
 - Dynamic SSH and PowerShell-over-SSH machines register through `POST /api/registry/hosts` and persist in `~/.wmux/host-registry.json`. The shared registration token is trusted catalog-write authority for every dynamic ID, not per-host identity; it must not authorize registry reads, deletion, helper bundles, or any other endpoint.
 - The host registry has its own schema version, owner-only atomic writes, legacy migration, and downgrade refusal. Bump/migrate its envelope before changing persisted record shapes; never rewrite a future version.
 - Dynamic registrations always dial the validated private/internal heartbeat source address. Keep their schema narrower than static `MachineConfig`: no commands, local/service kinds, agent URLs, or stream gateway configuration. The Windows agent backend requires explicit `agentPort` and `agentToken`; the token must stay server-only and redacted from registry/status/helper/browser payloads.
@@ -65,7 +77,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Windows `powershell-ssh` panes fetch helper scripts from `/api/helpers/windows/:machineId`, stage them into `%LOCALAPPDATA%\wmux\bin`, prepend that directory to `PATH`, and install a temporary PowerShell prompt function for OSC 7 cwd reporting.
 - POSIX SSH helper staging must run under POSIX `sh`; do not rely on zsh/bash-specific word splitting in `src/server/machines.ts`.
 - Session audit cleanup must remain limited to local `wmux_` tmux/screen sessions that the audit marks duplicate or orphan. Never add automatic cleanup of active sessions or non-wmux multiplexer sessions.
-- Machine screen streams are machine-local or gateway-local captures, not browser captures. The MediaMTX helper path has the active host publish its own pixels to the MediaMTX service on homelab, and wmux viewers embed the active machine's WebRTC path. The Moonlight gateway path proxies a browser-native Moonlight/Sunshine bridge. Do not replace either path with `getDisplayMedia` from the viewing browser.
+- Machine screen streams are machine-local or gateway-local captures, not browser captures. The MediaMTX helper path has the active host publish its own pixels to the MediaMTX service on the wmux server, and wmux viewers embed the active machine's WebRTC path. The Moonlight gateway path proxies a browser-native Moonlight/Sunshine bridge. Do not replace either path with `getDisplayMedia` from the viewing browser.
 - MediaMTX helper capture should remain on-demand. The browser requests/releases a short stream lease through the existing `/ws/events` socket, while `wmux-stream-agent` polls the wmux lease endpoint and only runs `screencapture`/ffmpeg while a lease is active.
 - MediaMTX should bind RTSP/WebRTC only to the Tailscale/internal interface and keep its API on loopback. Use `scripts/install-stream-service.sh` for repeatable setup.
 - `wmux-moonlight-gateway` should bind only to loopback, Tailscale, or RFC1918/internal addresses. It is a clean process boundary around browser-native Moonlight bridges such as Moonlight Web Stream; do not vendor or copy GPL implementation code into wmux without an explicit license decision. Its setup API may automate the supported pairing flow by generating the Moonlight Web PIN and submitting it to Sunshine's `/api/pin`, but it should not edit Sunshine's paired-client state directly. The Sunshine PIN device name must match the upstream Moonlight bridge's pair device name; Moonlight Web Stream v2.10.0 currently hardcodes this as `roth`. Browser autologin should use gateway environment credentials to mint a Moonlight Web session cookie; do not commit raw Moonlight Web credentials into `wmux.config.json`.
@@ -73,8 +85,8 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 ## UI And Interaction Notes
 
 - The terminal canvas/content area should remain visually untreated. Product styling belongs in surrounding chrome, overlays, sidebars, shelves, and toolbars.
-- The default chrome is the OpenTUI-inspired path. `?legacy=1` keeps the older React chrome available.
-- OpenTUI chrome surfaces use the vendored `opentui-browser` package under `vendor/opentui-browser`; upstream is private/unpublished and currently treated as an experimental snapshot. Preserve provenance in `vendor/opentui-browser/UPSTREAM.md`.
+- The default chrome uses the wmux-owned Canvas 2D cell-grid renderer in `src/client/src/opentui-grid.ts`. `?legacy=1` keeps the older DOM-heavy React chrome available.
+- Do not reintroduce the former unlicensed `opentui-browser` vendor snapshot. Keep the local renderer limited to the cell-grid surface wmux actually uses.
 - The empty-workspace view is a sibling WebGL shader, not a ghostty-web shader. It renders a Game-of-Life/metal light-panel cube field with mobile-adjusted projection and click-to-toggle cells.
 - Settings remains a DOM modal because it contains editable controls and destructive session-audit actions.
 - Machine aliases are user-facing labels only. Underlying machine IDs and hosts must remain stable for links, state, and helper environment.
@@ -119,14 +131,14 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - `wmux-hooks install codex` mutates `~/.codex/hooks.json` outside the repo. Codex command hooks require the user to review/trust them with `/hooks` before they run.
 - `wmux-stream-agent` publishes the local display with ffmpeg to the machine's `WMUX_STREAM_RTSP_URL`. It should normally run as a service with `onDemand: true`, polling wmux and starting actual capture only while a stream dialog is open. It must run in the graphical login session of the machine being captured. On macOS, the owning app needs System Settings -> Privacy & Security -> Screen Recording permission. On Windows, the validated path is `wmux-windows-setup install-stream`, which creates a per-user Scheduled Task that runs under the logged-in user session.
 - Remote hooks/helpers are not auto-installed retroactively into already-running shell sessions. Start a new wmux pane or ensure the staged helper directory is on `PATH` on the remote host.
-- The Codex skill lives under `skills/wmux` and should stay aligned with wmux API routes, helper behavior, and `wmux.config.json`. On dogfood hosts, expose it through `~/.codex/skills/wmux` as a symlink to this repo copy rather than maintaining a separate personal copy.
+- The Codex skill lives under `skills/wmux` and should stay aligned with wmux API routes, helper behavior, and config shape. Keep public examples generic and discover live machine IDs from `/api/bootstrap`. Install it through a symlink to this repo copy rather than maintaining a separate personal copy.
 
 ## Current Gaps To Preserve In Docs
 
 - Dynamically registered panes stage helper commands but intentionally receive no broad `WMUX_TOKEN`; API-posting helpers need separately provisioned auth.
 - Dynamic live-pane endpoint snapshots are in-memory only; a wmux restart followed by dynamic ID reassignment can leave the old remote durable session requiring manual cleanup.
 - Remote per-platform wmux agents are partial. Windows has an experimental ConPTY session agent; Linux/macOS agents are not implemented.
-- Windows SSH PowerShell is validated on 9800x3d. The experimental Windows session agent uses pywinpty-backed ConPTY, contains each pane in a kill-on-close Windows Job Object, and supports staged-update draining. Broad full-screen app validation and process preservation across unexpected/forced Windows-agent restarts are still pending.
+- Windows SSH PowerShell is validated on dogfood Windows hosts. The experimental Windows session agent uses pywinpty-backed ConPTY, contains each pane in a kill-on-close Windows Job Object, and supports staged-update draining. Broad full-screen app validation and process preservation across unexpected/forced Windows-agent restarts are still pending.
 - Static machine management is file-based and the dynamic registry has no in-app editor.
 - Authentication exists for browser and helper access, but browser tokens remain in local storage/WebSocket query parameters and helpers still receive a broadly privileged shared token; scoped capabilities and cookie-backed browser sessions are not implemented.
 - Dynamic host presence follows the host user's service lifecycle: the systemd user timer needs lingering to run while logged out, and the Windows Scheduled Task starts only after that user logs in.
@@ -134,7 +146,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Kitty graphics support is partial. File/shared-memory transfer, animation frames, z-index layering, scrollback-persistent placement, Sixel, and iTerm2 image protocols are not complete.
 - Command run tracking is explicit through `wmux-run`; arbitrary shell command detection is not implemented.
 - Cwd preservation is best-effort outside tmux and wmux-managed shell bootstraps.
-- OpenTUI migration is partial and vendored.
+- The canvas-grid and legacy DOM chrome paths coexist; avoid behavior drift between them while the fallback remains supported.
 - Pixel streaming has the legacy MediaMTX helper path and an early Moonlight gateway path. Wayland, locked/logged-out Windows capture behavior, macOS permission automation, Sunshine app-launch automation, reconnect supervision, and a full wmux native agent remain gaps.
 - Document newly discovered or intentionally deferred limitations in the relevant `README.md` section (or a `docs/` runbook) so they stay near the feature they qualify.
 

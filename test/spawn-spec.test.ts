@@ -20,6 +20,7 @@ const fixedEnv: Record<string, string> = {
   WMUX_PORT: "3478",
   WMUX_STREAM_HOST: "10.0.0.1",
   WMUX_PUBLIC_URL: "http://10.0.0.1:3478",
+  HOME: "/home/operator",
 };
 
 const extraEnv = {
@@ -31,15 +32,15 @@ const extraEnv = {
 };
 
 const machines: Array<{ label: string; machine: MachineConfig }> = [
-  { label: "local-auto", machine: { id: "local", name: "homelab", kind: "local", sessionBackend: "auto", cwd: "/home/fixed" } },
-  { label: "local-pty", machine: { id: "local", name: "homelab", kind: "local", sessionBackend: "pty", cwd: "/home/fixed" } },
-  { label: "local-tmux", machine: { id: "local", name: "homelab", kind: "local", sessionBackend: "tmux", cwd: "/home/fixed" } },
-  { label: "local-screen", machine: { id: "local", name: "homelab", kind: "local", sessionBackend: "screen", cwd: "/home/fixed" } },
+  { label: "local-auto", machine: { id: "local", name: "Local Server", kind: "local", sessionBackend: "auto", cwd: "/home/fixed" } },
+  { label: "local-pty", machine: { id: "local", name: "Local Server", kind: "local", sessionBackend: "pty", cwd: "/home/fixed" } },
+  { label: "local-tmux", machine: { id: "local", name: "Local Server", kind: "local", sessionBackend: "tmux", cwd: "/home/fixed" } },
+  { label: "local-screen", machine: { id: "local", name: "Local Server", kind: "local", sessionBackend: "screen", cwd: "/home/fixed" } },
   { label: "local-command", machine: { id: "svc", name: "svc", kind: "local", command: ["htop", "-d", "5"] } },
-  { label: "ssh-auto", machine: { id: "away", name: "Away", kind: "ssh", host: "away.ts.net", user: "gisen", sessionBackend: "auto" } },
-  { label: "ssh-port-screen", machine: { id: "away", name: "Away", kind: "ssh", host: "away.ts.net", user: "gisen", port: 2222, sessionBackend: "screen" } },
+  { label: "ssh-auto", machine: { id: "away", name: "Away", kind: "ssh", host: "linux-box.internal", user: "operator", sessionBackend: "auto" } },
+  { label: "ssh-port-screen", machine: { id: "away", name: "Away", kind: "ssh", host: "linux-box.internal", user: "operator", port: 2222, sessionBackend: "screen" } },
   { label: "powershell", machine: { id: "win", name: "Win", kind: "powershell", host: "win-host" } },
-  { label: "powershell-ssh", machine: { id: "win2", name: "Win2", kind: "powershell-ssh", host: "9800x3d", user: "gisen" } },
+  { label: "powershell-ssh", machine: { id: "win2", name: "Win2", kind: "powershell-ssh", host: "windows-box", user: "operator" } },
 ];
 
 const sampleSpecs = () => {

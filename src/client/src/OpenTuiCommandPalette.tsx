@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createGrid,
-  createOpenTuiPainter,
+  createGridPainter,
   fillCells,
   fitText,
   hexToRgba,
@@ -78,7 +78,7 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const painter = createOpenTuiPainter(canvas, {
+    const painter = createGridPainter(canvas, {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",

@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/gisenberg/git/gisenberg/wmux
+WorkingDirectory=/home/operator/wmux
 Environment=NODE_ENV=development
-Environment=WMUX_HOST=100.107.241.79
+Environment=WMUX_HOST=100.64.0.10
 Environment=WMUX_PORT=3478
 Environment=WMUX_CERT_FILE=
 Environment=WMUX_KEY_FILE=

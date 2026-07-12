@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
   createGrid,
-  createOpenTuiPainter,
+  createGridPainter,
   fillCells,
   fitText,
   hexToRgba,
@@ -92,7 +92,7 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const painter = createOpenTuiPainter(canvas, {
+    const painter = createGridPainter(canvas, {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
@@ -159,7 +159,7 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
   };
 
   return (
-    <header className="topbar open-tui-topbar" aria-label="OpenTUI session toolbar">
+    <header className="topbar open-tui-topbar" aria-label="Session toolbar">
       <canvas ref={canvasRef} className="open-tui-canvas" onClick={onClick} onPointerMove={onPointerMove} />
     </header>
   );

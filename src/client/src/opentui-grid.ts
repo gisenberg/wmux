@@ -1,10 +1,20 @@
-import { CanvasPainter } from "opentui-browser/canvas-painter";
-import type { CanvasPainterOptions } from "opentui-browser/canvas-painter";
-import type { CellGrid } from "opentui-browser/cell-grid";
-
-export type { CellGrid };
-
 export type RGBA = readonly [number, number, number, number];
+
+export interface CellGrid {
+  width: number;
+  height: number;
+  chars: Uint32Array;
+  fg: Float32Array;
+  bg: Float32Array;
+  attrs: Uint32Array;
+}
+
+export interface GridPainterOptions {
+  fontSize?: number;
+  fontFamily?: string;
+  cellVAlign?: "top" | "middle" | "bottom";
+  clearColor?: string;
+}
 
 export interface CellMetrics {
   width: number;
@@ -26,10 +36,175 @@ export const ATTR_UNDERLINE = 1 << 3;
 export const ATTR_VALIGN_MIDDLE = 1 << 4;
 export const ATTR_VALIGN_BOTTOM = 2 << 4;
 
-export const createOpenTuiPainter = (
+const rgbaCss = (buffer: Float32Array, offset: number): string => {
+  const red = Math.round(Math.max(0, Math.min(1, buffer[offset] ?? 0)) * 255);
+  const green = Math.round(Math.max(0, Math.min(1, buffer[offset + 1] ?? 0)) * 255);
+  const blue = Math.round(Math.max(0, Math.min(1, buffer[offset + 2] ?? 0)) * 255);
+  const alpha = Math.max(0, Math.min(1, buffer[offset + 3] ?? 1));
+  return alpha === 1 ? `rgb(${red} ${green} ${blue})` : `rgb(${red} ${green} ${blue} / ${alpha})`;
+};
+
+const canvasFont = (fontSize: number, fontFamily: string, attrs: number): string => {
+  const style = attrs & ATTR_ITALIC ? "italic " : "";
+  const weight = attrs & ATTR_BOLD ? "700 " : "400 ";
+  return `${style}${weight}${fontSize}px ${fontFamily}`;
+};
+
+const configureCanvasText = (context: CanvasRenderingContext2D): void => {
+  context.textBaseline = "top";
+  const extended = context as CanvasRenderingContext2D & {
+    fontKerning?: CanvasFontKerning;
+    fontVariantLigatures?: string;
+    fontFeatureSettings?: string;
+  };
+  extended.fontKerning = "normal";
+  extended.fontVariantLigatures = "common-ligatures contextual";
+  extended.fontFeatureSettings = '"calt" 1, "liga" 1';
+};
+
+/** A small wmux-owned renderer for the cell grids used by the surrounding chrome. */
+export class GridPainter {
+  readonly canvas: HTMLCanvasElement;
+  readonly cellWidth: number;
+  readonly cellHeight: number;
+
+  private readonly context: CanvasRenderingContext2D;
+  private readonly fontSize: number;
+  private readonly fontFamily: string;
+  private readonly defaultVAlign: 0 | 1 | 2;
+  private readonly clearColor: string;
+  private cssWidth = 1;
+  private cssHeight = 1;
+  private viewportConfigured = false;
+  private cols = 1;
+  private rows = 1;
+
+  constructor(canvas: HTMLCanvasElement, options: GridPainterOptions = {}) {
+    this.canvas = canvas;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Canvas 2D rendering is unavailable");
+    this.context = context;
+    this.fontSize = options.fontSize ?? 13;
+    this.fontFamily = options.fontFamily ?? "ui-monospace, SFMono-Regular, Menlo, monospace";
+    this.defaultVAlign = options.cellVAlign === "middle" ? 1 : options.cellVAlign === "bottom" ? 2 : 0;
+    this.clearColor = options.clearColor ?? "#000000";
+
+    context.font = canvasFont(this.fontSize, this.fontFamily, 0);
+    configureCanvasText(context);
+    this.cellWidth = Math.max(1, Math.round(context.measureText("M").width));
+    this.cellHeight = Math.max(1, Math.round(this.fontSize * 1.2));
+  }
+
+  fit(width: number, height: number): { cols: number; rows: number } {
+    return {
+      cols: Math.max(1, Math.floor(width / this.cellWidth)),
+      rows: Math.max(1, Math.floor(height / this.cellHeight)),
+    };
+  }
+
+  resize(cols: number, rows: number): void {
+    this.cols = Math.max(1, Math.floor(cols));
+    this.rows = Math.max(1, Math.floor(rows));
+    if (this.viewportConfigured) return;
+
+    const deviceScale = window.devicePixelRatio || 1;
+    this.cssWidth = this.cols * this.cellWidth;
+    this.cssHeight = this.rows * this.cellHeight;
+    this.canvas.width = Math.max(1, Math.round(this.cssWidth * deviceScale));
+    this.canvas.height = Math.max(1, Math.round(this.cssHeight * deviceScale));
+    this.canvas.style.width = `${this.cssWidth}px`;
+    this.canvas.style.height = `${this.cssHeight}px`;
+    this.configureContext();
+  }
+
+  setViewport(deviceWidth: number, deviceHeight: number, cssWidth: number, cssHeight: number): void {
+    this.viewportConfigured = true;
+    this.cssWidth = Math.max(1, cssWidth);
+    this.cssHeight = Math.max(1, cssHeight);
+    const nextDeviceWidth = Math.max(1, Math.round(deviceWidth));
+    const nextDeviceHeight = Math.max(1, Math.round(deviceHeight));
+    if (this.canvas.width !== nextDeviceWidth) this.canvas.width = nextDeviceWidth;
+    if (this.canvas.height !== nextDeviceHeight) this.canvas.height = nextDeviceHeight;
+    this.configureContext();
+  }
+
+  paint(grid: CellGrid): void {
+    if (grid.width !== this.cols || grid.height !== this.rows) this.resize(grid.width, grid.height);
+
+    const context = this.context;
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.fillStyle = this.clearColor;
+    context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    context.restore();
+
+    for (let row = 0; row < grid.height; row += 1) {
+      const top = row * this.cellHeight;
+      const height = row === grid.height - 1 ? Math.max(this.cellHeight, this.cssHeight - top) : this.cellHeight;
+      for (let col = 0; col < grid.width; col += 1) {
+        const cell = row * grid.width + col;
+        const left = col * this.cellWidth;
+        const width = col === grid.width - 1 ? Math.max(this.cellWidth, this.cssWidth - left) : this.cellWidth;
+        context.fillStyle = rgbaCss(grid.bg, cell * 4);
+        context.fillRect(left, top, width, height);
+      }
+    }
+
+    let activeFont = "";
+    for (let row = 0; row < grid.height; row += 1) {
+      const top = row * this.cellHeight;
+      for (let col = 0; col < grid.width; col += 1) {
+        const cell = row * grid.width + col;
+        const codePoint = grid.chars[cell] ?? 0x20;
+        if (codePoint === 0 || codePoint === 0x20 || codePoint > 0x10ffff) continue;
+
+        const attrs = grid.attrs[cell] ?? 0;
+        const nextFont = canvasFont(this.fontSize, this.fontFamily, attrs);
+        if (nextFont !== activeFont) {
+          context.font = nextFont;
+          configureCanvasText(context);
+          activeFont = nextFont;
+        }
+        context.fillStyle = rgbaCss(grid.fg, cell * 4);
+        const encodedVAlign = (attrs >> 4) & 0b11;
+        const vAlign = encodedVAlign === 1 || encodedVAlign === 2 ? encodedVAlign : this.defaultVAlign;
+        const verticalOffset = vAlign === 1
+          ? Math.round((this.cellHeight - this.fontSize) / 2)
+          : vAlign === 2
+            ? this.cellHeight - this.fontSize
+            : 0;
+        const left = col * this.cellWidth;
+        context.fillText(String.fromCodePoint(codePoint), left, top + verticalOffset);
+        if (attrs & ATTR_UNDERLINE) {
+          const underline = Math.min(top + this.cellHeight - 1, top + verticalOffset + this.fontSize - 1);
+          context.fillRect(left, underline, this.cellWidth, 1);
+        }
+      }
+    }
+  }
+
+  dispose(): void {
+    // Canvas 2D owns no external resources.
+  }
+
+  private configureContext(): void {
+    this.context.setTransform(
+      this.canvas.width / this.cssWidth,
+      0,
+      0,
+      this.canvas.height / this.cssHeight,
+      0,
+      0,
+    );
+    this.context.font = canvasFont(this.fontSize, this.fontFamily, 0);
+    configureCanvasText(this.context);
+  }
+}
+
+export const createGridPainter = (
   canvas: HTMLCanvasElement,
-  opts: CanvasPainterOptions = {},
-): CanvasPainter => new CanvasPainter(canvas, { clearColor: "#050505", ...opts });
+  opts: GridPainterOptions = {},
+): GridPainter => new GridPainter(canvas, { clearColor: "#050505", ...opts });
 
 export const measureCanvasViewport = (
   canvas: HTMLCanvasElement,
@@ -50,7 +225,7 @@ export const measureCanvasViewport = (
 };
 
 export const syncPainterViewport = (
-  painter: CanvasPainter,
+  painter: GridPainter,
   canvas: HTMLCanvasElement,
   entry?: ResizeObserverEntry,
 ): CellMetrics => {

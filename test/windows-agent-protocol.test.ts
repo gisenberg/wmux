@@ -70,13 +70,13 @@ import runpy
 module = runpy.run_path("scripts/wmux-windows-agent")
 reporter = module["CwdReporter"]()
 values = []
-for chunk in (b"prefix\x1b]7;file://WIN/C%3A/Users/gi", b"sen/work%20tree\x07suffix"):
+for chunk in (b"prefix\x1b]7;file://WIN/C%3A/Users/oper", b"ator/work%20tree\x07suffix"):
     values.extend(reporter.feed(chunk))
 print(json.dumps(values))
 `;
   const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), ["C:/Users/gisen/work tree"]);
+  assert.deepEqual(JSON.parse(result.stdout), ["C:/Users/operator/work tree"]);
 });
 
 test("Windows agent reports the staged helper bundle version", () => {

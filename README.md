@@ -1,12 +1,92 @@
 # wmux
 
-A browser-based terminal multiplexer for a Tailscale or internal network.
+A single-user browser terminal multiplexer for a Tailscale or internal network.
 
 wmux combines:
 
-- a localterm-style PTY-over-WebSocket service,
-- a cmux-style left workspace rail with tabs and split panes,
-- ghostty-web canvas terminal rendering in the browser.
+- PTY and durable-session ownership behind authenticated WebSockets,
+- cmux-style workspaces, tabs, splits, activity, and direct links,
+- `ghostty-web` terminal rendering with desktop and mobile browser chrome,
+- local, SSH, PowerShell-over-SSH, and experimental Windows-agent backends,
+- dynamic host heartbeats plus browser-aware clipboard, media, and notifications.
+
+> [!CAUTION]
+> A public source repository does not make the running service suitable for the
+> public Internet. wmux grants terminal access to its host machines and is
+> designed for one trusted user behind loopback, Tailscale, or another private
+> network boundary. Do not publish it through a public bind or an unrestricted
+> reverse proxy.
+
+## Screenshots
+
+### Desktop
+
+![wmux desktop workspace with the workspace rail, terminal, and status chrome](docs/images/wmux-desktop.png)
+
+![wmux desktop command palette over an active terminal workspace](docs/images/wmux-command-palette.png)
+
+### Mobile
+
+<p>
+  <img src="docs/images/wmux-mobile-terminal.png" width="320" alt="wmux mobile terminal view with session controls">
+  <img src="docs/images/wmux-mobile-navigation.png" width="320" alt="wmux mobile workspace and host navigation drawer">
+</p>
+
+The tracked screenshots are captured from the isolated local fixture with
+`npm run docs:screenshots`; they do not use a live machine inventory.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Browser["Browser<br/>React + canvas-grid chrome<br/>ghostty-web terminal"]
+
+  subgraph Server["wmux Node.js service"]
+    Boundary["Private bind<br/>Host + Origin checks<br/>Bearer auth"]
+    Control["REST API<br/>event WebSocket"]
+    Sessions["Session manager<br/>replay + VT checkpoints"]
+    Catalog["Machine catalog<br/>static config + heartbeat registry"]
+    Stores["State + settings<br/>attachments + metadata"]
+  end
+
+  Browser <-->|"HTTP(S) + authenticated WS(S)"| Boundary
+  Boundary <-->|"control + snapshots"| Control
+  Boundary <-->|"pane streams"| Sessions
+  Catalog --> Control
+  Catalog --> Sessions
+  Control --> Stores
+
+  Config["wmux.config.json"] --> Catalog
+  Heartbeats["Registered SSH hosts<br/>POSIX / Windows heartbeat"] --> Catalog
+  Stores --> Disk["~/.wmux/*.json"]
+
+  Sessions --> Local["Local node-pty<br/>tmux / screen"]
+  Sessions --> SSH["ssh -tt<br/>remote tmux / screen / pwsh"]
+  Sessions --> WinAgent["Windows agent API<br/>ConPTY + replay"]
+
+  Browser -.->|"WebRTC / Moonlight"| Streams["Optional stream services"]
+  Local -.-> Streams
+  SSH -.-> Streams
+  WinAgent -.-> Streams
+```
+
+The server owns canonical workspace state and one long-lived session client per
+pane. Browsers are attachable views: closing or refreshing a browser does not
+kill a pane, while explicitly closing a pane, tab, or workspace does. Local and
+POSIX SSH panes can reattach through `tmux` or `screen`; the Windows agent owns
+ConPTY sessions across wmux service restarts. See
+[Restart Persistence](#restart-persistence) for the exact durability boundary.
+
+## Security Model
+
+wmux is defense-in-depth for a private network, not a hardened multi-tenant
+terminal service. The server rejects wildcard and public bind addresses, checks
+Host and Origin on HTTP and WebSocket requests, and authenticates control and
+pane endpoints. Browser tokens are stored locally and WebSocket authentication
+uses a query token; static remote helpers may receive a broadly privileged
+shared token. Use HTTPS away from loopback, treat every token as a password,
+and keep every API, WebSocket, helper, clipboard, media, and streaming endpoint
+inside the same trusted network boundary.
 
 ## Run
 
@@ -43,9 +123,9 @@ keys, environment files, and persisted state outside the image.
 To serve wmux over HTTPS with a Tailscale certificate, point wmux at the certificate and key and set the public URL to the certificate name:
 
 ```bash
-WMUX_CERT_FILE=~/.wmux/certs/homelab.tailnet.ts.net.crt \
-WMUX_KEY_FILE=~/.wmux/certs/homelab.tailnet.ts.net.key \
-WMUX_PUBLIC_URL=https://homelab.tailnet.ts.net:3478 \
+WMUX_CERT_FILE=~/.wmux/certs/wmux-host.tailnet.ts.net.crt \
+WMUX_KEY_FILE=~/.wmux/certs/wmux-host.tailnet.ts.net.key \
+WMUX_PUBLIC_URL=https://wmux-host.tailnet.ts.net:3478 \
 npm run start -- --host 100.x.y.z --port 3478
 ```
 
@@ -83,30 +163,40 @@ machine secrets.
 
 ## Configure Machines
 
+The checkout-local runtime config is intentionally ignored by Git. Start from
+the public example, or keep the config in your home directory:
+
+```bash
+cp wmux.config.example.json wmux.config.json
+```
+
 Put machine definitions in `wmux.config.json` or `~/.wmux/config.json`:
 
 ```json
 {
   "machines": [
     {
-      "id": "away-team",
-      "name": "Away-Team",
+      "id": "linux-box",
+      "name": "Linux Box",
       "kind": "ssh",
-      "host": "away-team.tailnet-name.ts.net",
-      "user": "gisenberg"
+      "host": "linux-box.tailnet-name.ts.net",
+      "user": "operator"
     },
     {
-      "id": "9800x3d",
-      "name": "9800x3d",
+      "id": "windows-box",
+      "name": "Windows Box",
       "kind": "powershell-ssh",
-      "host": "9800x3d",
-      "user": "gisen"
+      "host": "windows-box",
+      "user": "operator"
     }
   ]
 }
 ```
 
-Set `WMUX_CONFIG_PATH` to use one explicit config file. When set, wmux will not fall back to the repository or home config, and startup fails if the requested file is missing. This keeps tests and alternate service instances isolated from the dogfood machine inventory.
+Set `WMUX_CONFIG_PATH` to use one explicit config file. When set, wmux will not fall back to the repository or home config, and startup fails if the requested file is missing. This keeps tests and alternate service instances isolated from the default machine inventory.
+
+Do not commit a live inventory, credentials, agent tokens, gateway tokens, or
+private key paths. Keep reusable examples in `wmux.config.example.json`.
 
 wmux adds a local machine when no configured machine has the `local` ID. Set
 `"localMachine": false` at the top level to suppress that implicit shell, for
@@ -118,7 +208,7 @@ Unix-like local and SSH machines default to `"sessionBackend": "auto"`, which at
 
 Use `kind: "powershell-ssh"` for Windows hosts reachable from a non-Windows wmux server. It starts the local `ssh` client with a forced TTY and launches `pwsh -NoLogo -NoProfile` on the Windows host, so the Windows host must have PowerShell 7 and OpenSSH Server configured for the target user. Reachability for this kind requires a local `ssh` client, a TCP response on SSH port 22, and a short PowerShell health probe that reports helper and stream readiness. This path does not use WSMan or the PowerShell SSH remoting subsystem.
 
-Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so an Ubuntu wmux server such as homelab cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. Plain `powershell-ssh` panes are non-durable; to let Windows panes survive wmux service restarts, opt the machine into the Windows session agent with `"sessionBackend": "agent"` (see [Experimental Windows Session Agent](#experimental-windows-session-agent)).
+Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which uses WSMan remoting. Microsoft documents WSMan remoting as unsupported from non-Windows PowerShell hosts, so a Linux wmux server cannot reliably drive a Windows host that way even if `pwsh` is installed and WinRM answers on TCP 5985. Plain `powershell-ssh` panes are non-durable; to let Windows panes survive wmux service restarts, opt the machine into the Windows session agent with `"sessionBackend": "agent"` (see [Experimental Windows Session Agent](#experimental-windows-session-agent)).
 
 For the full Windows registration checklist, see [docs/WINDOWS_NODE_REGISTRATION.md](docs/WINDOWS_NODE_REGISTRATION.md).
 
@@ -147,8 +237,8 @@ keep both the token and JSON file mode `0600`. A POSIX SSH host can use:
 ```json
 {
   "machine": {
-    "id": "away-team",
-    "name": "Away-Team",
+    "id": "linux-box",
+    "name": "Linux Box",
     "kind": "ssh",
     "user": "operator",
     "sessionBackend": "auto"
@@ -330,7 +420,7 @@ handoff remains an explicit remote transport gap.
 
 Unread notifications light the workspace, tab, and pane. The browser notification button in the top bar requests browser notification permission.
 
-SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, its `wmux-clip`/`wclip`/`wmclip` aliases, `wmux-stream-agent`, `wmux-stream-agent-service`, and `wmux-sunshine-setup` available on hosts like Away-Team without manually copying this repo there.
+SSH panes stage remote helper commands into `~/.cache/wmux/bin` when the pane process starts. That makes `wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`, its `wmux-clip`/`wclip`/`wmclip` aliases, `wmux-stream-agent`, `wmux-stream-agent-service`, and `wmux-sunshine-setup` available on remote hosts without manually copying this repo there.
 
 Windows `powershell-ssh` panes fetch a helper bundle from wmux when the pane starts and stage PowerShell/CMD shims into `%LOCALAPPDATA%\wmux\bin`. New Windows panes get the same helper command names plus `wmux-hooks`, `wmux-stream-agent-service`, and `wmux-windows-setup`.
 
@@ -347,14 +437,14 @@ wmux-windows-setup install-hooks
 
 `install-deps` uses `winget` to install FFmpeg and Python when missing, then installs `pywinpty` for the Windows session agent's ConPTY backend. The dependency check executes Python instead of trusting the Microsoft Store app-execution alias. `install-stream` creates the per-user Scheduled Task that runs the on-demand screen stream agent. `install-agent` creates a per-user Scheduled Task for the experimental Windows session agent, which uses ConPTY by default. Agent tasks use interactive logon when a desktop user is present and S4U logon on headless hosts; set `WMUX_WINDOWS_AGENT_LOGON_TYPE=Interactive` or `S4U` to override detection. Both Scheduled Tasks start when available, restart after failure, run without the default 72-hour execution cutoff, and launch through hidden PowerShell wrappers instead of visible `cmd.exe` windows.
 
-Host versions are shown consistently in the target picker, Host Status list, and workspace host labels. The local host uses the wmux package version (for example, `homelab@0.1.0`), POSIX SSH hosts use their bootstrap runtime version, Windows SSH hosts use their staged helper version, and Windows agent hosts use the running agent version (for example, `win-ci@0.5`); hosts that cannot currently report a version show `@unknown`. Agent 0.5 and later also report the staged helper-bundle version in host details, making a current agent with stale helpers distinguishable from an outdated agent process. Agent-backed pane creation sends the current helper bundle through the authenticated agent API; the agent verifies every file hash before swapping it into `%LOCALAPPDATA%\wmux\bin`, so this backend does not depend on an SSH bootstrap to receive helper updates.
+Host versions are shown consistently in the target picker, Host Status list, and workspace host labels. The local host uses the wmux package version (for example, `wmux-server@0.1.0`), POSIX SSH hosts use their bootstrap runtime version, Windows SSH hosts use their staged helper version, and Windows agent hosts use the running agent version (for example, `windows-box@0.7`); hosts that cannot currently report a version show `@unknown`. Agent 0.5 and later also report the staged helper-bundle version in host details, making a current agent with stale helpers distinguishable from an outdated agent process. Agent-backed pane creation sends the current helper bundle through the authenticated agent API; the agent verifies every file hash before swapping it into `%LOCALAPPDATA%\wmux\bin`, so this backend does not depend on an SSH bootstrap to receive helper updates.
 
 ## Agent Events
 
 wmux can update workspace names/descriptors and send completion notifications from agent hooks:
 
 ```bash
-wmux-agent-event --agent codex --status completed --title "Remote helpers" --summary "Fixed Away-Team helper staging"
+wmux-agent-event --agent codex --status completed --title "Remote helpers" --summary "Fixed Linux host helper staging"
 ```
 
 The helper posts to `POST /api/agent-events`. It uses the pane environment variables when available and exits without changing state if it is run outside a wmux pane. Stop/completion hooks include the sanitized full assistant message as structured event data; prompt-start and notification hooks deliberately omit assistant message text so they cannot replay the prior turn. Short summaries remain separate workspace and notification metadata.
@@ -477,11 +567,11 @@ full Sunshine/Moonlight setup is unnecessary:
 
 ```json
 {
-  "id": "9800x3d",
-  "name": "9800x3d",
+  "id": "windows-box",
+  "name": "Windows Box",
   "kind": "powershell-ssh",
-  "host": "9800x3d",
-  "user": "gisen",
+  "host": "windows-box",
+  "user": "operator",
   "stream": {
     "provider": "moonlight-gateway",
     "gatewayUrl": "http://100.x.y.z:3490"
@@ -513,10 +603,10 @@ The agent listens on the configured Tailscale/internal host and owns pane proces
 
 ```json
 {
-  "id": "9800x3d",
+  "id": "windows-box",
   "kind": "powershell-ssh",
-  "host": "100.68.206.111",
-  "user": "gisen",
+  "host": "100.64.0.30",
+  "user": "operator",
   "sessionBackend": "agent",
   "agentPort": 3481
 }
@@ -652,7 +742,7 @@ workspace's tabs and split panes, so panes hidden by the single-pane mobile
 layout remain selectable.
 
 Interactive mobile overlays use semantic DOM controls even when the default
-OpenTUI chrome is enabled. Navigation, commands, activity, diagnostics, and
+canvas-grid chrome is enabled. Navigation, commands, activity, diagnostics, and
 settings therefore support touch scrolling, software-keyboard editing, safe
 areas, and at least 44px primary targets. When an editable field opens the
 software keyboard, surrounding chrome collapses while mounted terminals stay
@@ -661,7 +751,7 @@ instead of leaving the app in that collapsed state.
 
 ## Design Direction
 
-The terminal viewport should stay visually neutral. Product styling belongs in surrounding chrome: workspace rail, tab strip, pane toolbar, settings, activity, notifications, and audit views. Current chrome uses dense cmux-inspired navigation with dark surfaces, thin borders, compact uppercase labels, clipped corners, gold focus accents, and small reachability/status indicators.
+The terminal viewport should stay visually neutral. Product styling belongs in surrounding chrome: workspace rail, tab strip, pane toolbar, settings, activity, notifications, and audit views. Current chrome uses a small wmux-owned Canvas 2D cell-grid renderer for dense cmux-inspired navigation with dark surfaces, thin borders, compact uppercase labels, clipped corners, gold focus accents, and small reachability/status indicators. `?legacy=1` retains the original DOM-heavy browser chrome.
 
 Workspace pinning, manual ordering, and archive/restore are intentionally
 deferred until workspace counts demonstrate that navigation and search are not
@@ -669,3 +759,15 @@ sufficient. The mobile Chat surface sends input to the active terminal pane but
 renders responses only from structured agent events. It never interprets raw
 PTY output, so live terminal progress stays in Term view and the complete
 assistant response appears in Chat when the trusted completion hook runs.
+
+## License
+
+wmux-owned source code and artwork are available under the [MIT License](LICENSE).
+Dependencies and historical assets retain their own terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the provenance files beside
+the assets.
+
+> [!WARNING]
+> The current checkout still contains font and historical screenshot files
+> whose source-redistribution permission is unresolved. Do not publish or
+> redistribute the complete source tree until those notice entries are resolved.

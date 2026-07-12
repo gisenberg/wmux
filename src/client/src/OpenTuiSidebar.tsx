@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
 import {
   createGrid,
-  createOpenTuiPainter,
+  createGridPainter,
   fillCells,
   fitText,
   hexToRgba,
@@ -152,7 +152,7 @@ export function OpenTuiSidebar({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const painter = createOpenTuiPainter(canvas, {
+    const painter = createGridPainter(canvas, {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
@@ -204,7 +204,7 @@ export function OpenTuiSidebar({
   };
 
   return (
-    <aside id="wmux-sidebar" className="sidebar open-tui-sidebar" aria-label="OpenTUI workspace navigation">
+    <aside id="wmux-sidebar" className="sidebar open-tui-sidebar" aria-label="Workspace navigation">
       <canvas ref={canvasRef} className="open-tui-canvas" onClick={onClick} onPointerMove={onPointerMove} />
     </aside>
   );

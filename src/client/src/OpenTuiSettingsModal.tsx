@@ -10,7 +10,7 @@ import {
 } from "react";
 import {
   createGrid,
-  createOpenTuiPainter,
+  createGridPainter,
   fillCells,
   fitText,
   hexToRgba,
@@ -218,7 +218,7 @@ export function OpenTuiSettingsModal({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const painter = createOpenTuiPainter(canvas, {
+    const painter = createGridPainter(canvas, {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
@@ -590,7 +590,7 @@ const drawSettings = (
   fillCells(grid, 3, 1, Math.max(0, cols - 2), rgba.line);
   fillCells(grid, footerTop, 1, Math.max(0, cols - 2), rgba.line);
   write(1, 2, "WMUX SETTINGS", rgba.gold, 700);
-  write(2, 2, "opentui console surface", rgba.faint, 600);
+  write(2, 2, "wmux canvas console", rgba.faint, 600);
 
   let closeCol = Math.max(2, cols - 7);
   drawButton(grid, 1, closeCol, "X", focusId === "close", hits, "close", "activate");

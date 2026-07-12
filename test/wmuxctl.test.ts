@@ -83,7 +83,7 @@ test("WMUX_URL overrides a stale saved URL", async () => {
   fs.writeFileSync(path.join(home, ".wmux", "url"), "http://127.0.0.1:1\n");
   const server = http.createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ machines: [{ id: "win-ci", kind: "powershell-ssh", reachable: true }] }));
+    response.end(JSON.stringify({ machines: [{ id: "windows-runner", kind: "powershell-ssh", reachable: true }] }));
   });
   const url = await listen(server);
   try {
@@ -91,7 +91,7 @@ test("WMUX_URL overrides a stale saved URL", async () => {
       cwd: repoRoot,
       env: { ...process.env, HOME: home, WMUX_URL: url, WMUX_TOKEN: "test-token" },
     });
-    assert.match(result.stdout, /^win-ci\tpowershell-ssh\tup/m);
+    assert.match(result.stdout, /^windows-runner\tpowershell-ssh\tup/m);
   } finally {
     await close(server);
     fs.rmSync(home, { recursive: true, force: true });
@@ -102,8 +102,8 @@ test("wmuxctl refuses an ambiguous reused workspace and honors an explicit tab",
   const inputs: Array<Record<string, unknown>> = [];
   const workspace = {
     id: "ws_multi",
-    name: "Rocksmith",
-    machineId: "win-ci",
+    name: "Runner repair",
+    machineId: "windows-runner",
     activeTabId: "tab_shell",
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
@@ -112,13 +112,13 @@ test("wmuxctl refuses an ambiguous reused workspace and honors an explicit tab",
         id: "tab_agent",
         title: "Codex",
         activePaneId: "pane_agent",
-        panes: [{ id: "pane_agent", machineId: "win-ci" }],
+        panes: [{ id: "pane_agent", machineId: "windows-runner" }],
       },
       {
         id: "tab_shell",
         title: "Shell",
         activePaneId: "pane_shell",
-        panes: [{ id: "pane_shell", machineId: "win-ci" }],
+        panes: [{ id: "pane_shell", machineId: "windows-runner" }],
       },
     ],
   };
@@ -144,7 +144,7 @@ test("wmuxctl refuses an ambiguous reused workspace and honors an explicit tab",
   const url = await listen(server);
   try {
     await assert.rejects(
-      cli(url, ["run", "win-ci", "--title", "Rocksmith", "--line", "Get-Date"]),
+      cli(url, ["run", "windows-runner", "--title", "Runner repair", "--line", "Get-Date"]),
       (error: { stderr?: string }) => {
         assert.match(error.stderr ?? "", /multiple tabs; choose --tab or --pane explicitly/);
         return true;
@@ -152,7 +152,7 @@ test("wmuxctl refuses an ambiguous reused workspace and honors an explicit tab",
     );
 
     const sent = await cli(url, [
-      "run", "win-ci", "--title", "Rocksmith", "--tab", "tab_agent", "--line", "Get-Date",
+      "run", "windows-runner", "--title", "Runner repair", "--tab", "tab_agent", "--line", "Get-Date",
     ]);
     const result = JSON.parse(sent.stdout);
     assert.equal(result.tabId, "tab_agent");
@@ -172,13 +172,13 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
   const workspace = {
     id: "ws_new",
     name: "Fresh",
-    machineId: "win-ci",
+    machineId: "windows-runner",
     activeTabId: "tab_new",
     tabs: [{
       id: "tab_new",
       title: "Shell",
       activePaneId: "pane_new",
-      panes: [{ id: "pane_new", machineId: "win-ci" }],
+      panes: [{ id: "pane_new", machineId: "windows-runner" }],
     }],
   };
   const server = http.createServer((request, response) => {
@@ -199,7 +199,7 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
     }
     if (request.method === "GET" && request.url === "/api/bootstrap") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ machines: [{ id: "win-ci", kind: "powershell-ssh" }], workspaces: [workspace] }));
+      response.end(JSON.stringify({ machines: [{ id: "windows-runner", kind: "powershell-ssh" }], workspaces: [workspace] }));
       return;
     }
     if (request.method === "POST" && request.url === "/api/panes/pane_new/input") {
@@ -226,16 +226,16 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
       "",
       "",
     ].join("\r\n"));
-    socket.end(websocketFrame({ type: "ready", paneId: "pane_new", replay: "PS C:\\Users\\gisenberg> " }));
+    socket.end(websocketFrame({ type: "ready", paneId: "pane_new", replay: "PS C:\\Users\\operator> " }));
   });
 
   const url = await listen(server);
   try {
-    const sent = await cli(url, ["run", "win-ci", "--title", "Fresh", "--new", "--line", "Get-Date"]);
+    const sent = await cli(url, ["run", "windows-runner", "--title", "Fresh", "--new", "--line", "Get-Date"]);
     const result = JSON.parse(sent.stdout);
     assert.equal(result.paneId, "pane_new");
     assert.equal(typeof result.shellReadySeconds, "number");
-    assert.deepEqual(workspaceRequests, [{ machineId: "win-ci", createdBy: "agent" }]);
+    assert.deepEqual(workspaceRequests, [{ machineId: "windows-runner", createdBy: "agent" }]);
     assert.deepEqual(events, ["prompt", "input", "input"]);
   } finally {
     await close(server);

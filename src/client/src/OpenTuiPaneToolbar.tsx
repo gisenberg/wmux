@@ -3,7 +3,7 @@ import { Copy, PanelBottom, PanelRight, Play, RefreshCw, X } from "lucide-react"
 import type { SplitDirection, TerminalRun } from "./types";
 import {
   createGrid,
-  createOpenTuiPainter,
+  createGridPainter,
   fillCells,
   fitText,
   hexToRgba,
@@ -85,7 +85,7 @@ export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const painter = createOpenTuiPainter(canvas, {
+    const painter = createGridPainter(canvas, {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",

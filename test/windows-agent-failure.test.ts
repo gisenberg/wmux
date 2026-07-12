@@ -135,7 +135,7 @@ test("OSC 7 cwd wins over a stale cwd returned by an older Windows agent", async
     const path = request.url ?? "";
     response.writeHead(200, { "content-type": "application/json" });
     if (request.method === "POST" && path === "/sessions/pane_cwd") {
-      response.end(JSON.stringify({ id: "pane_cwd", pid: 123, base: 0, cwd: "C:\\Users\\gisen" }));
+      response.end(JSON.stringify({ id: "pane_cwd", pid: 123, base: 0, cwd: "C:\\Users\\operator" }));
       return;
     }
     if (request.method === "GET" && path.includes("/output")) {
@@ -144,7 +144,7 @@ test("OSC 7 cwd wins over a stale cwd returned by an older Windows agent", async
       response.end(JSON.stringify({
         cursor: data.length,
         dataBase64: Buffer.from(data).toString("base64"),
-        cwd: "C:\\Users\\gisen",
+        cwd: "C:\\Users\\operator",
         exited: false,
       }));
       return;

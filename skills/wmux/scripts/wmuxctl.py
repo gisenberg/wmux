@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_URL = "https://homelab.tail2fcc57.ts.net:3478"
+DEFAULT_URL = "http://127.0.0.1:3478"
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
@@ -703,7 +703,7 @@ def cmd_ps(client: WmuxClient, args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Interact with the homelab wmux API.")
+    parser = argparse.ArgumentParser(description="Interact with a wmux API.")
     parser.add_argument("--url", default=default_url(), help=f"wmux base URL (default: {DEFAULT_URL})")
     parser.add_argument("--token-path", default=None, help="token file path when WMUX_TOKEN is unset")
 
@@ -717,7 +717,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.set_defaults(func=cmd_bootstrap)
 
     open_workspace = subparsers.add_parser("open", help="create or reuse a titled workspace on a machine")
-    open_workspace.add_argument("machine", help="machine id, for example away-team or 9800x3d")
+    open_workspace.add_argument("machine", help="machine id, for example linux-box or windows-box")
     open_workspace.add_argument("--title", default="", help="manual workspace title")
     open_workspace.add_argument("--new", action="store_true", help="force a new workspace even when --title already exists")
     open_workspace.add_argument("--tab", default="", help="select a specific existing tab")
@@ -807,7 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
     wait.set_defaults(func=cmd_wait)
 
     ps = subparsers.add_parser("ps", help="send a PowerShell script through a child pwsh -EncodedCommand")
-    ps.add_argument("machine", help="Windows machine id, for example win-ci")
+    ps.add_argument("machine", help="Windows machine id, for example windows-box")
     ps.add_argument("--script", default="", help="PowerShell script text")
     ps.add_argument("--file", default="", help="read PowerShell script from this file")
     ps.add_argument("--title", required=True, help="manual workspace title; reused by default")

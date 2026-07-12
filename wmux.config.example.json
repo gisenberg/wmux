@@ -1,0 +1,29 @@
+{
+  "machines": [
+    {
+      "id": "local",
+      "name": "Local",
+      "kind": "local",
+      "sessionBackend": "auto"
+    },
+    {
+      "id": "linux-box",
+      "name": "Linux Box",
+      "kind": "ssh",
+      "host": "100.64.0.20",
+      "user": "operator",
+      "port": 22,
+      "sessionBackend": "auto"
+    },
+    {
+      "id": "windows-box",
+      "name": "Windows Box",
+      "kind": "powershell-ssh",
+      "host": "100.64.0.30",
+      "user": "operator",
+      "port": 22,
+      "sessionBackend": "agent",
+      "agentPort": 3481
+    }
+  ]
+}

@@ -2402,6 +2402,10 @@ button.active-tool {
   outline-color: #6bb6ff;
 }
 
+.terminal-pane:not(.terminal-ready) .terminal-host canvas {
+  visibility: hidden;
+}
+
 .pane-toolbar {
   min-width: 0;
   border-bottom: 1px solid var(--line);
