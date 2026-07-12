@@ -34,42 +34,21 @@ The desktop view and both mobile surfaces show the same live Codex workspace.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  Browser["Browser<br/>React + canvas-grid chrome<br/>ghostty-web terminal"]
-
-  subgraph Server["wmux Node.js service"]
-    Boundary["Private bind<br/>Host + Origin checks<br/>Bearer auth"]
-    Control["REST API<br/>event WebSocket"]
-    Sessions["Session manager<br/>replay + VT checkpoints"]
-    Catalog["Machine catalog<br/>config + heartbeat registry"]
-    Stores["State + settings<br/>attachments + metadata"]
-  end
-
-  Browser <-->|"HTTP(S) + WS(S)"| Boundary
-  Boundary <--> Control
-  Boundary <--> Sessions
-  Catalog --> Control
-  Catalog --> Sessions
-  Control --> Stores
-
-  Config["wmux.config.json"] --> Catalog
-  Heartbeats["Registered hosts"] --> Catalog
-  Stores --> Disk["~/.wmux/*.json"]
-
-  Sessions --> Local["Local node-pty<br/>tmux / screen"]
-  Sessions --> SSH["ssh -tt<br/>tmux / screen / pwsh"]
-  Sessions --> WinAgent["Windows agent<br/>ConPTY / stdio + replay"]
-
-  Browser -.-> Streams["Optional stream services"]
-  Local -.-> Streams
-  SSH -.-> Streams
-  WinAgent -.-> Streams
-```
+| Component | Responsibility |
+| --- | --- |
+| Browser client | React chrome, `ghostty-web` terminals, mobile controls, media, clipboard, and stream views |
+| Node.js service | Private-network boundary, bearer authentication, REST API, event WebSocket, and canonical workspace state |
+| Session manager | One live client per pane, bounded replay, VT checkpoints, resize ownership, and backend lifecycle |
+| Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
+| Execution backends | Local PTYs, SSH with `tmux`/`screen`, PowerShell over SSH, and the experimental Windows agent |
+| Persistent state | Workspace layout, settings, attachments, and metadata under `~/.wmux` |
+| Optional streaming | Machine-local MediaMTX capture or a Moonlight/Sunshine gateway, requested by the browser |
 
 The server owns canonical workspace state and one live session client per
 pane. Browsers are attachable views: refreshing or closing a browser does not
-kill a pane, while explicitly closing a pane, tab, or workspace does.
+kill a pane, while explicitly closing a pane, tab, or workspace does. Execution
+and capture remain on the target machine; the viewing browser does not provide
+the terminal process or screen pixels.
 
 ## Quick Start
 
