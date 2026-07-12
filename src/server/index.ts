@@ -2,10 +2,12 @@ import fs from "node:fs";
 import type { ServerOptions as HttpsServerOptions } from "node:https";
 import os from "node:os";
 import path from "node:path";
-import { loadAuthConfig } from "./auth.js";
+import { loadAuthConfig, loadRegistrationAuthConfig } from "./auth.js";
 import { isAllowedBindHost } from "./bind.js";
 import { loadConfig } from "./config.js";
+import { HostRegistry } from "./host-registry.js";
 import { createHttpServer } from "./http.js";
+import { parseTrustedProxyAddresses } from "./proxy-address.js";
 import { SettingsStore } from "./settings.js";
 import { SessionManager } from "./session-manager.js";
 import { StateStore } from "./state.js";
@@ -57,10 +59,43 @@ const main = async (): Promise<void> => {
 
   const config = loadConfig();
   const auth = loadAuthConfig();
-  const state = new StateStore(config.machines);
+  const registrationAuth = loadRegistrationAuthConfig();
+  if (auth.enabled && auth.token === registrationAuth.token) {
+    throw new Error("WMUX_REGISTRATION_TOKEN must differ from the main wmux access token.");
+  }
+  const trustedProxies = parseTrustedProxyAddresses();
+  let stateStore: StateStore | undefined;
+  let sessionManagerRef: SessionManager | undefined;
+  const hostRegistry = new HostRegistry(
+    config.machines,
+    undefined,
+    undefined,
+    (machineId) => !stateStore || stateStore.hasMachineReferences(machineId),
+    undefined,
+    (machineId) => sessionManagerRef?.hasLiveSessionsForMachine(machineId) ?? false,
+  );
+  const currentMachines = (): typeof config.machines => hostRegistry.machines();
+  const state = new StateStore(currentMachines());
+  stateStore = state;
+  hostRegistry.sweep();
+  state.updateMachines(currentMachines());
   const settings = new SettingsStore();
-  const sessionManager = new SessionManager(state, config.machines, auth.token);
-  const server = await createHttpServer(host, state, config.machines, sessionManager, settings, { dev, auth, tls });
+  const sessionManager = new SessionManager(
+    state,
+    currentMachines,
+    auth.token,
+    (machineId) => hostRegistry.bootstrapToken(machineId),
+    () => hostRegistry.sweep(),
+  );
+  sessionManagerRef = sessionManager;
+  const server = await createHttpServer(host, state, currentMachines, sessionManager, settings, {
+    dev,
+    auth,
+    tls,
+    hostRegistry,
+    registrationToken: registrationAuth.token,
+    trustedProxies,
+  });
   // Persist the reachable URL next to ~/.wmux/token: helpers and agent hooks
   // running without WMUX_URL in their env (existing durable panes) read this
   // instead of assuming localhost, which is wrong on non-loopback binds.
@@ -79,6 +114,11 @@ const main = async (): Promise<void> => {
     } else {
       console.log("wmux: authentication disabled (WMUX_DISABLE_AUTH=1); relying on network boundary only.");
     }
+    if (registrationAuth.tokenPath) {
+      console.log(`wmux: host registration token stored at ${registrationAuth.tokenPath}.`);
+    } else {
+      console.log("wmux: host registration token loaded from environment.");
+    }
   });
 
   let shuttingDown = false;
@@ -89,6 +129,7 @@ const main = async (): Promise<void> => {
     // Persist pending state and reap non-durable child processes so a restart
     // doesn't orphan raw PTYs / ssh clients or lose debounced writes.
     state.flush();
+    hostRegistry.dispose();
     sessionManager.disposeAll();
     server.close(() => process.exit(0));
     // Backstop if connections keep the server open past the grace period.

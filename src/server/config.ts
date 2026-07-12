@@ -15,10 +15,10 @@ const streamSchema = z.object({
 // ids and names end up in generated shell scripts, tmux session names, URLs,
 // and filesystem paths, so they are constrained at load time instead of
 // trusting every embedding site to quote them.
-const machineIdSchema = z
+export const machineIdSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, "machine id must be alphanumeric with - or _ (max 64 chars)");
-const machineNameSchema = z
+export const machineNameSchema = z
   .string()
   .min(1)
   .max(80)
@@ -28,7 +28,7 @@ const hostSchema = z
   .string()
   .regex(/^[A-Za-z0-9.:_-]+$/, "host must be a hostname or IP address")
   .optional();
-const userSchema = z
+export const userSchema = z
   .string()
   .regex(/^[A-Za-z0-9._-]+$/, "user must be a plain account name")
   .optional();

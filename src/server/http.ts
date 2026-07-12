@@ -7,13 +7,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
-import { type AuthConfig, isAuthorized, issueSessionToken, verifyCredentials } from "./auth.js";
+import {
+  type AuthConfig,
+  isAuthorized,
+  issueSessionToken,
+  requestBearerToken,
+  requestToken,
+  tokensMatch,
+  verifyCredentials,
+} from "./auth.js";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { buildDoctorReport } from "./doctor.js";
+import { HostRegistryError, type HostRegistry } from "./host-registry.js";
 import { readDurableSessionCwd, resolveMachineStatuses } from "./machines.js";
+import { observedClientAddress } from "./proxy-address.js";
 import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
-import type { MachineConfig, MachineStatus, PaneState, StreamStatus } from "./types.js";
+import type { MachineConfig, MachineSource, MachineStatus, PaneState, StreamStatus } from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
 import type { StateStore } from "./state.js";
 import type { SessionManager } from "./session-manager.js";
@@ -68,27 +78,78 @@ type WmuxHttpServer = http.Server | https.Server;
 export const createHttpServer = (
   bindHost: string,
   state: StateStore,
-  machines: MachineConfig[],
+  machineSource: MachineSource,
   sessions: SessionManager,
   settings: SettingsStore,
-  options: { dev?: boolean; auth: AuthConfig; tls?: https.ServerOptions },
+  options: {
+    dev?: boolean;
+    auth: AuthConfig;
+    tls?: https.ServerOptions;
+    hostRegistry?: HostRegistry;
+    registrationToken?: string;
+    trustedProxies?: ReadonlySet<string>;
+    healthRefreshIntervals?: { machines?: number; streams?: number };
+    healthResolvers?: {
+      machines?: typeof resolveMachineStatuses;
+      streams?: typeof resolveStreamStatuses;
+    };
+  },
 ): Promise<WmuxHttpServer> => {
-  const { auth } = options;
+  const { auth, hostRegistry, registrationToken } = options;
+  const machineStatusResolver = options.healthResolvers?.machines ?? resolveMachineStatuses;
+  const streamStatusResolver = options.healthResolvers?.streams ?? resolveStreamStatuses;
+  const trustedProxies = options.trustedProxies ?? new Set<string>();
+  const currentMachines = typeof machineSource === "function" ? machineSource : () => machineSource;
   const root = clientRoot();
   const streamRequests = new StreamRequestStore();
   const healthEvents = new EventEmitter();
   let machineStatuses: MachineStatus[] = [];
   let streamStatuses: StreamStatus[] = [];
   let machineRefresh: Promise<void> | null = null;
-  let streamRefresh = Promise.resolve();
+  let streamRefresh: Promise<void> | null = null;
+  let streamMutationRevision = 0;
+  let machineStatusKey = "";
+  let streamStatusKey = "";
+  let machinePublishRequested = false;
+  let streamPublishRequested = false;
   let vite: ViteDevServer | undefined;
   const protocol = options.tls ? "https" : "http";
+
+  const machineCatalogFingerprint = (): string => JSON.stringify(
+    currentMachines().map(({
+      registeredAt: _registeredAt,
+      lastSeenAt: _lastSeenAt,
+      expiresAt: _expiresAt,
+      ...machine
+    }) => machine),
+  );
+  const streamCatalogFingerprint = (): string => JSON.stringify(
+    currentMachines().map((machine) => ({ id: machine.id, host: machine.host, stream: machine.stream })),
+  );
+  const machineInputKey = (): string => machineCatalogFingerprint();
+  const streamInputKey = (): string => `${streamMutationRevision}:${streamCatalogFingerprint()}`;
+
+  const currentMachineStatuses = (): MachineStatus[] => {
+    const latest = new Map(currentMachines().map((machine) => [machine.id, machine]));
+    return machineStatuses.map((status) => {
+      const machine = latest.get(status.id);
+      if (!machine) return status;
+      return {
+        ...status,
+        source: machine.source,
+        registeredAt: machine.registeredAt,
+        lastSeenAt: machine.lastSeenAt,
+        expiresAt: machine.expiresAt,
+        online: machine.online,
+      };
+    });
+  };
 
   const currentPayload = () => {
     const snapshot = state.snapshot();
     return {
       revision: snapshot.revision,
-      machines: machineStatuses,
+      machines: currentMachineStatuses(),
       workspaces: snapshot.workspaces,
       activeWorkspaceId: snapshot.activeWorkspaceId,
       notifications: snapshot.notifications,
@@ -99,27 +160,64 @@ export const createHttpServer = (
     };
   };
 
-  const refreshMachineStatuses = async (publish = true): Promise<void> => {
-    if (machineRefresh) return machineRefresh;
-    machineRefresh = resolveMachineStatuses(machines, bindHost)
+  const refreshMachineStatuses = async (publish = true, force = false): Promise<void> => {
+    machinePublishRequested ||= publish;
+    if (machineRefresh) {
+      await machineRefresh;
+      if (machineStatusKey !== machineInputKey()) await refreshMachineStatuses(publish);
+      return;
+    }
+    const expectedKey = machineInputKey();
+    if (!force && machineStatusKey === expectedKey) {
+      if (machinePublishRequested) healthEvents.emit("change", "machines");
+      machinePublishRequested = false;
+      return;
+    }
+
+    const machines = currentMachines();
+    const refreshKey = machineInputKey();
+    machineRefresh = machineStatusResolver(machines, bindHost)
       .then((next) => {
+        if (refreshKey !== machineInputKey()) return;
         machineStatuses = next;
-        if (publish) healthEvents.emit("change", "machines");
+        machineStatusKey = refreshKey;
+        if (machinePublishRequested) healthEvents.emit("change", "machines");
+        machinePublishRequested = false;
       })
       .finally(() => {
         machineRefresh = null;
       });
-    return machineRefresh;
+    await machineRefresh;
+    if (machineStatusKey !== machineInputKey()) await refreshMachineStatuses(publish);
   };
 
-  const refreshStreamStatuses = (publish = true): Promise<void> => {
-    const nextRefresh = streamRefresh.then(async () => {
-      const next = await resolveStreamStatuses(machines, bindHost, streamRequests);
+  const refreshStreamStatuses = async (publish = true, force = false): Promise<void> => {
+    streamPublishRequested ||= publish;
+    if (streamRefresh) {
+      await streamRefresh;
+      if (streamStatusKey !== streamInputKey()) await refreshStreamStatuses(publish);
+      return;
+    }
+    const expectedKey = streamInputKey();
+    if (!force && streamStatusKey === expectedKey) {
+      streamPublishRequested = false;
+      return;
+    }
+
+    const machines = currentMachines();
+    const refreshKey = streamInputKey();
+    streamRefresh = (async () => {
+      const next = await streamStatusResolver(machines, bindHost, streamRequests);
+      if (refreshKey !== streamInputKey()) return;
       streamStatuses = next;
-      if (publish) healthEvents.emit("change", "streams");
+      streamStatusKey = refreshKey;
+      if (streamPublishRequested) healthEvents.emit("change", "streams");
+      streamPublishRequested = false;
+    })().finally(() => {
+      streamRefresh = null;
     });
-    streamRefresh = nextRefresh.catch(() => undefined);
-    return nextRefresh;
+    await streamRefresh;
+    if (streamStatusKey !== streamInputKey()) await refreshStreamStatuses(publish);
   };
 
   const refreshHealthInBackground = (kind: "machines" | "streams", refresh: () => Promise<void>): void => {
@@ -130,12 +228,16 @@ export const createHttpServer = (
   };
 
   const bootstrapFresh = async () => {
-    await Promise.all([
-      machineStatuses.length === machines.length ? undefined : refreshMachineStatuses(false),
-      streamStatuses.length === machines.length ? undefined : refreshStreamStatuses(false),
-    ]);
+    await Promise.all([refreshMachineStatuses(false), refreshStreamStatuses(false)]);
     return currentPayload();
   };
+
+  const onRegistryChange = (): void => {
+    state.updateMachines(currentMachines());
+    refreshHealthInBackground("machines", () => refreshMachineStatuses(true));
+    refreshHealthInBackground("streams", () => refreshStreamStatuses(true));
+  };
+  hostRegistry?.on("change", onRegistryChange);
 
   const handleRequest = async (request: http.IncomingMessage, response: http.ServerResponse): Promise<void> => {
     if (
@@ -147,13 +249,36 @@ export const createHttpServer = (
     }
 
     const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? bindHost}`);
+    const machines = currentMachines();
 
     // Token gate: everything under /api requires a valid token, except the
     // unauthenticated bootstrap endpoints (liveness, auth capability probe, and
     // login itself). The static app shell is served unauthenticated so the
     // browser can load and then present its stored token.
     const unauthenticatedApi = new Set(["/api/health", "/api/auth-info", "/api/login"]);
-    if (url.pathname.startsWith("/api/") && !unauthenticatedApi.has(url.pathname) && !isAuthorized(auth, request, url)) {
+    const registrationPost = url.pathname === "/api/registry/hosts" && request.method === "POST";
+    const registrationAuthorized =
+      Boolean(registrationToken) && tokensMatch(registrationToken ?? "", requestBearerToken(request));
+    const helperMatch = url.pathname.match(/^\/api\/helpers\/windows\/([^/]+)(?:\/bootstrap)?$/);
+    const helperMachine = helperMatch
+      ? machines.find((machine) => machine.id === helperMatch[1])
+      : undefined;
+    const registeredHelperAuthorized =
+      request.method === "GET" &&
+      url.pathname.endsWith("/bootstrap") &&
+      helperMachine?.source === "registered" &&
+      Boolean(hostRegistry?.acceptsBootstrapToken(helperMachine.id, requestToken(request, url)));
+    if (registrationPost && !registrationAuthorized) {
+      sendJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    if (
+      url.pathname.startsWith("/api/") &&
+      !registrationPost &&
+      !unauthenticatedApi.has(url.pathname) &&
+      !registeredHelperAuthorized &&
+      !isAuthorized(auth, request, url)
+    ) {
       sendJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -194,19 +319,50 @@ export const createHttpServer = (
         return;
       }
 
+      if (url.pathname === "/api/registry/hosts" && request.method === "GET") {
+        sendJson(response, 200, { hosts: hostRegistry?.snapshot() ?? [] });
+        return;
+      }
+
+      if (url.pathname === "/api/registry/hosts" && request.method === "POST") {
+        if (!hostRegistry) {
+          sendJson(response, 404, { error: "registry_disabled" });
+          return;
+        }
+        const host = hostRegistry.register(
+          await readBody(request),
+          observedClientAddress(request, trustedProxies),
+        );
+        sendJson(response, 200, {
+          host: { id: host.id, lastSeenAt: host.lastSeenAt, expiresAt: host.expiresAt },
+        });
+        return;
+      }
+
+      const registeredHost = url.pathname.match(/^\/api\/registry\/hosts\/([^/]+)$/);
+      if (registeredHost && request.method === "DELETE") {
+        if (!hostRegistry) {
+          sendJson(response, 404, { error: "registry_disabled" });
+          return;
+        }
+        const removed = hostRegistry.unregister(decodeURIComponent(registeredHost[1]));
+        sendJson(response, removed ? 200 : 404, { removed });
+        return;
+      }
+
       if (url.pathname === "/api/session-audit" && request.method === "GET") {
         sendJson(response, 200, auditDurableSessions());
         return;
       }
 
       if (url.pathname === "/api/doctor" && request.method === "GET") {
-        if (machineStatuses.length !== machines.length) await refreshMachineStatuses(false);
+        await refreshMachineStatuses(false);
         sendJson(response, 200, buildDoctorReport(state.snapshot(), machines, machineStatuses, auditDurableSessions()));
         return;
       }
 
       if (url.pathname === "/api/streams" && request.method === "GET") {
-        await refreshStreamStatuses(false);
+        await refreshStreamStatuses(false, true);
         sendJson(response, 200, { streams: streamStatuses });
         return;
       }
@@ -229,12 +385,23 @@ export const createHttpServer = (
           const value = url.searchParams.get(key);
           if (value) extraEnv[key] = value;
         }
-        if (auth.token) extraEnv.WMUX_TOKEN = auth.token;
+        if (machine.source !== "registered" && auth.token) {
+          extraEnv.WMUX_TOKEN = auth.token;
+        }
         response.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",
           "cache-control": "no-store",
         });
-        response.end(buildWindowsPowerShellBootstrap(machine, startCwd, extraEnv));
+        const bundleMachine = machine.source === "registered" ? { ...machine, agentToken: undefined } : machine;
+        response.end(
+          buildWindowsPowerShellBootstrap(
+            machine,
+            startCwd,
+            extraEnv,
+            undefined,
+            machine.source === "registered" ? buildWindowsHelperBundle(bundleMachine, bindHost) : undefined,
+          ),
+        );
         return;
       }
 
@@ -250,7 +417,8 @@ export const createHttpServer = (
           sendJson(response, 400, { error: "not_windows_machine" });
           return;
         }
-        sendJson(response, 200, buildWindowsHelperBundle(machine, bindHost));
+        const bundleMachine = machine.source === "registered" ? { ...machine, agentToken: undefined } : machine;
+        sendJson(response, 200, buildWindowsHelperBundle(bundleMachine, bindHost));
         return;
       }
 
@@ -274,7 +442,8 @@ export const createHttpServer = (
         const body = (await readBody(request)) as { requestId?: string; ttlMs?: number };
         const requestId = body.requestId?.trim() || cryptoRandomId();
         const requestStatus = streamRequests.touch(machineId, requestId, body.ttlMs);
-        await refreshStreamStatuses();
+        streamMutationRevision += 1;
+        await refreshStreamStatuses(true, true);
         sendJson(response, 200, {
           requestId,
           ...requestStatus,
@@ -291,7 +460,8 @@ export const createHttpServer = (
           return;
         }
         const requestStatus = streamRequests.release(machineId, decodeURIComponent(streamRequestRelease[2]));
-        await refreshStreamStatuses();
+        streamMutationRevision += 1;
+        await refreshStreamStatuses(true, true);
         sendJson(response, 200, {
           ...requestStatus,
           streams: streamStatuses,
@@ -699,7 +869,7 @@ export const createHttpServer = (
 
       sendJson(response, 404, { error: "not_found" });
     } catch (error) {
-      if (error instanceof HttpError) {
+      if (error instanceof HttpError || error instanceof HostRegistryError) {
         sendJson(response, error.status, { error: error.code });
         return;
       }
@@ -803,13 +973,15 @@ export const createHttpServer = (
         ws.on("message", (raw) => {
           const message = parseSocketMessage(raw.toString());
           if (!message) return;
-          if (message.type === "stream-request" && machineExists(machines, message.machineId)) {
+          if (message.type === "stream-request" && machineExists(currentMachines(), message.machineId)) {
             streamRequests.touch(message.machineId, message.requestId, message.ttlMs);
-            refreshHealthInBackground("streams", refreshStreamStatuses);
+            streamMutationRevision += 1;
+            refreshHealthInBackground("streams", () => refreshStreamStatuses(true, true));
           }
-          if (message.type === "stream-release" && machineExists(machines, message.machineId)) {
+          if (message.type === "stream-release" && machineExists(currentMachines(), message.machineId)) {
             streamRequests.release(message.machineId, message.requestId);
-            refreshHealthInBackground("streams", refreshStreamStatuses);
+            streamMutationRevision += 1;
+            refreshHealthInBackground("streams", () => refreshStreamStatuses(true, true));
           }
         });
         ws.on("close", () => {
@@ -855,18 +1027,19 @@ export const createHttpServer = (
   });
 
   const machineHealthTimer = setInterval(
-    () => refreshHealthInBackground("machines", refreshMachineStatuses),
-    15_000,
+    () => refreshHealthInBackground("machines", () => refreshMachineStatuses(true, true)),
+    options.healthRefreshIntervals?.machines ?? 15_000,
   );
   const streamHealthTimer = setInterval(
-    () => refreshHealthInBackground("streams", refreshStreamStatuses),
-    5_000,
+    () => refreshHealthInBackground("streams", () => refreshStreamStatuses(true, true)),
+    options.healthRefreshIntervals?.streams ?? 5_000,
   );
   machineHealthTimer.unref();
   streamHealthTimer.unref();
   server.on("close", () => {
     clearInterval(machineHealthTimer);
     clearInterval(streamHealthTimer);
+    hostRegistry?.off("change", onRegistryChange);
   });
 
   return setupDevServer().then(() => server);

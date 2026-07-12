@@ -203,6 +203,83 @@ The node is registered correctly when wmux reports:
 
 For `powershell-ssh`, `/api/bootstrap` does more than a TCP check. It runs a short encoded PowerShell health probe over SSH and reports helper readiness, `WMUX_URL` reachability through `/api/health`, FFmpeg/Python availability, and the `wmux-stream-agent` Scheduled Task state.
 
+## Optional: Dynamic Registration And Heartbeats
+
+Use dynamic registration when the Windows node should enroll itself instead of
+keeping its address in `wmux.config.json`. The wmux server's shared
+`~/.wmux/registration-token` is trusted catalog-write authority for every
+dynamic ID, so transfer it only over an already trusted channel. It cannot read
+or delete registry entries and is not a substitute for normal wmux API auth.
+
+Provision three owner-only files on the Windows node:
+
+```text
+~\.wmux\url
+~\.wmux\registration-token
+~\.wmux\heartbeat.json
+```
+
+The URL file contains the externally reachable wmux base URL. A restart-durable
+Windows-agent registration looks like this; use the same `agentToken` already
+configured for the local `wmux-windows-agent` service:
+
+```json
+{
+  "machine": {
+    "id": "9800x3d",
+    "name": "9800x3d",
+    "kind": "powershell-ssh",
+    "user": "gisen",
+    "sessionBackend": "agent",
+    "agentPort": 3481,
+    "agentToken": "replace-with-the-agent-token"
+  },
+  "ttlMs": 90000,
+  "metadata": { "os": "windows" }
+}
+```
+
+`host` may remain in an older heartbeat file for compatibility, but wmux ignores
+it and dials the validated private source address. The agent backend requires an
+explicit port and printable token. The agent token stays in the owner-only
+registry and is redacted from browser, status, registry, and helper responses.
+
+Copy `scripts/windows/wmux-heartbeat.ps1` to the node and validate one POST:
+
+```powershell
+& "$env:LOCALAPPDATA\wmux\bin\wmux-heartbeat.ps1" -Once
+```
+
+After a pane has staged the helper bundle through SSH bootstrap or the Windows
+agent, install and inspect the per-user at-logon task:
+
+```powershell
+wmux-windows-setup install-heartbeat
+wmux-windows-setup heartbeat-status
+wmux-windows-setup heartbeat-logs
+```
+
+When rotating the registration token, update `~\.wmux\registration-token` and
+run `wmux-heartbeat-service restart`. Address changes are accepted for idle
+persisted panes, but any referenced pane pins the connection descriptor and
+agent token until it is closed. A live Windows-agent pane also pins its callback
+address. Close referenced panes before changing those pinned values, then run a
+one-shot heartbeat. The task runs only after this user logs on.
+
+Rotating `agentToken` is a coordinated agent update: drain/close active panes
+without forcing an agent restart, update the token in both
+`~\.wmux\heartbeat.json` and `~\.wmux\windows-agent.json`, restart the agent
+task, and only then send `wmux-heartbeat -Once`. Updating only the heartbeat
+would make wmux authenticate with a token the agent does not accept. Use the
+`wmux-windows-agent-service activate-update` drain flow described below when
+the rotation is part of a staged agent update.
+
+Registered panes stage the same helper commands as static panes but receive no
+broad `WMUX_TOKEN` and never overwrite an existing `~\.wmux\token`. API-posting
+helpers therefore return `401` unless normal or scoped auth is provisioned
+separately. A token left from an earlier static setup continues to work; keep it
+only when that trusted-host access is intentional, otherwise remove or rotate it.
+
 ## 5. Finish Windows Helper Setup
 
 Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helper bundle from homelab and stages scripts plus CMD shims into:

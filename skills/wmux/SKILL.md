@@ -13,7 +13,7 @@ Prefer direct local tools or SSH only for quick invisible checks. Prefer wmux wh
 
 ## First Steps
 
-1. Read live machine state before acting. The source config is `/home/gisenberg/git/gisenberg/wmux/wmux.config.json`; the live API usually runs at `https://homelab.tail2fcc57.ts.net:3478`.
+1. Read live machine state before acting. Static machines come from `/home/gisenberg/git/gisenberg/wmux/wmux.config.json`, dynamic hosts come from the heartbeat registry, and the live API usually runs at `https://homelab.tail2fcc57.ts.net:3478`.
 2. Use `references/api-and-machines.md` when you need exact endpoints, machine ids, or setup caveats.
 3. Use `scripts/wmuxctl.py` for common API actions:
 
@@ -40,7 +40,8 @@ The helper reads `WMUX_URL`/`~/.wmux/url` and `WMUX_TOKEN`/`~/.wmux/token`; envi
 - For Windows machines from homelab, use `kind: "powershell-ssh"` behavior. Do not switch to legacy WSMan `powershell` unless explicitly debugging that path.
 - Prefer `wmux-windows-agent-service activate-update` for agent upgrades. It drains existing panes and restarts after the last pane closes; never use `restart --force` unless terminating every active agent-owned pane is explicitly intended.
 - Check `/api/bootstrap` for `reachable`, `reason`, and `backendDetail` before assuming a machine is ready. Windows status includes helper, stream, Python/FFmpeg, and agent health probes.
-- Use exact machine ids from the current config. Do not rely on stale docs if `wmux.config.json` or `/api/bootstrap` differs.
+- Use exact machine ids from `/api/bootstrap`; it merges static config with the dynamic heartbeat registry. Do not rely on stale docs if the live API differs.
+- Registered panes intentionally lack the broad `WMUX_TOKEN`. Before relying on `wmux-notify`, `wmux-run`, media, clipboard, or agent hooks there, verify that separate normal/scoped helper auth was provisioned; otherwise those helpers return `401`.
 - Always give automated work a descriptive `--title`; `wmuxctl open`, `run`, and `ps` reuse an existing workspace with that exact title by default. Use `--new` only when a genuinely separate workspace is wanted.
 - Treat visibility as a contract. If the user asked for visible work, start substantive and long-lived processes in the wmux pane, not through direct SSH. Direct SSH remains appropriate for quick diagnostics only.
 - A successful input POST, `sentBytes`, process existence, or a `running` event proves neither that a command was submitted nor that an agent is still working. Confirm pane output with `wmuxctl output`/`wait` and distinguish the latest agent turn from a persistent idle TUI process.

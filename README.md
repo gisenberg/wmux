@@ -113,6 +113,111 @@ Legacy `kind: "powershell"` still uses `Enter-PSSession -ComputerName`, which us
 
 For the full Windows registration checklist, see [docs/WINDOWS_NODE_REGISTRATION.md](docs/WINDOWS_NODE_REGISTRATION.md).
 
+## Dynamic Host Registration
+
+Remote SSH hosts may register themselves instead of requiring a static entry in
+`wmux.config.json`. wmux generates a dedicated credential at
+`~/.wmux/registration-token`; override it with `WMUX_REGISTRATION_TOKEN` or
+`WMUX_REGISTRATION_TOKEN_PATH`. This shared credential is trusted catalog-write
+authority: a holder can create or update any dynamic machine ID, but cannot
+read the registry, delete hosts, or use other APIs. It remains required when
+`WMUX_DISABLE_AUTH=1`; registry reads and deletes use normal wmux authorization.
+
+Provision these files manually on each remote host:
+
+```text
+~/.wmux/url
+~/.wmux/registration-token
+~/.wmux/heartbeat.json
+```
+
+The URL file contains the externally reachable wmux base URL. Copy the
+registration token from the wmux server over an already trusted channel and
+keep both the token and JSON file mode `0600`. A POSIX SSH host can use:
+
+```json
+{
+  "machine": {
+    "id": "away-team",
+    "name": "Away-Team",
+    "kind": "ssh",
+    "user": "operator",
+    "sessionBackend": "auto"
+  },
+  "ttlMs": 90000,
+  "metadata": { "os": "linux" }
+}
+```
+
+Only `ssh` and `powershell-ssh` registrations are accepted. Connection and
+session fields are allowlisted; registrations cannot supply commands, service
+machines, agent URLs, or stream gateway configuration. A supplied `host` is
+accepted for compatibility but ignored: wmux always dials the validated source
+IP of the heartbeat. For a `powershell-ssh` machine using
+`"sessionBackend": "agent"`, both `agentPort` and `agentToken` are required;
+the callback remains pinned to the observed source IP, and the token is removed
+from registry, status, helper-bundle, and browser state responses. While a
+persisted pane references an ID, its connection descriptor and agent token are
+pinned but address-only roaming remains allowed. A live agent pane also pins its
+address. Close the referenced panes before rotating a token or descriptor.
+
+Send one heartbeat for validation or run continuously:
+
+```bash
+scripts/wmux-heartbeat --once
+scripts/wmux-heartbeat --interval 30
+```
+
+On a systemd user host, `scripts/install-heartbeat-service.sh` installs the
+shipped `wmux-heartbeat.service` and `wmux-heartbeat.timer` after the three
+files above exist. The timer posts every 30 seconds. On Windows, copy
+`scripts/windows/wmux-heartbeat.ps1` for initial enrollment. After a registered
+pane stages the normal helper bundle through SSH bootstrap or the Windows agent,
+install the per-user logon task with:
+
+```powershell
+wmux-windows-setup install-heartbeat
+wmux-windows-setup heartbeat-status
+wmux-windows-setup heartbeat-logs
+```
+
+The systemd timer runs in the user manager; enable lingering with
+`loginctl enable-linger "$USER"` if it must run while that user is logged out.
+The Windows task is intentionally per-user and triggered at logon, so the host
+does not heartbeat before that user signs in.
+
+Registrations default to a 90-second TTL (allowed range: 30 seconds through 24
+hours). A missed TTL keeps the machine visible but marks it offline; records are
+removed after seven days without a heartbeat unless a persisted pane still
+references them. Heartbeats for the same ID must be at least five seconds apart;
+the registry accepts at most 256 hosts, at most 32 from one observed address,
+and at most 16 KiB of serialized metadata per host. The registry is stored at
+`~/.wmux/host-registry.json`, overridable with `WMUX_REGISTRY_PATH`.
+
+Registered panes receive staged helper commands but never the broad wmux API
+token. Windows bootstrap uses a random per-machine capability that can fetch
+only an inline, credential-redacted helper bundle. Helpers that post to wmux
+(`wmux-notify`, `wmux-title`, `wmux-agent-event`, `wmux-run`, `wmux-media`, and
+`wmux-copy`) therefore fail with `401` unless normal or suitably scoped API auth
+has been provisioned separately on that trusted host. This is a current
+least-privilege limitation of dynamic registration.
+
+Live pane endpoint snapshots are process-local. Persisted panes reject descriptor
+or token changes across a restart, but address-only roaming is necessarily
+indistinguishable from reassignment to a different physical host with the same
+descriptor. In that case wmux no longer has the old endpoint needed for
+automatic durable-session cleanup; audit and remove that old remote session
+manually. Ordinary address churn on the same host remains reachable.
+
+When a reverse proxy is directly in front of wmux, list its exact IP in
+`WMUX_TRUSTED_PROXIES`. wmux accepts `X-Forwarded-For` only from those peers,
+validates every hop as an IP literal, and walks the chain from the right. Only
+trust proxies configured to replace or append the client address reliably.
+Malformed chains and callback addresses outside loopback, Tailscale, RFC1918,
+or IPv6 ULA space are rejected. A trusted proxy request must contain at least
+one valid untrusted client hop; direct heartbeats should leave their peer IP out
+of `WMUX_TRUSTED_PROXIES`.
+
 ## Authentication
 
 wmux gates every API and WebSocket endpoint behind a bearer token, on top of the bind-address and Host/Origin checks. There are two ways to get a token, and both are accepted on every request:
@@ -135,7 +240,7 @@ Session tokens are HMAC-signed with a secret persisted to `~/.wmux/session-secre
 wmux: access requires a token. Open http://100.x.y.z:3478/?token=XXXX once per browser.
 ```
 
-Opening that URL stores the token directly (skipping the login form) — handy for kiosk/bookmark use. More importantly, this static token is what non-interactive clients use: every pane receives it as `WMUX_TOKEN`, so the bundled helpers authenticate automatically, and remote scripts/`curl` send `authorization: Bearer $WMUX_TOKEN`. Set your own with `WMUX_TOKEN=…` (or `WMUX_TOKEN_PATH`).
+Opening that URL stores the token directly (skipping the login form) — handy for kiosk/bookmark use. More importantly, this static token is what non-interactive clients use: statically configured panes receive it as `WMUX_TOKEN`, so the bundled helpers authenticate automatically, and remote scripts/`curl` send `authorization: Bearer $WMUX_TOKEN`. Dynamically registered panes deliberately do not receive it; see [Dynamic Host Registration](#dynamic-host-registration). Set your own with `WMUX_TOKEN=…` (or `WMUX_TOKEN_PATH`).
 
 To run without any token — relying solely on the network boundary, as earlier versions did — set `WMUX_DISABLE_AUTH=1`.
 
@@ -204,14 +309,15 @@ curl -fsS \
   "$WMUX_URL/api/notifications"
 ```
 
-`WMUX_TOKEN` is present in every pane's environment, so the bundled helpers (`wmux-notify`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`) send it automatically. For shells that predate those variables — durable sessions created before an upgrade, or agent hooks launched outside a pane — the helpers fall back to `~/.wmux/token` and `~/.wmux/url`, which wmux persists on the server host at startup and on every remote machine when a durable pane (re)attaches. See [Authentication](#authentication) above.
+`WMUX_TOKEN` is present in statically configured panes, so the bundled helpers (`wmux-notify`, `wmux-agent-event`, `wmux-run`, `wmux-media`, `wmux-copy`) send it automatically. Registered panes stage the same commands but leave `WMUX_TOKEN` unset and never overwrite `~/.wmux/token`; API-posting helpers need separately provisioned auth and otherwise return `401`. For static shells that predate those variables — durable sessions created before an upgrade, or agent hooks launched outside a pane — the helpers fall back to `~/.wmux/token` and `~/.wmux/url`, which wmux persists on the server host at startup and on every static remote machine when a durable pane (re)attaches. See [Authentication](#authentication) above.
 
 Local durable panes stage their generated bootstrap in a mode-`0700`, versioned
 runtime file, so tokens and shell setup are not exposed in the wmux attachment
-process arguments. First-run SSH and PowerShell helper delivery still embeds
-bootstrap credentials in their respective client command lines; replacing that
-with a non-argument, one-time credential handoff remains an explicit remote
-transport gap.
+process arguments. First-run static SSH and PowerShell helper delivery still
+embeds bootstrap credentials in their respective client command lines. Dynamic
+Windows bootstrap uses a narrow per-machine capability but also places it in the
+SSH command line; replacing both paths with a non-argument, one-time credential
+handoff remains an explicit remote transport gap.
 
 Unread notifications light the workspace, tab, and pane. The browser notification button in the top bar requests browser notification permission.
 

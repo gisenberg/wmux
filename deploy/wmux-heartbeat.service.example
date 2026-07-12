@@ -1,0 +1,11 @@
+[Unit]
+Description=Announce this host to wmux
+After=network-online.target tailscaled.service
+Wants=network-online.target
+ConditionPathExists=%h/.wmux/heartbeat.json
+ConditionPathExists=%h/.wmux/registration-token
+ConditionPathExists=%h/.wmux/url
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/wmux-heartbeat --once

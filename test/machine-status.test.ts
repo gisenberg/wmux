@@ -58,3 +58,30 @@ test("machine version status distinguishes runtime and helper drift", () => {
     expectedRuntimeVersion: "0.7",
   }), "unknown");
 });
+
+test("offline registered status preserves heartbeat metadata without exposing credentials", async () => {
+  const [status] = await resolveMachineStatuses([
+    {
+      id: "gdi",
+      name: "GDI",
+      kind: "powershell-ssh",
+      host: "100.70.0.8",
+      sessionBackend: "agent",
+      agentPort: 3481,
+      agentToken: "private-agent-token",
+      source: "registered",
+      registeredAt: "2026-07-08T00:00:00.000Z",
+      lastSeenAt: "2026-07-08T00:01:00.000Z",
+      expiresAt: "2026-07-08T00:02:30.000Z",
+      online: false,
+    },
+  ]);
+
+  assert.equal(status.reachable, false);
+  assert.equal(status.source, "registered");
+  assert.equal(status.lastSeenAt, "2026-07-08T00:01:00.000Z");
+  assert.equal(status.online, false);
+  assert.match(status.reason ?? "", /^Offline; last seen /);
+  assert.doesNotMatch(JSON.stringify(status), /private-agent-token/);
+  assert.equal("agentToken" in status, false);
+});

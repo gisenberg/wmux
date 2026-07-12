@@ -24,6 +24,16 @@ test("bundle files carry correct sha256 digests and a stable version", () => {
   assert.equal(buildWindowsHelperBundle(machine).bundleVersion, bundle.bundleVersion);
 });
 
+test("bundle stages heartbeat helpers and reports them as required", () => {
+  const bundle = buildWindowsHelperBundle(machine);
+  for (const name of ["wmux-heartbeat.ps1", "wmux-heartbeat.cmd", "wmux-heartbeat-service.ps1"]) {
+    assert.ok(bundle.files.some((file) => file.name === name), `bundle includes ${name}`);
+  }
+  const healthProbe = buildWindowsHealthProbeScript("http://127.0.0.1:3478");
+  assert.match(healthProbe, /wmux-heartbeat\.ps1/);
+  assert.match(healthProbe, /wmux-heartbeat-service\.ps1/);
+});
+
 test("clipboard helper sends bearer auth and reads staged fallback files", () => {
   const bundle = buildWindowsHelperBundle(machine);
   const helper = bundle.files.find((file) => file.name === "wmux-copy.ps1");

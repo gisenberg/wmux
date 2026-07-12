@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import type { MachineConfig, PaneState } from "./types.js";
 import { buildWindowsHelperBundle } from "./windows-helpers.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
@@ -54,7 +55,8 @@ const MAX_REPLAY_BYTES = 2 * 1024 * 1024;
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
   if (machine.agentUrl) return machine.agentUrl.replace(/\/+$/, "");
   if (!machine.host) return undefined;
-  return `http://${machine.host}:${machine.agentPort ?? 3481}`;
+  const host = net.isIP(machine.host) === 6 ? `[${machine.host}]` : machine.host;
+  return `http://${host}:${machine.agentPort ?? 3481}`;
 };
 
 export const shouldUseWindowsAgent = (machine: MachineConfig): boolean =>

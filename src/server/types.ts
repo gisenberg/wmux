@@ -26,7 +26,15 @@ export interface MachineConfig {
   agentPort?: number;
   agentToken?: string;
   stream?: MachineStreamConfig;
+  /** Runtime provenance and heartbeat state; static config files omit these. */
+  source?: "config" | "registered";
+  registeredAt?: string;
+  lastSeenAt?: string;
+  expiresAt?: string;
+  online?: boolean;
 }
+
+export type MachineSource = MachineConfig[] | (() => MachineConfig[]);
 
 export interface MachineStatus {
   id: string;
@@ -50,6 +58,11 @@ export interface MachineStatus {
   expectedHelperBundleVersion?: string;
   versionStatus?: MachineVersionStatus;
   health?: Record<string, unknown>;
+  source?: "config" | "registered";
+  registeredAt?: string;
+  lastSeenAt?: string;
+  expiresAt?: string;
+  online?: boolean;
 }
 
 export interface PaneState {

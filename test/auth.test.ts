@@ -9,6 +9,8 @@ import {
   isAuthorized,
   issueSessionToken,
   loadAuthConfig,
+  loadRegistrationAuthConfig,
+  requestBearerToken,
   requestToken,
   tokensMatch,
   verifyCredentials,
@@ -35,9 +37,11 @@ const withIsolatedHome = (run: (dir: string) => void): void => {
   process.env.WMUX_TOKEN_PATH = path.join(dir, "token");
   process.env.WMUX_AUTH_PATH = path.join(dir, "auth.json");
   process.env.WMUX_SESSION_SECRET_PATH = path.join(dir, "session-secret");
+  process.env.WMUX_REGISTRATION_TOKEN_PATH = path.join(dir, "registration-token");
   delete process.env.WMUX_DISABLE_AUTH;
   delete process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN;
   delete process.env.WMUX_TOKEN;
+  delete process.env.WMUX_REGISTRATION_TOKEN;
   try {
     run(dir);
   } finally {
@@ -56,6 +60,8 @@ test("requestToken reads Authorization header then query", () => {
   assert.equal(requestToken(fakeRequest({ authorization: "Bearer abc" }), urlWith()), "abc");
   assert.equal(requestToken(fakeRequest(), urlWith("?token=qtok")), "qtok");
   assert.equal(requestToken(fakeRequest(), urlWith()), null);
+  assert.equal(requestBearerToken(fakeRequest({ authorization: "Bearer abc" })), "abc");
+  assert.equal(requestBearerToken(fakeRequest()), null);
 });
 
 test("isAuthorized accepts the shared token, rejects a bad one", () => {
@@ -100,6 +106,33 @@ test("loadAuthConfig honors WMUX_DISABLE_AUTH", () => {
   } finally {
     process.env = saved;
   }
+});
+
+test("registration auth persists a separate token even when main auth is disabled", () => {
+  withIsolatedHome((dir) => {
+    process.env.WMUX_DISABLE_AUTH = "1";
+    const first = loadRegistrationAuthConfig();
+    assert.ok(first.token.length >= 16);
+    assert.equal(first.tokenPath, path.join(dir, "registration-token"));
+    assert.equal(fs.readFileSync(first.tokenPath, "utf8").trim(), first.token);
+    assert.equal(loadRegistrationAuthConfig().token, first.token);
+  });
+});
+
+test("registration auth honors an environment token without writing a file", () => {
+  withIsolatedHome((dir) => {
+    process.env.WMUX_REGISTRATION_TOKEN = "registration-only";
+    const registration = loadRegistrationAuthConfig();
+    assert.deepEqual(registration, { token: "registration-only" });
+    assert.equal(fs.existsSync(path.join(dir, "registration-token")), false);
+  });
+});
+
+test("registration auth rejects values that cannot be sent as bearer headers", () => {
+  withIsolatedHome(() => {
+    process.env.WMUX_REGISTRATION_TOKEN = "first\nsecond";
+    assert.throws(() => loadRegistrationAuthConfig(), /printable ASCII without spaces/);
+  });
 });
 
 test("loadAuthConfig starts token-only without configured credentials", () => {

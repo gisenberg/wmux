@@ -153,6 +153,8 @@ function Get-WindowsWmuxReport {
     'wmux-agent-event',
     'wmux-copy',
     'wmux-clip',
+    'wmux-heartbeat',
+    'wmux-heartbeat-service',
     'wmux-hooks',
     'wmux-media',
     'wmux-notify',
@@ -176,6 +178,8 @@ function Get-WindowsWmuxReport {
   $AgentConfigPath = Join-Path $HOME '.wmux\windows-agent.json'
   $Task = Get-ScheduledTask -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue
   $TaskInfo = if ($Task) { Get-ScheduledTaskInfo -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue } else { $null }
+  $HeartbeatTask = Get-ScheduledTask -TaskName 'wmux-heartbeat' -ErrorAction SilentlyContinue
+  $HeartbeatTaskInfo = if ($HeartbeatTask) { Get-ScheduledTaskInfo -TaskName 'wmux-heartbeat' -ErrorAction SilentlyContinue } else { $null }
   $AgentTask = Get-ScheduledTask -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue
   $AgentTaskInfo = if ($AgentTask) { Get-ScheduledTaskInfo -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue } else { $null }
   $SunshineCommand = Get-SunshineCommand
@@ -196,6 +200,9 @@ function Get-WindowsWmuxReport {
     streamTaskState = if ($Task) { [string]$Task.State } else { 'missing' }
     streamTaskLastRunTime = if ($TaskInfo) { $TaskInfo.LastRunTime.ToString('o') } else { $null }
     streamTaskLastTaskResult = if ($TaskInfo) { $TaskInfo.LastTaskResult } else { $null }
+    heartbeatTaskState = if ($HeartbeatTask) { [string]$HeartbeatTask.State } else { 'missing' }
+    heartbeatTaskLastRunTime = if ($HeartbeatTaskInfo) { $HeartbeatTaskInfo.LastRunTime.ToString('o') } else { $null }
+    heartbeatTaskLastTaskResult = if ($HeartbeatTaskInfo) { $HeartbeatTaskInfo.LastTaskResult } else { $null }
     agentConfigPath = $AgentConfigPath
     agentConfigExists = Test-Path -LiteralPath $AgentConfigPath -PathType Leaf
     agentTaskState = if ($AgentTask) { [string]$AgentTask.State } else { 'missing' }
@@ -322,7 +329,7 @@ function Start-Sunshine {
 
 function Show-Usage {
   Write-Error @'
-usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-stream|stream-status|install-agent|agent-status|agent-logs|install-hooks|status]
+usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-heartbeat|heartbeat-status|heartbeat-logs|install-stream|stream-status|install-agent|agent-status|agent-logs|install-hooks|status]
 
 validate       Print a JSON report for Windows wmux prerequisites and helper state.
 persist-path   Add %LOCALAPPDATA%\wmux\bin to the persistent user PATH.
@@ -331,6 +338,9 @@ install-sunshine Install Sunshine with winget when missing.
 configure-sunshine Set Sunshine credentials from WMUX_SUNSHINE_USER/WMUX_SUNSHINE_PASSWORD.
 start-sunshine Start sunshine.exe for the current logged-in user session.
 sunshine-status Print the Sunshine section of the validation report.
+install-heartbeat Install/start the per-user wmux heartbeat Scheduled Task.
+heartbeat-status Show the wmux heartbeat Scheduled Task status.
+heartbeat-logs Show the wmux heartbeat logs.
 install-stream Install/start the per-user wmux stream-agent Scheduled Task.
 stream-status  Show the wmux stream-agent Scheduled Task status.
 install-agent  Install/start the per-user wmux Windows session agent Scheduled Task.
@@ -367,6 +377,15 @@ switch ($Action) {
   }
   'sunshine-status' {
     (Get-WindowsWmuxReport).sunshine | ConvertTo-Json -Depth 8
+  }
+  'install-heartbeat' {
+    Invoke-WmuxHelper 'wmux-heartbeat-service' @('install')
+  }
+  'heartbeat-status' {
+    Invoke-WmuxHelper 'wmux-heartbeat-service' @('status')
+  }
+  'heartbeat-logs' {
+    Invoke-WmuxHelper 'wmux-heartbeat-service' @('logs')
   }
   'install-stream' {
     Invoke-WmuxHelper 'wmux-stream-agent-service' @('install')

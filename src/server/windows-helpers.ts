@@ -16,6 +16,8 @@ const windowsBootstrapEnvKeys = new Set([
 const windowsRequiredHelperNames = [
   "wmux-agent-event",
   "wmux-copy",
+  "wmux-heartbeat",
+  "wmux-heartbeat-service",
   "wmux-hooks",
   "wmux-media",
   "wmux-notify",
@@ -67,6 +69,7 @@ export const buildWindowsPowerShellBootstrapUrl = (
   machine: MachineConfig,
   startCwd: string | undefined,
   extraEnv: Record<string, string>,
+  bootstrapToken = extraEnv.WMUX_TOKEN,
 ): string => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
@@ -78,7 +81,7 @@ export const buildWindowsPowerShellBootstrapUrl = (
   }
   // The helper endpoints are token-gated; the WS/one-liner fetch can only carry
   // the token on the query string.
-  if (extraEnv.WMUX_TOKEN) url.searchParams.set("token", extraEnv.WMUX_TOKEN);
+  if (bootstrapToken) url.searchParams.set("token", bootstrapToken);
   return url.toString();
 };
 
@@ -86,6 +89,8 @@ export const buildWindowsPowerShellBootstrap = (
   machine: MachineConfig,
   startCwd: string | undefined,
   extraEnv: Record<string, string>,
+  bootstrapToken?: string,
+  inlineBundle?: WindowsHelperBundle,
 ): string => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
@@ -109,6 +114,11 @@ export const buildWindowsPowerShellBootstrap = (
     .map(([key, value]) => `$env:${key} = ${psSingleQuote(value)}`)
     .join("\n");
   const bundleUrl = `${wmuxUrl.replace(/\/+$/, "")}/api/helpers/windows/${encodeURIComponent(machine.id)}`;
+  const bundleLoad = inlineBundle
+    ? `$BundleJson = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psSingleQuote(
+        Buffer.from(JSON.stringify(inlineBundle), "utf8").toString("base64"),
+      )}))\n  $Bundle = $BundleJson | ConvertFrom-Json`
+    : "$Bundle = Invoke-RestMethod -Method Get -Uri $BundleUrl -Headers $WmuxHeaders -TimeoutSec 20";
 
   return `
 $ErrorActionPreference = 'Continue'
@@ -129,9 +139,14 @@ if ($env:WMUX_URL) {
 
 $BundleUrl = ${psSingleQuote(bundleUrl)}
 $WmuxHeaders = @{}
-if ($env:WMUX_TOKEN) { $WmuxHeaders['Authorization'] = "Bearer $($env:WMUX_TOKEN)" }
+$WmuxBootstrapToken = ${psSingleQuote(bootstrapToken ?? "")}
+if ($WmuxBootstrapToken) {
+  $WmuxHeaders['Authorization'] = "Bearer $WmuxBootstrapToken"
+} elseif ($env:WMUX_TOKEN) {
+  $WmuxHeaders['Authorization'] = "Bearer $($env:WMUX_TOKEN)"
+}
 try {
-  $Bundle = Invoke-RestMethod -Method Get -Uri $BundleUrl -Headers $WmuxHeaders -TimeoutSec 20
+  ${bundleLoad}
   # Stage-verify-swap: decode everything into a scratch directory, check each
   # file's SHA-256 against the manifest, and only then move files into place.
   # A truncated download or mid-write failure never leaves a broken helper.

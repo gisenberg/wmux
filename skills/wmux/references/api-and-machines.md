@@ -9,7 +9,7 @@
 - Token sources: `WMUX_TOKEN`, `WMUX_TOKEN_PATH`, or `~/.wmux/token`
 - URL sources used by helpers: `WMUX_URL`, `~/.wmux/url`, then default URL
 
-All `/api/*` endpoints except `/api/health`, `/api/auth-info`, and `/api/login` require `Authorization: Bearer <token>`.
+All `/api/*` endpoints except `/api/health`, `/api/auth-info`, and `/api/login` require normal wmux authorization. `POST /api/registry/hosts` is the exception: it always requires the separate catalog-write registration token from `WMUX_REGISTRATION_TOKEN` or `~/.wmux/registration-token`, even when main auth is disabled. The shared token can create or update any dynamic ID, so provision it only to trusted hosts.
 
 Never print or commit the token. Prefer environment variables or local token files.
 
@@ -24,6 +24,57 @@ Confirm with `wmux.config.json` or `/api/bootstrap` before use.
 | `9800x3d` | `powershell-ssh` | `gisen@100.68.206.111` | `sessionBackend: "agent"`; Windows session agent on port `3481`. |
 | `2080ti` | `powershell-ssh` | `gisenberg@100.101.81.42` | Helpers are staged in repo docs, but live bootstrap may report this host down; validate before scheduling work. FFmpeg, pywinpty, stream task, and Windows session agent may still be pending. |
 | `win-ci` | `powershell-ssh` | `gisenberg@100.124.2.7` | `sessionBackend: "agent"`; headless Windows session agent on port `3481` using S4U task logon; Moonlight gateway at `https://homelab.tail2fcc57.ts.net:3491`. Consult `homelab/win-ci/README.md` for VM details. |
+
+## Dynamic Host Registry
+
+`POST /api/registry/hosts` registers a host and refreshes its presence TTL. It
+requires `Authorization: Bearer <registration-token>` and never accepts the
+normal browser/shared token as a substitute. `GET /api/registry/hosts` and
+`DELETE /api/registry/hosts/:machineId` use normal wmux authorization; the GET
+response is redacted.
+
+The POST body has this shape:
+
+```json
+{
+  "machine": {
+    "id": "build-host",
+    "name": "Build Host",
+    "kind": "ssh",
+    "user": "operator",
+    "port": 22,
+    "sessionBackend": "auto"
+  },
+  "ttlMs": 90000,
+  "metadata": { "os": "linux" }
+}
+```
+
+Only `ssh` and `powershell-ssh` plus remote-safe connection/session fields are
+accepted. `host` may be present for compatibility but is ignored; wmux dials
+the validated heartbeat source address. Commands, local/service kinds, agent
+URLs, and stream gateway fields are rejected. An observed-host Windows agent
+must include both `agentPort` and `agentToken` with `sessionBackend: "agent"`;
+the token remains server-only. A persisted pane pins the connection descriptor
+and agent token while permitting address-only roaming; a live agent pane pins
+its address too. Close referenced panes before descriptor/token rotation.
+
+TTL defaults to 90 seconds and may be 30 seconds through 24 hours. Expired
+hosts stay visible offline and are retained for seven days, or longer while a
+persisted pane references them. The same ID may heartbeat no more than once per
+five seconds; limits are 256 records, 32 records per observed address, and 16
+KiB of serialized metadata per record. Host files are
+`~/.wmux/url`, `~/.wmux/registration-token`, and
+`~/.wmux/heartbeat.json`. Validate with `wmux-heartbeat --once`; install the
+POSIX timer with `scripts/install-heartbeat-service.sh` or the Windows logon
+task with `wmux-windows-setup install-heartbeat`. Registration token transfer
+is always a separate manual provisioning step.
+
+Registered panes stage helper commands but do not receive the broad
+`WMUX_TOKEN` and do not overwrite a remote `~/.wmux/token`. Dynamic Windows
+bootstrap uses a per-machine capability for a redacted inline bundle. Helpers
+that post to wmux require separately provisioned normal/scoped auth and
+otherwise return `401`.
 
 ## Common Checks
 
@@ -154,6 +205,9 @@ For failed runs, debugging sessions, interactive work, or long-running processes
 - `POST /api/panes/:paneId/input`: body `{ "data": "...", "cols": 120, "rows": 36 }`.
 - `POST /api/agent-events`: body may include `workspaceId`, `tabId`, `paneId`, `agent`, `status`, `title`, `summary`, `body`.
 - `POST /api/run-events`: used by `wmux-run` for activity tracking.
+- `GET /api/registry/hosts`: list redacted dynamic registration records using normal wmux auth.
+- `POST /api/registry/hosts`: register/heartbeat an allowlisted `ssh` or `powershell-ssh` descriptor using the registration token.
+- `DELETE /api/registry/hosts/:machineId`: remove a dynamic registration using normal wmux auth.
 - `POST /api/streams/:machineId/request`: request a screen stream lease.
 - `DELETE /api/streams/:machineId/request/:requestId`: release a stream lease.
 
@@ -169,6 +223,7 @@ Use:
 - `wmux-copy`/`wclip` to hand text to the browser clipboard.
 - `wmux-media <file>` for browser-aware images/audio/video.
 - `wmux-title --title ... --descriptor ...` for workspace/tab labeling.
+- `wmux-heartbeat --once` to validate or refresh a dynamic host registration; its dedicated token is provisioned separately from pane auth.
 
 Helpers fall back to `~/.wmux/token` and `~/.wmux/url` when pane environment variables are unavailable.
 
@@ -182,6 +237,8 @@ Windows helper setup commands from a fresh wmux pane:
 wmux-windows-setup validate
 wmux-windows-setup persist-path
 wmux-windows-setup install-deps
+wmux-windows-setup install-heartbeat
+wmux-windows-setup heartbeat-status
 wmux-windows-setup install-stream
 wmux-windows-setup stream-status
 wmux-windows-setup install-agent

@@ -22,6 +22,7 @@ This is intentionally not a multi-tenant SaaS app. Authentication currently reli
 - `npm run audit:sessions` audits local wmux-managed durable `tmux`/`screen` sessions.
 - `npm run audit:sessions -- --json` emits the same audit as JSON.
 - `scripts/install-user-service.sh` installs or updates the systemd user service. It picks a Tailscale IPv4 address when available; override with `WMUX_HOST` and `WMUX_PORT`.
+- `scripts/install-heartbeat-service.sh` installs the dynamic-host heartbeat systemd user timer after its URL, token, and machine descriptor are provisioned.
 
 Useful service commands:
 
@@ -35,6 +36,8 @@ The service must only bind to loopback, Tailscale `100.64.0.0/10`, or RFC1918/in
 
 For MagicDNS names or reverse-proxy hostnames, set `WMUX_ALLOWED_HOSTS` to a comma-separated allowlist. `*.ts.net` is allowed for Tailscale host headers.
 
+`WMUX_TRUSTED_PROXIES` accepts exact IP literals only. Never trust forwarded address headers from an unlisted peer or accept hostnames/CIDRs without an equivalent validated proxy-chain control.
+
 Keep websocket, media, clipboard, hook, and run endpoints behind the same network boundary. Do not add CORS broadening or public callback endpoints without also adding an auth story.
 
 ## Architecture Notes
@@ -42,7 +45,12 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Server state lives in `~/.wmux/state.json` unless `WMUX_STATE_PATH` is set.
 - Server-backed UI settings live in `~/.wmux/settings.json` unless `WMUX_SETTINGS_PATH` is set.
 - State and settings use explicit schema versions, atomic owner-only writes, validated rolling backups, and downgrade refusal. Add a migration before changing a persisted shape.
-- Machine definitions are read from `./wmux.config.json` first, then `~/.wmux/config.json`.
+- Machine definitions are read from `./wmux.config.json` first, then `~/.wmux/config.json`; `WMUX_CONFIG_PATH` selects one explicit file and disables fallback.
+- Dynamic SSH and PowerShell-over-SSH machines register through `POST /api/registry/hosts` and persist in `~/.wmux/host-registry.json`. The shared registration token is trusted catalog-write authority for every dynamic ID, not per-host identity; it must not authorize registry reads, deletion, helper bundles, or any other endpoint.
+- The host registry has its own schema version, owner-only atomic writes, legacy migration, and downgrade refusal. Bump/migrate its envelope before changing persisted record shapes; never rewrite a future version.
+- Dynamic registrations always dial the validated private/internal heartbeat source address. Keep their schema narrower than static `MachineConfig`: no commands, local/service kinds, agent URLs, or stream gateway configuration. The Windows agent backend requires explicit `agentPort` and `agentToken`; the token must stay server-only and redacted from registry/status/helper/browser payloads.
+- Registered panes never receive the broad wmux API token and must not overwrite a pre-existing remote `~/.wmux/token`. Dynamic Windows SSH bootstrap uses a rotating per-machine capability for an inline redacted bundle. API-posting helpers on registered panes require separately provisioned auth and otherwise fail with `401`.
+- Expired registered hosts remain visible offline and are retained past the normal seven-day window while a pane references them. A referenced ID pins kind/user/port/shell/backend/agent port/token while permitting address-only roaming; a live agent pane pins its address too. Do not dial an offline registration for new attach/refresh. Live pane sessions retain their original machine snapshot so address churn cannot redirect later cleanup.
 - Keep remote-machine behavior explicit in `MachineConfig`; do not hide durable/session behavior in UI-only state.
 - The `local` and SSH machines default to durable `tmux`/`screen` sessions via `sessionBackend: "auto"`.
 - Use `kind: "powershell-ssh"` for Windows hosts reached from non-Windows wmux servers. It uses local `ssh -tt` to launch remote `pwsh`; follow [docs/WINDOWS_NODE_REGISTRATION.md](docs/WINDOWS_NODE_REGISTRATION.md) for setup and validation. Legacy `kind: "powershell"` means WSMan `Enter-PSSession -ComputerName`; do not mark it online from a non-Windows wmux host by TCP probe alone.
@@ -102,6 +110,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Browser media handoff is handled by `wmux-media`. Images prefer `kitten icat --transfer-mode=stream --passthrough=tmux --align=left --engine=builtin --stdin=no`; audio/video render in browser media controls; `--mode http` forces the media shelf and `--mode kitty` fails instead of falling back.
 - `wmux-sunshine-setup` is the macOS SSH-host Sunshine setup helper. It installs the official macOS DMG by default, can use the official LizardByte Homebrew tap with `WMUX_SUNSHINE_INSTALL_METHOD=brew`, configures `sunshine --creds`, and runs Sunshine through a per-user GUI LaunchAgent. It cannot bypass macOS Screen Recording, Accessibility/Input Monitoring, or Local Network approval prompts.
 - Windows helper scripts live under `scripts/windows` and are served as a Base64 helper bundle instead of being embedded in the SSH command line. Keep the launch command small; Windows OpenSSH rejects large encoded commands.
+- `wmux-heartbeat` refreshes a dynamic host registration. POSIX hosts can use the shipped systemd user timer; Windows hosts can install the staged `wmux-heartbeat-service` Scheduled Task with `wmux-windows-setup install-heartbeat`. Registration token distribution remains an explicit manual step.
 - `wmux-windows-setup` is the Windows self-check/setup entry point. It validates helper state, can persist the helper directory to the user PATH, can install FFmpeg/Python with `winget`, installs `pywinpty` for ConPTY, and can install/status the per-user stream and session-agent Scheduled Tasks. It must work both inside a bootstrapped wmux pane and from plain SSH where `%LOCALAPPDATA%\wmux\bin` is not yet on `PATH`.
 - `wmux-windows-agent` is served as `wmux-windows-agent.py` plus a CMD shim. Its HTTP API owns sessions keyed by wmux pane id: create/attach, input, pywinpty-backed ConPTY resize, output long-poll, list, health, and delete. It must bind only loopback, Tailscale, or RFC1918/internal hosts.
 - Windows PowerShell bootstraps disable PSReadLine predictions to avoid inline history suggestions painting ghost text into browser terminal output.
@@ -114,10 +123,13 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 
 ## Current Gaps To Preserve In Docs
 
+- Dynamically registered panes stage helper commands but intentionally receive no broad `WMUX_TOKEN`; API-posting helpers need separately provisioned auth.
+- Dynamic live-pane endpoint snapshots are in-memory only; a wmux restart followed by dynamic ID reassignment can leave the old remote durable session requiring manual cleanup.
 - Remote per-platform wmux agents are partial. Windows has an experimental ConPTY session agent; Linux/macOS agents are not implemented.
 - Windows SSH PowerShell is validated on 9800x3d. The experimental Windows session agent uses pywinpty-backed ConPTY, contains each pane in a kill-on-close Windows Job Object, and supports staged-update draining. Broad full-screen app validation and process preservation across unexpected/forced Windows-agent restarts are still pending.
-- Machine management is file-based; there is no in-app editor.
+- Static machine management is file-based and the dynamic registry has no in-app editor.
 - Authentication exists for browser and helper access, but browser tokens remain in local storage/WebSocket query parameters and helpers still receive a broadly privileged shared token; scoped capabilities and cookie-backed browser sessions are not implemented.
+- Dynamic host presence follows the host user's service lifecycle: the systemd user timer needs lingering to run while logged out, and the Windows Scheduled Task starts only after that user logs in.
 - Full cmux-style transcript auto-naming is heuristic. Claude and Codex hook paths exist; OpenCode installation is not implemented.
 - Kitty graphics support is partial. File/shared-memory transfer, animation frames, z-index layering, scrollback-persistent placement, Sixel, and iTerm2 image protocols are not complete.
 - Command run tracking is explicit through `wmux-run`; arbitrary shell command detection is not implemented.

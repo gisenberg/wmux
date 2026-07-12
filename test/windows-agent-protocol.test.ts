@@ -3,8 +3,21 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { windowsAgentUrl } from "../src/server/windows-agent.js";
+import type { MachineConfig } from "../src/server/types.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("Windows agent URLs bracket IPv6 callback addresses", () => {
+  const machine: MachineConfig = {
+    id: "dynamic-v6",
+    name: "Dynamic IPv6",
+    kind: "powershell-ssh",
+    host: "fd7a:115c:a1e0::8",
+    agentPort: 3481,
+  };
+  assert.equal(windowsAgentUrl(machine), "http://[fd7a:115c:a1e0::8]:3481");
+});
 
 test("Windows agent recognizes fixed terminal queries across output chunks", () => {
   const source = String.raw`

@@ -26,6 +26,16 @@ import type {
 
 const now = (): string => new Date().toISOString();
 const ACTIVE_AGENT_STATUSES = new Set(["running", "started", "working"]);
+const stateMachines = (machines: MachineConfig[]): MachineConfig[] =>
+  machines.map(({
+    agentToken: _agentToken,
+    source: _source,
+    registeredAt: _registeredAt,
+    lastSeenAt: _lastSeenAt,
+    expiresAt: _expiresAt,
+    online: _online,
+    ...machine
+  }) => structuredClone(machine));
 
 const defaultPath = (): string => path.join(os.homedir(), ".wmux", "state.json");
 
@@ -105,6 +115,21 @@ export class StateStore extends EventEmitter {
 
   snapshot(): PersistedState {
     return structuredClone(this.state);
+  }
+
+  /** Replace the machine catalog after a dynamic registration change. */
+  updateMachines(machines: MachineConfig[]): boolean {
+    const nextMachines = stateMachines(machines);
+    if (JSON.stringify(this.state.machines) === JSON.stringify(nextMachines)) return false;
+    this.state.machines = nextMachines;
+    this.save();
+    return true;
+  }
+
+  hasMachineReferences(machineId: string): boolean {
+    return this.state.workspaces.some((workspace) =>
+      workspace.tabs.some((tab) => tab.panes.some((pane) => pane.machineId === machineId)),
+    );
   }
 
   save(): void {
@@ -622,11 +647,12 @@ export class StateStore extends EventEmitter {
   }
 
   private load(machines: MachineConfig[]): PersistedState {
+    const safeMachines = stateMachines(machines);
     if (fs.existsSync(this.filePath)) {
       const restored = this.tryLoadPersisted();
       if (restored) {
         const beforeNormalization = JSON.stringify(restored.state);
-        const normalized = { ...this.normalizeRestoredState(restored.state), machines };
+        const normalized = { ...this.normalizeRestoredState(restored.state), machines: safeMachines };
         this.dirty = restored.migrated || JSON.stringify(normalized) !== beforeNormalization;
         return normalized;
       }
@@ -639,14 +665,14 @@ export class StateStore extends EventEmitter {
       if (backup) {
         console.error(`wmux: recovered state from ${this.backupPath()}`);
         this.dirty = true;
-        return { ...this.normalizeRestoredState(backup.state), machines };
+        return { ...this.normalizeRestoredState(backup.state), machines: safeMachines };
       }
       this.quarantineStateFile(this.backupPath());
     }
     const state: PersistedState = {
       schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
       revision: 0,
-      machines,
+      machines: safeMachines,
       workspaces: [],
       activeWorkspaceId: "",
       notifications: [],

@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh this host's wmux registration
+
+[Timer]
+OnStartupSec=10s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Persistent=true
+Unit=wmux-heartbeat.service
+
+[Install]
+WantedBy=timers.target

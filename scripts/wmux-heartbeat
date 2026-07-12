@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+once=0
+interval=30
+state_dir="${WMUX_STATE_DIR:-${HOME}/.wmux}"
+
+usage() {
+  echo "usage: wmux-heartbeat [--once] [--interval SECONDS] [--state-dir DIR]" >&2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --once)
+      once=1
+      shift
+      ;;
+    --interval)
+      interval="${2:?--interval requires a value}"
+      shift 2
+      ;;
+    --state-dir)
+      state_dir="${2:?--state-dir requires a value}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if [[ ! "${interval}" =~ ^[1-9][0-9]*$ ]] || (( interval < 5 )); then
+  echo "--interval must be an integer of at least 5 seconds" >&2
+  exit 2
+fi
+
+wmux_url="${WMUX_URL:-}"
+if [[ -z "${wmux_url}" && -r "${state_dir}/url" ]]; then
+  wmux_url="$(tr -d '[:space:]' < "${state_dir}/url")"
+fi
+wmux_url="${wmux_url:-http://127.0.0.1:3478}"
+wmux_url="${wmux_url%/}"
+
+token="${WMUX_REGISTRATION_TOKEN:-}"
+if [[ -z "${token}" && -r "${state_dir}/registration-token" ]]; then
+  token="$(tr -d '[:space:]' < "${state_dir}/registration-token")"
+fi
+if [[ -z "${token}" ]]; then
+  echo "no registration token: set WMUX_REGISTRATION_TOKEN or create ${state_dir}/registration-token" >&2
+  exit 1
+fi
+if [[ "${token}" == *$'\r'* || "${token}" == *$'\n'* ]]; then
+  echo "registration token must not contain a newline" >&2
+  exit 1
+fi
+
+umask 077
+header_file="$(mktemp "${TMPDIR:-/tmp}/wmux-heartbeat.XXXXXX")"
+trap 'rm -f "${header_file}"' EXIT
+printf 'Authorization: Bearer %s\n' "${token}" > "${header_file}"
+
+config="${WMUX_HEARTBEAT_CONFIG:-${state_dir}/heartbeat.json}"
+if [[ ! -r "${config}" ]]; then
+  echo "missing ${config}" >&2
+  exit 1
+fi
+
+while :; do
+  failed=0
+  curl -fsS -m 15 -X POST "${wmux_url}/api/registry/hosts" \
+    -H "@${header_file}" \
+    -H "Content-Type: application/json" \
+    --data-binary "@${config}" >/dev/null || failed=$?
+  if (( failed != 0 )); then
+    echo "wmux-heartbeat: POST failed with curl exit ${failed}" >&2
+  fi
+  if (( once == 1 )); then
+    exit "${failed}"
+  fi
+  sleep "${interval}"
+done

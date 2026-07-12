@@ -32,6 +32,11 @@ export interface MachineStatus {
   expectedHelperBundleVersion?: string;
   versionStatus?: MachineVersionStatus;
   health?: Record<string, unknown>;
+  source?: "config" | "registered";
+  registeredAt?: string;
+  lastSeenAt?: string;
+  expiresAt?: string;
+  online?: boolean;
 }
 
 export interface PaneState {

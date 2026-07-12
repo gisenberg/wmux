@@ -142,6 +142,50 @@ test("flush persists debounced writes synchronously", () => {
   });
 });
 
+test("machine catalog updates advance revision only when content changes", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const initialRevision = store.snapshot().revision;
+    assert.equal(store.updateMachines(machines), false);
+    assert.equal(store.snapshot().revision, initialRevision);
+
+    const nextMachines: MachineConfig[] = [
+      ...machines,
+      {
+        id: "dynamic",
+        name: "Dynamic",
+        kind: "ssh",
+        host: "100.70.0.8",
+        source: "registered",
+        online: true,
+        registeredAt: "2026-07-08T00:00:00.000Z",
+        lastSeenAt: "2026-07-08T00:00:00.000Z",
+        expiresAt: "2026-07-08T00:01:00.000Z",
+        agentToken: "server-only-agent-token",
+      },
+    ];
+    assert.equal(store.updateMachines(nextMachines), true);
+    assert.equal(store.snapshot().revision, initialRevision + 1);
+    assert.equal(store.snapshot().machines.find((machine) => machine.id === "dynamic")?.agentToken, undefined);
+    assert.equal(store.updateMachines(nextMachines.map((machine) =>
+      machine.id === "dynamic"
+        ? {
+            ...machine,
+            online: false,
+            lastSeenAt: "2026-07-08T00:00:30.000Z",
+            expiresAt: "2026-07-08T00:02:00.000Z",
+          }
+        : machine,
+    )), false);
+    assert.equal(store.snapshot().revision, initialRevision + 1);
+    store.flush();
+    assert.doesNotMatch(
+      fs.readFileSync(filePath, "utf8"),
+      /server-only-agent-token|"source"\s*:|"online"\s*:|registeredAt|lastSeenAt|expiresAt/,
+    );
+  });
+});
+
 test("agent messages are sanitized and persist across restart", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);

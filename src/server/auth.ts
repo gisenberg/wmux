@@ -8,6 +8,7 @@ const wmuxHome = (): string => path.join(os.homedir(), ".wmux");
 const defaultTokenPath = (): string => path.join(wmuxHome(), "token");
 const defaultAuthPath = (): string => path.join(wmuxHome(), "auth.json");
 const defaultSessionSecretPath = (): string => path.join(wmuxHome(), "session-secret");
+const defaultRegistrationTokenPath = (): string => path.join(wmuxHome(), "registration-token");
 
 const SCRYPT_KEYLEN = 32;
 
@@ -48,6 +49,37 @@ export const loadAuthConfig = (): AuthConfig => {
     credentials: credentials ?? undefined,
     sessionSecret,
   };
+};
+
+export interface RegistrationAuthConfig {
+  token: string;
+  /** Absent when the token was supplied directly through the environment. */
+  tokenPath?: string;
+}
+
+const registrationToken = (value: string, source: string): string => {
+  const token = value.trim();
+  if (!/^[\x21-\x7e]+$/.test(token)) {
+    throw new Error(`${source} must contain printable ASCII without spaces`);
+  }
+  return token;
+};
+
+/**
+ * Registration has its own credential so a host may announce itself without
+ * gaining read access to sessions or the rest of the wmux API.
+ */
+export const loadRegistrationAuthConfig = (): RegistrationAuthConfig => {
+  const fromEnv = process.env.WMUX_REGISTRATION_TOKEN?.trim();
+  if (fromEnv) return { token: registrationToken(fromEnv, "WMUX_REGISTRATION_TOKEN") };
+
+  const tokenPath = process.env.WMUX_REGISTRATION_TOKEN_PATH ?? defaultRegistrationTokenPath();
+  const existing = readTrimmedFile(tokenPath);
+  if (existing) return { token: registrationToken(existing, tokenPath), tokenPath };
+
+  const generated = crypto.randomBytes(24).toString("base64url");
+  persistSecretFile(tokenPath, `${generated}\n`);
+  return { token: generated, tokenPath };
 };
 
 const resolveSharedToken = (): string => {
@@ -173,13 +205,20 @@ const signBody = (secret: string, body: string): string =>
 
 // ---- Request authorization -------------------------------------------------
 
-/** Extract a presented token from the Authorization header or a `token` query param. */
-export const requestToken = (request: http.IncomingMessage, url: URL): string | null => {
+/** Extract a bearer token without accepting URL credentials. */
+export const requestBearerToken = (request: http.IncomingMessage): string | null => {
   const header = request.headers.authorization;
   if (header) {
     const match = /^Bearer\s+(.+)$/i.exec(header.trim());
     if (match) return match[1].trim();
   }
+  return null;
+};
+
+/** Extract a presented token from the Authorization header or a `token` query param. */
+export const requestToken = (request: http.IncomingMessage, url: URL): string | null => {
+  const bearer = requestBearerToken(request);
+  if (bearer) return bearer;
   const queryToken = url.searchParams.get("token");
   return queryToken ? queryToken.trim() : null;
 };

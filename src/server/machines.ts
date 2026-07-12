@@ -175,7 +175,8 @@ const powershellSshBackend: Backend = {
     const target = machine.user ? `${machine.user}@${machine.host}` : machine.host;
     const args = ["-tt"];
     if (machine.port) args.push("-p", String(machine.port));
-    const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, extraEnv);
+    const { WMUX_BOOTSTRAP_TOKEN: bootstrapToken, ...remoteEnv } = extraEnv;
+    const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, remoteEnv, bootstrapToken);
     const bootstrapCommand = `iex (irm ${powershellQuote(bootstrapUrl)})`;
     args.push(
       target,
@@ -1174,6 +1175,16 @@ const commandExists = (command: string): boolean => {
   return result.status === 0;
 };
 
+const relativeAge = (iso: string | undefined): string => {
+  const then = iso ? Date.parse(iso) : Number.NaN;
+  if (!Number.isFinite(then)) return "never";
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86_400)}d ago`;
+};
+
 export const resolveMachineStatuses = async (
   machines: MachineConfig[],
   localEndpoint = "127.0.0.1",
@@ -1182,6 +1193,16 @@ export const resolveMachineStatuses = async (
     machines.map(async (machine) => {
       const checkedAt = new Date().toISOString();
       const publicMachine = publicMachineStatusBase(machine);
+      if (machine.source === "registered" && machine.online === false) {
+        return {
+          ...publicMachine,
+          reachable: false,
+          reason: `Offline; last seen ${relativeAge(machine.lastSeenAt)}`,
+          checkedAt,
+          endpoint: machine.host,
+          backendDetail: backendDetail(machine),
+        };
+      }
       if (machine.kind === "local") {
         return {
           ...publicMachine,
@@ -1326,6 +1347,11 @@ const publicMachineStatusBase = (machine: MachineConfig): Omit<MachineStatus, "r
         gatewayOpenUrl: machine.stream.gatewayOpenUrl,
       }
     : undefined,
+  source: machine.source,
+  registeredAt: machine.registeredAt,
+  lastSeenAt: machine.lastSeenAt,
+  expiresAt: machine.expiresAt,
+  online: machine.online,
 });
 
 const localBackendDetail = (machine: MachineConfig): string => {

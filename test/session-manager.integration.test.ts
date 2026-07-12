@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -11,10 +12,104 @@ import {
   isAgentInterruptInput,
   isTerminalProtocolResponseInput,
   parseClientMessage,
+  resolveDisposalMachine,
+  sessionAccessTokenForMachine,
   SessionManager,
 } from "../src/server/session-manager.js";
 import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
+
+test("registered sessions never receive the broad wmux API token", () => {
+  const registered: MachineConfig = {
+    id: "dynamic",
+    name: "Dynamic",
+    kind: "ssh",
+    host: "100.70.0.8",
+    source: "registered",
+  };
+  assert.equal(sessionAccessTokenForMachine(registered, "broad-token"), "");
+  assert.equal(sessionAccessTokenForMachine({ ...registered, source: "config" }, "broad-token"), "broad-token");
+});
+
+test("pane disposal prefers the live session's pre-heartbeat machine snapshot", () => {
+  const oldMachine: MachineConfig = {
+    id: "roamer",
+    name: "Roamer",
+    kind: "ssh",
+    host: "100.70.0.8",
+    source: "registered",
+  };
+  const movedMachine = { ...oldMachine, host: "100.70.0.9" };
+  assert.equal(resolveDisposalMachine(oldMachine, [movedMachine], oldMachine.id)?.host, "100.70.0.8");
+  assert.equal(resolveDisposalMachine(undefined, [movedMachine], oldMachine.id)?.host, "100.70.0.9");
+});
+
+test("idle durable-client recycle keeps the old endpoint snapshot through later address churn", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-recycle-"));
+  let machine: MachineConfig = {
+    id: "recycled-roamer",
+    name: "Recycled roamer",
+    kind: "ssh",
+    host: "100.70.0.8",
+    sessionBackend: "pty",
+    source: "registered",
+    online: true,
+  };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const workspace = state.createWorkspace(machine.id);
+  const pane = workspace.tabs[0].panes[0];
+  const manager = new SessionManager(state, () => [machine]);
+  const internals = manager as unknown as {
+    sessions: Map<string, { pane: typeof pane; isExited: boolean; kill: () => void }>;
+    sessionMachines: Map<string, MachineConfig>;
+    shouldUseDurableClientRefresh: (pane: typeof pane) => boolean;
+    hasPaneConnections: (paneId: string) => boolean;
+    recycleIdleDurableClient: (pane: typeof pane) => void;
+  };
+  let killed = false;
+  internals.sessions.set(pane.id, { pane, isExited: false, kill: () => { killed = true; } });
+  internals.sessionMachines.set(pane.id, structuredClone(machine));
+  internals.shouldUseDurableClientRefresh = () => true;
+  internals.hasPaneConnections = () => false;
+  try {
+    internals.recycleIdleDurableClient(pane);
+    assert.equal(killed, true);
+    assert.equal(internals.sessionMachines.get(pane.id)?.host, "100.70.0.8");
+
+    machine = { ...machine, host: "100.70.0.9" };
+    assert.equal(
+      resolveDisposalMachine(internals.sessionMachines.get(pane.id), [machine], machine.id)?.host,
+      "100.70.0.8",
+    );
+    assert.equal(manager.closePane(pane.id), true);
+    assert.equal(internals.sessionMachines.has(pane.id), false);
+  } finally {
+    manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("offline registered machines reject new session creation", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-offline-"));
+  const machine: MachineConfig = {
+    id: "offline-host",
+    name: "Offline host",
+    kind: "ssh",
+    host: "100.70.0.8",
+    source: "registered",
+    online: false,
+  };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const workspace = state.createWorkspace(machine.id);
+  const pane = workspace.tabs[0].panes[0];
+  const manager = new SessionManager(state, [machine]);
+  try {
+    assert.throws(() => manager.writePane(pane.id, "whoami\n"), /machine offline-host is offline/);
+  } finally {
+    manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 class FakeSocket extends EventEmitter {
   readonly OPEN = 1;
@@ -72,6 +167,79 @@ const withState = async (machine: MachineConfig, run: (state: StateStore, dir: s
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
+
+test("failed agent exit retains its old endpoint snapshot for close after a heartbeat move", async () => {
+  let oldDeletes = 0;
+  let newRequests = 0;
+  const oldAgent = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST") {
+      response.end(JSON.stringify({ pid: 1, base: 0 }));
+      return;
+    }
+    if (request.method === "GET") {
+      response.end(JSON.stringify({ cursor: 0, exited: true, exitCode: 1 }));
+      return;
+    }
+    if (request.method === "DELETE") {
+      oldDeletes += 1;
+      response.end(JSON.stringify({ deleted: true }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+  const newAgent = http.createServer((_request, response) => {
+    newRequests += 1;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ deleted: true }));
+  });
+  oldAgent.listen(0, "127.0.0.1");
+  newAgent.listen(0, "127.0.0.1");
+  await Promise.all([once(oldAgent, "listening"), once(newAgent, "listening")]);
+  const oldAddress = oldAgent.address();
+  const newAddress = newAgent.address();
+  assert.ok(oldAddress && typeof oldAddress === "object");
+  assert.ok(newAddress && typeof newAddress === "object");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-agent-move-"));
+  let machine: MachineConfig = {
+    id: "moving-agent",
+    name: "Moving agent",
+    kind: "powershell-ssh",
+    host: "127.0.0.1",
+    sessionBackend: "agent",
+    agentPort: oldAddress.port,
+    agentToken: "test-agent-token",
+    source: "registered",
+    online: true,
+  };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const workspace = state.createWorkspace(machine.id);
+  const pane = workspace.tabs[0].panes[0];
+  const manager = new SessionManager(state, () => [machine]);
+  const client = socket();
+  try {
+    manager.attach(pane.id, client, 80, 24);
+    await waitForMessage(client, (message) => message.type === "exit");
+    assert.equal(state.findPane(pane.id)?.status, "exited");
+
+    machine = { ...machine, agentPort: newAddress.port };
+    assert.equal(manager.closePane(pane.id), true);
+    for (let attempt = 0; attempt < 50 && oldDeletes === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(oldDeletes, 1);
+    assert.equal(newRequests, 0);
+  } finally {
+    manager.disposeAll();
+    oldAgent.close();
+    newAgent.close();
+    oldAgent.closeAllConnections();
+    newAgent.closeAllConnections();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("agent interrupt input excludes terminal escape sequences", () => {
   assert.equal(isAgentInterruptInput("\x03"), true);
