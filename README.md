@@ -1,5 +1,7 @@
 # wmux
 
+[![CI](https://github.com/gisenberg/wmux/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gisenberg/wmux/actions/workflows/ci.yml)
+
 A single-user browser terminal multiplexer for Tailscale and private networks.
 
 wmux provides:
