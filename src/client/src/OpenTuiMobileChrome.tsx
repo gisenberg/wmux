@@ -195,7 +195,7 @@ const drawMobileChrome = (
     : model.versionStatus === "outdated"
       ? rgba.gold
       : rgba.muted;
-  const versionText = model.versionLabel ? `[${model.versionLabel}]` : "";
+  const versionText = model.versionStatus === "outdated" && model.versionLabel ? `[${model.versionLabel}]` : "";
   const actionRowCount = rows >= 5 ? 3 : 2;
   const actionRow = Math.max(0, rows - actionRowCount);
   if (actionRow >= 4) {

@@ -1199,7 +1199,7 @@ export function App() {
                       <span className="workspace-origin-badge" title="Created by an agent">AI</span>
                     ) : null}
                     <span className="workspace-title-text">{workspace.name}</span>
-                    {version ? (
+                    {version?.status === "outdated" ? (
                       <span
                         className={`workspace-version-badge ${version.status}`}
                         title={version.detail}
@@ -1391,7 +1391,7 @@ export function App() {
               <span>
                 <span className={`mobile-header-status ${mobileHeaderStatus}`} aria-hidden="true" />
                 <span className={`mobile-header-status-label ${mobileHeaderStatus}`}>{mobileHeaderStatusLabel}</span>
-                {mobileHeaderVersion ? (
+                {mobileHeaderVersion?.status === "outdated" ? (
                   <span
                     className={`workspace-version-badge mobile ${mobileHeaderVersion.status}`}
                     title={mobileHeaderVersion.detail}

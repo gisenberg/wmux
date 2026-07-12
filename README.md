@@ -455,7 +455,7 @@ When you create a new workspace, tab, or split on the same host as the source pa
 
 Open the command palette with `Cmd+K` or `Ctrl+K`, or use the command icon in the top bar. It searches common actions, workspace and tab navigation, host-scoped session creation, pane splits, settings, diagnostics, and session audit entry points.
 
-The workspace rail has a host filter for narrowing the left navigation without changing the target host used for new workspaces and tabs. Each versioned workspace carries a compact green current, gold update-available, or muted unknown badge; its tooltip shows the reported and expected runtime/helper versions. Mixed-host workspaces use the least-current status of their panes. Workspaces created by agent automation carry a persistent purple `AI` badge, independent of the transient running/completed status indicator. Splits open on the host of the pane being split.
+The workspace rail has a host filter for narrowing the left navigation without changing the target host used for new workspaces and tabs. Version badges are exception-only: a compact gold badge appears when a confirmed runtime or helper mismatch needs attention, while current and unknown states stay visually quiet. The workspace tooltip still shows reported and expected versions, and mixed-host workspaces use the least-current status of their panes. Workspaces created by agent automation carry a persistent purple `AI` badge, independent of the transient running/completed status indicator. Splits open on the host of the pane being split.
 
 ## Durable Session Audit
 

@@ -339,7 +339,9 @@ const drawSidebarGrid = (
       const titleCol = workspace.agentCreated ? 8 : 5;
       if (workspace.agentCreated) write(row, 5, "AI", rgba.agent, 700);
       const unreadText = workspace.unreadCount > 0 ? `(${workspace.unreadCount})` : "";
-      const versionText = workspace.versionLabel ? `[${workspace.versionLabel}]` : "";
+      const versionText = workspace.versionStatus === "outdated" && workspace.versionLabel
+        ? `[${workspace.versionLabel}]`
+        : "";
       let suffixCol = cols - 1;
       if (unreadText) {
         suffixCol -= unreadText.length;

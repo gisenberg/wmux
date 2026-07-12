@@ -51,7 +51,7 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   await chrome.getByRole("button", { name: "Open workspaces and hosts" }).click();
   const navigation = page.getByRole("complementary", { name: "Workspace navigation" });
   await expect(navigation).toBeVisible();
-  await expect(navigation.locator(".workspace-version-badge[data-version-status='current']").first()).toBeVisible();
+  await expect(navigation.locator(".workspace-version-badge")).toHaveCount(0);
   await page.locator("button.mobile-sidebar-close").click();
 
   await chrome.getByRole("button", { name: "Open actions" }).click();
