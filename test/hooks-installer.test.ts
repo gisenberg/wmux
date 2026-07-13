@@ -25,8 +25,15 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     const plugin = fs.readFileSync(pluginPath, "utf8");
     assert.match(plugin, /const eventScript = .*wmux-agent-event/);
     assert.match(plugin, /"chat\.message"/);
+    assert.match(plugin, /if \(!session \|\| session\.data\?\.parentID\) return/);
     assert.match(plugin, /session\.idle/);
     assert.match(plugin, /session\.error/);
+    assert.match(plugin, /UserPromptSubmit", title, prompt/);
+    assert.match(plugin, /const session = await client\.session\.get/);
+    assert.match(plugin, /const sessionTitle = \(title: string \| undefined\)/);
+    assert.match(plugin, /\^New session - \\d\{4\}/);
+    assert.match(plugin, /const title = sessionTitle\(session\.data\?\.title\)/);
+    assert.match(plugin, /const title = sessionTitle\(session\?\.data\?\.title\) \|\| current\.title/);
     await execFileAsync(process.execPath, ["--experimental-strip-types", "--check", pluginPath]);
     const before = fs.statSync(pluginPath).mtimeMs;
     await new Promise((resolve) => setTimeout(resolve, 20));

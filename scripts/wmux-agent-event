@@ -197,10 +197,11 @@ def main():
     transcript_title, transcript_summary_text, transcript_message = transcript_summary(transcript)
 
     hook_event = str(hook_input.get("hook_event_name") or "")
+    hook_title = clean_text(hook_input.get("title") if isinstance(hook_input.get("title"), str) else "", 80)
     prompt_title = title_from_prompt(hook_input.get("prompt") or "")
     hook_summary = summary_from_output(hook_input.get("last_assistant_message") or "")
     hook_message = clean_message(hook_input.get("last_assistant_message") or "")
-    title = args.title or prompt_title or transcript_title
+    title = args.title or hook_title or prompt_title or transcript_title
     summary = args.summary or args.body or hook_summary or transcript_summary_text
     message = clean_message(args.message) or hook_message or transcript_message
     status = args.status

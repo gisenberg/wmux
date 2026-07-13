@@ -99,16 +99,20 @@ const send = (input: Record<string, unknown>) => new Promise<void>((resolve) => 
 const text = (parts: Array<{ type: string; text?: string }>) =>
   parts.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\\n")
 
+const sessionTitle = (title: string | undefined) =>
+  title && !/^New session - \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$/.test(title) ? title : ""
+
 export default (async ({ client, directory }) => {
-  const active = new Map<string, { messageID: string; prompt: string }>()
+  const active = new Map<string, { messageID: string; prompt: string; title: string }>()
 
   return {
     "chat.message": async (input, output) => {
       const session = await client.session.get({ path: { id: input.sessionID }, query: { directory } }).catch(() => undefined)
       if (!session || session.data?.parentID) return
       const prompt = text(output.parts)
-      active.set(input.sessionID, { messageID: output.message.id, prompt })
-      await send({ hook_event_name: "UserPromptSubmit", prompt })
+      const title = sessionTitle(session.data?.title)
+      active.set(input.sessionID, { messageID: output.message.id, prompt, title })
+      await send({ hook_event_name: "UserPromptSubmit", title, prompt })
     },
     event: async ({ event }) => {
       if (event.type !== "session.idle" && event.type !== "session.error") return
@@ -118,10 +122,13 @@ export default (async ({ client, directory }) => {
       if (!current) return
       active.delete(sessionID)
 
+      const session = await client.session.get({ path: { id: sessionID }, query: { directory } }).catch(() => undefined)
+      const title = sessionTitle(session?.data?.title) || current.title
+
       if (event.type === "session.error") {
         const error = event.properties.error
         const detail = error && "data" in error && "message" in error.data ? String(error.data.message) : ""
-        await send({ hook_event_name: "Error", prompt: current.prompt, last_assistant_message: detail })
+        await send({ hook_event_name: "Error", title, prompt: current.prompt, last_assistant_message: detail })
         return
       }
 
@@ -134,11 +141,12 @@ export default (async ({ client, directory }) => {
         )
         await send({
           hook_event_name: "Stop",
+          title,
           prompt: user ? text(user.parts) : current.prompt,
           last_assistant_message: assistant ? text(assistant.parts) : "",
         })
       } catch {
-        await send({ hook_event_name: "Stop", prompt: current.prompt })
+        await send({ hook_event_name: "Stop", title, prompt: current.prompt })
       }
     },
   }

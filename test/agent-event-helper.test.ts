@@ -143,7 +143,7 @@ test("OpenCode hooks report running, failed, and completed lifecycles", async ()
     const address = server.address();
     assert.ok(address && typeof address === "object");
     for (const input of [
-      { hook_event_name: "UserPromptSubmit", prompt: "fix OpenCode hooks", last_assistant_message: "stale response" },
+      { hook_event_name: "UserPromptSubmit", title: "OpenCode session title", prompt: "fix OpenCode hooks", last_assistant_message: "stale response" },
       { hook_event_name: "Error", prompt: "fix OpenCode hooks" },
       { hook_event_name: "Stop", prompt: "fix OpenCode hooks", last_assistant_message: "Done." },
     ]) {
@@ -158,6 +158,7 @@ test("OpenCode hooks report running, failed, and completed lifecycles", async ()
       { status: "failed", summary: "opencode failed", message: undefined },
       { status: "completed", summary: "Done.", message: "Done." },
     ]);
+    assert.equal(captured[0]?.title, "OpenCode session title");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
