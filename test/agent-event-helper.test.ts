@@ -125,3 +125,65 @@ test("agent start hooks never replay the previous assistant response", async () 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("OpenCode hooks report running, failed, and completed lifecycles", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-event-"));
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    for (const input of [
+      { hook_event_name: "UserPromptSubmit", prompt: "fix OpenCode hooks", last_assistant_message: "stale response" },
+      { hook_event_name: "Error", prompt: "fix OpenCode hooks" },
+      { hook_event_name: "Stop", prompt: "fix OpenCode hooks", last_assistant_message: "Done." },
+    ]) {
+      await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-event"), [
+        "--url", `http://127.0.0.1:${address.port}`, "--agent", "opencode", "--opencode-hook", "--pane", "pane-1",
+      ], {
+        env: { ...process.env, HOME: dir, WMUX_TOKEN: "", WMUX_TOKEN_PATH: path.join(dir, "missing-token"), HOOK_INPUT: JSON.stringify(input) },
+      });
+    }
+    assert.deepEqual(captured.map(({ status, summary, message }) => ({ status, summary, message })), [
+      { status: "running", summary: "opencode running", message: undefined },
+      { status: "failed", summary: "opencode failed", message: undefined },
+      { status: "completed", summary: "Done.", message: "Done." },
+    ]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode hooks warn but do not fail without wmux pane context", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-context-"));
+  try {
+    const { stderr } = await execFileAsync(
+      path.join(repoRoot, "scripts", "wmux-agent-event"),
+      ["--agent", "opencode", "--opencode-hook"],
+      {
+        env: {
+          ...process.env,
+          HOME: dir,
+          WMUX_TOKEN: "",
+          WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
+          WMUX_PANE_ID: "",
+          WMUX_WORKSPACE_ID: "",
+          HOOK_INPUT: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "no context" }),
+        },
+      },
+    );
+    assert.match(stderr, /hook is missing WMUX_PANE_ID and WMUX_WORKSPACE_ID/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

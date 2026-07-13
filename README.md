@@ -261,7 +261,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-run` | Track a command, duration, and exit status in Activity |
 | `wmux-media` | Render images, audio, or video through the browser |
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
-| `wmux-hooks` | Install Claude or Codex lifecycle hooks |
+| `wmux-hooks` | Install Claude, Codex, or OpenCode lifecycle hooks |
 | `wmux-doctor` | Report host, pane, and durability health |
 
 Examples:
@@ -272,7 +272,12 @@ wmux-notify --title "Build" --body "Completed"
 wmux-run -- npm test
 wmux-media ./image.png
 git diff | wmux-copy
+wmux-hooks install opencode
 ```
+
+`wmux-hooks install opencode` writes an auto-loaded global TypeScript plugin to
+`${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/wmux.ts`; it does not modify
+`opencode.json`. POSIX installation is supported; Windows installer parity is not included.
 
 The bundled Codex skill lives in `skills/wmux`:
 

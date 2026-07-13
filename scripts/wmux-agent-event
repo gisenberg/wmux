@@ -188,10 +188,11 @@ def main():
     parser.add_argument("--transcript", default="")
     parser.add_argument("--claude-hook", action="store_true")
     parser.add_argument("--codex-hook", action="store_true")
+    parser.add_argument("--opencode-hook", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
-    hook_input = read_hook_input() if args.claude_hook or args.codex_hook else {}
+    hook_input = read_hook_input() if args.claude_hook or args.codex_hook or args.opencode_hook else {}
     transcript = args.transcript or hook_input.get("transcript_path") or hook_input.get("agent_transcript_path") or ""
     transcript_title, transcript_summary_text, transcript_message = transcript_summary(transcript)
 
@@ -225,6 +226,17 @@ def main():
         elif hook_event:
             status = "completed"
             summary = summary or "codex completed"
+    if args.opencode_hook:
+        if hook_event == "UserPromptSubmit":
+            status = "running"
+            summary = "opencode running"
+            message = ""
+        elif hook_event == "Error":
+            status = "failed"
+            summary = summary or "opencode failed"
+        elif hook_event:
+            status = "completed"
+            summary = summary or "opencode completed"
 
     payload = {
         "agent": clean_text(args.agent, 50),
@@ -243,6 +255,13 @@ def main():
         payload["tabId"] = args.tab
 
     if not args.force and not any(key in payload for key in ("paneId", "workspaceId")):
+        if args.claude_hook or args.codex_hook or args.opencode_hook:
+            print(
+                "wmux-agent-event: hook is missing WMUX_PANE_ID and WMUX_WORKSPACE_ID; "
+                "start the agent from a newly bootstrapped wmux pane",
+                file=sys.stderr,
+            )
+            return 0
         return 0
 
     # Event delivery is telemetry; a down/unauthenticated server must never
