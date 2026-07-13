@@ -232,6 +232,14 @@ def main():
             status = "running"
             summary = "opencode running"
             message = ""
+        elif hook_event == "Question":
+            status = "waiting"
+            summary = "opencode waiting for input"
+            message = ""
+        elif hook_event == "Resume":
+            status = "running"
+            summary = "opencode running"
+            message = ""
         elif hook_event == "Error":
             status = "failed"
             summary = summary or "opencode failed"

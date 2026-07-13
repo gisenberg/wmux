@@ -20,7 +20,7 @@ export interface OpenTuiActivityRow {
   title: string;
   summary: string;
   meta: string;
-  status: "running" | "completed" | "failed" | "updated";
+  status: "running" | "waiting" | "completed" | "failed" | "updated";
 }
 
 interface OpenTuiActivityPanelProps {
@@ -157,6 +157,7 @@ const drawActivity = (
 
 const statusColorFor = (status: OpenTuiActivityRow["status"]): RGBA => {
   if (status === "running") return rgba.blue;
+  if (status === "waiting") return rgba.gold;
   if (status === "completed") return rgba.green;
   if (status === "failed") return rgba.red;
   return rgba.gold;

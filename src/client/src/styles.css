@@ -476,6 +476,11 @@ button.active-tool {
   background: linear-gradient(90deg, rgba(90, 169, 255, 0.1), #181407 68%);
 }
 
+.workspace-item.agent-waiting {
+  border-color: rgba(212, 180, 95, 0.42);
+  background: linear-gradient(90deg, rgba(212, 180, 95, 0.08), transparent 72%);
+}
+
 .workspace-item.agent-failed {
   border-color: rgba(217, 74, 61, 0.36);
   box-shadow: inset 3px 0 0 rgba(217, 74, 61, 0.78);
@@ -531,6 +536,21 @@ button.active-tool {
   border-top-color: var(--blue);
   background: transparent;
   animation: wmux-state-spin 780ms linear infinite;
+}
+
+.workspace-state-dot.waiting {
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+  background: transparent;
+  color: var(--gold);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.workspace-state-dot.waiting::after {
+  content: "?";
 }
 
 @keyframes wmux-state-spin {
@@ -1193,6 +1213,23 @@ button.active-tool {
   animation: wmux-state-spin 780ms linear infinite;
 }
 
+.mobile-agent-live.waiting,
+.mobile-agent-inline-status.waiting {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 0;
+  background: transparent;
+  color: var(--gold);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.mobile-agent-live.waiting::after,
+.mobile-agent-inline-status.waiting::after {
+  content: "?";
+}
+
 .mobile-agent-live.completed {
   background: var(--green);
 }
@@ -1414,6 +1451,10 @@ button.active-tool {
 .mobile-agent-message.agent.running,
 .mobile-agent-message.run.started {
   border-left-color: var(--blue);
+}
+
+.mobile-agent-message.agent.waiting {
+  border-left-color: var(--gold);
 }
 
 .mobile-agent-message.agent.completed,
@@ -3646,6 +3687,10 @@ button.active-tool {
 .activity-row.running,
 .activity-row.started {
   border-color: rgba(80, 151, 255, 0.34);
+}
+
+.activity-row.waiting {
+  border-color: rgba(212, 180, 95, 0.42);
 }
 
 .activity-row.completed {

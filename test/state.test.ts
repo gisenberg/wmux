@@ -282,6 +282,25 @@ test("terminal interrupts clear the latest running agent event", () => {
   });
 });
 
+test("waiting agent events can be interrupted and resume events reconcile them", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, agent: "opencode", status: "waiting", summary: "Waiting for input" });
+
+    assert.equal(store.interruptAgentForPane(paneId), true);
+    assert.equal(store.snapshot().agentEvents[0].status, "interrupted");
+
+    store.recordAgentEvent({ paneId, agent: "opencode", status: "waiting", summary: "Waiting for input" });
+    store.recordAgentEvent({ paneId, agent: "opencode", status: "running", summary: "Running" });
+
+    const [current, previous] = store.snapshot().agentEvents;
+    assert.equal(current.status, "running");
+    assert.equal(previous.status, "interrupted");
+    assert.equal(previous.summary, "opencode interrupted");
+  });
+});
+
 test("a new running event reconciles a prior turn without a stop hook", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);

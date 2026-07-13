@@ -15,7 +15,7 @@ import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import type { MachineVersionStatus } from "./types";
 
 type MobileSurfaceMode = "agent" | "terminal";
-type MobileStatus = "running" | "completed" | "failed" | "updated";
+type MobileStatus = "running" | "waiting" | "completed" | "failed" | "updated";
 
 interface OpenTuiMobileChromeProps {
   workspaceName: string;
@@ -57,6 +57,13 @@ const rgba = Object.fromEntries(
 ) as Record<keyof typeof colors, RGBA>;
 
 const runningFrames = ["|", "/", "-", "\\"];
+const statusColors = {
+  completed: rgba.green,
+  failed: rgba.red,
+  running: rgba.blue,
+  updated: rgba.muted,
+  waiting: rgba.gold,
+};
 
 export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -187,9 +194,8 @@ const drawMobileChrome = (
     : `● ${model.serviceConnection.toUpperCase()}`;
   write(0, Math.max(1, cols - connection.length - 1), connection, connectionColor, true);
 
-  const statusColor =
-    model.status === "running" ? rgba.blue : model.status === "completed" ? rgba.green : model.status === "failed" ? rgba.red : rgba.muted;
-  const statusMark = model.status === "running" ? runningFrames[model.animationTick] : "●";
+  const statusColor = statusColors[model.status];
+  const statusMark = model.status === "running" ? runningFrames[model.animationTick] : model.status === "waiting" ? "?" : "●";
   const versionColor = model.versionStatus === "current"
     ? rgba.green
     : model.versionStatus === "outdated"
@@ -205,7 +211,7 @@ const drawMobileChrome = (
     if (model.subtitle) write(3, 1, model.subtitle, rgba.muted);
   } else if (actionRow >= 2) {
     const context = [model.workspaceName, versionText, `${statusMark} ${model.statusLabel}`, model.subtitle].filter(Boolean).join(" / ");
-    write(1, 1, `> ${context}`, model.status === "running" ? statusColor : rgba.gold, true);
+    write(1, 1, `> ${context}`, ["running", "waiting"].includes(model.status) ? statusColor : rgba.gold, true);
   }
 
   const gap = 1;

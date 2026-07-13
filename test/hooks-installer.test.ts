@@ -29,6 +29,11 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.match(plugin, /if \(!session \|\| session\.data\?\.parentID\) return/);
     assert.match(plugin, /session\.idle/);
     assert.match(plugin, /session\.error/);
+    assert.match(plugin, /question\.asked/);
+    assert.match(plugin, /question\.replied/);
+    assert.match(plugin, /question\.rejected/);
+    assert.match(plugin, /hook_event_name: "Question"/);
+    assert.match(plugin, /hook_event_name: "Resume"/);
     assert.match(plugin, /UserPromptSubmit", title, prompt/);
     assert.match(plugin, /const session = await client\.session\.get/);
     assert.match(plugin, /const sessionTitle = \(title: string \| undefined\)/);
@@ -105,11 +110,15 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", async 
       { sessionID: "session-1" },
       { message: { id: "user-1" }, parts: [{ type: "text", text: "fix hooks" }] },
     );
+    await plugin.event({ event: { type: "question.asked", properties: { sessionID: "session-1" } } });
+    await plugin.event({ event: { type: "question.replied", properties: { sessionID: "session-1" } } });
     await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session-1" } } });
 
     assert.deepEqual(
       captured.map(({ status, title, message }) => ({ status, title, message })),
       [
+        { status: "running", title: "OpenCode integration", message: undefined },
+        { status: "waiting", title: "OpenCode integration", message: undefined },
         { status: "running", title: "OpenCode integration", message: undefined },
         { status: "completed", title: "OpenCode integration", message: "Done." },
       ],

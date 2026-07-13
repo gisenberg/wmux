@@ -29,7 +29,7 @@ export interface OpenTuiSidebarWorkspace {
   unreadCount: number;
   agentCreated?: boolean;
   agentName?: string;
-  agentStatus?: "running" | "completed" | "failed" | "updated";
+  agentStatus?: "running" | "waiting" | "completed" | "failed" | "updated";
   versionStatus?: MachineVersionStatus;
   versionLabel?: string;
   versionDetail?: string;
@@ -92,6 +92,20 @@ const rgba = Object.fromEntries(
 ) as Record<keyof typeof colors, RGBA>;
 
 const runningFrames = ["|", "/", "-", "\\"];
+const agentStatusColors = {
+  completed: rgba.green,
+  failed: rgba.red,
+  running: rgba.blue,
+  updated: rgba.gold,
+  waiting: rgba.gold,
+};
+const inactiveAgentBackgrounds = {
+  completed: rgba.black,
+  failed: rgba.failedSoft,
+  running: rgba.runningSoft,
+  updated: rgba.black,
+  waiting: rgba.activeSoft,
+};
 const statusBullet = "•";
 const reachColor = (reachable: boolean): RGBA => reachable ? rgba.green : rgba.red;
 
@@ -315,21 +329,17 @@ const drawSidebarGrid = (
       const itemRows = 1 + descriptionLines.length + 1 + (cwd ? 1 : 0);
       if (row + itemRows >= workspaceEndRow) break;
       const itemStart = row;
-      const statusColor = workspace.agentStatus === "completed"
-        ? rgba.green
-        : workspace.agentStatus === "failed"
-          ? rgba.red
-          : workspace.agentStatus === "running"
-            ? rgba.blue
-            : reachColor(workspace.reachable);
-      const statusMarker = workspace.agentStatus === "running" ? runningFrames[model.animationTick] : statusBullet;
-      const inactiveBackground = workspace.agentStatus === "completed"
-        ? rgba.black
-        : workspace.agentStatus === "failed"
-          ? rgba.failedSoft
-          : workspace.agentStatus === "running"
-            ? rgba.runningSoft
-            : rgba.black;
+      const statusColor = workspace.agentStatus
+        ? agentStatusColors[workspace.agentStatus]
+        : reachColor(workspace.reachable);
+      const statusMarker = workspace.agentStatus === "running"
+        ? runningFrames[model.animationTick]
+        : workspace.agentStatus === "waiting"
+          ? "?"
+          : statusBullet;
+      const inactiveBackground = workspace.agentStatus
+        ? inactiveAgentBackgrounds[workspace.agentStatus]
+        : rgba.black;
       for (let offset = 0; offset < itemRows; offset += 1) {
         fillRow(row + offset, workspace.active ? (offset === 0 ? rgba.active : rgba.activeSoft) : inactiveBackground);
       }

@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
-import { Activity, ArrowDown, Bell, Bot, CheckCircle2, Command as CommandIcon, Image as ImageIcon, LoaderCircle, MessageSquare, Play, Send, Square, TerminalSquare, X, Zap } from "lucide-react";
+import {
+  Activity,
+  ArrowDown,
+  Bell,
+  Bot,
+  CheckCircle2,
+  CircleHelp,
+  Command as CommandIcon,
+  Image as ImageIcon,
+  LoaderCircle,
+  MessageSquare,
+  Play,
+  Send,
+  Square,
+  TerminalSquare,
+  X,
+  Zap,
+} from "lucide-react";
 import type { PaneAttachment } from "./api";
 import type {
   AgentActivity,
@@ -25,7 +42,7 @@ interface MobileAgentSurfaceProps {
   onOpenActions?: () => void;
 }
 
-type MobileAgentStatus = "running" | "completed" | "failed" | "updated";
+type MobileAgentStatus = "running" | "waiting" | "completed" | "failed" | "updated";
 type AgentLauncher = MobileAgentLauncher;
 
 type LocalMobileMessage = {
@@ -576,6 +593,7 @@ function MobileRecentActivity({ items }: { items: MobileRecentItem[] }) {
 
 function RecentActivityIcon({ item }: { item: MobileRecentItem }) {
   if (item.kind === "Notify") return <Bell size={15} />;
+  if (item.status === "waiting") return <CircleHelp size={15} />;
   if (item.kind === "Run" && item.status !== "running") return <CheckCircle2 size={15} />;
   return <Activity size={15} />;
 }
@@ -953,12 +971,13 @@ const agentStatusClass = (status: string): MobileAgentStatus => {
   const normalized = status.toLowerCase();
   if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";
+  if (normalized === "waiting") return "waiting";
   if (["running", "started", "working"].includes(normalized)) return "running";
   return "updated";
 };
 
 const isActiveAgentStatus = (status: string): boolean =>
-  ["running", "started", "working"].includes(status.toLowerCase());
+  ["running", "started", "working", "waiting"].includes(status.toLowerCase());
 
 const isSettledAgentStatus = (status: string): boolean =>
   ["completed", "done", "success", "failed", "error", "cancelled", "stopped", "interrupted"].includes(

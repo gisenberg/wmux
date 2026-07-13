@@ -115,11 +115,20 @@ export default (async ({ client, directory }) => {
       await send({ hook_event_name: "UserPromptSubmit", title, prompt })
     },
     event: async ({ event }) => {
-      if (event.type !== "session.idle" && event.type !== "session.error") return
       const sessionID = event.properties.sessionID
       if (!sessionID) return
       const current = active.get(sessionID)
       if (!current) return
+
+      if (event.type === "question.asked") {
+        await send({ hook_event_name: "Question", title: current.title, prompt: current.prompt })
+        return
+      }
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        await send({ hook_event_name: "Resume", title: current.title, prompt: current.prompt })
+        return
+      }
+      if (event.type !== "session.idle" && event.type !== "session.error") return
       active.delete(sessionID)
 
       const session = await client.session.get({ path: { id: sessionID }, query: { directory } }).catch(() => undefined)

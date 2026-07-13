@@ -126,7 +126,7 @@ test("agent start hooks never replay the previous assistant response", async () 
   }
 });
 
-test("OpenCode hooks report running, failed, and completed lifecycles", async () => {
+test("OpenCode hooks report running, waiting, failed, and completed lifecycles", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-event-"));
   const captured: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {
@@ -144,6 +144,8 @@ test("OpenCode hooks report running, failed, and completed lifecycles", async ()
     assert.ok(address && typeof address === "object");
     for (const input of [
       { hook_event_name: "UserPromptSubmit", title: "OpenCode session title", prompt: "fix OpenCode hooks", last_assistant_message: "stale response" },
+      { hook_event_name: "Question", prompt: "fix OpenCode hooks", last_assistant_message: "stale response" },
+      { hook_event_name: "Resume", prompt: "fix OpenCode hooks", last_assistant_message: "stale response" },
       { hook_event_name: "Error", prompt: "fix OpenCode hooks" },
       { hook_event_name: "Stop", prompt: "fix OpenCode hooks", last_assistant_message: "Done." },
     ]) {
@@ -154,6 +156,8 @@ test("OpenCode hooks report running, failed, and completed lifecycles", async ()
       });
     }
     assert.deepEqual(captured.map(({ status, summary, message }) => ({ status, summary, message })), [
+      { status: "running", summary: "opencode running", message: undefined },
+      { status: "waiting", summary: "opencode waiting for input", message: undefined },
       { status: "running", summary: "opencode running", message: undefined },
       { status: "failed", summary: "opencode failed", message: undefined },
       { status: "completed", summary: "Done.", message: "Done." },

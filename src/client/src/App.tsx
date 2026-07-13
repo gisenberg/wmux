@@ -1898,10 +1898,11 @@ const latestRunByPane = (runs: TerminalRun[]): Map<string, TerminalRun> => {
   return latest;
 };
 
-const agentStatusClass = (status: string): "running" | "completed" | "failed" | "updated" => {
+const agentStatusClass = (status: string): "running" | "waiting" | "completed" | "failed" | "updated" => {
   const normalized = status.toLowerCase();
   if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";
+  if (normalized === "waiting") return "waiting";
   if (["running", "started", "working"].includes(normalized)) return "running";
   return "updated";
 };
@@ -1910,6 +1911,7 @@ const openTuiActivityStatus = (status: string): OpenTuiActivityRow["status"] => 
   const normalized = status.toLowerCase();
   if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";
+  if (normalized === "waiting") return "waiting";
   if (["running", "started", "working"].includes(normalized)) return "running";
   return "updated";
 };

@@ -25,7 +25,7 @@ import type {
 } from "./types.js";
 
 const now = (): string => new Date().toISOString();
-const ACTIVE_AGENT_STATUSES = new Set(["running", "started", "working"]);
+const ACTIVE_AGENT_STATUSES = new Set(["running", "started", "working", "waiting"]);
 const stateMachines = (machines: MachineConfig[]): MachineConfig[] =>
   machines.map(({
     agentToken: _agentToken,
