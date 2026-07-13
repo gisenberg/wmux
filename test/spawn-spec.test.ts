@@ -33,6 +33,11 @@ const extraEnv = {
   KITTY_WINDOW_ID: "wmux-pane_fixed001",
 };
 
+const stableBackendDetail = (machine: MachineConfig) =>
+  backendDetail(machine)
+    .replace(/tmux (?:available|missing)/, "tmux available")
+    .replace(/screen (?:available|missing)/, "screen missing");
+
 const machines: Array<{ label: string; machine: MachineConfig }> = [
   { label: "local-auto", machine: { id: "local", name: "Local Server", kind: "local", sessionBackend: "auto", cwd: "/home/fixed" } },
   { label: "local-pty", machine: { id: "local", name: "Local Server", kind: "local", sessionBackend: "pty", cwd: "/home/fixed" } },
@@ -61,7 +66,7 @@ const sampleSpecs = () => {
           args: rest.args.map((arg) => arg.replaceAll(runtimeDir, snapshotRuntimeDir)),
         },
         canRefresh: canRefreshDurableSessionClient(machine),
-        backendDetail: backendDetail(machine),
+        backendDetail: stableBackendDetail(machine),
       };
     });
   } finally {

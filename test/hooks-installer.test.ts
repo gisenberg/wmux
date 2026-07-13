@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +46,80 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.equal(status.opencode, "installed");
     assert.equal(status.opencodePath, pluginPath);
   } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("generated OpenCode plugin forwards a complete top-level lifecycle", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-plugin-"));
+  const configHome = path.join(home, "config");
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  const savedEnv = {
+    WMUX_URL: process.env.WMUX_URL,
+    WMUX_TOKEN: process.env.WMUX_TOKEN,
+    WMUX_TOKEN_PATH: process.env.WMUX_TOKEN_PATH,
+    WMUX_PANE_ID: process.env.WMUX_PANE_ID,
+    WMUX_WORKSPACE_ID: process.env.WMUX_WORKSPACE_ID,
+  };
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    Object.assign(process.env, {
+      WMUX_URL: `http://127.0.0.1:${address.port}`,
+      WMUX_TOKEN: "",
+      WMUX_TOKEN_PATH: path.join(home, "missing-token"),
+      WMUX_PANE_ID: "pane-opencode",
+      WMUX_WORKSPACE_ID: "workspace-opencode",
+    });
+
+    const hooksScript = path.join(repoRoot, "scripts", "wmux-hooks");
+    await execFileAsync(hooksScript, ["install", "opencode"], {
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome },
+    });
+    const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+    const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+    const createPlugin = pluginModule.default as (input: Record<string, unknown>) => Promise<Record<string, (...args: unknown[]) => Promise<void>>>;
+    const client = {
+      session: {
+        get: async () => ({ data: { title: "OpenCode integration", parentID: undefined } }),
+        messages: async () => ({
+          data: [
+            { info: { id: "user-1", role: "user" }, parts: [{ type: "text", text: "fix hooks" }] },
+            { info: { id: "assistant-1", role: "assistant", parentID: "user-1" }, parts: [{ type: "text", text: "Done." }] },
+          ],
+        }),
+      },
+    };
+    const plugin = await createPlugin({ client, directory: repoRoot });
+    await plugin["chat.message"](
+      { sessionID: "session-1" },
+      { message: { id: "user-1" }, parts: [{ type: "text", text: "fix hooks" }] },
+    );
+    await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session-1" } } });
+
+    assert.deepEqual(
+      captured.map(({ status, title, message }) => ({ status, title, message })),
+      [
+        { status: "running", title: "OpenCode integration", message: undefined },
+        { status: "completed", title: "OpenCode integration", message: "Done." },
+      ],
+    );
+  } finally {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
