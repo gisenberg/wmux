@@ -35,6 +35,7 @@ import {
   type MobileViewportBaseline,
 } from "./mobile-viewport";
 import { resolveMachineTargetId } from "./machine-target";
+import { workspacePresentationDescriptor, workspacePresentationMachineId } from "./workspace-presentation";
 import type {
   AgentActivity,
   BootstrapPayload,
@@ -308,8 +309,10 @@ export function App() {
   const openTuiWorkspaces = useMemo<OpenTuiSidebarWorkspace[]>(
     () =>
       visibleWorkspaces.flatMap((workspace) => {
-        const machine = machineFor(displayMachines, workspace.machineId);
-        const sourceMachine = machineFor(machines, workspace.machineId);
+        const presentationMachineId = workspacePresentationMachineId(workspace);
+        const machine = machineFor(displayMachines, presentationMachineId);
+        const sourceMachine = machineFor(machines, presentationMachineId);
+        const affinityMachine = machineFor(machines, workspace.machineId);
         const unreadCount = unreadByWorkspaceId.get(workspace.id) ?? 0;
         const latestUnread = latestUnreadByWorkspaceId.get(workspace.id);
         const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
@@ -323,10 +326,16 @@ export function App() {
           latestUnread?.body ||
             latestUnread?.subtitle ||
             workspaceAgentSummary(latestAgent) ||
-            displayWorkspaceDescriptor(workspace.descriptor, machine, sourceMachine, workspace.machineId),
+            displayWorkspaceDescriptor(
+              workspacePresentationDescriptor(workspace, machine?.name ?? presentationMachineId, affinityMachine?.name),
+              machine,
+              sourceMachine,
+              presentationMachineId,
+              workspace.machineId,
+            ),
           latestAgentStatusLabel,
         );
-        const host = displayWorkspaceHost(machine, sourceMachine, workspace.machineId);
+        const host = displayWorkspaceHost(machine, sourceMachine, presentationMachineId);
         const visibleDescriptor = compactWorkspaceDescription(descriptor, 72);
         const version = summarizeWorkspaceVersion(workspace, displayMachines);
         return [
@@ -487,7 +496,10 @@ export function App() {
   useEffect(() => {
     if (targetMachineId !== newMachineId) setNewMachineId(targetMachineId);
   }, [newMachineId, targetMachineId]);
-  const activeStreamMachineId = activeWorkspace?.machineId ?? selectedMachine?.id ?? targetMachineId;
+  const activeStreamMachineId = activePane?.machineId
+    ?? (activeWorkspace ? workspacePresentationMachineId(activeWorkspace) : undefined)
+    ?? selectedMachine?.id
+    ?? targetMachineId;
   const activeStreamMachine = machineFor(displayMachines, activeStreamMachineId);
   const activeStream = streams.find((stream) => stream.machineId === activeStreamMachineId);
   const canOpenStream = !mobileViewport.isMobile && Boolean(activeStream);
@@ -999,10 +1011,11 @@ export function App() {
 
     const workspaceCommands =
       state?.workspaces.flatMap((workspace): PaletteCommand[] => {
+        const presentationMachineId = workspacePresentationMachineId(workspace);
         const host = displayWorkspaceHost(
-          machineFor(displayMachines, workspace.machineId),
-          machineFor(machines, workspace.machineId),
-          workspace.machineId,
+          machineFor(displayMachines, presentationMachineId),
+          machineFor(machines, presentationMachineId),
+          presentationMachineId,
         );
         const activeWorkspaceTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
         const workspaceCommand: PaletteCommand[] = activeWorkspaceTab
@@ -1144,8 +1157,10 @@ export function App() {
         <nav className="workspace-list">
             {visibleWorkspaces.length === 0 ? <div className="workspace-empty">No workspaces</div> : null}
             {visibleWorkspaces.map((workspace) => {
-              const machine = machineFor(displayMachines, workspace.machineId);
-              const sourceMachine = machineFor(machines, workspace.machineId);
+              const presentationMachineId = workspacePresentationMachineId(workspace);
+              const machine = machineFor(displayMachines, presentationMachineId);
+              const sourceMachine = machineFor(machines, presentationMachineId);
+              const affinityMachine = machineFor(machines, workspace.machineId);
               const unreadCount = unreadByWorkspaceId.get(workspace.id) ?? 0;
               const latestUnread = latestUnreadByWorkspaceId.get(workspace.id);
               const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
@@ -1160,10 +1175,16 @@ export function App() {
                 latestUnread?.body ||
                   latestUnread?.subtitle ||
                   workspaceAgentSummary(latestAgent) ||
-                  displayWorkspaceDescriptor(workspace.descriptor, machine, sourceMachine, workspace.machineId),
+                  displayWorkspaceDescriptor(
+                    workspacePresentationDescriptor(workspace, machine?.name ?? presentationMachineId, affinityMachine?.name),
+                    machine,
+                    sourceMachine,
+                    presentationMachineId,
+                    workspace.machineId,
+                  ),
                 latestAgentStatusLabel,
               );
-              const host = displayWorkspaceHost(machine, sourceMachine, workspace.machineId);
+              const host = displayWorkspaceHost(machine, sourceMachine, presentationMachineId);
               const hostContext = latestAgentName ? `${host} / ${latestAgentName}` : host;
               const visibleDescriptor = compactWorkspaceDescription(descriptor, 72);
               const tooltipDescriptor = compactWorkspaceDescription(descriptor, 200);
@@ -1799,10 +1820,11 @@ const displayWorkspaceDescriptor = (
   displayMachine: MachineStatus | undefined,
   sourceMachine: MachineStatus | undefined,
   machineId: string,
+  affinityMachineId = machineId,
 ): string => {
   const raw = descriptor?.trim();
   if (!raw) return displayMachine?.name ?? machineId;
-  if (raw === machineId || raw === sourceMachine?.name || raw === displayMachine?.id) {
+  if (raw === machineId || raw === affinityMachineId || raw === sourceMachine?.name || raw === displayMachine?.id) {
     return displayMachine?.name ?? raw;
   }
   return raw;
