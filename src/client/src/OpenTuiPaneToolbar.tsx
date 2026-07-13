@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Copy, PanelBottom, PanelRight, Play, RefreshCw, X } from "lucide-react";
+import { Clipboard, Copy, PanelBottom, PanelRight, Play, RefreshCw, X } from "lucide-react";
 import type { SplitDirection, TerminalRun } from "./types";
 import {
   createGrid,
@@ -29,6 +29,7 @@ interface OpenTuiPaneToolbarProps {
   unreadCount: number;
   run?: PaneToolbarRun;
   canCopyLastCommand: boolean;
+  hasPendingTerminalCopy: boolean;
   canRerunLastCommand: boolean;
   canSplit: boolean;
   canReconnect: boolean;
@@ -38,10 +39,12 @@ interface OpenTuiPaneToolbarProps {
   onClose: () => void;
   onReconnect: () => void;
   onCopyLastCommand: () => void;
+  onCopyTerminalRequest: () => void;
   onRerunLastCommand: () => void;
 }
 
 type HitAction =
+  | { type: "copy-terminal-request" }
   | { type: "copy-last-command" }
   | { type: "rerun-last-command" }
   | { type: "split"; direction: SplitDirection }
@@ -108,6 +111,7 @@ export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
 
   const runAction = (action: HitAction) => {
     if (action.type === "copy-last-command") props.onCopyLastCommand();
+    if (action.type === "copy-terminal-request") props.onCopyTerminalRequest();
     if (action.type === "rerun-last-command") props.onRerunLastCommand();
     if (action.type === "split") props.onSplit(action.direction);
     if (action.type === "reconnect") props.onReconnect();
@@ -163,6 +167,11 @@ export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
           {props.unreadCount > 0 ? <span className="badge">{Math.min(99, props.unreadCount)}</span> : null}
         </button>
         <div className="mobile-pane-toolbar-actions" aria-label="Pane actions">
+          {props.hasPendingTerminalCopy ? (
+            <button type="button" title="Copy terminal request" aria-label="Copy terminal request" onClick={props.onCopyTerminalRequest}>
+              <Clipboard size={17} aria-hidden="true" />
+            </button>
+          ) : null}
           {props.run && props.canCopyLastCommand ? (
             <button type="button" title="Copy last command" aria-label="Copy last command" onClick={props.onCopyLastCommand}>
               <Copy size={17} />
@@ -242,6 +251,7 @@ const drawPaneToolbar = (
   }
   right = button(right, "down", `Split down on ${props.machineLabel}`, { type: "split", direction: "horizontal" }, !props.canSplit);
   right = button(right, "right", `Split right on ${props.machineLabel}`, { type: "split", direction: "vertical" }, !props.canSplit);
+  if (props.hasPendingTerminalCopy) right = button(right, "clip", "Copy terminal request", { type: "copy-terminal-request" }, false, true);
 
   if (props.run) {
     right = button(right, "rerun", "Rerun last command", { type: "rerun-last-command" }, !props.canRerunLastCommand);

@@ -21,6 +21,8 @@ import { configureTerminalInput } from "./terminal-input";
 import { isTerminalProtocolResponse } from "./terminal-protocol";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { withTokenParam } from "./token";
+import { writeBrowserClipboard } from "./clipboard";
+import { Osc52Parser } from "./terminal-osc52";
 import type { MachineStatus, PaneState, SplitDirection, TerminalMedia, TerminalRun } from "./types";
 
 interface Props {
@@ -105,6 +107,11 @@ export const TerminalPane = memo(function TerminalPane({
   const fitAddonRef = useRef<TerminalFitter | null>(null);
   const reconnectRef = useRef<(() => void) | null>(null);
   const outputCarryRef = useRef("");
+  const osc52ParserRef = useRef(new Osc52Parser());
+  const pendingOsc52Ref = useRef<{ text: string; generation: number; expiresAt: number } | undefined>();
+  const osc52GenerationRef = useRef(0);
+  const osc52WriteAtRef = useRef(0);
+  const [hasPendingOsc52, setHasPendingOsc52] = useState(false);
   const kittyParserRef = useRef(new KittyGraphicsParser());
   const kittyPlaceholderStripRef = useRef<KittyPlaceholderStripState>({ pendingPlaceholderMarks: false });
   const kittyImageCacheRef = useRef(new Map<string, TerminalMedia>());
@@ -165,6 +172,7 @@ export const TerminalPane = memo(function TerminalPane({
     let selectionRestoreTimer: number | undefined;
     let removeContextCopyBridgeDismissListeners: (() => void) | undefined;
     let terminalOutputTimer: number | undefined;
+    let osc52PendingTimer: number | undefined;
     let queuedTerminalOutput = "";
     let replayChunks: string[] = [];
     let replayBufferedOutput: string[] = [];
@@ -183,6 +191,9 @@ export const TerminalPane = memo(function TerminalPane({
     wmuxControlCarryRef.current = "";
     resetSynchronizedOutput(synchronizedOutputRef.current);
     shellCursorPlacementRef.current = false;
+    osc52ParserRef.current.reset();
+    pendingOsc52Ref.current = undefined;
+    setHasPendingOsc52(false);
     setKittyMediaItems([]);
     setKittyInlineItems([]);
     setViewportY(0);
@@ -405,8 +416,47 @@ export const TerminalPane = memo(function TerminalPane({
       scheduleSynchronizedOutputFlush(term);
     };
 
+    const nextOsc52Request = (text: string) => ({ text, generation: ++osc52GenerationRef.current, expiresAt: Date.now() + OSC52_PENDING_MS });
+    const retainOsc52 = (request: { text: string; generation: number; expiresAt: number }) => {
+      if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
+      pendingOsc52Ref.current = request;
+      setHasPendingOsc52(true);
+      osc52PendingTimer = window.setTimeout(() => {
+        if (pendingOsc52Ref.current?.generation === request.generation) {
+          pendingOsc52Ref.current = undefined;
+          setHasPendingOsc52(false);
+        }
+      }, OSC52_PENDING_MS);
+    };
+    const tryOsc52Write = (request: { text: string; generation: number; expiresAt: number }) => {
+      if (!isForegroundTerminal(activeRef.current) || !navigator.userActivation?.isActive || Date.now() - osc52WriteAtRef.current < 1000) {
+        retainOsc52(request);
+        return;
+      }
+      osc52WriteAtRef.current = Date.now();
+      void writeBrowserClipboard(request.text).then(
+        () => {
+          if (!pendingOsc52Ref.current || pendingOsc52Ref.current.generation <= request.generation) {
+            pendingOsc52Ref.current = undefined;
+            setHasPendingOsc52(false);
+          }
+        },
+        () => {
+          // A later request must remain the one the user can explicitly copy.
+          if (!pendingOsc52Ref.current || pendingOsc52Ref.current.generation <= request.generation) retainOsc52(request);
+        },
+      );
+    };
     const handleOutput = (term: Terminal, data: string) => {
-      const parsed = kittyParserRef.current.push(data);
+      const osc52 = osc52ParserRef.current.push(data);
+      if (osc52.text.includes("\x07")) onBell();
+      if (!replayingTerminalOutput) {
+        for (const write of osc52.writes) {
+          const request = nextOsc52Request(write.text);
+          tryOsc52Write(request);
+        }
+      }
+      const parsed = kittyParserRef.current.push(osc52.text);
       for (const event of parsed.events) {
         if (event.kind === "text") {
           const text = stripWmuxControlSequences(wmuxControlCarryRef, event.text, (control) => {
@@ -439,6 +489,14 @@ export const TerminalPane = memo(function TerminalPane({
       replayChunks = [];
       replayBufferedOutput = [];
       replayingTerminalOutput = false;
+      osc52ParserRef.current.reset();
+    };
+
+    // Replay is display-only. Never let an incomplete replay request borrow a
+    // terminator from subsequent live output.
+    const finishReplay = () => {
+      replayingTerminalOutput = false;
+      osc52ParserRef.current.reset();
     };
 
     const startReplayDrain = (term: Terminal, replay: string) => {
@@ -446,7 +504,7 @@ export const TerminalPane = memo(function TerminalPane({
       if (replay.length <= REPLAY_CHUNK_CHARS) {
         handleOutput(term, replay);
         flushQueuedTerminalText(term);
-        replayingTerminalOutput = false;
+        finishReplay();
         revealTerminal();
         return;
       }
@@ -468,7 +526,7 @@ export const TerminalPane = memo(function TerminalPane({
           return;
         }
         flushQueuedTerminalText(term);
-        replayingTerminalOutput = false;
+        finishReplay();
         const buffered = replayBufferedOutput;
         replayBufferedOutput = [];
         for (const data of buffered) handleOutput(term, data);
@@ -486,7 +544,7 @@ export const TerminalPane = memo(function TerminalPane({
       replayChunks = [];
       for (const chunk of chunks) handleOutput(term, chunk);
       flushQueuedTerminalText(term);
-      replayingTerminalOutput = false;
+      finishReplay();
       const buffered = replayBufferedOutput;
       replayBufferedOutput = [];
       for (const data of buffered) handleOutput(term, data);
@@ -554,6 +612,10 @@ export const TerminalPane = memo(function TerminalPane({
         if (message.type === "ready") {
           setTerminalReady(false);
           outputCarryRef.current = "";
+          osc52ParserRef.current.reset();
+          pendingOsc52Ref.current = undefined;
+          if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
+          setHasPendingOsc52(false);
           queuedTerminalOutput = "";
           if (terminalOutputTimer !== undefined) {
             window.clearTimeout(terminalOutputTimer);
@@ -567,7 +629,6 @@ export const TerminalPane = memo(function TerminalPane({
           else revealTerminal();
         }
         if (message.type === "output") {
-          if (typeof message.data === "string" && message.data.includes("\x07")) onBell();
           if (replayDraining()) replayBufferedOutput.push(message.data);
           else handleOutput(term, message.data);
         }
@@ -805,6 +866,7 @@ export const TerminalPane = memo(function TerminalPane({
       scrollDisposable?.dispose();
       renderDisposable?.dispose();
       if (terminalOutputTimer !== undefined) window.clearTimeout(terminalOutputTimer);
+      if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
       if (selectionRestoreTimer !== undefined) window.clearTimeout(selectionRestoreTimer);
       clearContextCopyBridge();
       if (mouseDownListener) terminalRef.current?.element?.removeEventListener("mousedown", mouseDownListener, { capture: true });
@@ -827,6 +889,7 @@ export const TerminalPane = memo(function TerminalPane({
       terminalRef.current = null;
       fitAddonRef.current = null;
       reconnectRef.current = null;
+      pendingOsc52Ref.current = undefined;
     };
   }, [pane.id]);
 
@@ -861,6 +924,20 @@ export const TerminalPane = memo(function TerminalPane({
     if (!lastRun?.command || !navigator.clipboard) return;
     void navigator.clipboard.writeText(lastRun.command);
   };
+  const copyPendingOsc52 = () => {
+    const request = pendingOsc52Ref.current;
+    if (!request || request.expiresAt < Date.now()) {
+      pendingOsc52Ref.current = undefined;
+      setHasPendingOsc52(false);
+      return;
+    }
+    void writeBrowserClipboard(request.text).then(() => {
+      if (pendingOsc52Ref.current?.generation === request.generation) {
+        pendingOsc52Ref.current = undefined;
+        setHasPendingOsc52(false);
+      }
+    });
+  };
   const paneMachineLabel = currentMachine?.name ?? pane.machineId;
   const paneRun = lastRun
     ? {
@@ -884,6 +961,7 @@ export const TerminalPane = memo(function TerminalPane({
         unreadCount={unreadCount}
         run={paneRun}
         canCopyLastCommand={Boolean(lastRun?.command && navigator.clipboard)}
+        hasPendingTerminalCopy={hasPendingOsc52}
         canRerunLastCommand={Boolean(connected && lastRun?.command)}
         canSplit={canSplit}
         canReconnect={!connected || pane.status === "exited" || Boolean(connectionIssue)}
@@ -893,6 +971,7 @@ export const TerminalPane = memo(function TerminalPane({
         onClose={onClose}
         onReconnect={() => reconnectRef.current?.()}
         onCopyLastCommand={copyLastCommand}
+        onCopyTerminalRequest={copyPendingOsc52}
         onRerunLastCommand={rerunLastCommand}
       />
       <div
@@ -1040,6 +1119,7 @@ const TERMINAL_OUTPUT_BATCH_MS = 16;
 // well under a frame budget while a 2 MiB replay finishes in ~16 steps.
 const REPLAY_CHUNK_CHARS = 128 * 1024;
 const CONTEXT_COPY_BRIDGE_TIMEOUT_MS = 30_000;
+const OSC52_PENDING_MS = 60_000;
 
 const createSynchronizedOutputState = (): SynchronizedOutputState => ({
   active: false,
