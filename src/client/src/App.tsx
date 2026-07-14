@@ -943,10 +943,10 @@ export function App() {
       },
       {
         id: "rectangular-terminal-selection",
-        title: "Copy rectangular terminal selection",
-        subtitle: "Linux Mint/Firefox: Alt+Option+drag; Ctrl+Alt+drag fallback, and bare Alt+drag may move the window",
+        title: "Rectangular terminal selection",
+        subtitle: "Alt/Option+drag; use Ctrl+Alt+drag when a Linux window manager reserves Alt+drag",
         section: "Terminal",
-        shortcut: "Alt+Option+Drag",
+        shortcut: "Alt/Option+Drag",
         disabled: !activeWorkspace || !activeTab || !activePane,
         run: () => {
           if (!activeWorkspace || !activeTab) return;
