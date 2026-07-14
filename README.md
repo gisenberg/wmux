@@ -124,6 +124,7 @@ cp wmux.config.example.json wmux.config.json
       "id": "linux-box",
       "name": "Linux Box",
       "kind": "ssh",
+      "platform": "linux",
       "host": "linux-box.tailnet-name.ts.net",
       "user": "operator"
     },
@@ -131,6 +132,7 @@ cp wmux.config.example.json wmux.config.json
       "id": "windows-box",
       "name": "Windows Box",
       "kind": "powershell-ssh",
+      "platform": "win",
       "host": "windows-box",
       "user": "operator"
     }
@@ -144,6 +146,10 @@ cp wmux.config.example.json wmux.config.json
   `tmux`, then `screen`; use `"pty"` to force a raw session.
 - Use `kind: "powershell-ssh"` for Windows hosts reached from Linux or macOS.
   It requires OpenSSH Server and PowerShell 7 on Windows.
+- Host release labels use `v<wmux-version>-<platform>`, such as
+  `v0.1.1-linux`, `v0.1.1-mac`, and `v0.1.1-win`. Local and Windows platforms
+  are inferred; POSIX SSH defaults to `linux`, so set `"platform": "mac"` for
+  a Mac SSH host.
 - Set `WMUX_ALLOWED_HOSTS` for non-`*.ts.net` MagicDNS or proxy hostnames.
 
 Never commit machine inventories, credentials, tokens, private-key paths, or
@@ -232,7 +238,9 @@ token. wmux is not a hardened multi-user service.
 - New same-host workspaces, tabs, and splits preserve the source pane's current
   directory through `tmux` metadata or OSC 7 reports.
 - `wmux-title` updates generated titles without overwriting a manual title.
-- Version indicators stay hidden unless a runtime or helper update is needed.
+- Host labels show the wmux release and platform consistently. Update
+  indicators stay hidden unless an underlying runtime or helper update is
+  needed.
 - Settings persist in `~/.wmux/settings.json` and include terminal size,
   scrollback, and user-facing host aliases.
 

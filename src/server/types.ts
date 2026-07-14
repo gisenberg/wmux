@@ -1,4 +1,5 @@
 export type MachineKind = "local" | "ssh" | "powershell" | "powershell-ssh" | "service";
+export type MachinePlatform = "linux" | "mac" | "win";
 export type SessionBackend = "auto" | "pty" | "tmux" | "screen" | "agent";
 export type StreamProvider = "mediamtx" | "moonlight-gateway";
 export type StreamReasonKind = "provider" | "gateway" | "upstream" | "target";
@@ -15,6 +16,8 @@ export interface MachineConfig {
   id: string;
   name: string;
   kind: MachineKind;
+  /** Target OS for display/version labeling. Inferred when omitted. */
+  platform?: MachinePlatform;
   host?: string;
   user?: string;
   port?: number;
@@ -40,6 +43,7 @@ export interface MachineStatus {
   id: string;
   name: string;
   kind: MachineKind;
+  platform: MachinePlatform;
   host?: string;
   user?: string;
   port?: number;
@@ -52,6 +56,8 @@ export interface MachineStatus {
   checkedAt: string;
   endpoint?: string;
   backendDetail?: string;
+  /** Running wmux release labeled for the target platform, e.g. v0.1.1-win. */
+  releaseVersion: string;
   runtimeVersion?: string;
   expectedRuntimeVersion?: string;
   helperBundleVersion?: string;

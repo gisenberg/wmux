@@ -14,6 +14,8 @@ test("accepts normal machine configs", () => {
   assert.ok(configSchema.safeParse(machine({ id: "remote-box_2", name: "Remote Box (Windows)" })).success);
   assert.ok(configSchema.safeParse(machine({ host: "100.64.0.7" })).success);
   assert.ok(configSchema.safeParse(machine({ host: "fd7a::1234" })).success);
+  assert.ok(configSchema.safeParse(machine({ platform: "mac" })).success);
+  assert.equal(configSchema.safeParse(machine({ platform: "darwin" })).success, false);
 });
 
 test("rejects machine ids that could escape scripts, paths, or URLs", () => {

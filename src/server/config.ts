@@ -37,6 +37,7 @@ export const machineSchema = z.object({
   id: machineIdSchema,
   name: machineNameSchema,
   kind: z.enum(["local", "ssh", "powershell", "powershell-ssh", "service"]),
+  platform: z.enum(["linux", "mac", "win"]).optional(),
   host: hostSchema,
   user: userSchema,
   port: z.number().int().positive().optional(),

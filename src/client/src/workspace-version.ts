@@ -35,7 +35,7 @@ const machineVersionDetail = (machine: MachineStatus): string => {
         : `helpers ${compactVersion(machine.helperBundleVersion)}, expected ${compactVersion(machine.expectedHelperBundleVersion)}`
       : "helpers not reported"
     : "";
-  return `${machine.name}: ${[runtime, helpers].filter(Boolean).join("; ")}`;
+  return `${machine.name}: ${[`release ${machine.releaseVersion}`, runtime, helpers].filter(Boolean).join("; ")}`;
 };
 
 export const summarizeWorkspaceVersion = (
@@ -59,7 +59,7 @@ export const summarizeWorkspaceVersion = (
   );
   const marker = status === "current" ? "✓" : status === "outdated" ? "↑" : "?";
   const label = versionedMachines.length === 1
-    ? `${marker} ${displayVersion(versionedMachines[0].runtimeVersion)}`
+    ? `${marker} ${displayVersion(versionedMachines[0].releaseVersion)}`
     : `${marker} ${versionedMachines.length}H`;
   const statusLabel = status === "current" ? "Up to date" : status === "outdated" ? "Update available" : "Version unknown";
   return {

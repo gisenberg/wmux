@@ -7,8 +7,10 @@ const machine = (overrides: Partial<MachineStatus> = {}): MachineStatus => ({
   id: "win",
   name: "Windows",
   kind: "powershell-ssh",
+  platform: "win",
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
+  releaseVersion: "v0.1.1-win",
   runtimeVersion: "0.7",
   expectedRuntimeVersion: "0.7",
   versionStatus: "current",
@@ -41,8 +43,8 @@ const workspace = (machineIds: string[] = ["win"]): Workspace => ({
 test("workspace version reports a current single-machine runtime", () => {
   assert.deepEqual(summarizeWorkspaceVersion(workspace(), [machine()]), {
     status: "current",
-    label: "✓ v0.7",
-    detail: "Up to date. Windows: runtime 0.7",
+    label: "✓ v0.1.1-win",
+    detail: "Up to date. Windows: release v0.1.1-win; runtime 0.7",
   });
 });
 
@@ -59,7 +61,7 @@ test("an outdated machine wins for a mixed-machine workspace", () => {
   ]);
   assert.equal(summary?.status, "outdated");
   assert.equal(summary?.label, "↑ 2H");
-  assert.match(summary?.detail ?? "", /Runner: runtime 0\.4, expected 0\.7/);
+  assert.match(summary?.detail ?? "", /Runner: release v0\.1\.1-win; runtime 0\.4, expected 0\.7/);
 });
 
 test("helper mismatch is explained in the version detail", () => {

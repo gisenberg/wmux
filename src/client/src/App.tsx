@@ -375,7 +375,7 @@ export function App() {
       displayMachines.map((machine) => ({
         id: machine.id,
         name: machine.name,
-        version: machine.runtimeVersion ?? "unknown",
+        version: machine.releaseVersion,
         reachable: machine.reachable,
         detail: machineStatusDetail(machine),
       })),
@@ -1813,7 +1813,7 @@ const compactRuntimeVersion = (version: string): string =>
   /^[0-9a-f]{12,}$/i.test(version) ? version.slice(0, 8) : version;
 
 const versionedMachineName = (machine: MachineStatus): string =>
-  `${machine.name}@${machine.runtimeVersion ? compactRuntimeVersion(machine.runtimeVersion) : "unknown"}`;
+  `${machine.name}@${compactRuntimeVersion(machine.releaseVersion)}`;
 
 const displayWorkspaceDescriptor = (
   descriptor: string | undefined,

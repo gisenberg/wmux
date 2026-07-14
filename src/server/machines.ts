@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { streamPathForMachine } from "./streams.js";
-import type { MachineConfig, MachineStatus, PtySpawnSpec, SessionBackend } from "./types.js";
+import type { MachineConfig, MachinePlatform, MachineStatus, PtySpawnSpec, SessionBackend } from "./types.js";
 import {
   buildWindowsHealthProbeScript,
   buildWindowsPowerShellBootstrapUrl,
@@ -26,6 +26,27 @@ const WMUX_SERVER_VERSION = (() => {
     return "dev";
   }
 })();
+
+const nodeMachinePlatform = (nodePlatform: NodeJS.Platform): MachinePlatform => {
+  if (nodePlatform === "darwin") return "mac";
+  if (nodePlatform === "win32") return "win";
+  return "linux";
+};
+
+export const resolveMachinePlatform = (
+  machine: MachineConfig,
+  nodePlatform: NodeJS.Platform = process.platform,
+): MachinePlatform => {
+  if (machine.platform) return machine.platform;
+  if (machine.kind === "local") return nodeMachinePlatform(nodePlatform);
+  if (machine.kind === "powershell" || machine.kind === "powershell-ssh") return "win";
+  return "linux";
+};
+
+export const machineReleaseVersion = (
+  machine: MachineConfig,
+  nodePlatform: NodeJS.Platform = process.platform,
+): string => `v${WMUX_SERVER_VERSION.replace(/^v/i, "")}-${resolveMachinePlatform(machine, nodePlatform)}`;
 
 export const resolveMachineVersionStatus = ({
   reachable,
@@ -1338,12 +1359,14 @@ const publicMachineStatusBase = (machine: MachineConfig): Omit<MachineStatus, "r
   id: machine.id,
   name: machine.name,
   kind: machine.kind,
+  platform: resolveMachinePlatform(machine),
   host: machine.host,
   user: machine.user,
   port: machine.port,
   sessionBackend: machine.sessionBackend,
   agentUrl: machine.agentUrl,
   agentPort: machine.agentPort,
+  releaseVersion: machineReleaseVersion(machine),
   stream: machine.stream
     ? {
         provider: machine.stream.provider,

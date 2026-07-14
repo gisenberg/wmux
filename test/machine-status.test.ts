@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveMachineStatuses, resolveMachineVersionStatus } from "../src/server/machines.js";
+import {
+  machineReleaseVersion,
+  resolveMachinePlatform,
+  resolveMachineStatuses,
+  resolveMachineVersionStatus,
+} from "../src/server/machines.js";
 
 test("browser-facing machine status excludes server-only configuration", async () => {
   const [status] = await resolveMachineStatuses([
@@ -22,6 +27,8 @@ test("browser-facing machine status excludes server-only configuration", async (
   ]);
 
   assert.equal(status.id, "local");
+  assert.equal(status.platform, resolveMachinePlatform({ id: "local", name: "Local", kind: "local" }));
+  assert.match(status.releaseVersion, /^v\d+\.\d+\.\d+-(linux|mac|win)$/);
   assert.match(status.runtimeVersion ?? "", /^\d+\.\d+\.\d+$/);
   assert.equal(status.expectedRuntimeVersion, status.runtimeVersion);
   assert.equal(status.versionStatus, "current");
@@ -30,6 +37,16 @@ test("browser-facing machine status excludes server-only configuration", async (
   assert.doesNotMatch(serialized, /agent-secret|gateway-secret|private-command|private-shell|secret\/worktree/);
   assert.equal("agentToken" in status, false);
   assert.equal("command" in status, false);
+});
+
+test("machine release versions use one platform-suffixed scheme", () => {
+  const ssh = { id: "mac", name: "Mac", kind: "ssh" as const, platform: "mac" as const };
+  const windows = { id: "win", name: "Windows", kind: "powershell-ssh" as const };
+  const local = { id: "local", name: "Linux", kind: "local" as const };
+
+  assert.match(machineReleaseVersion(ssh), /^v\d+\.\d+\.\d+-mac$/);
+  assert.match(machineReleaseVersion(windows), /^v\d+\.\d+\.\d+-win$/);
+  assert.match(machineReleaseVersion(local, "linux"), /^v\d+\.\d+\.\d+-linux$/);
 });
 
 test("machine version status distinguishes runtime and helper drift", () => {
