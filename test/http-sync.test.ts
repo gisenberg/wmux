@@ -78,6 +78,7 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
   const port = await listen(server);
   const baseUrl = `http://127.0.0.1:${port}`;
   let ws: WebSocket | undefined;
+  let secondWs: WebSocket | undefined;
 
   try {
     const bootstrapStart = performance.now();
@@ -89,13 +90,27 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     assert.ok(bootstrap.streams[0].checkedAt);
 
     ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
-    await once(ws, "open");
+    secondWs = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    await Promise.all([once(ws, "open"), once(secondWs, "open")]);
     const snapshotPromise = nextSocketMessage<{
       type: "snapshot";
       reason: string;
       revision: number;
       state: BootstrapPayload;
     }>(ws, (message) => Boolean(message && typeof message === "object" && "type" in message && message.type === "snapshot"));
+    const secondSnapshotPromise = nextSocketMessage<{
+      type: "snapshot";
+      reason: string;
+      revision: number;
+      state: BootstrapPayload;
+    }>(secondWs, (message) => Boolean(message && typeof message === "object" && "type" in message && message.type === "snapshot"));
+
+    const originalSnapshot = state.snapshot.bind(state);
+    let snapshotCalls = 0;
+    state.snapshot = () => {
+      snapshotCalls += 1;
+      return originalSnapshot();
+    };
 
     const workspaceId = bootstrap.workspaces[0].id;
     const mutationStart = performance.now();
@@ -111,12 +126,16 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     assert.ok(mutation.state.revision > bootstrap.revision);
 
     const socketSnapshot = await snapshotPromise;
+    const secondSocketSnapshot = await secondSnapshotPromise;
     assert.equal(socketSnapshot.reason, "state");
     assert.equal(socketSnapshot.revision, mutation.state.revision);
     assert.equal(socketSnapshot.state.workspaces[0].name, "Fast rename");
     assert.equal(socketSnapshot.state.streams[0].checkedAt, bootstrap.streams[0].checkedAt);
+    assert.equal(secondSocketSnapshot.revision, socketSnapshot.revision);
+    assert.equal(snapshotCalls, 2, "one shared event snapshot plus one HTTP response snapshot");
   } finally {
     ws?.terminate();
+    secondWs?.terminate();
     state.flush();
     await close(server);
     await close(healthServer);

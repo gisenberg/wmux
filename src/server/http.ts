@@ -19,11 +19,23 @@ import {
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { buildDoctorReport } from "./doctor.js";
 import { HostRegistryError, type HostRegistry } from "./host-registry.js";
-import { readDurableSessionCwd, resolveMachineStatuses } from "./machines.js";
+import { readDurableSessionCwd } from "./durable-session.js";
+import { resolveMachineStatuses } from "./machines.js";
 import { observedClientAddress } from "./proxy-address.js";
 import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
-import type { MachineConfig, MachineSource, MachineStatus, PaneState, StreamStatus } from "./types.js";
+import type {
+  EventClientMessage,
+  EventServerMessage,
+  MachineConfig,
+  MachineSource,
+  MachineStatus,
+  PaneState,
+  StreamStatus,
+  TerminalClipboard,
+  TerminalMedia,
+  TerminalNotification,
+} from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
 import type { StateStore } from "./state.js";
 import type { SessionManager } from "./session-manager.js";
@@ -367,13 +379,13 @@ export const createHttpServer = (
       }
 
       if (url.pathname === "/api/session-audit" && request.method === "GET") {
-        sendJson(response, 200, auditDurableSessions());
+        sendJson(response, 200, await auditDurableSessions());
         return;
       }
 
       if (url.pathname === "/api/doctor" && request.method === "GET") {
         await refreshMachineStatuses(false);
-        sendJson(response, 200, buildDoctorReport(state.snapshot(), machines, machineStatuses, auditDurableSessions()));
+        sendJson(response, 200, buildDoctorReport(state.snapshot(), machines, machineStatuses, await auditDurableSessions()));
         return;
       }
 
@@ -487,7 +499,11 @@ export const createHttpServer = (
 
       const cleanupSession = url.pathname.match(/^\/api\/session-audit\/(tmux|screen)\/([^/]+)$/);
       if (cleanupSession && request.method === "DELETE") {
-        sendJson(response, 200, cleanupDurableSession(cleanupSession[1] as "tmux" | "screen", decodeURIComponent(cleanupSession[2])));
+        sendJson(
+          response,
+          200,
+          await cleanupDurableSession(cleanupSession[1] as "tmux" | "screen", decodeURIComponent(cleanupSession[2])),
+        );
         return;
       }
 
@@ -516,7 +532,7 @@ export const createHttpServer = (
         const sourcePane = body.sourcePaneId ? state.findPane(body.sourcePaneId) ?? undefined : undefined;
         const workspace = state.createWorkspace(
           machineId,
-          cwdForSourcePane(state, machines, sourcePane, machineId),
+          await cwdForSourcePane(state, machines, sourcePane, machineId),
           body.createdBy === "agent" ? "agent" : "user",
         );
         sendJson(response, 201, { workspace, state: currentPayload() });
@@ -753,7 +769,7 @@ export const createHttpServer = (
           ? workspace?.tabs.flatMap((tab) => tab.panes).find((pane) => pane.id === body.sourcePaneId)
           : undefined;
         const machineId = resolveMachineId(machines, body.machineId, workspace?.machineId);
-        const tab = state.createTab(tabs[1], machineId, cwdForSourcePane(state, machines, sourcePane, machineId));
+        const tab = state.createTab(tabs[1], machineId, await cwdForSourcePane(state, machines, sourcePane, machineId));
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
       }
@@ -795,7 +811,7 @@ export const createHttpServer = (
           body.paneId,
           body.direction,
           machineId,
-          cwdForSourcePane(state, machines, sourcePane, machineId),
+          await cwdForSourcePane(state, machines, sourcePane, machineId),
         );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
@@ -915,6 +931,41 @@ export const createHttpServer = (
   };
 
   const wss = new WebSocketServer({ noServer: true });
+  const eventSockets = new Set<import("ws").WebSocket>();
+
+  const sendEventMessage = (ws: import("ws").WebSocket, message: EventServerMessage): void => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+  };
+  const broadcastEventMessage = (message: EventServerMessage): void => {
+    if (eventSockets.size === 0) return;
+    const serialized = JSON.stringify(message);
+    for (const ws of eventSockets) {
+      if (ws.readyState === ws.OPEN) ws.send(serialized);
+    }
+  };
+  const broadcastSnapshot = (reason: string): void => {
+    if (eventSockets.size === 0) return;
+    const snapshot = currentPayload();
+    broadcastEventMessage({ type: "snapshot", reason, revision: snapshot.revision, state: snapshot });
+  };
+  const onStateChange = () => broadcastSnapshot("state");
+  const onSettingsChange = () => broadcastSnapshot("settings");
+  const onHealthChange = (reason: string) => broadcastSnapshot(reason);
+  const onNotification = (notification: TerminalNotification) => {
+    broadcastEventMessage({ type: "notification", notification });
+  };
+  const onMedia = (media: TerminalMedia) => {
+    broadcastEventMessage({ type: "media", media });
+  };
+  const onClipboard = (clipboard: TerminalClipboard) => {
+    broadcastEventMessage({ type: "clipboard", clipboard });
+  };
+  state.on("change", onStateChange);
+  settings.on("change", onSettingsChange);
+  healthEvents.on("change", onHealthChange);
+  state.on("notification", onNotification);
+  state.on("media", onMedia);
+  state.on("clipboard", onClipboard);
 
   // Heartbeat: half-open connections (mobile/VPN drops without a close frame)
   // never fire "close", so their PTY output buffers and resize-owner state
@@ -962,30 +1013,7 @@ export const createHttpServer = (
     if (url.pathname === "/ws/events") {
       wss.handleUpgrade(request, socket, head, (ws) => {
         markAlive(ws);
-        const sendSnapshot = (reason: string) => {
-          if (ws.readyState === ws.OPEN) {
-            const snapshot = currentPayload();
-            ws.send(JSON.stringify({ type: "snapshot", reason, revision: snapshot.revision, state: snapshot }));
-          }
-        };
-        const onStateChange = () => sendSnapshot("state");
-        const onSettingsChange = () => sendSnapshot("settings");
-        const onHealthChange = (reason: string) => sendSnapshot(reason);
-        const onNotification = (notification: unknown) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "notification", notification }));
-        };
-        const onMedia = (media: unknown) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "media", media }));
-        };
-        const onClipboard = (clipboard: unknown) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "clipboard", clipboard }));
-        };
-        state.on("change", onStateChange);
-        settings.on("change", onSettingsChange);
-        healthEvents.on("change", onHealthChange);
-        state.on("notification", onNotification);
-        state.on("media", onMedia);
-        state.on("clipboard", onClipboard);
+        eventSockets.add(ws);
         ws.on("message", (raw) => {
           const message = parseSocketMessage(raw.toString());
           if (!message) return;
@@ -1001,14 +1029,9 @@ export const createHttpServer = (
           }
         });
         ws.on("close", () => {
-          state.off("change", onStateChange);
-          settings.off("change", onSettingsChange);
-          healthEvents.off("change", onHealthChange);
-          state.off("notification", onNotification);
-          state.off("media", onMedia);
-          state.off("clipboard", onClipboard);
+          eventSockets.delete(ws);
         });
-        ws.send(JSON.stringify({ type: "ready" }));
+        sendEventMessage(ws, { type: "ready" });
       });
       return;
     }
@@ -1056,6 +1079,12 @@ export const createHttpServer = (
     clearInterval(machineHealthTimer);
     clearInterval(streamHealthTimer);
     hostRegistry?.off("change", onRegistryChange);
+    state.off("change", onStateChange);
+    settings.off("change", onSettingsChange);
+    healthEvents.off("change", onHealthChange);
+    state.off("notification", onNotification);
+    state.off("media", onMedia);
+    state.off("clipboard", onClipboard);
   });
 
   return setupDevServer().then(() => server);
@@ -1088,15 +1117,15 @@ const serveViteRequest = async (
   }
 };
 
-const cwdForSourcePane = (
+const cwdForSourcePane = async (
   state: StateStore,
   machines: MachineConfig[],
   sourcePane: PaneState | undefined,
   targetMachineId: string,
-): string | undefined => {
+): Promise<string | undefined> => {
   if (!sourcePane || sourcePane.machineId !== targetMachineId) return undefined;
   const machine = machines.find((candidate) => candidate.id === sourcePane.machineId);
-  const cwd = machine ? readDurableSessionCwd(machine, sourcePane.id) : undefined;
+  const cwd = machine ? await readDurableSessionCwd(machine, sourcePane.id) : undefined;
   if (cwd && cwd !== sourcePane.cwd) state.updatePane(sourcePane.id, { cwd });
   return cwd ?? sourcePane.cwd;
 };
@@ -1238,14 +1267,7 @@ const windowsBootstrapEnvKeys = [
 const cryptoRandomId = (): string =>
   `stream-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-interface StreamSocketMessage {
-  type: "stream-request" | "stream-release";
-  machineId: string;
-  requestId: string;
-  ttlMs?: number;
-}
-
-const parseSocketMessage = (raw: string): StreamSocketMessage | null => {
+const parseSocketMessage = (raw: string): EventClientMessage | null => {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -1253,15 +1275,16 @@ const parseSocketMessage = (raw: string): StreamSocketMessage | null => {
     return null;
   }
   if (!value || typeof value !== "object") return null;
-  const message = value as Partial<StreamSocketMessage>;
+  const message = value as Record<string, unknown>;
   if (message.type !== "stream-request" && message.type !== "stream-release") return null;
   if (typeof message.machineId !== "string" || typeof message.requestId !== "string") return null;
   if (!message.machineId.trim() || !message.requestId.trim()) return null;
-  if (message.ttlMs !== undefined && typeof message.ttlMs !== "number") return null;
-  return {
-    type: message.type,
+  if (message.type === "stream-request" && message.ttlMs !== undefined && typeof message.ttlMs !== "number") return null;
+  const base = {
     machineId: message.machineId.trim(),
     requestId: message.requestId.trim(),
-    ttlMs: message.ttlMs,
   };
+  return message.type === "stream-request"
+    ? { type: "stream-request", ...base, ...(typeof message.ttlMs === "number" ? { ttlMs: message.ttlMs } : {}) }
+    : { type: "stream-release", ...base };
 };

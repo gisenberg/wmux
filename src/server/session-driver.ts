@@ -5,7 +5,7 @@ import {
   disposeDurableSession,
   readDurableSessionCwd,
   refreshDurableSessionClient,
-} from "./machines.js";
+} from "./durable-session.js";
 import { deleteWindowsAgentSession, shouldUseWindowsAgent, WindowsAgentSession } from "./windows-agent.js";
 import type { AttachReplay } from "./terminal-checkpoint.js";
 
@@ -47,9 +47,9 @@ export interface SessionDriver {
     rows: number,
     env: Record<string, string>,
   ): ManagedSession;
-  readCwd(machine: MachineConfig, paneId: string): string | undefined;
-  refreshClient(machine: MachineConfig, paneId: string): boolean;
-  dispose(machine: MachineConfig, paneId: string, hadLiveClient: boolean): void;
+  readCwd(machine: MachineConfig, paneId: string): Promise<string | undefined>;
+  refreshClient(machine: MachineConfig, paneId: string): Promise<boolean>;
+  dispose(machine: MachineConfig, paneId: string, hadLiveClient: boolean): Promise<void>;
 }
 
 const ptyDriver: SessionDriver = {
@@ -75,8 +75,8 @@ const ptyDriver: SessionDriver = {
   create: (pane, machine, cols, rows, env) => new PtySession(pane, machine, cols, rows, env),
   readCwd: readDurableSessionCwd,
   refreshClient: refreshDurableSessionClient,
-  dispose(machine, paneId) {
-    disposeDurableSession(machine, paneId);
+  async dispose(machine, paneId) {
+    await disposeDurableSession(machine, paneId);
   },
 };
 
@@ -92,10 +92,10 @@ const windowsAgentDriver: SessionDriver = {
     refreshClient: false,
   }),
   create: (pane, machine, cols, rows, env) => new WindowsAgentSession(pane, machine, cols, rows, env),
-  readCwd: () => undefined,
-  refreshClient: () => false,
-  dispose(machine, paneId, hadLiveClient) {
-    if (!hadLiveClient) deleteWindowsAgentSession(machine, paneId);
+  readCwd: async () => undefined,
+  refreshClient: async () => false,
+  async dispose(machine, paneId, hadLiveClient) {
+    if (!hadLiveClient) await deleteWindowsAgentSession(machine, paneId);
   },
 };
 

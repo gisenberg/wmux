@@ -1,43 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import type { DurableSessionAudit, DurableSessionAuditRow } from "../shared/protocol.js";
+import { runCommand } from "./child-process.js";
+import { durableSessionName } from "./durable-session.js";
 
-export interface DurableSessionAuditRow {
-  backend: "tmux" | "screen";
-  name: string;
-  paneId: string;
-  attached: boolean;
-  detail: string;
-  activePane: boolean;
-  status: "active" | "duplicate" | "orphan";
-  cleanupAllowed: boolean;
-}
-
-export interface DurableSessionMissingRow {
-  paneId: string;
-  name: string;
-}
-
-export interface DurableSessionAudit {
-  summary: {
-    statePath: string;
-    activePaneCount: number;
-    sessionCount: number;
-    orphanCount: number;
-    duplicateCount: number;
-    missingCount: number;
-  };
-  sessions: DurableSessionAuditRow[];
-  missing: DurableSessionMissingRow[];
-}
+export type { DurableSessionAudit, DurableSessionAuditRow } from "../shared/protocol.js";
 
 const defaultStatePath = (): string => path.join(os.homedir(), ".wmux", "state.json");
 
-const commandOutput = (command: string, args: string[]): string => {
-  const result = spawnSync(command, args, { encoding: "utf8" });
-  if (result.error || result.status !== 0) return "";
-  return result.stdout;
+const commandOutput = async (command: string, args: string[]): Promise<string> => {
+  const result = await runCommand(command, args, { timeoutMs: 2000 });
+  return result.status === 0 ? result.stdout : "";
 };
 
 interface AuditMachine {
@@ -66,7 +40,6 @@ const loadState = (statePath: string): AuditState => {
   }
 };
 
-const durableSessionName = (paneId: string): string => `wmux_${String(paneId || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")}`;
 const paneIdFromSession = (sessionName: string): string => (sessionName.startsWith("wmux_") ? sessionName.slice("wmux_".length) : "");
 
 export const expectedLocalDurablePaneIds = (state: AuditState): Set<string> => {
@@ -87,8 +60,8 @@ export const expectedLocalDurablePaneIds = (state: AuditState): Set<string> => {
   return new Set(paneIds);
 };
 
-const listTmux = (): Array<Omit<DurableSessionAuditRow, "activePane" | "status" | "cleanupAllowed">> =>
-  commandOutput("tmux", ["list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{session_windows}"])
+const listTmux = async (): Promise<Array<Omit<DurableSessionAuditRow, "activePane" | "status" | "cleanupAllowed">>> =>
+  (await commandOutput("tmux", ["list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{session_windows}"]))
     .split("\n")
     .filter(Boolean)
     .map((line) => {
@@ -103,8 +76,8 @@ const listTmux = (): Array<Omit<DurableSessionAuditRow, "activePane" | "status" 
     })
     .filter((session) => session.name.startsWith("wmux_"));
 
-const listScreen = (): Array<Omit<DurableSessionAuditRow, "activePane" | "status" | "cleanupAllowed">> =>
-  commandOutput("screen", ["-ls"])
+const listScreen = async (): Promise<Array<Omit<DurableSessionAuditRow, "activePane" | "status" | "cleanupAllowed">>> =>
+  (await commandOutput("screen", ["-ls"]))
     .split("\n")
     .map((line) => line.trim())
     .flatMap((line) => {
@@ -121,10 +94,13 @@ const listScreen = (): Array<Omit<DurableSessionAuditRow, "activePane" | "status
       ];
     });
 
-export const auditDurableSessions = (statePath = process.env.WMUX_STATE_PATH ?? defaultStatePath()): DurableSessionAudit => {
+export const auditDurableSessions = async (
+  statePath = process.env.WMUX_STATE_PATH ?? defaultStatePath(),
+): Promise<DurableSessionAudit> => {
   const state = loadState(statePath);
   const active = expectedLocalDurablePaneIds(state);
-  const sessions = [...listTmux(), ...listScreen()];
+  const [tmuxSessions, screenSessions] = await Promise.all([listTmux(), listScreen()]);
+  const sessions = [...tmuxSessions, ...screenSessions];
   const byName = new Map<string, typeof sessions>();
   for (const session of sessions) {
     if (!byName.has(session.name)) byName.set(session.name, []);
@@ -187,25 +163,33 @@ export const cleanupDurableSession = (
   backend: "tmux" | "screen",
   name: string,
   statePath = process.env.WMUX_STATE_PATH ?? defaultStatePath(),
-): DurableSessionAudit => {
+): Promise<DurableSessionAudit> => {
   if (!name.startsWith("wmux_")) {
     throw new Error("refusing to clean up a non-wmux session");
   }
 
-  const audit = auditDurableSessions(statePath);
+  return cleanupDurableSessionAsync(backend, name, statePath);
+};
+
+const cleanupDurableSessionAsync = async (
+  backend: "tmux" | "screen",
+  name: string,
+  statePath: string,
+): Promise<DurableSessionAudit> => {
+  const audit = await auditDurableSessions(statePath);
   const row = audit.sessions.find((candidate) => candidate.backend === backend && candidate.name === name);
   if (!row) return auditDurableSessions(statePath);
   if (!row.cleanupAllowed) {
     throw new Error("refusing to clean up an active wmux session");
   }
 
-  const result =
+  const result = await (
     backend === "tmux"
-      ? spawnSync("tmux", ["kill-session", "-t", name], { encoding: "utf8" })
-      : spawnSync("screen", ["-S", name, "-X", "quit"], { encoding: "utf8" });
-  if (result.error) throw result.error;
+      ? runCommand("tmux", ["kill-session", "-t", name], { timeoutMs: 3000 })
+      : runCommand("screen", ["-S", name, "-X", "quit"], { timeoutMs: 3000 })
+  );
   if (result.status !== 0) {
-    const detail = result.stderr?.trim() || result.stdout?.trim() || `${backend} exited with ${result.status}`;
+    const detail = result.stderr.trim() || result.stdout.trim() || `${backend} exited with ${result.status}`;
     throw new Error(detail);
   }
 

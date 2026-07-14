@@ -5,7 +5,7 @@ import {
   hasDurableSessionAuditIssues,
 } from "../dist/server/session-audit.js";
 
-const audit = auditDurableSessions();
+const audit = await auditDurableSessions();
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify(audit, null, 2));
 } else {

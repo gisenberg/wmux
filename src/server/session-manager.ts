@@ -1,14 +1,11 @@
 import type { WebSocket } from "ws";
-import type { MachineConfig, MachineSource, PaneState } from "./types.js";
+import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
 import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
 import { streamPathForMachine } from "./streams.js";
 import type { AttachReplay } from "./terminal-checkpoint.js";
 
-export type ClientMessage =
-  | { type: "input"; data: string; terminalResponse?: boolean }
-  | { type: "resize"; cols: number; rows: number; foreground?: boolean }
-  | { type: "activate"; cols: number; rows: number; foreground?: boolean };
+export type ClientMessage = PaneClientMessage;
 
 interface SocketState {
   paneId: string;
@@ -275,10 +272,9 @@ export class SessionManager {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
     const driver = sessionDriverForMachine(machine);
-    const refreshedCwd = this.refreshPaneCwdFromBackend(pane, machine);
-    pane = refreshedCwd && refreshedCwd !== pane.cwd ? { ...pane, cwd: refreshedCwd } : pane;
+    void this.refreshPaneCwdFromBackend(pane, machine);
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
-      sessionDriverForMachine(previousSessionMachine).dispose(previousSessionMachine, pane.id, false);
+      void sessionDriverForMachine(previousSessionMachine).dispose(previousSessionMachine, pane.id, false);
     }
     const context = this.state.findPaneContext(pane.id);
     const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
@@ -340,7 +336,7 @@ export class SessionManager {
 
       const exitedMachine = this.sessionMachines.get(pane.id);
       if (exitedMachine && sessionDriverForMachine(exitedMachine).capabilities(exitedMachine).agentOwned) {
-        sessionDriverForMachine(exitedMachine).dispose(exitedMachine, pane.id, false);
+        void sessionDriverForMachine(exitedMachine).dispose(exitedMachine, pane.id, false);
       }
       this.sessionMachines.delete(pane.id);
       if (context.tab.panes.length > 1) {
@@ -356,13 +352,12 @@ export class SessionManager {
     return session;
   }
 
-  private refreshPaneCwdFromBackend(pane: PaneState, machine: MachineConfig): string | undefined {
-    const cwd = sessionDriverForMachine(machine).readCwd(machine, pane.id);
+  private async refreshPaneCwdFromBackend(pane: PaneState, machine: MachineConfig): Promise<void> {
+    const cwd = await sessionDriverForMachine(machine).readCwd(machine, pane.id);
     if (cwd && cwd !== pane.cwd) this.state.updatePane(pane.id, { cwd });
-    return cwd;
   }
 
-  private broadcast(paneId: string, payload: unknown): void {
+  private broadcast(paneId: string, payload: PaneServerMessage): void {
     for (const socket of this.sockets.get(paneId) ?? []) {
       this.send(socket, payload);
     }
@@ -426,7 +421,7 @@ export class SessionManager {
         if (socket.readyState !== socket.OPEN) return;
         const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
         if (machine && !(machine.source === "registered" && machine.online === false)) {
-          sessionDriverForMachine(machine).refreshClient(machine, pane.id);
+          void sessionDriverForMachine(machine).refreshClient(machine, pane.id);
         }
       }, delayMs);
       timer.unref?.();
@@ -520,7 +515,7 @@ export class SessionManager {
     if (session) session.kill();
     const fallbackMachineId = machineId ?? session?.pane.machineId ?? this.state.findPane(paneId)?.machineId;
     const machine = resolveDisposalMachine(sessionMachine, this.currentMachines(), fallbackMachineId);
-    if (machine) sessionDriverForMachine(machine).dispose(machine, paneId, Boolean(session));
+    if (machine) void sessionDriverForMachine(machine).dispose(machine, paneId, Boolean(session));
     this.broadcast(paneId, { type: "removed", paneId });
     for (const socket of this.sockets.get(paneId) ?? []) {
       this.socketState.delete(socket);
@@ -546,7 +541,7 @@ export class SessionManager {
     );
   }
 
-  private send(socket: WebSocket, payload: unknown): void {
+  private send(socket: WebSocket, payload: PaneServerMessage): void {
     if (socket.readyState !== socket.OPEN) return;
     socket.send(JSON.stringify(payload));
   }

@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, UnauthorizedError } from "./api";
 import { writeBrowserClipboard } from "./clipboard";
 import { withTokenParam } from "./token";
-import type { BootstrapPayload, TerminalMedia, TerminalNotification } from "./types";
+import type {
+  BootstrapPayload,
+  EventClientMessage,
+  EventServerMessage,
+  TerminalMedia,
+  TerminalNotification,
+} from "./types";
 
 export type ServiceConnection = "connecting" | "online" | "offline";
 
@@ -58,28 +64,21 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
         scheduleResync();
       };
       ws.onmessage = (event) => {
-        let message: {
-          type?: string;
-          state?: BootstrapPayload;
-          notification?: unknown;
-          media?: unknown;
-          clipboard?: unknown;
-        };
+        let message: EventServerMessage;
         try {
-          message = JSON.parse(event.data);
+          message = JSON.parse(String(event.data)) as EventServerMessage;
         } catch {
           return;
         }
         if (message.type === "notification") {
-          showBrowserNotification(message.notification as TerminalNotification);
+          showBrowserNotification(message.notification);
         }
         if (message.type === "media") {
-          const media = message.media as TerminalMedia;
+          const media = message.media;
           setMediaItems((items) => [media, ...items.filter((item) => item.id !== media.id)].slice(0, 20));
         }
         if (message.type === "clipboard") {
-          const clipboard = message.clipboard as { text?: string };
-          if (typeof clipboard.text === "string") void writeBrowserClipboard(clipboard.text).catch(() => undefined);
+          void writeBrowserClipboard(message.clipboard.text).catch(() => undefined);
         }
         if (message.type === "snapshot" && message.state) {
           callbacksRef.current.onResync(message.state);
@@ -107,7 +106,7 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
     };
   }, []);
 
-  const sendEventSocketMessage = useCallback((message: unknown): boolean => {
+  const sendEventSocketMessage = useCallback((message: EventClientMessage): boolean => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return false;
     socket.send(JSON.stringify(message));

@@ -159,6 +159,14 @@ const waitForMessage = async (ws: WebSocket, predicate: (message: any) => boolea
   });
 };
 
+const waitForCondition = async (predicate: () => boolean, timeoutMs = 3_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
+
 const withState = async (machine: MachineConfig, run: (state: StateStore, dir: string) => Promise<void>) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-manager-"));
   try {
@@ -368,6 +376,7 @@ test(
         await waitForMessage(second, (message) => message.type === "output" && message.data.includes("restore:survived"), 5_000);
 
         assert.equal(secondManager.closeWorkspace(state.snapshot().workspaces[0].id), true);
+        await waitForCondition(() => spawnSync("tmux", ["has-session", "-t", sessionName]).status !== 0);
         assert.notEqual(spawnSync("tmux", ["has-session", "-t", sessionName]).status, 0);
       } finally {
         firstManager.disposeAll();

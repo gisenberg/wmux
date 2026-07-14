@@ -58,6 +58,8 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Server state lives in `~/.wmux/state.json` unless `WMUX_STATE_PATH` is set.
 - Server-backed UI settings live in `~/.wmux/settings.json` unless `WMUX_SETTINGS_PATH` is set.
 - State and settings use explicit schema versions, atomic owner-only writes, validated rolling backups, and downgrade refusal. Add a migration before changing a persisted shape.
+- Browser/server wire contracts live in `src/shared/protocol.ts`, including pane and event WebSocket unions. Keep credentials and other server-only configuration in `src/server/types.ts`; do not reintroduce parallel client/server wire shapes.
+- `src/server/machines.ts` is a compatibility facade. Keep spawn construction in `spawn-backends.ts`, health/version probes in `machine-health.ts`, and async tmux/screen lifecycle operations in `durable-session.ts`; do not add blocking child-process calls to request or pane-attach paths.
 - Machine definitions are read from ignored `./wmux.config.json` first, then `~/.wmux/config.json`; `WMUX_CONFIG_PATH` selects one explicit file and disables fallback. `wmux.config.example.json` is the tracked template.
 - Dynamic SSH and PowerShell-over-SSH machines register through `POST /api/registry/hosts` and persist in `~/.wmux/host-registry.json`. The shared registration token is trusted catalog-write authority for every dynamic ID, not per-host identity; it must not authorize registry reads, deletion, helper bundles, or any other endpoint.
 - The host registry has its own schema version, owner-only atomic writes, legacy migration, and downgrade refusal. Bump/migrate its envelope before changing persisted record shapes; never rewrite a future version.
