@@ -23,6 +23,7 @@ import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { withTokenParam } from "./token";
 import { writeBrowserClipboard } from "./clipboard";
 import { Osc52Parser } from "./terminal-osc52";
+import { RectangularSelection } from "./terminal-rectangular-selection";
 import type { MachineStatus, PaneState, SplitDirection, TerminalMedia, TerminalRun } from "./types";
 
 interface Props {
@@ -104,6 +105,7 @@ export const TerminalPane = memo(function TerminalPane({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const rectangularSelectionRef = useRef<RectangularSelection | null>(null);
   const fitAddonRef = useRef<TerminalFitter | null>(null);
   const reconnectRef = useRef<(() => void) | null>(null);
   const outputCarryRef = useRef("");
@@ -130,6 +132,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [terminalMetrics, setTerminalMetrics] = useState<CellMetrics>({ width: 8, height: 16 });
   const [viewportY, setViewportY] = useState(0);
   const [terminalReady, setTerminalReady] = useState(false);
+  const [rectangleVersion, setRectangleVersion] = useState(0);
   const visibleMediaItems = [...kittyMediaItems, ...mediaItems];
   const visibleInlineItems = viewportY < 1 ? kittyInlineItems.filter((item) => item.data) : [];
 
@@ -152,6 +155,7 @@ export const TerminalPane = memo(function TerminalPane({
     let reconnectTimer: number | undefined;
     let scrollDisposable: { dispose: () => void } | undefined;
     let renderDisposable: { dispose: () => void } | undefined;
+    let bufferDisposable: { dispose: () => void } | undefined;
     let mouseDownListener: ((event: MouseEvent) => void) | undefined;
     let mouseUpListener: ((event: MouseEvent) => void) | undefined;
     let mouseShieldDownListener: ((event: MouseEvent) => void) | undefined;
@@ -164,6 +168,7 @@ export const TerminalPane = memo(function TerminalPane({
     let windowBlurListener: (() => void) | undefined;
     let pageShowListener: (() => void) | undefined;
     let visibilityChangeListener: (() => void) | undefined;
+    let rectangularSelection: RectangularSelection | undefined;
     let contextMenuSelection = "";
     let pendingCursorPlacement: { sequence: string; x: number; y: number } | null = null;
     let browserPrimaryMouseGesture = false;
@@ -204,6 +209,32 @@ export const TerminalPane = memo(function TerminalPane({
       setTerminalMetrics((previous) =>
         previous.width === metrics.width && previous.height === metrics.height ? previous : metrics,
       );
+    };
+
+    const copyRectangularSelection = (term: Terminal, selection: string): void => {
+      if (!selection) return;
+      let copied = false;
+
+      const previousActive = document.activeElement;
+      const shouldRestoreFocus = previousActive !== term.element;
+      if (shouldRestoreFocus) term.focus();
+      try {
+        copied = document.execCommand("copy");
+      } catch {
+        copied = false;
+      } finally {
+        if (
+          shouldRestoreFocus &&
+          previousActive instanceof HTMLElement &&
+          typeof previousActive.focus === "function"
+        ) {
+          previousActive.focus({ preventScroll: true });
+        }
+      }
+
+      if (!copied) {
+        void writeBrowserClipboard(selection).catch(() => undefined);
+      }
     };
 
     const clearContextCopyBridge = () => {
@@ -676,6 +707,14 @@ export const TerminalPane = memo(function TerminalPane({
       term.open(containerRef.current);
       configureTerminalInput(term);
       terminalRef.current = term;
+      rectangularSelection = new RectangularSelection(
+        term,
+        () => setRectangleVersion((version) => version + 1),
+        (text) => {
+          if (text) copyRectangularSelection(term, text);
+        },
+      );
+      rectangularSelectionRef.current = rectangularSelection;
       if (activeRef.current && focusSignalRef.current > 0) requestAnimationFrame(() => term.focus());
       await waitForVisibleBox(containerRef.current);
       fitAddon = createTerminalFitter(term, containerRef.current);
@@ -683,9 +722,14 @@ export const TerminalPane = memo(function TerminalPane({
       fitAddon.fit();
       refreshMetrics(term);
       scrollDisposable = term.onScroll((position) => setViewportY(position));
-      renderDisposable = term.onRender(() => refreshMetrics(term));
+      renderDisposable = term.onRender(() => {
+        refreshMetrics(term);
+        if (rectangularSelection?.overlay) setRectangleVersion((version) => version + 1);
+      });
+      bufferDisposable = term.buffer.onBufferChange(() => rectangularSelection?.clear());
 
       mouseDownListener = (event) => {
+        if (event.button === 0 && !event.altKey && !event.ctrlKey) rectangularSelection?.clear();
         if (event.button === 2 || (event.button === 0 && event.ctrlKey)) {
           contextMenuSelection = term.getSelection();
         }
@@ -757,7 +801,7 @@ export const TerminalPane = memo(function TerminalPane({
       };
       document.addEventListener("mouseup", mouseGestureEndListener);
       contextMenuListener = () => {
-        const selection = term.getSelection() || contextMenuSelection;
+        const selection = rectangularSelection?.text || term.getSelection() || contextMenuSelection;
         contextMenuSelection = "";
         if (!selection) {
           clearContextCopyBridge();
@@ -767,7 +811,7 @@ export const TerminalPane = memo(function TerminalPane({
       };
       term.element?.addEventListener("contextmenu", contextMenuListener, { capture: true });
       copyListener = (event) => {
-        const selection = term.getSelection();
+        const selection = rectangularSelection?.text || term.getSelection();
         if (!selection) return;
         event.preventDefault();
         event.stopPropagation();
@@ -785,6 +829,7 @@ export const TerminalPane = memo(function TerminalPane({
         event.stopPropagation();
         event.stopImmediatePropagation();
         if (term.getViewportY() > 0) term.scrollToBottom();
+        rectangularSelection?.clear();
         term.clearSelection();
         term.paste(text);
       };
@@ -803,16 +848,25 @@ export const TerminalPane = memo(function TerminalPane({
       document.addEventListener("visibilitychange", visibilityChangeListener);
 
       term.attachCustomKeyEventHandler((event) => {
-        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === "KeyC" && term.hasSelection()) {
-          term.copySelection();
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          !event.altKey &&
+          event.code === "KeyC" &&
+          (rectangularSelection?.text || term.hasSelection())
+        ) {
+          const selection = rectangularSelection?.text;
+          if (selection) copyRectangularSelection(term, selection);
+          else term.copySelection();
           return true;
         }
         if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
           if (event.key === "ArrowLeft") {
+            rectangularSelection?.clear();
             sendInput(socketRef.current, "\x1bb");
             return true;
           }
           if (event.key === "ArrowRight") {
+            rectangularSelection?.clear();
             sendInput(socketRef.current, "\x1bf");
             return true;
           }
@@ -831,7 +885,9 @@ export const TerminalPane = memo(function TerminalPane({
       });
 
       term.onData((data) => {
-        if (awaitingRestart) {
+        const terminalResponse = isTerminalProtocolResponse(data);
+        if (!terminalResponse) rectangularSelection?.clear();
+        if (awaitingRestart && !terminalResponse) {
           awaitingRestart = false;
           term.write("\r\n[wmux] restarting…\r\n");
           reconnectDelayMs = 350;
@@ -845,11 +901,11 @@ export const TerminalPane = memo(function TerminalPane({
         }
         if (inputMayLeaveShellPrompt(data)) shellCursorPlacementRef.current = false;
         if (term.getViewportY() > 0) term.scrollToBottom();
-        const terminalResponse = isTerminalProtocolResponse(data);
         if (terminalResponse && replayingTerminalOutput) return;
         sendInput(socketRef.current, data, terminalResponse);
       });
       term.onResize(() => {
+        rectangularSelection?.clear();
         const ws = socketRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
           sendResizeMessage(ws, activeRef.current ? "activate" : "resize", term, foreground());
@@ -861,10 +917,13 @@ export const TerminalPane = memo(function TerminalPane({
 
     return () => {
       cancelled = true;
+      rectangularSelection?.dispose();
+      rectangularSelectionRef.current = null;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (replayDrainTimer !== undefined) window.clearTimeout(replayDrainTimer);
       scrollDisposable?.dispose();
       renderDisposable?.dispose();
+      bufferDisposable?.dispose();
       if (terminalOutputTimer !== undefined) window.clearTimeout(terminalOutputTimer);
       if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
       if (selectionRestoreTimer !== undefined) window.clearTimeout(selectionRestoreTimer);
@@ -982,6 +1041,23 @@ export const TerminalPane = memo(function TerminalPane({
         }}
       >
         <div ref={containerRef} className="terminal-host" />
+        {(() => {
+          void rectangleVersion;
+          const range = rectangularSelectionRef.current?.visibleOverlay;
+          if (!range) return null;
+          return (
+            <div
+              className="terminal-rectangle-selection"
+              aria-hidden="true"
+              style={{
+                left: range.start.col * terminalMetrics.width,
+                top: range.start.row * terminalMetrics.height,
+                width: (range.end.col - range.start.col + 1) * terminalMetrics.width,
+                height: (range.end.row - range.start.row + 1) * terminalMetrics.height,
+              }}
+            />
+          );
+        })()}
         {visibleInlineItems.length > 0 ? (
           <div className="kitty-inline-layer" aria-hidden="true">
             {visibleInlineItems.map((item) => (

@@ -2564,6 +2564,13 @@ button.active-tool {
   pointer-events: none;
 }
 
+.terminal-rectangle-selection {
+  position: absolute;
+  z-index: 2;
+  background: rgba(80, 130, 190, 0.32);
+  pointer-events: none;
+}
+
 .kitty-inline-image {
   position: absolute;
   display: block;

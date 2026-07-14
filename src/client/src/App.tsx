@@ -942,6 +942,19 @@ export function App() {
         keywords: ["navigate"],
       },
       {
+        id: "rectangular-terminal-selection",
+        title: "Copy rectangular terminal selection",
+        subtitle: "Linux Mint/Firefox: Alt+Option+drag; Ctrl+Alt+drag fallback, and bare Alt+drag may move the window",
+        section: "Terminal",
+        shortcut: "Alt+Option+Drag",
+        disabled: !activeWorkspace || !activeTab || !activePane,
+        run: () => {
+          if (!activeWorkspace || !activeTab) return;
+          requestTerminalFocus(activeWorkspace.id, activeTab.id);
+        },
+        keywords: ["copy", "column", "block", "mouse", "drag"],
+      },
+      {
         id: "close-tab",
         title: "Close current tab",
         subtitle: activeTab?.title,
@@ -1045,6 +1058,7 @@ export function App() {
   }, [
     activeTab,
     activeWorkspace,
+    requestTerminalFocus,
     displayMachines,
     machines,
     targetMachineId,

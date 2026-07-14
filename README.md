@@ -243,6 +243,7 @@ creation, splits, settings, diagnostics, activity, and session audit actions.
 | Workspace 1–8 / last | `Cmd/Ctrl+1–8` / `Cmd/Ctrl+9` |
 | Tab 1–8 / last | `Alt+1–8` / `Alt+9` |
 | Previous/next word | `Option/Alt+Left/Right` |
+| Rectangular terminal selection | `Alt+Option+drag` (Linux Mint/Firefox primary); `Ctrl+Alt+drag` fallback, and bare `Alt+drag` may move the window |
 | Focus neighboring pane | `Option+Cmd+Arrow` / `Alt+Ctrl+Arrow` |
 | Latest unread notification | `Cmd/Ctrl+Shift+U` |
 
