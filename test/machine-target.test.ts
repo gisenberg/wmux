@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   loadMachineTargetId,
+  loadMachineTargetPickerExpanded,
+  machineTargetPickerExpandedStorageKey,
   machineTargetStorageKey,
   persistMachineTargetId,
+  persistMachineTargetPickerExpanded,
   resolveMachineTargetId,
 } from "../src/client/src/machine-target.js";
 
@@ -77,4 +80,24 @@ test("unavailable browser storage does not prevent target selection", () => {
 
   assert.equal(loadMachineTargetId(unavailable), "");
   assert.doesNotThrow(() => persistMachineTargetId(unavailable, "remote"));
+});
+
+test("the target host picker restores its expanded state", () => {
+  const storage = memoryStorage({ [machineTargetPickerExpandedStorageKey]: "true" });
+
+  assert.equal(loadMachineTargetPickerExpanded(storage), true);
+  persistMachineTargetPickerExpanded(storage, false);
+  assert.equal(loadMachineTargetPickerExpanded(storage), false);
+});
+
+test("invalid or unavailable picker storage defaults to collapsed", () => {
+  const invalid = memoryStorage({ [machineTargetPickerExpandedStorageKey]: "expanded" });
+  const unavailable = {
+    getItem: () => { throw new Error("denied"); },
+    setItem: () => { throw new Error("denied"); },
+  };
+
+  assert.equal(loadMachineTargetPickerExpanded(invalid), false);
+  assert.equal(loadMachineTargetPickerExpanded(unavailable), false);
+  assert.doesNotThrow(() => persistMachineTargetPickerExpanded(unavailable, true));
 });

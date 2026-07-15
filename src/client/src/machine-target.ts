@@ -1,4 +1,5 @@
 export const machineTargetStorageKey = "wmux.targetMachineId";
+export const machineTargetPickerExpandedStorageKey = "wmux.targetMachinePickerExpanded";
 
 interface MachineTargetStorage {
   getItem: (key: string) => string | null;
@@ -22,6 +23,25 @@ export const persistMachineTargetId = (
     const normalized = machineId.trim();
     if (normalized) storage.setItem(machineTargetStorageKey, normalized);
     else storage.removeItem(machineTargetStorageKey);
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+};
+
+export const loadMachineTargetPickerExpanded = (storage: Pick<MachineTargetStorage, "getItem">): boolean => {
+  try {
+    return storage.getItem(machineTargetPickerExpandedStorageKey) === "true";
+  } catch {
+    return false;
+  }
+};
+
+export const persistMachineTargetPickerExpanded = (
+  storage: Pick<MachineTargetStorage, "setItem">,
+  expanded: boolean,
+): void => {
+  try {
+    storage.setItem(machineTargetPickerExpandedStorageKey, String(expanded));
   } catch {
     // Storage can be unavailable in privacy-restricted browser contexts.
   }

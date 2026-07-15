@@ -14,6 +14,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { loadMachineTargetPickerExpanded, persistMachineTargetPickerExpanded } from "./machine-target";
 import { compactMiddlePath } from "./path-display";
 import type { MachineVersionStatus } from "./types";
 
@@ -129,13 +130,17 @@ export function OpenTuiSidebar({
   onCreateWorkspace,
   onActivateWorkspace,
 }: OpenTuiSidebarProps) {
-  const [hostPickerOpen, setHostPickerOpen] = useState(false);
+  const [hostPickerOpen, setHostPickerOpen] = useState(() => loadMachineTargetPickerExpanded(window.localStorage));
   const [animationTick, setAnimationTick] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const paintRef = useRef<(() => void) | null>(null);
   const hasRunningWorkspace = workspaces.some((workspace) => workspace.agentStatus === "running");
+
+  useEffect(() => {
+    persistMachineTargetPickerExpanded(window.localStorage, hostPickerOpen);
+  }, [hostPickerOpen]);
 
   useEffect(() => {
     if (!hasRunningWorkspace) return;
