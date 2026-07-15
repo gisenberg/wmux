@@ -267,7 +267,44 @@ def helper_bundle_version(config: dict[str, Any]) -> str:
         return ""
 
 
+def refresh_callback_state(payload: dict[str, Any]) -> None:
+    payload_env = payload.get("env")
+    if not isinstance(payload_env, dict):
+        return
+    values = {
+        "url": payload_env.get("WMUX_URL"),
+        "token": payload_env.get("WMUX_TOKEN"),
+    }
+    if not any(isinstance(value, str) and value.strip() for value in values.values()):
+        return
+    state_dir = os.path.expanduser("~/.wmux")
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(state_dir, 0o700)
+    except OSError:
+        pass
+    for name, raw_value in values.items():
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            continue
+        path = os.path.join(state_dir, name)
+        temporary = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+        try:
+            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(raw_value.strip())
+                handle.write("\n")
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+
 def stage_helper_bundle(config: dict[str, Any], payload: dict[str, Any]) -> None:
+    # A create request also serves as an attach request for an existing durable
+    # ConPTY session. Refresh callback state even when no helper files changed.
+    refresh_callback_state(payload)
     bundle = payload.get("helperBundle")
     if not isinstance(bundle, dict) or not isinstance(bundle.get("files"), list):
         return

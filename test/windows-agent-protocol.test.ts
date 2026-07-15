@@ -163,19 +163,66 @@ import tempfile
 module = runpy.run_path("scripts/wmux-windows-agent")
 data = b"Write-Output staged"
 with tempfile.TemporaryDirectory() as root:
+    home = os.path.join(root, "home")
+    os.makedirs(home)
+    os.environ["HOME"] = home
     payload = {"helperBundle": {"bundleVersion": "bundle123", "files": [{
         "name": "wmux-test.ps1",
         "dataBase64": base64.b64encode(data).decode("ascii"),
         "sha256": hashlib.sha256(data).hexdigest(),
-    }]}}
+    }]}, "env": {"WMUX_URL": "http://current-wmux:3478", "WMUX_TOKEN": "current-token"}}
     module["stage_helper_bundle"]({"helperDir": root}, payload)
     with open(os.path.join(root, "wmux-test.ps1"), "rb") as handle:
         staged = handle.read().decode("utf-8")
-    print(json.dumps({"content": staged, "version": module["helper_bundle_version"]({"helperDir": root})}))
+    with open(os.path.join(home, ".wmux", "url"), encoding="utf-8") as handle:
+        callback_url = handle.read().strip()
+    with open(os.path.join(home, ".wmux", "token"), encoding="utf-8") as handle:
+        callback_token = handle.read().strip()
+    print(json.dumps({
+        "content": staged,
+        "version": module["helper_bundle_version"]({"helperDir": root}),
+        "callbackUrl": callback_url,
+        "callbackToken": callback_token,
+        "tokenMode": oct(os.stat(os.path.join(home, ".wmux", "token")).st_mode & 0o777),
+    }))
 `;
   const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { content: "Write-Output staged", version: "bundle123" });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    content: "Write-Output staged",
+    version: "bundle123",
+    callbackUrl: "http://current-wmux:3478",
+    callbackToken: "current-token",
+    tokenMode: "0o600",
+  });
+});
+
+test("Windows agent refreshes callback state even when its helper bundle is current", () => {
+  const source = String.raw`
+import json
+import os
+import runpy
+import tempfile
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+with tempfile.TemporaryDirectory() as home:
+    os.environ["HOME"] = home
+    module["stage_helper_bundle"]({}, {"env": {
+        "WMUX_URL": "http://reattached-wmux:3478",
+        "WMUX_TOKEN": "rotated-token",
+    }})
+    with open(os.path.join(home, ".wmux", "url"), encoding="utf-8") as handle:
+        callback_url = handle.read().strip()
+    with open(os.path.join(home, ".wmux", "token"), encoding="utf-8") as handle:
+        callback_token = handle.read().strip()
+    print(json.dumps({"url": callback_url, "token": callback_token}))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    url: "http://reattached-wmux:3478",
+    token: "rotated-token",
+  });
 });
 
 test("Windows agent job ownership kills the full pane process tree on close", () => {
