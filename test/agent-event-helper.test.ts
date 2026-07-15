@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -10,6 +10,65 @@ import { test } from "node:test";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+const resolveHelperUrl = (env: Record<string, string>, persistedUrl?: string): string => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-event-url-"));
+  try {
+    if (persistedUrl) {
+      fs.mkdirSync(path.join(home, ".wmux"));
+      fs.writeFileSync(path.join(home, ".wmux", "url"), `${persistedUrl}\n`);
+    }
+    const childEnv = { ...process.env, ...env, HOME: home };
+    delete childEnv.WMUX_HELPER_URL;
+    delete childEnv.WMUX_PUBLIC_URL;
+    delete childEnv.WMUX_URL;
+    Object.assign(childEnv, env);
+    return execFileSync(
+      "python3",
+      ["-c", "import importlib.machinery, sys; print(importlib.machinery.SourceFileLoader('agent_event', sys.argv[1]).load_module()._wmux_url())", path.join(repoRoot, "scripts", "wmux-agent-event")],
+      { encoding: "utf8", env: childEnv },
+    ).trim();
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+};
+
+test("agent event callback URL prefers refreshed state, then helper/public/legacy fallbacks", () => {
+  assert.equal(resolveHelperUrl({ WMUX_HELPER_URL: "http://stale-helper:3478", WMUX_URL: "http://stale-legacy:3478" }, "http://persisted:3478"), "http://persisted:3478");
+  assert.equal(resolveHelperUrl({ WMUX_HELPER_URL: " http://helper:3478 " }), "http://helper:3478");
+  assert.equal(resolveHelperUrl({ WMUX_HELPER_URL: " \t", WMUX_PUBLIC_URL: " https://public.example " }), "https://public.example");
+  assert.equal(resolveHelperUrl({ WMUX_PUBLIC_URL: "https://public.example", WMUX_URL: "http://legacy:3478" }, "http://persisted:3478"), "http://persisted:3478");
+  assert.equal(resolveHelperUrl({ WMUX_PUBLIC_URL: "https://public.example", WMUX_URL: "http://legacy:3478" }), "https://public.example");
+  assert.equal(resolveHelperUrl({ WMUX_URL: "http://legacy:3478" }), "http://legacy:3478");
+  assert.equal(resolveHelperUrl({}), "http://127.0.0.1:3478");
+  assert.match(fs.readFileSync(path.join(repoRoot, "scripts", "wmux-agent-event"), "utf8"), /add_argument\("--url", default=_wmux_url\(\)\)/);
+});
+
+test("agent event helper prefers the refreshed token file over a stale environment token", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-event-token-"));
+  const authorizations: string[] = [];
+  const server = http.createServer((request, response) => {
+    authorizations.push(request.headers.authorization ?? "");
+    response.writeHead(201).end();
+  });
+  try {
+    fs.mkdirSync(path.join(home, ".wmux"));
+    fs.writeFileSync(path.join(home, ".wmux", "token"), "current-token\n", { mode: 0o600 });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const invoke = () => execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-event"), ["--url", `http://127.0.0.1:${address.port}`, "--pane", "pane-1", "--force"], {
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "stale-token" },
+    });
+    await invoke();
+    fs.rmSync(path.join(home, ".wmux", "token"));
+    await invoke();
+    assert.deepEqual(authorizations, ["Bearer current-token", "Bearer stale-token"]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test("agent event helper sends the full assistant response as structured JSON", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-event-"));
@@ -61,7 +120,14 @@ test("agent event helper sends the full assistant response as structured JSON", 
       transcriptPath,
       "--force",
     ], {
-      env: { ...process.env, HOME: dir, WMUX_TOKEN: "", WMUX_TOKEN_PATH: path.join(dir, "missing-token") },
+      env: {
+        ...process.env,
+        HOME: dir,
+        WMUX_TOKEN: "",
+        WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
+        WMUX_HELPER_URL: "http://127.0.0.1:1",
+        WMUX_URL: "http://127.0.0.1:1",
+      },
     });
 
     assert.equal(captured?.title, "fix mobile chat");

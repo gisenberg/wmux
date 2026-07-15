@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { canRefreshDurableSessionClient, durableSessionName } from "./durable-session.js";
 import { streamPathForMachine } from "./streams.js";
+import { resolveHelperUrl } from "./helper-url.js";
 import type { MachineConfig, PtySpawnSpec, SessionBackend } from "./types.js";
 import {
   buildWindowsPowerShellBootstrapUrl,
@@ -518,8 +519,8 @@ const durableShellScript = ({
   // helpers and agent hooks there rely on this file fallback to reach an
   // authenticated server (same contract as ~/.wmux/token on the server host).
   const credentialWrites = [
-    extraEnv.WMUX_TOKEN ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_TOKEN)} > "$HOME/.wmux/token" 2>/dev/null || true;` : "",
-    extraEnv.WMUX_URL ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_URL)} > "$HOME/.wmux/url" 2>/dev/null || true;` : "",
+    extraEnv.WMUX_TOKEN ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_TOKEN)} > "$HOME/.wmux/token" 2>/dev/null && chmod 600 "$HOME/.wmux/token" 2>/dev/null || true;` : "",
+    extraEnv.WMUX_URL ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_URL)} > "$HOME/.wmux/url" 2>/dev/null && chmod 600 "$HOME/.wmux/url" 2>/dev/null || true;` : "",
   ].filter(Boolean);
   const persistCredentials = credentialWrites.length > 0
     ? `( umask 077; mkdir -p "$HOME/.wmux" 2>/dev/null || true; ${credentialWrites.join(" ")} );`
@@ -664,7 +665,7 @@ const remoteHelperDir = (): string => "${XDG_CACHE_HOME:-$HOME/.cache}/wmux/bin"
 const installRemoteHelpersScript = (machine: MachineConfig): string => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
-  const wmuxUrl = process.env.WMUX_PUBLIC_URL ?? process.env.WMUX_URL ?? `http://${streamHost}:${wmuxPort}`;
+  const wmuxUrl = resolveHelperUrl(`http://${streamHost}:${wmuxPort}`);
   const streamPath = streamPathForMachine(machine.id);
   const streamConfig = JSON.stringify(
     {

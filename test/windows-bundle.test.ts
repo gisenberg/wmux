@@ -67,7 +67,13 @@ test("agent-event helper sends bearer auth and maps Claude start hooks to runnin
   assert.ok(content.includes("Authorization"), "agent-event helper must send an auth header");
   assert.ok(content.includes("WMUX_TOKEN_PATH"), "agent-event helper must respect token path overrides");
   assert.ok(content.includes(".wmux\\token"), "agent-event helper must fall back to the staged token");
+  assert.ok(content.indexOf("$StateToken") < content.indexOf("return $env:WMUX_TOKEN"), "agent-event helper must prefer the refreshed token file");
   assert.ok(content.includes(".wmux\\url"), "agent-event helper must fall back to the staged URL");
+  const stateIndex = content.indexOf("$StateUrl");
+  const helperIndex = content.indexOf("WMUX_HELPER_URL");
+  const publicIndex = content.indexOf("WMUX_PUBLIC_URL");
+  const legacyIndex = content.indexOf("WMUX_URL");
+  assert.ok(stateIndex >= 0 && stateIndex < helperIndex && helperIndex < publicIndex && publicIndex < legacyIndex, "agent-event URL precedence must favor refreshed state, helper, public, then legacy");
   assert.ok(content.includes("$HookEvent -eq 'UserPromptSubmit'"), "Claude start hooks must be recognized");
   assert.ok(content.includes("$Summary = 'claude running'"), "Claude start hooks must emit a fresh running summary");
   assert.ok(content.includes("$Message = ''"), "start hooks must discard the previous assistant response");
@@ -96,6 +102,19 @@ test("bootstrap persists wmux auth fallback files for Windows helpers", () => {
   const script = buildWindowsPowerShellBootstrap(machine, undefined, { WMUX_TOKEN: "fixed-token" });
   assert.ok(script.includes("Join-Path $StateDir 'token'"), "bootstrap must write the token fallback file");
   assert.ok(script.includes("Join-Path $StateDir 'url'"), "bootstrap must write the URL fallback file");
+});
+
+test("Windows bootstrap stages the helper callback URL ahead of the public URL", () => {
+  const saved = { ...process.env };
+  try {
+    process.env.WMUX_HELPER_URL = "http://10.0.0.2:3478";
+    process.env.WMUX_PUBLIC_URL = "https://wmux.tailnet.ts.net";
+    const script = buildWindowsPowerShellBootstrap(machine, undefined, {});
+    assert.ok(script.includes("http://10.0.0.2:3478"));
+    assert.equal(script.includes("https://wmux.tailnet.ts.net"), false);
+  } finally {
+    process.env = saved;
+  }
 });
 
 test("health probe reports the staged and expected bundle versions", () => {

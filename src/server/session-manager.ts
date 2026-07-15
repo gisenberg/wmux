@@ -3,6 +3,7 @@ import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage
 import type { StateStore } from "./state.js";
 import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
 import { streamPathForMachine } from "./streams.js";
+import { resolveHelperUrl } from "./helper-url.js";
 import type { AttachReplay } from "./terminal-checkpoint.js";
 
 export type ClientMessage = PaneClientMessage;
@@ -283,7 +284,7 @@ export class SessionManager {
     const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
     const streamPath = streamPathForMachine(machine.id);
     const sessionEnv = {
-      WMUX_URL: process.env.WMUX_PUBLIC_URL ?? `http://${process.env.WMUX_HOST ?? "127.0.0.1"}:${process.env.WMUX_PORT ?? "3478"}`,
+      WMUX_URL: resolveHelperUrl(`http://${process.env.WMUX_HOST ?? "127.0.0.1"}:${process.env.WMUX_PORT ?? "3478"}`),
       WMUX_WORKSPACE_ID: context?.workspace.id ?? "",
       WMUX_WORKSPACE_NAME: context?.workspace.name ?? "",
       WMUX_TAB_ID: context?.tab.id ?? "",

@@ -69,6 +69,8 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", async 
     });
   });
   const savedEnv = {
+    HOME: process.env.HOME,
+    WMUX_HELPER_URL: process.env.WMUX_HELPER_URL,
     WMUX_URL: process.env.WMUX_URL,
     WMUX_TOKEN: process.env.WMUX_TOKEN,
     WMUX_TOKEN_PATH: process.env.WMUX_TOKEN_PATH,
@@ -80,6 +82,8 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", async 
     const address = server.address();
     assert.ok(address && typeof address === "object");
     Object.assign(process.env, {
+      HOME: home,
+      WMUX_HELPER_URL: `http://127.0.0.1:${address.port}`,
       WMUX_URL: `http://127.0.0.1:${address.port}`,
       WMUX_TOKEN: "",
       WMUX_TOKEN_PATH: path.join(home, "missing-token"),

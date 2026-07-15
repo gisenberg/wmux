@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { streamPathForMachine } from "./streams.js";
+import { resolveHelperUrl } from "./helper-url.js";
 import type { MachineConfig } from "./types.js";
 import { wmuxReleaseVersion } from "./version.js";
 
@@ -75,7 +76,7 @@ export const buildWindowsPowerShellBootstrapUrl = (
 ): string => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
-  const wmuxUrl = process.env.WMUX_PUBLIC_URL ?? process.env.WMUX_URL ?? `http://${streamHost}:${wmuxPort}`;
+  const wmuxUrl = resolveHelperUrl(`http://${streamHost}:${wmuxPort}`);
   const url = new URL(`${wmuxUrl.replace(/\/+$/, "")}/api/helpers/windows/${encodeURIComponent(machine.id)}/bootstrap`);
   if (startCwd) url.searchParams.set("WMUX_START_CWD", startCwd);
   for (const [key, value] of Object.entries(extraEnv)) {
@@ -96,7 +97,7 @@ export const buildWindowsPowerShellBootstrap = (
 ): string => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
-  const wmuxUrl = process.env.WMUX_PUBLIC_URL ?? process.env.WMUX_URL ?? `http://${streamHost}:${wmuxPort}`;
+  const wmuxUrl = resolveHelperUrl(`http://${streamHost}:${wmuxPort}`);
   const streamPath = streamPathForMachine(machine.id);
   const remoteEnv = {
     TERM: "xterm-256color",
@@ -394,7 +395,7 @@ const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
 const windowsStreamConfig = (machine: MachineConfig, bindHost: string): Record<string, unknown> => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? bindHost;
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
-  const wmuxUrl = process.env.WMUX_PUBLIC_URL ?? process.env.WMUX_URL ?? `http://${streamHost}:${wmuxPort}`;
+  const wmuxUrl = resolveHelperUrl(`http://${streamHost}:${wmuxPort}`);
   const streamPath = streamPathForMachine(machine.id);
   return {
     machine: machine.id,

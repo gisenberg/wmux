@@ -10,6 +10,7 @@ import {
   windowsHelperBundleVersion,
 } from "./windows-helpers.js";
 import { probeWindowsAgent, shouldUseWindowsAgent } from "./windows-agent.js";
+import { resolveHelperUrl } from "./helper-url.js";
 import { wmuxReleaseVersion } from "./version.js";
 
 const WINDOWS_HEALTH_CACHE_MS = 15_000;
@@ -88,10 +89,7 @@ const probeWindowsPowerShellSsh = async (
   localEndpoint: string,
 ): Promise<WindowsHealthProbe> => {
   if (!machine.host) return { reachable: false, reason: "missing host" };
-  const wmuxUrl =
-    process.env.WMUX_PUBLIC_URL ??
-    process.env.WMUX_URL ??
-    `http://${localEndpoint}:${process.env.WMUX_PORT ?? "3478"}`;
+  const wmuxUrl = resolveHelperUrl(`http://${localEndpoint}:${process.env.WMUX_PORT ?? "3478"}`);
   const cacheKey = `${machine.id}:${machine.user ?? ""}@${machine.host}:${machine.port ?? 22}:${wmuxUrl}`;
   const cached = windowsHealthCache.get(cacheKey);
   if (cached && Date.now() - cached.checkedAt < WINDOWS_HEALTH_CACHE_MS) return cached.result;

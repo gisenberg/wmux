@@ -7,6 +7,7 @@ import { isAllowedBindHost } from "./bind.js";
 import { loadConfig } from "./config.js";
 import { HostRegistry } from "./host-registry.js";
 import { createHttpServer } from "./http.js";
+import { resolveHelperUrl } from "./helper-url.js";
 import { parseTrustedProxyAddresses } from "./proxy-address.js";
 import { SettingsStore } from "./settings.js";
 import { SessionManager } from "./session-manager.js";
@@ -96,13 +97,14 @@ const main = async (): Promise<void> => {
     registrationToken: registrationAuth.token,
     trustedProxies,
   });
-  // Persist the reachable URL next to ~/.wmux/token: helpers and agent hooks
-  // running without WMUX_URL in their env (existing durable panes) read this
-  // instead of assuming localhost, which is wrong on non-loopback binds.
+  // Persist the helper callback URL next to ~/.wmux/token: helpers and agent hooks
+  // in existing durable panes read this before their stale inherited env.
   try {
     const wmuxDir = path.join(os.homedir(), ".wmux");
     fs.mkdirSync(wmuxDir, { recursive: true });
-    fs.writeFileSync(path.join(wmuxDir, "url"), `${publicUrl}\n`, { mode: 0o600 });
+    const helperUrlPath = path.join(wmuxDir, "url");
+    fs.writeFileSync(helperUrlPath, `${resolveHelperUrl(publicUrl)}\n`, { mode: 0o600 });
+    fs.chmodSync(helperUrlPath, 0o600);
   } catch {
     // Best-effort; helpers fall back to their localhost default.
   }

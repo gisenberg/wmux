@@ -24,8 +24,9 @@ docker compose --env-file deploy/docker/.env \
 
 For direct access over a private network, set `WMUX_PUBLISH_HOST` to one
 specific Tailscale or RFC1918 address and set `WMUX_PUBLIC_URL` to the URL at
-that address. The public URL must be reachable from the container and every
-managed remote machine; otherwise staged helpers and hooks cannot call wmux.
+that address. If managed remote machines need a different private route for
+staged helpers and hooks, set `WMUX_HELPER_URL` to that reachable callback URL;
+browser links continue to use `WMUX_PUBLIC_URL`.
 When a reverse proxy or non-`*.ts.net` DNS name is used, set the same reachable
 `WMUX_PUBLIC_URL` and add the hostname to `WMUX_ALLOWED_HOSTS`. The proxy must
 forward WebSocket upgrades for `/ws/*`.

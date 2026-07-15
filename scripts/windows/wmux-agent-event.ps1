@@ -11,16 +11,19 @@ function Read-WmuxFileValue([string]$PathValue) {
 }
 
 function Get-WmuxUrl {
-  if ($env:WMUX_URL) { return $env:WMUX_URL }
   $StateUrl = Read-WmuxFileValue (Join-Path $HOME '.wmux\url')
   if ($StateUrl) { return $StateUrl }
+  if (-not [string]::IsNullOrWhiteSpace($env:WMUX_HELPER_URL)) { return $env:WMUX_HELPER_URL.Trim() }
+  if (-not [string]::IsNullOrWhiteSpace($env:WMUX_PUBLIC_URL)) { return $env:WMUX_PUBLIC_URL.Trim() }
+  if (-not [string]::IsNullOrWhiteSpace($env:WMUX_URL)) { return $env:WMUX_URL.Trim() }
   return 'http://127.0.0.1:3478'
 }
 
 function Get-WmuxToken {
-  if ($env:WMUX_TOKEN) { return $env:WMUX_TOKEN }
   $TokenPath = if ($env:WMUX_TOKEN_PATH) { $env:WMUX_TOKEN_PATH } else { Join-Path $HOME '.wmux\token' }
-  return Read-WmuxFileValue $TokenPath
+  $StateToken = Read-WmuxFileValue $TokenPath
+  if ($StateToken) { return $StateToken }
+  return $env:WMUX_TOKEN
 }
 
 function Clean-Text([string]$Value, [int]$Limit) {

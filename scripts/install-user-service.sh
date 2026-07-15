@@ -7,6 +7,9 @@ PORT="${WMUX_PORT:-3478}"
 CERT_FILE="${WMUX_CERT_FILE:-}"
 KEY_FILE="${WMUX_KEY_FILE:-}"
 PUBLIC_URL="${WMUX_PUBLIC_URL:-}"
+HELPER_URL="${WMUX_HELPER_URL:-}"
+HELPER_URL="${HELPER_URL#"${HELPER_URL%%[![:space:]]*}"}"
+HELPER_URL="${HELPER_URL%"${HELPER_URL##*[![:space:]]}"}"
 
 if [[ -z "${HOST}" ]] && command -v tailscale >/dev/null 2>&1; then
   HOST="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
@@ -28,6 +31,9 @@ fi
 if [[ -z "${PUBLIC_URL}" ]]; then
   PUBLIC_URL="${PROTOCOL}://${HOST}:${PORT}"
 fi
+if [[ -z "${HELPER_URL}" ]]; then
+  HELPER_URL="${PUBLIC_URL}"
+fi
 
 mkdir -p "${HOME}/.config/systemd/user"
 mkdir -p "${HOME}/.local/bin"
@@ -42,7 +48,7 @@ cat > "${HOME}/.wmux/stream-agent.defaults.json" <<EOF
 {
   "machine": "local",
   "server": "${HOST}",
-  "wmuxUrl": "${PUBLIC_URL}",
+  "wmuxUrl": "${HELPER_URL}",
   "rtspUrl": "rtsp://${HOST}:8554/wmux-local",
   "onDemand": true,
   "pollInterval": 2
@@ -85,6 +91,7 @@ sed \
   -e "s#Environment=WMUX_CERT_FILE=.*#Environment=WMUX_CERT_FILE=${CERT_FILE}#" \
   -e "s#Environment=WMUX_KEY_FILE=.*#Environment=WMUX_KEY_FILE=${KEY_FILE}#" \
   -e "s#Environment=WMUX_PUBLIC_URL=.*#Environment=WMUX_PUBLIC_URL=${PUBLIC_URL}#" \
+  -e "s#Environment=WMUX_HELPER_URL=.*#Environment=WMUX_HELPER_URL=${HELPER_URL}#" \
   "${ROOT_DIR}/deploy/wmux.service.example" > "${HOME}/.config/systemd/user/wmux.service"
 
 systemctl --user daemon-reload

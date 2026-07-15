@@ -15,22 +15,27 @@ def _wmux_file(path):
         return ""
 
 
+def _wmux_env(name):
+    return os.environ.get(name, "").strip()
+
+
 def _wmux_token():
-    token = os.environ.get("WMUX_TOKEN")
+    # Durable processes retain WMUX_TOKEN across restarts, while wmux refreshes
+    # this owner-only file on every reattach.
+    token = _wmux_file(os.environ.get("WMUX_TOKEN_PATH") or os.path.expanduser("~/.wmux/token"))
     if token:
         return token
-    # Fall back to ~/.wmux/token so hooks in existing/durable panes
-    # authenticate even when WMUX_TOKEN was never in their env. wmux writes
-    # the file on the server host at startup and on every remote (re)attach.
-    return _wmux_file(os.environ.get("WMUX_TOKEN_PATH") or os.path.expanduser("~/.wmux/token"))
+    return _wmux_env("WMUX_TOKEN")
 
 
 def _wmux_url():
-    # Env, else the ~/.wmux/url file wmux persists alongside the token, else
-    # the historical localhost default.
+    # Durable processes retain their environment across restarts, while wmux
+    # refreshes this owner-only file on every reattach.
     return (
-        os.environ.get("WMUX_URL")
-        or _wmux_file(os.path.expanduser("~/.wmux/url"))
+        _wmux_file(os.path.expanduser("~/.wmux/url"))
+        or _wmux_env("WMUX_HELPER_URL")
+        or _wmux_env("WMUX_PUBLIC_URL")
+        or _wmux_env("WMUX_URL")
         or "http://127.0.0.1:3478"
     )
 

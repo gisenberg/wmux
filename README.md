@@ -86,6 +86,9 @@ npm run start -- --host 100.x.y.z --port 3478
 ```
 
 HTTPS is required for browser secure-context APIs such as Moonlight/WebCodecs.
+If managed SSH hosts cannot reach the browser-facing URL, set `WMUX_HELPER_URL`
+to their private callback URL. It affects staged helpers and agent callbacks
+only; browser links continue to use `WMUX_PUBLIC_URL`.
 
 ### User service and containers
 
@@ -97,7 +100,8 @@ scripts/install-user-service.sh
 
 It chooses the first Tailscale IPv4 address when available. Override it with
 `WMUX_HOST`, `WMUX_PORT`, `WMUX_CERT_FILE`, `WMUX_KEY_FILE`, and
-`WMUX_PUBLIC_URL`.
+`WMUX_PUBLIC_URL`, and (when helper callbacks need a different private route)
+`WMUX_HELPER_URL`.
 
 ```bash
 systemctl --user status wmux.service

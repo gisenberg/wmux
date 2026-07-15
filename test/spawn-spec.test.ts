@@ -17,6 +17,7 @@ const snapshotRuntimeDir = "/run/user/1000";
 
 // Fixed environment so generated bootstrap URLs / scripts are deterministic.
 const fixedEnv: Record<string, string> = {
+  WMUX_HELPER_URL: "",
   WMUX_URL: "http://10.0.0.1:3478",
   WMUX_HOST: "10.0.0.1",
   WMUX_PORT: "3478",
@@ -127,5 +128,6 @@ test("POSIX SSH staging includes the hook installer beside its event helper", ()
   assert.match(command, /wmux-agent-profile/);
   assert.match(command, /wmux-agent-profile apply --quiet/);
   assert.match(command, /\$HOME\/\.local\/bin/);
+  assert.match(command, /chmod 600 "\$HOME\/\.wmux\/(?:token|url)"/);
   assert.equal(wrapper.includes(extraEnv.WMUX_TOKEN), false, "credentials stay in the staged payload");
 });
