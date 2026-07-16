@@ -5,6 +5,8 @@ import { DiagnosticsModal } from "./DiagnosticsModal";
 import { ActivityPanel, buildActivityItems } from "./ActivityPanel";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { SettingsModal, cleanAlias, defaultSettings, type SettingsSurface } from "./SettingsModal";
+import { ColorSchemeProvider } from "./color-scheme-context";
+import { colorSchemeById, colorSchemeCssVariables } from "./color-schemes";
 
 // The full pane surface (Ghostty + Kitty graphics) stays lazy; the lightweight
 // boot screen owns the initial Ghostty startup while the API bootstrap runs.
@@ -507,8 +509,10 @@ export function App() {
   const activeStreamMachine = machineFor(displayMachines, activeStreamMachineId);
   const activeStream = streams.find((stream) => stream.machineId === activeStreamMachineId);
   const canOpenStream = !mobileViewport.isMobile && Boolean(activeStream);
+  const activeColorScheme = colorSchemeById(settings.colorScheme);
   const appStyle = {
     "--wmux-sidebar-width": `${sidebarWidth}px`,
+    ...colorSchemeCssVariables(activeColorScheme),
   } as CSSProperties;
   const showMobileModeBar = mobileViewport.isMobile;
   const showMobileAgentSurface = showMobileModeBar && mobileSurfaceMode === "agent";
@@ -1082,6 +1086,7 @@ export function App() {
     .join(" ");
 
   return (
+    <ColorSchemeProvider id={settings.colorScheme}>
     <main className={appClassName} style={appStyle} aria-busy={pendingActions.length > 0}>
       <Toasts toasts={toasts} dismissToast={dismissToast} />
       {pendingActions.length > 0 ? (
@@ -1700,6 +1705,7 @@ export function App() {
         )
       ) : null}
     </main>
+    </ColorSchemeProvider>
   );
 }
 

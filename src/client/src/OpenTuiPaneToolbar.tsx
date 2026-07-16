@@ -6,7 +6,6 @@ import {
   createGridPainter,
   fillCells,
   fitText,
-  hexToRgba,
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
@@ -15,6 +14,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 interface PaneToolbarRun {
   status: TerminalRun["status"];
@@ -61,24 +61,8 @@ interface HitZone {
   action: HitAction;
 }
 
-const colors = {
-  black: "#050505",
-  panel: "#0a0907",
-  active: "#17130a",
-  gold: "#f4d35e",
-  text: "#e4ded0",
-  muted: "#8d826f",
-  faint: "#5f584b",
-  green: "#47d37c",
-  blue: "#5097ff",
-  red: "#d94a3d",
-};
-
-const rgba = Object.fromEntries(
-  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
-) as Record<keyof typeof colors, RGBA>;
-
 export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
+  const theme = useOpenTuiTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
@@ -92,13 +76,13 @@ export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
-      clearColor: colors.panel,
+      clearColor: theme.colors.panel,
     });
 
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
-      painter.paint(drawPaneToolbar(metrics, renderModel, hitsRef.current));
+      painter.paint(drawPaneToolbar(metrics, renderModel, hitsRef.current, theme));
     };
 
     paint();
@@ -107,7 +91,7 @@ export function OpenTuiPaneToolbar(props: OpenTuiPaneToolbarProps) {
       observer.disconnect();
       painter.dispose();
     };
-  }, [renderModel]);
+  }, [renderModel, theme]);
 
   const runAction = (action: HitAction) => {
     if (action.type === "copy-last-command") props.onCopyLastCommand();
@@ -218,7 +202,9 @@ const drawPaneToolbar = (
   metrics: CellMetrics,
   props: OpenTuiPaneToolbarProps,
   hits: HitZone[],
+  theme: OpenTuiTheme,
 ): CellGrid => {
+  const { rgba } = theme;
   hits.length = 0;
   const { cols, rows } = metrics;
   const grid = createGrid(cols, rows, rgba.panel, rgba.text);
@@ -260,7 +246,7 @@ const drawPaneToolbar = (
     const runWidth = Math.max(6, runLabel.length + 2);
     const runCol = Math.max(0, right - runWidth);
     fillCells(grid, row, runCol, runWidth, rgba.black);
-    writeText(grid, row, runCol + 1, runLabel, runColor(props.run.status), 1);
+    writeText(grid, row, runCol + 1, runLabel, runColor(props.run.status, theme), 1);
     hits.push({ row, col: runCol, width: runWidth, title: props.run.title, action: { type: "focus" }, disabled: true });
     right = runCol - 1;
   }
@@ -275,7 +261,7 @@ const drawPaneToolbar = (
   return grid;
 };
 
-const runColor = (status: TerminalRun["status"]): RGBA => {
+const runColor = (status: TerminalRun["status"], { rgba }: OpenTuiTheme): RGBA => {
   if (status === "started") return rgba.blue;
   if (status === "failed") return rgba.red;
   return rgba.green;

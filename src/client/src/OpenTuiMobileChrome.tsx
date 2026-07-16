@@ -4,7 +4,6 @@ import {
   createGridPainter,
   fillCells,
   fitText,
-  hexToRgba,
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
@@ -13,6 +12,7 @@ import {
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import type { MachineVersionStatus } from "./types";
+import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 type MobileSurfaceMode = "agent" | "terminal";
 type MobileStatus = "running" | "waiting" | "completed" | "failed" | "updated";
@@ -38,34 +38,10 @@ type MobileChromeRenderModel = Pick<
   "workspaceName" | "subtitle" | "status" | "statusLabel" | "versionStatus" | "versionLabel" | "versionDetail" | "serviceConnection" | "surfaceMode" | "navigationOpen"
 > & { animationTick: number };
 
-const colors = {
-  black: "#050505",
-  panel: "#0a0907",
-  active: "#17130a",
-  line: "#2f2a1d",
-  gold: "#f4d35e",
-  text: "#e4ded0",
-  muted: "#8d826f",
-  faint: "#5f584b",
-  green: "#47d37c",
-  red: "#d94a3d",
-  blue: "#5aa9ff",
-};
-
-const rgba = Object.fromEntries(
-  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
-) as Record<keyof typeof colors, RGBA>;
-
 const runningFrames = ["|", "/", "-", "\\"];
-const statusColors = {
-  completed: rgba.green,
-  failed: rgba.red,
-  running: rgba.blue,
-  updated: rgba.muted,
-  waiting: rgba.gold,
-};
 
 export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
+  const theme = useOpenTuiTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const paintRef = useRef<(() => void) | null>(null);
   const [animationTick, setAnimationTick] = useState(0);
@@ -116,11 +92,11 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
-      clearColor: colors.black,
+      clearColor: theme.colors.black,
     });
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
-      painter.paint(drawMobileChrome(metrics, modelRef.current));
+      painter.paint(drawMobileChrome(metrics, modelRef.current, theme));
     };
     paintRef.current = () => paint();
     paint();
@@ -130,7 +106,7 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
       observer.disconnect();
       painter.dispose();
     };
-  }, []);
+  }, [theme]);
 
   return (
     <header className="open-tui-mobile-chrome" role="banner" aria-label="Mobile session controls">
@@ -175,7 +151,16 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
 const drawMobileChrome = (
   metrics: CellMetrics,
   model: MobileChromeRenderModel,
+  theme: OpenTuiTheme,
 ) => {
+  const { rgba } = theme;
+  const statusColors = {
+    completed: rgba.green,
+    failed: rgba.red,
+    running: rgba.blue,
+    updated: rgba.muted,
+    waiting: rgba.gold,
+  };
   const { cols, rows } = metrics;
   const grid = createGrid(cols, rows, rgba.black, rgba.text);
   const write = (row: number, col: number, text: string, color: RGBA, bold = false) => {

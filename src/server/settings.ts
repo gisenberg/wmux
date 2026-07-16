@@ -4,20 +4,23 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { z } from "zod";
 import type { WmuxSettings } from "./types.js";
+import { TERMINAL_COLOR_SCHEME_IDS, type TerminalColorSchemeId } from "../shared/protocol.js";
 
 const defaultPath = (): string => path.join(os.homedir(), ".wmux", "settings.json");
-export const CURRENT_SETTINGS_SCHEMA_VERSION = 1;
+export const CURRENT_SETTINGS_SCHEMA_VERSION = 2;
 
 const persistedSettingsSchema = z.object({
   schemaVersion: z.literal(CURRENT_SETTINGS_SCHEMA_VERSION),
   terminalFontSize: z.unknown().optional(),
   terminalScrollbackRows: z.unknown().optional(),
+  colorScheme: z.unknown().optional(),
   machineAliases: z.unknown().optional(),
 }).strict();
 
 export const defaultSettings: WmuxSettings = {
   terminalFontSize: 14,
   terminalScrollbackRows: 10_000,
+  colorScheme: "wmux",
   machineAliases: {},
 };
 
@@ -38,6 +41,7 @@ export class SettingsStore extends EventEmitter {
     this.settings = normalizeSettings({
       terminalFontSize: input.terminalFontSize ?? this.settings.terminalFontSize,
       terminalScrollbackRows: input.terminalScrollbackRows ?? this.settings.terminalScrollbackRows,
+      colorScheme: input.colorScheme ?? this.settings.colorScheme,
       machineAliases: input.machineAliases ?? this.settings.machineAliases,
     });
     this.save(true);
@@ -96,8 +100,8 @@ export class SettingsStore extends EventEmitter {
           `settings schema ${version} is newer than this wmux build supports (${CURRENT_SETTINGS_SCHEMA_VERSION})`,
         );
       }
-      const candidate = version === undefined
-        ? { ...record, schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION }
+      const candidate = version === undefined || version === 1
+        ? { ...record, schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION, colorScheme: record.colorScheme ?? defaultSettings.colorScheme }
         : record;
       const parsed = persistedSettingsSchema.parse(candidate);
       return normalizeSettings(parsed);
@@ -126,12 +130,21 @@ export class SettingsStore extends EventEmitter {
 const normalizeSettings = (input: {
   terminalFontSize?: unknown;
   terminalScrollbackRows?: unknown;
+  colorScheme?: unknown;
   machineAliases?: unknown;
 }): WmuxSettings => ({
   terminalFontSize: clampFontSize(input.terminalFontSize),
   terminalScrollbackRows: clampScrollbackRows(input.terminalScrollbackRows),
+  colorScheme: cleanColorScheme(input.colorScheme),
   machineAliases: cleanAliases(input.machineAliases),
 });
+
+const colorSchemeIds = new Set<string>(TERMINAL_COLOR_SCHEME_IDS);
+
+const cleanColorScheme = (value: unknown): TerminalColorSchemeId =>
+  typeof value === "string" && colorSchemeIds.has(value)
+    ? value as TerminalColorSchemeId
+    : defaultSettings.colorScheme;
 
 const clampFontSize = (value: unknown): number => {
   const numeric = typeof value === "number" && Number.isFinite(value) ? value : defaultSettings.terminalFontSize;

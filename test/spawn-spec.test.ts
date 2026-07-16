@@ -71,7 +71,11 @@ const sampleSpecs = () => {
       };
     });
   } finally {
-    process.env = saved;
+    for (const key of [...Object.keys(fixedEnv), "XDG_RUNTIME_DIR"]) {
+      const value = saved[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(runtimeDir, { recursive: true, force: true });
   }
 };

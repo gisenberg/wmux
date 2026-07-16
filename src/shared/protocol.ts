@@ -4,6 +4,16 @@ export type SessionBackend = "auto" | "pty" | "tmux" | "screen" | "agent";
 export type StreamProvider = "mediamtx" | "moonlight-gateway";
 export type StreamReasonKind = "provider" | "gateway" | "upstream" | "target";
 export type MachineVersionStatus = "current" | "outdated" | "unknown";
+export const TERMINAL_COLOR_SCHEME_IDS = [
+  "wmux",
+  "catppuccin-mocha",
+  "dracula",
+  "nord",
+  "solarized-dark",
+  "gruvbox-dark",
+  "tokyo-night",
+] as const;
+export type TerminalColorSchemeId = (typeof TERMINAL_COLOR_SCHEME_IDS)[number];
 
 /** Browser-safe stream configuration. Server-only credentials never cross this boundary. */
 export interface MachineStreamConfig {
@@ -170,6 +180,7 @@ export interface StreamStatus {
 export interface WmuxSettings {
   terminalFontSize: number;
   terminalScrollbackRows: number;
+  colorScheme: TerminalColorSchemeId;
   machineAliases: Record<string, string>;
 }
 

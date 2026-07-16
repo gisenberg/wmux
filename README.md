@@ -269,8 +269,8 @@ token. wmux is not a hardened multi-user service.
 - Host labels show the wmux release and platform consistently. Update
   indicators stay hidden unless an underlying runtime or helper update is
   needed.
-- Settings persist in `~/.wmux/settings.json` and include terminal size,
-  scrollback, and user-facing host aliases.
+- Settings persist in `~/.wmux/settings.json` and include a shared terminal and
+  canvas-chrome color scheme, terminal size, scrollback, and user-facing host aliases.
 - Pasting a PNG, JPEG, WebP, or GIF into a connected terminal stages a private
   temporary file in that pane's target filesystem and pastes its quoted native
   path. Local, POSIX SSH, PowerShell-over-SSH, and current Windows-agent panes

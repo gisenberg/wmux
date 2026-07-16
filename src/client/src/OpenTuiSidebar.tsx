@@ -5,7 +5,6 @@ import {
   createGridPainter,
   fillCells,
   fitText,
-  hexToRgba,
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
@@ -17,6 +16,7 @@ import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { loadMachineTargetPickerExpanded, persistMachineTargetPickerExpanded } from "./machine-target";
 import { compactMiddlePath } from "./path-display";
 import type { MachineVersionStatus } from "./types";
+import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 export interface OpenTuiSidebarWorkspace {
   id: string;
@@ -70,45 +70,8 @@ interface HitZone {
   title: string;
 }
 
-const colors = {
-  black: "#050505",
-  panel: "#090909",
-  active: "#17130a",
-  activeSoft: "#100e08",
-  gold: "#f4d35e",
-  goldDim: "#a9944f",
-  text: "#e4ded0",
-  muted: "#8d826f",
-  faint: "#5f584b",
-  red: "#d94a3d",
-  green: "#47d37c",
-  blue: "#5aa9ff",
-  agent: "#c792ea",
-  runningSoft: "#061019",
-  failedSoft: "#150806",
-};
-
-const rgba = Object.fromEntries(
-  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
-) as Record<keyof typeof colors, RGBA>;
-
 const runningFrames = ["|", "/", "-", "\\"];
-const agentStatusColors = {
-  completed: rgba.green,
-  failed: rgba.red,
-  running: rgba.blue,
-  updated: rgba.gold,
-  waiting: rgba.gold,
-};
-const inactiveAgentBackgrounds = {
-  completed: rgba.black,
-  failed: rgba.failedSoft,
-  running: rgba.runningSoft,
-  updated: rgba.black,
-  waiting: rgba.activeSoft,
-};
 const statusBullet = "•";
-const reachColor = (reachable: boolean): RGBA => reachable ? rgba.green : rgba.red;
 
 interface SidebarRenderModel {
   targetMachineId: string;
@@ -130,6 +93,7 @@ export function OpenTuiSidebar({
   onCreateWorkspace,
   onActivateWorkspace,
 }: OpenTuiSidebarProps) {
+  const theme = useOpenTuiTheme();
   const [hostPickerOpen, setHostPickerOpen] = useState(() => loadMachineTargetPickerExpanded(window.localStorage));
   const [animationTick, setAnimationTick] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -175,13 +139,13 @@ export function OpenTuiSidebar({
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
-      clearColor: colors.black,
+      clearColor: theme.colors.black,
     });
 
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
-      painter.paint(drawSidebarGrid(metricsRef.current, renderModelRef.current, hitsRef));
+      painter.paint(drawSidebarGrid(metricsRef.current, renderModelRef.current, hitsRef, theme));
     };
 
     paintRef.current = () => paint();
@@ -192,7 +156,7 @@ export function OpenTuiSidebar({
       observer.disconnect();
       painter.dispose();
     };
-  }, []);
+  }, [theme]);
 
   const onClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -233,7 +197,24 @@ const drawSidebarGrid = (
   metrics: CellMetrics,
   model: SidebarRenderModel,
   hitsRef: MutableRefObject<HitZone[]>,
+  theme: OpenTuiTheme,
 ): CellGrid => {
+  const { rgba } = theme;
+  const agentStatusColors = {
+    completed: rgba.green,
+    failed: rgba.red,
+    running: rgba.blue,
+    updated: rgba.gold,
+    waiting: rgba.gold,
+  };
+  const inactiveAgentBackgrounds = {
+    completed: rgba.black,
+    failed: rgba.failedSoft,
+    running: rgba.runningSoft,
+    updated: rgba.black,
+    waiting: rgba.activeSoft,
+  };
+  const reachColor = (reachable: boolean): RGBA => reachable ? rgba.green : rgba.red;
   const { cols, rows } = metrics;
   const grid = createGrid(cols, rows, rgba.black, rgba.text);
   const hits: HitZone[] = [];

@@ -4,7 +4,6 @@ import {
   createGridPainter,
   fillCells,
   fitText,
-  hexToRgba,
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
@@ -13,6 +12,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 export interface OpenTuiActivityRow {
   id: string;
@@ -28,24 +28,6 @@ interface OpenTuiActivityPanelProps {
   onClose: () => void;
 }
 
-const colors = {
-  black: "#050505",
-  panel: "#090907",
-  active: "#17130a",
-  gold: "#f4d35e",
-  text: "#e4ded0",
-  muted: "#8d826f",
-  faint: "#5f584b",
-  line: "#2f2a1d",
-  green: "#47d37c",
-  blue: "#5097ff",
-  red: "#d94a3d",
-};
-
-const rgba = Object.fromEntries(
-  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
-) as Record<keyof typeof colors, RGBA>;
-
 interface HitZone {
   row: number;
   col: number;
@@ -54,6 +36,7 @@ interface HitZone {
 }
 
 export function OpenTuiActivityPanel({ rows, onClose }: OpenTuiActivityPanelProps) {
+  const theme = useOpenTuiTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
@@ -67,13 +50,13 @@ export function OpenTuiActivityPanel({ rows, onClose }: OpenTuiActivityPanelProp
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
-      clearColor: colors.black,
+      clearColor: theme.colors.black,
     });
 
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
-      painter.paint(drawActivity(metrics, renderRows, hitsRef.current));
+      painter.paint(drawActivity(metrics, renderRows, hitsRef.current, theme));
     };
 
     paint();
@@ -82,7 +65,7 @@ export function OpenTuiActivityPanel({ rows, onClose }: OpenTuiActivityPanelProp
       observer.disconnect();
       painter.dispose();
     };
-  }, [renderRows]);
+  }, [renderRows, theme]);
 
   const onClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -116,7 +99,9 @@ const drawActivity = (
   metrics: CellMetrics,
   rows: OpenTuiActivityRow[],
   hits: HitZone[],
+  theme: OpenTuiTheme,
 ): CellGrid => {
+  const { rgba } = theme;
   hits.length = 0;
   const { cols, rows: gridRows } = metrics;
   const grid = createGrid(cols, gridRows, rgba.black, rgba.text);
@@ -146,7 +131,7 @@ const drawActivity = (
     for (let offset = 0; offset < rowHeight - 1; offset += 1) {
       fillRow(itemRow + offset, index % 2 === 0 ? rgba.black : rgba.panel);
     }
-    const statusColor = statusColorFor(item.status);
+    const statusColor = statusColorFor(item.status, theme);
     write(itemRow, 2, item.kind.toUpperCase(), statusColor, 700);
     write(itemRow, 14, item.title, rgba.text, 700);
     write(itemRow + 1, 14, item.summary, rgba.muted, 400);
@@ -155,7 +140,7 @@ const drawActivity = (
   return grid;
 };
 
-const statusColorFor = (status: OpenTuiActivityRow["status"]): RGBA => {
+const statusColorFor = (status: OpenTuiActivityRow["status"], { rgba }: OpenTuiTheme): RGBA => {
   if (status === "running") return rgba.blue;
   if (status === "waiting") return rgba.gold;
   if (status === "completed") return rgba.green;

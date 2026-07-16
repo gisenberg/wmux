@@ -31,9 +31,37 @@ test("legacy settings migrate while preserving normalized values", () => {
     assert.deepEqual(store.snapshot(), {
       terminalFontSize: 19,
       terminalScrollbackRows: 5000,
+      colorScheme: "wmux",
       machineAliases: { local: "Home" },
     });
     assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_SETTINGS_SCHEMA_VERSION);
+  });
+});
+
+test("version 1 settings migrate to the default color scheme", () => {
+  withTempSettings((filePath) => {
+    fs.writeFileSync(filePath, JSON.stringify({
+      schemaVersion: 1,
+      terminalFontSize: 16,
+      terminalScrollbackRows: 8000,
+      machineAliases: {},
+    }));
+    const store = new SettingsStore(filePath);
+    assert.equal(store.snapshot().colorScheme, "wmux");
+    assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_SETTINGS_SCHEMA_VERSION);
+  });
+});
+
+test("settings persist supported schemes and normalize unknown values", () => {
+  withTempSettings((filePath) => {
+    const store = new SettingsStore(filePath);
+    store.update({ colorScheme: "catppuccin-mocha" });
+    assert.equal(store.snapshot().colorScheme, "catppuccin-mocha");
+    fs.writeFileSync(filePath, JSON.stringify({
+      schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
+      colorScheme: "not-a-scheme",
+    }));
+    assert.equal(new SettingsStore(filePath).snapshot().colorScheme, "wmux");
   });
 });
 

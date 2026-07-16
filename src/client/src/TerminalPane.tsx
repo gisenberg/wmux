@@ -25,6 +25,7 @@ import { api } from "./api";
 import { canApplyStagedPasteImage, imagesFromClipboard, quoteStagedImagePath } from "./clipboard-images";
 import { Osc52Parser } from "./terminal-osc52";
 import { RectangularSelection } from "./terminal-rectangular-selection";
+import { useColorScheme } from "./color-scheme-context";
 import { PaneSocketController } from "./pane-socket";
 import {
   type KittyInlineImage,
@@ -111,6 +112,7 @@ export const TerminalPane = memo(function TerminalPane({
   onBell,
   onDismissMedia,
 }: Props) {
+  const colorScheme = useColorScheme();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -676,12 +678,7 @@ export const TerminalPane = memo(function TerminalPane({
         fontSize: terminalFontSize,
         fontFamily: WMUX_MONO_FONT_FAMILY,
         scrollback: terminalScrollbackRows,
-        theme: {
-          background: "#101114",
-          foreground: "#d8dee9",
-          cursor: "#f7c95c",
-          selectionBackground: "#31445f",
-        },
+        theme: colorScheme.terminal,
       });
       term.open(containerRef.current);
       configureTerminalInput(term);
@@ -1032,6 +1029,12 @@ export const TerminalPane = memo(function TerminalPane({
       if (metrics) setTerminalMetrics(metrics);
     });
   }, [terminalFontSize]);
+
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.theme = colorScheme.terminal;
+  }, [colorScheme]);
 
   const currentMachine = machines.find((machine) => machine.id === pane.machineId);
   const canSplit = currentMachine?.reachable ?? false;

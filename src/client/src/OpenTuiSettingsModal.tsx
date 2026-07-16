@@ -13,7 +13,6 @@ import {
   createGridPainter,
   fillCells,
   fitText,
-  hexToRgba,
   observeCanvasViewport,
   setCellBackground,
   syncPainterViewport,
@@ -23,6 +22,8 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { terminalColorSchemes } from "./color-schemes";
+import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 import type { DurableSessionAudit, MachineStatus, WmuxSettings } from "./types";
 
 interface OpenTuiSettingsModalProps {
@@ -42,7 +43,8 @@ interface OpenTuiSettingsModalProps {
 }
 
 type FieldId = "font" | "scrollback" | `alias:${string}`;
-type FocusId = FieldId | "dom" | "close" | "audit" | "reset" | "cancel" | "save" | `cleanup:${string}:${string}`;
+type ChoiceId = "scheme";
+type FocusId = FieldId | ChoiceId | "dom" | "close" | "audit" | "reset" | "cancel" | "save" | `cleanup:${string}:${string}`;
 
 interface EditState {
   id: FieldId;
@@ -65,6 +67,15 @@ interface LayoutNumber {
   max: number;
   step: number;
   suffix: string;
+  start: number;
+  height: number;
+}
+
+interface LayoutChoice {
+  kind: "choice";
+  id: ChoiceId;
+  label: string;
+  value: string;
   start: number;
   height: number;
 }
@@ -108,10 +119,11 @@ interface LayoutAuditRow {
   height: number;
 }
 
-type LayoutItem = LayoutSection | LayoutNumber | LayoutAlias | LayoutAudit | LayoutMessage | LayoutAuditRow;
+type LayoutItem = LayoutSection | LayoutNumber | LayoutChoice | LayoutAlias | LayoutAudit | LayoutMessage | LayoutAuditRow;
 type LayoutItemInput =
   | Omit<LayoutSection, "start">
   | Omit<LayoutNumber, "start">
+  | Omit<LayoutChoice, "start">
   | Omit<LayoutAlias, "start">
   | Omit<LayoutAudit, "start">
   | Omit<LayoutMessage, "start">
@@ -137,24 +149,6 @@ const fontMax = 24;
 const scrollbackMin = 1_000;
 const scrollbackMax = 200_000;
 
-const colors = {
-  black: "#050505",
-  panel: "#090907",
-  active: "#17130a",
-  gold: "#f4d35e",
-  text: "#e4ded0",
-  muted: "#8d826f",
-  faint: "#5f584b",
-  line: "#2f2a1d",
-  green: "#47d37c",
-  blue: "#5097ff",
-  red: "#d94a3d",
-};
-
-const rgba = Object.fromEntries(
-  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
-) as Record<keyof typeof colors, RGBA>;
-
 export function OpenTuiSettingsModal({
   machines,
   draft,
@@ -170,6 +164,7 @@ export function OpenTuiSettingsModal({
   onRunSessionAudit,
   onCleanupSession,
 }: OpenTuiSettingsModalProps) {
+  const theme = useOpenTuiTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
@@ -222,14 +217,14 @@ export function OpenTuiSettingsModal({
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
-      clearColor: colors.black,
+      clearColor: theme.colors.black,
     });
 
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
       setViewportRows((current) => (current === metrics.rows ? current : metrics.rows));
-      painter.paint(drawSettings(metrics, layout, focusId, editing, scrollOffset, saving, hitsRef.current, !!onUseDomFallback));
+      painter.paint(drawSettings(metrics, layout, focusId, editing, scrollOffset, saving, hitsRef.current, !!onUseDomFallback, theme));
     };
 
     paint();
@@ -238,7 +233,7 @@ export function OpenTuiSettingsModal({
       observer.disconnect();
       painter.dispose();
     };
-  }, [editing, focusId, layout, onUseDomFallback, saving, scrollOffset]);
+  }, [editing, focusId, layout, onUseDomFallback, saving, scrollOffset, theme]);
 
   const applyNextDraft = (nextDraft: WmuxSettings) => {
     draftRef.current = nextDraft;
@@ -274,6 +269,14 @@ export function OpenTuiSettingsModal({
     setFocusId(id);
   };
 
+  const adjustScheme = (direction: -1 | 1) => {
+    const current = commitEditing();
+    const currentIndex = Math.max(0, terminalColorSchemes.findIndex((scheme) => scheme.id === current.colorScheme));
+    const colorScheme = terminalColorSchemes[modulo(currentIndex + direction, terminalColorSchemes.length)].id;
+    applyNextDraft({ ...current, colorScheme });
+    setFocusId("scheme");
+  };
+
   const activate = async (id: FocusId) => {
     if (id === "dom") {
       commitEditing();
@@ -297,6 +300,10 @@ export function OpenTuiSettingsModal({
     if (id === "audit") {
       commitEditing();
       await onRunSessionAudit();
+      return;
+    }
+    if (id === "scheme") {
+      adjustScheme(1);
       return;
     }
     if (id.startsWith("cleanup:")) {
@@ -372,14 +379,16 @@ export function OpenTuiSettingsModal({
       moveFocus(-1);
       return;
     }
-    if (event.key === "ArrowLeft" && (focusId === "font" || focusId === "scrollback")) {
+    if (event.key === "ArrowLeft" && (focusId === "font" || focusId === "scrollback" || focusId === "scheme")) {
       event.preventDefault();
-      adjustNumber(focusId, -1);
+      if (focusId === "scheme") adjustScheme(-1);
+      else adjustNumber(focusId, -1);
       return;
     }
-    if (event.key === "ArrowRight" && (focusId === "font" || focusId === "scrollback")) {
+    if (event.key === "ArrowRight" && (focusId === "font" || focusId === "scrollback" || focusId === "scheme")) {
       event.preventDefault();
-      adjustNumber(focusId, 1);
+      if (focusId === "scheme") adjustScheme(1);
+      else adjustNumber(focusId, 1);
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
@@ -397,12 +406,14 @@ export function OpenTuiSettingsModal({
     const hit = hitFromEvent(event.clientX, event.clientY);
     panelRef.current?.focus();
     if (!hit) return;
-    if (hit.action === "increment" && (hit.id === "font" || hit.id === "scrollback")) {
-      adjustNumber(hit.id, 1);
+    if (hit.action === "increment" && (hit.id === "font" || hit.id === "scrollback" || hit.id === "scheme")) {
+      if (hit.id === "scheme") adjustScheme(1);
+      else adjustNumber(hit.id, 1);
       return;
     }
-    if (hit.action === "decrement" && (hit.id === "font" || hit.id === "scrollback")) {
-      adjustNumber(hit.id, -1);
+    if (hit.action === "decrement" && (hit.id === "font" || hit.id === "scrollback" || hit.id === "scheme")) {
+      if (hit.id === "scheme") adjustScheme(-1);
+      else adjustNumber(hit.id, -1);
       return;
     }
     if (hit.action === "edit" && isFieldId(hit.id)) {
@@ -477,7 +488,14 @@ const buildLayout = (
     row += item.height;
   };
 
-  push({ kind: "section", title: "GHOSTTY", height: 2 });
+  push({ kind: "section", title: "APPEARANCE", height: 2 });
+  push({
+    kind: "choice",
+    id: "scheme",
+    label: "color scheme",
+    value: terminalColorSchemes.find((scheme) => scheme.id === draft.colorScheme)?.name ?? terminalColorSchemes[0].name,
+    height: 2,
+  });
   push({
     kind: "number",
     id: "font",
@@ -570,7 +588,9 @@ const drawSettings = (
   saving: boolean,
   hits: HitZone[],
   canUseDomFallback: boolean,
+  theme: OpenTuiTheme,
 ): CellGrid => {
+  const { rgba } = theme;
   hits.length = 0;
   const { cols, rows } = metrics;
   const grid = createGrid(cols, rows, rgba.black, rgba.text);
@@ -593,10 +613,10 @@ const drawSettings = (
   write(2, 2, "wmux canvas console", rgba.faint, 600);
 
   let closeCol = Math.max(2, cols - 7);
-  drawButton(grid, 1, closeCol, "X", focusId === "close", hits, "close", "activate");
+  drawButton(grid, 1, closeCol, "X", focusId === "close", hits, "close", "activate", theme);
   if (canUseDomFallback) {
     const domCol = Math.max(2, closeCol - 7);
-    drawButton(grid, 1, domCol, "DOM", focusId === "dom", hits, "dom", "activate");
+    drawButton(grid, 1, domCol, "DOM", focusId === "dom", hits, "dom", "activate", theme);
   }
 
   for (const item of layout.items) {
@@ -606,24 +626,26 @@ const drawSettings = (
       fillCells(grid, row, 1, Math.max(0, cols - 2), rgba.black);
       write(row, 2, item.title, rgba.gold, 700);
     } else if (item.kind === "number") {
-      drawNumber(grid, item, row, cols, focusId, editing, hits);
+      drawNumber(grid, item, row, cols, focusId, editing, hits, theme);
+    } else if (item.kind === "choice") {
+      drawChoice(grid, item, row, cols, focusId, hits, theme);
     } else if (item.kind === "alias") {
-      drawAlias(grid, item, row, cols, focusId, editing, hits);
+      drawAlias(grid, item, row, cols, focusId, editing, hits, theme);
     } else if (item.kind === "audit") {
       const selected = focusId === item.id;
       fillCells(grid, row, 1, Math.max(0, cols - 2), selected ? rgba.active : rgba.panel);
-      drawButton(grid, row, 2, "audit sessions", selected, hits, "audit", "activate");
+      drawButton(grid, row, 2, "audit sessions", selected, hits, "audit", "activate", theme);
       write(row, 20, item.summary, selected ? rgba.text : rgba.muted, selected ? 700 : 600);
     } else if (item.kind === "message") {
       write(row, 2, item.text, item.tone === "error" ? rgba.red : rgba.faint, 600);
     } else {
       const selected = item.id === focusId;
       fillCells(grid, row, 1, Math.max(0, cols - 2), selected ? rgba.active : rgba.black);
-      write(row, 2, item.status.toUpperCase(), statusColor(item.status), 700);
+      write(row, 2, item.status.toUpperCase(), statusColor(item.status, theme), 700);
       write(row, 14, item.meta, selected ? rgba.text : rgba.muted, selected ? 700 : 600);
       write(row + 1, 14, item.detail, rgba.faint, 400);
       if (item.id && item.backend && item.name) {
-        drawButton(grid, row, Math.max(2, cols - 9), "quit", selected, hits, item.id, "activate");
+        drawButton(grid, row, Math.max(2, cols - 9), "quit", selected, hits, item.id, "activate", theme);
       }
     }
   }
@@ -642,9 +664,9 @@ const drawSettings = (
       1,
     );
   }
-  drawButton(grid, footerTop + 1, resetCol, "reset", focusId === "reset", hits, "reset", "activate");
-  drawButton(grid, footerTop + 1, cancelCol, "cancel", focusId === "cancel", hits, "cancel", "activate");
-  drawButton(grid, footerTop + 1, saveCol, saving ? "saving" : "save", focusId === "save", hits, "save", "activate");
+  drawButton(grid, footerTop + 1, resetCol, "reset", focusId === "reset", hits, "reset", "activate", theme);
+  drawButton(grid, footerTop + 1, cancelCol, "cancel", focusId === "cancel", hits, "cancel", "activate", theme);
+  drawButton(grid, footerTop + 1, saveCol, saving ? "saving" : "save", focusId === "save", hits, "save", "activate", theme);
 
   return grid;
 };
@@ -657,21 +679,43 @@ const drawNumber = (
   focusId: FocusId,
   editing: EditState | null,
   hits: HitZone[],
+  theme: OpenTuiTheme,
 ) => {
+  const { rgba } = theme;
   const selected = focusId === item.id;
   const editValue = editing?.id === item.id ? editing.value : null;
   const displayValue = editValue === null ? item.value.toLocaleString() : `${editValue}_`;
   fillCells(grid, row, 1, Math.max(0, cols - 2), selected ? rgba.active : rgba.panel);
   writeText(grid, row, 2, item.label.toUpperCase(), selected ? rgba.gold : rgba.muted, 1);
   const fieldCol = Math.min(24, Math.max(16, Math.floor(cols * 0.34)));
-  drawField(grid, row, fieldCol, Math.max(12, cols - fieldCol - 15), `${displayValue} ${item.suffix}`, selected, hits, item.id);
-  drawButton(grid, row, Math.max(fieldCol + 12, cols - 13), "-", false, hits, item.id, "decrement");
-  drawButton(grid, row, Math.max(fieldCol + 17, cols - 7), "+", false, hits, item.id, "increment");
+  drawField(grid, row, fieldCol, Math.max(12, cols - fieldCol - 15), `${displayValue} ${item.suffix}`, selected, hits, item.id, theme);
+  drawButton(grid, row, Math.max(fieldCol + 12, cols - 13), "-", false, hits, item.id, "decrement", theme);
+  drawButton(grid, row, Math.max(fieldCol + 17, cols - 7), "+", false, hits, item.id, "increment", theme);
   const barCol = fieldCol;
   const barWidth = Math.max(10, cols - barCol - 3);
   const filled = Math.max(1, Math.round(((item.value - item.min) / (item.max - item.min)) * barWidth));
   fillCells(grid, row + 1, barCol, barWidth, rgba.line);
   fillCells(grid, row + 1, barCol, Math.min(barWidth, filled), selected ? rgba.gold : rgba.faint);
+  hits.push({ row, col: 1, width: Math.max(1, cols - 2), height: 2, id: item.id, action: "focus" });
+};
+
+const drawChoice = (
+  grid: CellGrid,
+  item: LayoutChoice,
+  row: number,
+  cols: number,
+  focusId: FocusId,
+  hits: HitZone[],
+  theme: OpenTuiTheme,
+) => {
+  const { rgba } = theme;
+  const selected = focusId === item.id;
+  fillCells(grid, row, 1, Math.max(0, cols - 2), selected ? rgba.active : rgba.panel);
+  writeText(grid, row, 2, item.label.toUpperCase(), selected ? rgba.gold : rgba.muted, 1);
+  const valueCol = Math.min(24, Math.max(16, Math.floor(cols * 0.34)));
+  writeText(grid, row, valueCol, fitText(item.value, Math.max(0, cols - valueCol - 15)), rgba.text, selected ? 1 : 0);
+  drawButton(grid, row, Math.max(valueCol + 12, cols - 13), "<", false, hits, item.id, "decrement", theme);
+  drawButton(grid, row, Math.max(valueCol + 17, cols - 7), ">", false, hits, item.id, "increment", theme);
   hits.push({ row, col: 1, width: Math.max(1, cols - 2), height: 2, id: item.id, action: "focus" });
 };
 
@@ -683,14 +727,16 @@ const drawAlias = (
   focusId: FocusId,
   editing: EditState | null,
   hits: HitZone[],
+  theme: OpenTuiTheme,
 ) => {
+  const { rgba } = theme;
   const selected = focusId === item.id;
   const editingValue = editing?.id === item.id ? editing.value : null;
   const value = editingValue === null ? item.value || item.placeholder : `${editingValue}_`;
   const valueColor = item.value || editingValue !== null ? rgba.text : rgba.faint;
   fillCells(grid, row, 1, Math.max(0, cols - 2), selected ? rgba.active : rgba.black);
   writeText(grid, row, 2, fitText(item.label.toUpperCase(), 18), selected ? rgba.gold : rgba.muted, 1);
-  drawField(grid, row, 22, Math.max(12, cols - 25), value, selected, hits, item.id, valueColor);
+  drawField(grid, row, 22, Math.max(12, cols - 25), value, selected, hits, item.id, theme, valueColor);
   writeText(grid, row + 1, 22, fitText(`id ${item.machineId}`, Math.max(0, cols - 25)), rgba.faint, 0);
   hits.push({ row, col: 1, width: Math.max(1, cols - 2), height: 2, id: item.id, action: "focus" });
 };
@@ -704,13 +750,15 @@ const drawField = (
   selected: boolean,
   hits: HitZone[],
   id: FieldId,
-  color: RGBA = rgba.text,
+  theme: OpenTuiTheme,
+  color?: RGBA,
 ) => {
+  const { rgba } = theme;
   if (width <= 0) return;
   fillCells(grid, row, col, width, selected ? rgba.black : rgba.panel);
   setCellBackground(grid, row, col, selected ? rgba.gold : rgba.line);
   setCellBackground(grid, row, col + width - 1, selected ? rgba.gold : rgba.line);
-  writeText(grid, row, col + 1, fitText(value, width - 2), color, selected ? 1 : 0);
+  writeText(grid, row, col + 1, fitText(value, width - 2), color ?? rgba.text, selected ? 1 : 0);
   hits.push({ row, col, width, height: 1, id, action: "edit" });
 };
 
@@ -723,7 +771,9 @@ const drawButton = (
   hits: HitZone[],
   id: FocusId,
   action: HitZone["action"],
+  theme: OpenTuiTheme,
 ) => {
+  const { rgba } = theme;
   const text = `[${label}]`;
   const width = text.length;
   fillCells(grid, row, col, width, selected ? rgba.active : rgba.black);
@@ -784,7 +834,7 @@ const clampScrollbackRows = (value: number): number => {
 
 const cleanAlias = (value: string): string => value.replace(/\s+/g, " ").trim().slice(0, 40);
 
-const statusColor = (status: string): RGBA => {
+const statusColor = (status: string, { rgba }: OpenTuiTheme): RGBA => {
   if (status === "active") return rgba.green;
   if (status === "missing" || status === "duplicate") return rgba.gold;
   if (status === "orphan") return rgba.red;

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { OpenTuiSettingsModal } from "./OpenTuiSettingsModal";
+import { terminalColorSchemes } from "./color-schemes";
 import type { DurableSessionAudit, MachineStatus, WmuxSettings } from "./types";
 
 export type SettingsSurface = "opentui" | "dom";
@@ -9,6 +10,7 @@ export type SettingsSurface = "opentui" | "dom";
 export const defaultSettings: WmuxSettings = {
   terminalFontSize: 14,
   terminalScrollbackRows: 10_000,
+  colorScheme: "wmux",
   machineAliases: {},
 };
 
@@ -158,7 +160,21 @@ export function SettingsModal({
         </div>
         <div className="settings-body">
           <section className="settings-section">
-            <h3>Ghostty</h3>
+            <h3>Appearance</h3>
+            <label className="settings-row">
+              <span>Color scheme</span>
+              <select
+                value={draft.colorScheme}
+                onChange={(event) => applyDraft({
+                  ...draft,
+                  colorScheme: event.target.value as WmuxSettings["colorScheme"],
+                })}
+              >
+                {terminalColorSchemes.map((scheme) => (
+                  <option key={scheme.id} value={scheme.id}>{scheme.name}</option>
+                ))}
+              </select>
+            </label>
             <label className="settings-row">
               <span>Font size</span>
               <input
@@ -308,6 +324,9 @@ export function SettingsModal({
 const normalizeSettings = (settings: WmuxSettings): WmuxSettings => ({
   terminalFontSize: clampFontSize(settings.terminalFontSize),
   terminalScrollbackRows: clampScrollbackRows(settings.terminalScrollbackRows),
+  colorScheme: terminalColorSchemes.some((scheme) => scheme.id === settings.colorScheme)
+    ? settings.colorScheme
+    : defaultSettings.colorScheme,
   machineAliases: Object.fromEntries(
     Object.entries(settings.machineAliases ?? {})
       .map(([machineId, alias]) => [machineId, cleanAlias(alias)] as const)
@@ -328,4 +347,3 @@ const clampScrollbackRows = (value: number): number => {
 };
 
 export const cleanAlias = (value: string): string => value.replace(/\s+/g, " ").trim().slice(0, 40);
-

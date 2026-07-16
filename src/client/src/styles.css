@@ -3926,7 +3926,8 @@ button.active-tool {
   white-space: nowrap;
 }
 
-.settings-row input {
+.settings-row input,
+.settings-row select {
   width: 100%;
   min-width: 0;
   height: 30px;

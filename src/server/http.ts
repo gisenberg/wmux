@@ -36,6 +36,7 @@ import type {
   TerminalClipboard,
   TerminalMedia,
   TerminalNotification,
+  WmuxSettings,
 } from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
 import type { StateStore } from "./state.js";
@@ -547,11 +548,13 @@ export const createHttpServer = (
         const body = (await readBody(request)) as {
           terminalFontSize?: number;
           terminalScrollbackRows?: number;
+          colorScheme?: WmuxSettings["colorScheme"];
           machineAliases?: Record<string, string>;
         };
         settings.update({
           terminalFontSize: body.terminalFontSize,
           terminalScrollbackRows: body.terminalScrollbackRows,
+          colorScheme: body.colorScheme,
           machineAliases: body.machineAliases,
         });
         sendJson(response, 200, { settings: settings.snapshot(), state: currentPayload() });

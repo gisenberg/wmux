@@ -59,6 +59,38 @@ test("keeps the loaded UI and recovers when a wake-up bootstrap briefly fails", 
   await expect.poll(() => requests, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
 });
 
+test("persists a color scheme and applies it to the shared chrome palette", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop settings coverage");
+  const before = await request.get("/api/bootstrap");
+  expect(before.ok()).toBeTruthy();
+  const originalSettings = (await before.json() as { settings: Record<string, unknown> }).settings;
+
+  try {
+    await page.goto("/?legacy=1");
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await page.locator('button[title="Settings"]').click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByLabel("Color scheme").selectOption("dracula");
+    await expect.poll(() => page.locator("main.app-shell").evaluate((element) =>
+      element.style.getPropertyValue("--black"),
+    )).toBe("#282a36");
+    await settings.getByRole("button", { name: "Save" }).click();
+
+    await expect.poll(async () => {
+      const response = await request.get("/api/bootstrap");
+      return (await response.json() as { settings: { colorScheme: string } }).settings.colorScheme;
+    }).toBe("dracula");
+    await page.reload();
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => page.locator("main.app-shell").evaluate((element) =>
+      element.style.getPropertyValue("--black"),
+    )).toBe("#282a36");
+  } finally {
+    const restored = await request.post("/api/settings", { data: originalSettings });
+    expect(restored.ok()).toBeTruthy();
+  }
+});
+
 test("idle Life field stays bounded and pauses when it leaves the viewport", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop WebGL lifecycle coverage");
 

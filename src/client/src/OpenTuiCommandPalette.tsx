@@ -4,7 +4,6 @@ import {
   createGridPainter,
   fillCells,
   fitText,
-  hexToRgba,
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
@@ -13,6 +12,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 export interface OpenTuiCommand {
   id: string;
@@ -40,23 +40,8 @@ interface HitZone {
   height: number;
 }
 
-const colors = {
-  black: "#050505",
-  panel: "#090907",
-  active: "#17130a",
-  gold: "#f4d35e",
-  text: "#e4ded0",
-  muted: "#8d826f",
-  faint: "#5f584b",
-  line: "#2f2a1d",
-  red: "#d94a3d",
-};
-
-const rgba = Object.fromEntries(
-  Object.entries(colors).map(([key, value]) => [key, hexToRgba(value)]),
-) as Record<keyof typeof colors, RGBA>;
-
 export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose }: OpenTuiCommandPaletteProps) {
+  const theme = useOpenTuiTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
@@ -82,13 +67,13 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
       fontSize: 12,
       fontFamily: WMUX_MONO_FONT_FAMILY,
       cellVAlign: "middle",
-      clearColor: colors.black,
+      clearColor: theme.colors.black,
     });
 
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
-      painter.paint(drawPalette(metrics, filteredCommands, selectedIndex, hitsRef.current));
+      painter.paint(drawPalette(metrics, filteredCommands, selectedIndex, hitsRef.current, theme));
     };
 
     paint();
@@ -97,7 +82,7 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
       observer.disconnect();
       painter.dispose();
     };
-  }, [filteredCommands, selectedIndex]);
+  }, [filteredCommands, selectedIndex, theme]);
 
   const runCommand = async (command: OpenTuiCommand | undefined) => {
     if (!command || command.disabled) return;
@@ -195,7 +180,9 @@ const drawPalette = (
   commands: OpenTuiCommand[],
   selectedIndex: number,
   hits: HitZone[],
+  theme: OpenTuiTheme,
 ): CellGrid => {
+  const { rgba } = theme;
   hits.length = 0;
   const { cols, rows } = metrics;
   const grid = createGrid(cols, rows, rgba.black, rgba.text);
