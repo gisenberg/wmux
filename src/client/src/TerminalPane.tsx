@@ -172,6 +172,8 @@ export const TerminalPane = memo(function TerminalPane({
     let mouseUpListener: ((event: MouseEvent) => void) | undefined;
     let mouseShieldDownListener: ((event: MouseEvent) => void) | undefined;
     let mouseShieldMoveListener: ((event: MouseEvent) => void) | undefined;
+    let mouseHostShieldDownListener: ((event: MouseEvent) => void) | undefined;
+    let mouseHostShieldMoveListener: ((event: MouseEvent) => void) | undefined;
     let mouseGestureEndListener: (() => void) | undefined;
     let contextMenuListener: ((event: MouseEvent) => void) | undefined;
     let copyListener: ((event: ClipboardEvent) => void) | undefined;
@@ -195,6 +197,7 @@ export const TerminalPane = memo(function TerminalPane({
     let replayBufferedOutput: string[] = [];
     let replayDrainTimer: number | undefined;
     let replayingTerminalOutput = false;
+    let terminalCanvas: HTMLCanvasElement | undefined;
     // The server preserves a pane whose process died abnormally instead of
     // deleting it, so a keypress here re-attaches (and re-spawns) on demand
     // rather than looping against a down host.
@@ -729,8 +732,27 @@ export const TerminalPane = memo(function TerminalPane({
       mouseShieldMoveListener = (event) => {
         if (browserPrimaryMouseGesture) event.stopPropagation();
       };
-      term.renderer?.getCanvas().addEventListener("mousedown", mouseShieldDownListener);
-      term.renderer?.getCanvas().addEventListener("mousemove", mouseShieldMoveListener);
+      terminalCanvas = term.renderer?.getCanvas();
+      terminalCanvas?.addEventListener("mousedown", mouseShieldDownListener);
+      terminalCanvas?.addEventListener("mousemove", mouseShieldMoveListener);
+      mouseHostShieldDownListener = (event) => {
+        if (event.target === terminalCanvas) return;
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return;
+        browserPrimaryMouseGesture = true;
+        term.focus();
+        // Ghostty listens for mouse reports on the terminal container, not
+        // only its canvas. Own gestures that begin on its hidden textarea or
+        // unused host space so a tiny drag cannot reach tmux as MouseDrag1Pane.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+      mouseHostShieldMoveListener = (event) => {
+        if (!browserPrimaryMouseGesture || event.target === terminalCanvas) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+      term.element?.addEventListener("mousedown", mouseHostShieldDownListener, { capture: true });
+      term.element?.addEventListener("mousemove", mouseHostShieldMoveListener, { capture: true });
       mouseUpListener = (event) => {
         const browserGesture = browserPrimaryMouseGesture;
         browserPrimaryMouseGesture = false;
@@ -966,8 +988,10 @@ export const TerminalPane = memo(function TerminalPane({
       clearContextCopyBridge();
       if (mouseDownListener) terminalRef.current?.element?.removeEventListener("mousedown", mouseDownListener, { capture: true });
       if (mouseUpListener) terminalRef.current?.element?.removeEventListener("mouseup", mouseUpListener, { capture: true });
-      if (mouseShieldDownListener) terminalRef.current?.renderer?.getCanvas().removeEventListener("mousedown", mouseShieldDownListener);
-      if (mouseShieldMoveListener) terminalRef.current?.renderer?.getCanvas().removeEventListener("mousemove", mouseShieldMoveListener);
+      if (mouseShieldDownListener) terminalCanvas?.removeEventListener("mousedown", mouseShieldDownListener);
+      if (mouseShieldMoveListener) terminalCanvas?.removeEventListener("mousemove", mouseShieldMoveListener);
+      if (mouseHostShieldDownListener) terminalRef.current?.element?.removeEventListener("mousedown", mouseHostShieldDownListener, { capture: true });
+      if (mouseHostShieldMoveListener) terminalRef.current?.element?.removeEventListener("mousemove", mouseHostShieldMoveListener, { capture: true });
       if (mouseGestureEndListener) document.removeEventListener("mouseup", mouseGestureEndListener);
       if (contextMenuListener) terminalRef.current?.element?.removeEventListener("contextmenu", contextMenuListener, { capture: true });
       if (copyListener) terminalRef.current?.element?.removeEventListener("copy", copyListener, { capture: true });

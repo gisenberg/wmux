@@ -170,6 +170,95 @@ test("completes a Ctrl+Alt-drag rectangle on outside mouseup and clears it on ke
   await page.keyboard.press("Control+C");
 });
 
+test("does not forward a primary drag from the hidden terminal input as PTY mouse motion", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop mouse gesture coverage");
+
+  await page.addInitScript(() => {
+    const sent: string[] = [];
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (typeof data === "string") sent.push(data);
+      return originalSend.call(this, data);
+    };
+    (window as unknown as { __wmuxSentSocketMessages: string[] }).__wmuxSentSocketMessages = sent;
+  });
+  await page.reload();
+
+  let response = await request.get("/api/bootstrap");
+  let bootstrap = await response.json() as {
+    activeWorkspaceId: string;
+    workspaces: Array<{
+      id: string;
+      activeTabId: string;
+      tabs: Array<{ id: string; panes: Array<{ id: string }> }>;
+    }>;
+  };
+  if (bootstrap.workspaces.length === 0) {
+    response = await request.post("/api/workspaces", { data: { machineId: "local" } });
+    expect(response.ok()).toBeTruthy();
+    await page.reload();
+    response = await request.get("/api/bootstrap");
+    bootstrap = await response.json();
+  }
+
+  const workspace = bootstrap.workspaces.find(({ id }) => id === bootstrap.activeWorkspaceId)
+    ?? bootstrap.workspaces[0];
+  const tab = workspace.tabs.find(({ id }) => id === workspace.activeTabId) ?? workspace.tabs[0];
+  const pane = tab.panes[0];
+  const activePane = page.locator(".terminal-pane.active");
+  await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+
+  const enableMouse = await request.post(`/api/panes/${pane.id}/input`, {
+    data: { data: "printf '\\033[?1000h\\033[?1002h\\033[?1006h'\r", cols: 100, rows: 30 },
+  });
+  expect(enableMouse.ok()).toBeTruthy();
+  await page.waitForTimeout(200);
+  await page.evaluate(() => {
+    (window as unknown as { __wmuxSentSocketMessages: string[] }).__wmuxSentSocketMessages.length = 0;
+  });
+
+  await activePane.locator(".terminal-host textarea").evaluate((textarea) => {
+    const rect = textarea.getBoundingClientRect();
+    const down = new MouseEvent("mousedown", {
+      bubbles: true,
+      button: 0,
+      clientX: rect.left + 1,
+      clientY: rect.top + 1,
+    });
+    const move = new MouseEvent("mousemove", {
+      bubbles: true,
+      buttons: 1,
+      clientX: rect.left + 24,
+      clientY: rect.top + 12,
+    });
+    const up = new MouseEvent("mouseup", {
+      bubbles: true,
+      button: 0,
+      clientX: rect.left + 24,
+      clientY: rect.top + 12,
+    });
+    textarea.dispatchEvent(down);
+    textarea.dispatchEvent(move);
+    textarea.dispatchEvent(up);
+  });
+
+  const paneInputs = await page.evaluate(() =>
+    (window as unknown as { __wmuxSentSocketMessages: string[] }).__wmuxSentSocketMessages
+      .flatMap((message) => {
+        try {
+          const parsed = JSON.parse(message) as { type?: string; data?: string };
+          return parsed.type === "input" && typeof parsed.data === "string" ? [parsed.data] : [];
+        } catch {
+          return [];
+        }
+      }),
+  );
+  expect(paneInputs.some((data) => data.includes("\x1b[<32;"))).toBe(false);
+});
+
 test("mobile chrome keeps navigation, chat, terminal, and actions reachable", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only smoke coverage");
 
