@@ -540,6 +540,9 @@ export class SessionManager {
   private activateResizeOwner(paneId: string, socket: WebSocket, session: ManagedSession): void {
     const state = this.socketState.get(socket);
     if (!state) return;
+    const owner = this.resizeOwners.get(paneId);
+    const paneSockets = this.sockets.get(paneId);
+    if (owner && owner !== socket && paneSockets?.has(owner) && owner.readyState === owner.OPEN) return;
     this.resizeOwners.set(paneId, socket);
     session.resize(state.cols, state.rows);
   }

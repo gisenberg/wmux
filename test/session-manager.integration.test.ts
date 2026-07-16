@@ -311,6 +311,44 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
   });
 });
 
+test("foreground activation cannot steal resize ownership without input", async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    const first = socket();
+    const second = socket();
+    manager.attach(pane.id, first, 80, 24);
+    await waitForMessage(first, (message) => message.type === "ready");
+
+    const internals = manager as unknown as {
+      sessions: Map<string, { resize: (cols: number, rows: number) => void }>;
+    };
+    const session = internals.sessions.get(pane.id);
+    assert.ok(session);
+    const originalResize = session.resize.bind(session);
+    const resizes: Array<[number, number]> = [];
+    session.resize = (cols, rows) => {
+      resizes.push([cols, rows]);
+      originalResize(cols, rows);
+    };
+
+    manager.attach(pane.id, second, 100, 30);
+    await waitForMessage(second, (message) => message.type === "ready");
+    fake(second).message({ type: "activate", cols: 100, rows: 30, foreground: true });
+    assert.deepEqual(resizes, []);
+
+    fake(second).message({ type: "input", data: "" });
+    assert.deepEqual(resizes, [[100, 30]]);
+    fake(first).message({ type: "activate", cols: 80, rows: 24, foreground: true });
+    assert.deepEqual(resizes, [[100, 30]]);
+
+    fake(first).message({ type: "input", data: "" });
+    assert.deepEqual(resizes, [[100, 30], [80, 24]]);
+    manager.disposeAll();
+  });
+});
+
 test("late attach receives an authoritative checkpoint for a full-screen PTY", async () => {
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   await withState(machine, async (state) => {

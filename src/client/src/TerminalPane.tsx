@@ -939,7 +939,7 @@ export const TerminalPane = memo(function TerminalPane({
         rectangularSelection?.clear();
         const ws = socketRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
-          sendResizeMessage(ws, activeRef.current ? "activate" : "resize", term, foreground());
+          sendResizeMessage(ws, "resize", term, foreground());
         }
       });
       socketController = createSocketController(term);
