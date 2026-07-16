@@ -106,6 +106,20 @@ test("local durable credentials are staged outside observable process arguments"
   assert.equal(fs.statSync(spec.args[0]).mode & 0o777, 0o700);
 });
 
+test("local durable reattach uses a fresh systemd scope", () => {
+  const first = buildSpawnSpec(machines[0].machine, 120, 40, extraEnv);
+  const firstRuntime = fs.readFileSync(first.args[0], "utf8");
+  const second = buildSpawnSpec(machines[0].machine, 120, 40, extraEnv);
+  const secondRuntime = fs.readFileSync(second.args[0], "utf8");
+  const unitPattern = /--unit '(wmux-pane-wmux_pane_fixed001-[0-9a-f-]+)'/;
+  const firstUnit = firstRuntime.match(unitPattern)?.[1];
+  const secondUnit = secondRuntime.match(unitPattern)?.[1];
+
+  assert.ok(firstUnit, "first attach has a pane-identifying scope name");
+  assert.ok(secondUnit, "second attach has a pane-identifying scope name");
+  assert.notEqual(firstUnit, secondUnit, "reattach cannot collide with the surviving tmux scope");
+});
+
 test("raw local panes apply an available agent profile before the shell", () => {
   const spec = buildSpawnSpec(machines[1].machine, 120, 40, extraEnv);
   assert.equal(spec.file, "/bin/sh");

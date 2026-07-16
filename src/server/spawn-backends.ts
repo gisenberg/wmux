@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { canRefreshDurableSessionClient, durableSessionName } from "./durable-session.js";
 import { streamPathForMachine } from "./streams.js";
 import { resolveHelperUrl } from "./helper-url.js";
@@ -587,7 +588,12 @@ const stageLocalRuntime = (sessionName: string, innerScript: string): string => 
   fs.chmodSync(runtimeDir, 0o700);
   const runtimePath = path.join(runtimeDir, `${POSIX_RUNTIME_VERSION}-${sessionName}.sh`);
   const temporaryPath = `${runtimePath}.${process.pid}.tmp`;
-  const unit = `wmux-pane-${sessionName}`.replace(/[^A-Za-z0-9_.@-]/g, "_").slice(0, 80);
+  // The tmux server remains in its first transient scope after an attach
+  // client exits. Each later browser attach therefore needs a fresh scope
+  // name; reusing one pane-scoped name makes systemd reject the reattach while
+  // the durable session is still doing exactly what it should: staying alive.
+  const unitPrefix = `wmux-pane-${sessionName}`.replace(/[^A-Za-z0-9_.@-]/g, "_").slice(0, 43);
+  const unit = `${unitPrefix}-${randomUUID()}`;
   const runtime = `#!/bin/sh
 if [ "\${WMUX_RUNTIME_SCOPED:-}" != 1 ] && command -v systemd-run >/dev/null 2>&1 && [ -n "\${XDG_RUNTIME_DIR:-}" ]; then
   exec systemd-run --user --scope --quiet --collect --unit ${shellQuote(unit)} env WMUX_RUNTIME_SCOPED=1 /bin/sh "$0"
