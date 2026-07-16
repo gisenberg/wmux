@@ -126,12 +126,14 @@ test("health probe reports the staged and expected bundle versions", () => {
 
 test("agent bundle uses the platform release and exposes protocol compatibility separately", () => {
   assert.match(expectedWindowsAgentReleaseVersion(), /^v\d+\.\d+\.\d+-win$/);
-  assert.ok(expectedWindowsAgentProtocolVersion() >= 1);
+  assert.ok(expectedWindowsAgentProtocolVersion() >= 4);
   const agent = buildWindowsHelperBundle(machine).files.find((file) => file.name === "wmux-windows-agent.py");
   assert.ok(agent);
   const content = Buffer.from(agent.dataBase64, "base64").toString("utf8");
   assert.ok(content.includes(`RELEASE_VERSION = "${expectedWindowsAgentReleaseVersion()}"`));
   assert.ok(content.includes(`PROTOCOL_VERSION = ${expectedWindowsAgentProtocolVersion()}`));
+  assert.ok(content.includes('"paste-images-v1"'));
+  assert.ok(content.includes("MAX_PASTE_IMAGE_BYTES = 8 * 1024 * 1024"));
   assert.ok(!content.includes("__WMUX_WINDOWS_AGENT_RELEASE_VERSION__"));
 });
 

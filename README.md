@@ -36,12 +36,12 @@ The desktop view and both mobile surfaces show the same live Codex workspace.
 
 | Component | Responsibility |
 | --- | --- |
-| Browser client | React chrome, `ghostty-web` terminals, mobile controls, media, clipboard, and stream views |
-| Node.js service | Private-network boundary, bearer authentication, REST API, event WebSocket, and canonical workspace state |
-| Session manager | One live client per pane, bounded replay, VT checkpoints, resize ownership, and backend lifecycle |
+| Browser client | React chrome, `ghostty-web` terminals, mobile controls, media, text/image clipboard handling, and stream views |
+| Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
+| Session manager | One live client per pane, pinned backend snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and backend lifecycle |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
-| Execution backends | Local PTYs, SSH with `tmux`/`screen`, PowerShell over SSH, and the experimental Windows agent |
-| Persistent state | Workspace layout, settings, attachments, and metadata under `~/.wmux` |
+| Execution backends | Local PTYs, SSH with `tmux`/`screen` and per-pane control sockets, PowerShell over SSH, and the experimental Windows agent |
+| Persistent state | Workspace layout, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
 | Optional streaming | Machine-local MediaMTX capture or a Moonlight/Sunshine gateway, requested by the browser |
 
 The server owns canonical workspace state and one live session client per
@@ -271,6 +271,15 @@ token. wmux is not a hardened multi-user service.
   needed.
 - Settings persist in `~/.wmux/settings.json` and include terminal size,
   scrollback, and user-facing host aliases.
+- Pasting a PNG, JPEG, WebP, or GIF into a connected terminal stages a private
+  temporary file in that pane's target filesystem and pastes its quoted native
+  path. Local, POSIX SSH, PowerShell-over-SSH, and current Windows-agent panes
+  are supported; legacy WSMan, service, and custom-command targets fail closed.
+  Images are limited to 8 MiB and expire after about one hour. Explicit pane
+  close and discarded asynchronous pastes clean them up when the target remains
+  reachable. A server or remote-host crash can leave a private file until the
+  next opportunistic sweep (or manual cleanup under the per-user wmux runtime
+  directory); stage paths are not persisted in workspace state.
 
 Open the command palette with `Cmd/Ctrl+K` for navigation, host-scoped session
 creation, splits, settings, diagnostics, activity, and session audit actions.

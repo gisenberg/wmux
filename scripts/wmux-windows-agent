@@ -19,8 +19,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 RELEASE_VERSION = "__WMUX_WINDOWS_AGENT_RELEASE_VERSION__"
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 DEFAULT_REPLAY_BYTES = 2 * 1024 * 1024
+MAX_PASTE_IMAGE_BYTES = 8 * 1024 * 1024
+PASTE_IMAGE_TTL_SECONDS = 60 * 60
 BACKEND_CONPTY = "conpty"
 BACKEND_STDIO = "stdio"
 
@@ -41,6 +43,114 @@ AGENT_RESTART_EXIT_CODE = 75
 
 class AgentDrainingError(RuntimeError):
     pass
+
+
+def paste_image_root(config: dict[str, Any]) -> str:
+    configured = config_string(config, "pasteImageDir")
+    local_app_data = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    return os.path.abspath(os.path.expandvars(configured) if configured else os.path.join(local_app_data, "wmux", "paste-images"))
+
+
+def paste_image_prefix(session_id: str, stage_id: str) -> str:
+    pane_digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:24]
+    return f"{pane_digest}-{stage_id}"
+
+
+def sweep_paste_images(config: dict[str, Any]) -> None:
+    root = paste_image_root(config)
+    if not os.path.isdir(root):
+        return
+    cutoff = time.time() - PASTE_IMAGE_TTL_SECONDS
+    for name in os.listdir(root):
+        if not re.fullmatch(r"[0-9a-f]{24}-paste-[0-9a-f]{36}\.(png|jpg|webp|gif)", name):
+            continue
+        target = os.path.join(root, name)
+        try:
+            if os.path.isfile(target) and os.path.getmtime(target) < cutoff:
+                os.remove(target)
+        except OSError:
+            pass
+
+
+def validate_paste_image(data: bytes, extension: str) -> bool:
+    if extension == "png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if extension == "jpg":
+        return data.startswith(b"\xff\xd8\xff")
+    if extension == "gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if extension == "webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return False
+
+
+def stage_paste_image(
+    config: dict[str, Any], session_id: str, stage_id: str, extension: str, data: bytes
+) -> dict[str, Any]:
+    if not re.fullmatch(r"paste-[0-9a-f]{36}", stage_id) or extension not in ("png", "jpg", "webp", "gif"):
+        raise ValueError("invalid_stage")
+    if not data or len(data) > MAX_PASTE_IMAGE_BYTES or not validate_paste_image(data, extension):
+        raise ValueError("invalid_image")
+    root = paste_image_root(config)
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(root, 0o700)
+    except OSError:
+        pass
+    sweep_paste_images(config)
+    target = os.path.join(root, f"{paste_image_prefix(session_id, stage_id)}.{extension}")
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        try:
+            os.remove(target)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    return {
+        "stageId": stage_id,
+        "targetPath": target,
+        "bytes": len(data),
+        "expiresAt": int((time.time() + PASTE_IMAGE_TTL_SECONDS) * 1000),
+    }
+
+
+def delete_paste_image(config: dict[str, Any], session_id: str, stage_id: str) -> bool:
+    root = paste_image_root(config)
+    if not os.path.isdir(root) or not re.fullmatch(r"paste-[0-9a-f]{36}", stage_id):
+        return False
+    prefix = paste_image_prefix(session_id, stage_id) + "."
+    removed = False
+    for name in os.listdir(root):
+        if not name.startswith(prefix):
+            continue
+        try:
+            os.remove(os.path.join(root, name))
+            removed = True
+        except OSError:
+            pass
+    return removed
+
+
+def delete_session_paste_images(config: dict[str, Any], session_id: str) -> None:
+    root = paste_image_root(config)
+    if not os.path.isdir(root):
+        return
+    prefix = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:24] + "-paste-"
+    for name in os.listdir(root):
+        if name.startswith(prefix):
+            try:
+                os.remove(os.path.join(root, name))
+            except OSError:
+                pass
 
 
 class WindowsJobApi:
@@ -950,6 +1060,7 @@ class Handler(BaseHTTPRequestHandler):
                     "version": RELEASE_VERSION,
                     "releaseVersion": RELEASE_VERSION,
                     "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": ["paste-images-v1"],
                     "machine": config_string(self.state.config, "machine", "windows"),
                     "pid": os.getpid(),
                     **lifecycle,
@@ -1024,6 +1135,40 @@ class Handler(BaseHTTPRequestHandler):
             session.resize(int(body.get("cols") or 80), int(body.get("rows") or 24))
             self.send_json({"ok": True})
             return
+        if len(parts) == 4 and parts[0] == "sessions" and parts[2] == "paste-images":
+            session = self.require_session(parts[1])
+            if not session or session.exited:
+                if session:
+                    self.send_json({"error": "session_exited"}, status=409)
+                return
+            query = parse_qs(parsed.query)
+            extension = str(query.get("extension", [""])[0]).lower()
+            content_type = (self.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if content_type != "application/octet-stream":
+                self.send_json({"error": "invalid_content_type"}, status=415)
+                return
+            length_header = self.headers.get("content-length")
+            try:
+                length = int(length_header or "")
+            except ValueError:
+                length = -1
+            if length <= 0 or length > MAX_PASTE_IMAGE_BYTES:
+                self.send_json({"error": "invalid_content_length"}, status=413 if length > MAX_PASTE_IMAGE_BYTES else 411)
+                return
+            data = self.rfile.read(length)
+            if len(data) != length:
+                self.send_json({"error": "incomplete_body"}, status=400)
+                return
+            if self.state.get(parts[1]) is not session or session.exited:
+                self.send_json({"error": "session_exited"}, status=409)
+                return
+            try:
+                result = stage_paste_image(self.state.config, parts[1], parts[3], extension, data)
+            except (OSError, ValueError):
+                self.send_json({"error": "paste_image_stage_failed"}, status=400)
+                return
+            self.send_json(result, status=201)
+            return
         self.send_json({"error": "not_found"}, status=404)
 
     def do_DELETE(self) -> None:
@@ -1036,7 +1181,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(self.state.cancel_drain())
             return
         if len(parts) == 2 and parts[0] == "sessions":
-            self.send_json({"removed": self.state.delete(parts[1])})
+            removed = self.state.delete(parts[1])
+            delete_session_paste_images(self.state.config, parts[1])
+            self.send_json({"removed": removed})
+            return
+        if len(parts) == 4 and parts[0] == "sessions" and parts[2] == "paste-images":
+            self.send_json({"removed": delete_paste_image(self.state.config, parts[1], parts[3])})
             return
         self.send_json({"error": "not_found"}, status=404)
 

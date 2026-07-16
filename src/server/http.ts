@@ -41,6 +41,10 @@ import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./win
 import type { StateStore } from "./state.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsStore } from "./settings.js";
+import {
+  MAX_PASTE_IMAGE_BYTES,
+  PasteImageStageError,
+} from "./paste-image-staging.js";
 
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string) {
@@ -74,6 +78,31 @@ const readBody = async (request: http.IncomingMessage, maxBytes = MAX_JSON_BODY)
   } catch {
     throw new HttpError(400, "invalid_json");
   }
+};
+
+export const readBinaryBody = async (
+  request: http.IncomingMessage,
+  maxBytes = MAX_PASTE_IMAGE_BYTES,
+): Promise<Buffer> => {
+  const rawLength = request.headers["content-length"];
+  if (typeof rawLength !== "string") throw new HttpError(411, "content_length_required");
+  if (!/^\d+$/.test(rawLength)) throw new HttpError(400, "invalid_content_length");
+  const expected = Number(rawLength);
+  if (!Number.isSafeInteger(expected)) throw new HttpError(400, "invalid_content_length");
+  if (expected > maxBytes) throw new HttpError(413, "paste_image_too_large");
+  if (expected === 0) throw new HttpError(400, "paste_image_empty");
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > maxBytes || total > expected) {
+      request.destroy();
+      throw new HttpError(413, "paste_image_too_large");
+    }
+    chunks.push(Buffer.from(chunk));
+  }
+  if (total !== expected) throw new HttpError(400, "incomplete_body");
+  return Buffer.concat(chunks, total);
 };
 
 const sendJson = (response: http.ServerResponse, status: number, payload: unknown): void => {
@@ -675,6 +704,39 @@ export const createHttpServer = (
         return;
       }
 
+      const panePasteImages = url.pathname.match(/^\/api\/panes\/([^/]+)\/paste-images$/);
+      if (panePasteImages && request.method === "POST") {
+        const paneId = decodeURIComponent(panePasteImages[1]);
+        if (!sessions.hasLivePaneSession(paneId)) {
+          sendJson(response, state.findPane(paneId) ? 409 : 404, {
+            error: state.findPane(paneId) ? "paste_image_pane_not_live" : "pane_not_found",
+          });
+          return;
+        }
+        if ((request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase() !== "application/octet-stream") {
+          throw new HttpError(415, "paste_image_content_type_required");
+        }
+        const staged = await sessions.stagePasteImage(paneId, await readBinaryBody(request));
+        sendJson(response, 201, {
+          stageId: staged.stageId,
+          targetPath: staged.targetPath,
+          mimeType: staged.mimeType,
+          bytes: staged.bytes,
+          expiresAt: staged.expiresAt,
+        });
+        return;
+      }
+
+      const panePasteImage = url.pathname.match(/^\/api\/panes\/([^/]+)\/paste-images\/([^/]+)$/);
+      if (panePasteImage && request.method === "DELETE") {
+        const removed = await sessions.discardPasteImage(
+          decodeURIComponent(panePasteImage[1]),
+          decodeURIComponent(panePasteImage[2]),
+        );
+        sendJson(response, removed ? 200 : 404, { removed });
+        return;
+      }
+
       const paneAttachment = url.pathname.match(/^\/api\/panes\/([^/]+)\/attachments$/);
       if (paneAttachment && request.method === "POST") {
         const paneId = decodeURIComponent(paneAttachment[1]);
@@ -908,7 +970,7 @@ export const createHttpServer = (
 
       sendJson(response, 404, { error: "not_found" });
     } catch (error) {
-      if (error instanceof HttpError || error instanceof HostRegistryError) {
+      if (error instanceof HttpError || error instanceof HostRegistryError || error instanceof PasteImageStageError) {
         sendJson(response, error.status, { error: error.code });
         return;
       }

@@ -18,6 +18,23 @@ export interface PaneAttachment {
   createdAt: string;
 }
 
+export interface StagedPanePasteImage {
+  stageId: string;
+  targetPath: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  bytes: number;
+  expiresAt: string;
+}
+
+const responseError = async (response: Response): Promise<Error> => {
+  try {
+    const body = await response.json() as { error?: string };
+    return new Error(body.error || `HTTP ${response.status}`);
+  } catch {
+    return new Error(`HTTP ${response.status}`);
+  }
+};
+
 const json = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
     ...init,
@@ -123,6 +140,27 @@ export const api = {
       method: "POST",
       body: JSON.stringify(attachment),
     }),
+  stagePanePasteImage: async (paneId: string, image: Blob): Promise<StagedPanePasteImage> => {
+    const response = await fetch(`/api/panes/${encodeURIComponent(paneId)}/paste-images`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        ...authHeaders(),
+      },
+      body: image,
+    });
+    if (response.status === 401) throw new UnauthorizedError();
+    if (!response.ok) throw await responseError(response);
+    return response.json() as Promise<StagedPanePasteImage>;
+  },
+  discardPanePasteImage: async (paneId: string, stageId: string): Promise<void> => {
+    const response = await fetch(
+      `/api/panes/${encodeURIComponent(paneId)}/paste-images/${encodeURIComponent(stageId)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    if (response.status === 401) throw new UnauthorizedError();
+    if (!response.ok && response.status !== 404) throw await responseError(response);
+  },
   createNotification: (paneId: string, title: string, subtitle: string, body: string) =>
     json<{ state: BootstrapPayload }>("/api/notifications", {
       method: "POST",

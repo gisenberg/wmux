@@ -151,6 +151,135 @@ with tempfile.TemporaryDirectory() as root:
   assert.equal(result.stdout.trim(), "abc123");
 });
 
+test("Windows agent stages private validated paste images and sweeps only generated files", () => {
+  const source = String.raw`
+import json
+import os
+import runpy
+import tempfile
+import time
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+stage_one = "paste-" + ("a" * 36)
+stage_two = "paste-" + ("b" * 36)
+png = b"\x89PNG\r\n\x1a\nbody"
+with tempfile.TemporaryDirectory() as root:
+    config = {"pasteImageDir": root}
+    first = module["stage_paste_image"](config, "pane-one", stage_one, "png", png)
+    first_mode = oct(os.stat(first["targetPath"]).st_mode & 0o777)
+    unrelated = os.path.join(root, "keep.txt")
+    with open(unrelated, "wb") as handle:
+        handle.write(b"keep")
+    old = time.time() - module["PASTE_IMAGE_TTL_SECONDS"] - 10
+    os.utime(first["targetPath"], (old, old))
+    os.utime(unrelated, (old, old))
+    module["sweep_paste_images"](config)
+    swept = not os.path.exists(first["targetPath"])
+    kept = os.path.exists(unrelated)
+    second = module["stage_paste_image"](config, "pane-one", stage_two, "png", png)
+    module["delete_session_paste_images"](config, "pane-one")
+    pane_cleaned = not os.path.exists(second["targetPath"])
+    try:
+        module["stage_paste_image"](config, "pane-one", stage_one, "png", b"not-an-image")
+    except ValueError:
+        invalid_rejected = True
+    else:
+        invalid_rejected = False
+    print(json.dumps({
+        "mode": first_mode,
+        "swept": swept,
+        "kept": kept,
+        "paneCleaned": pane_cleaned,
+        "invalidRejected": invalid_rejected,
+    }))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    mode: "0o600",
+    swept: true,
+    kept: true,
+    paneCleaned: true,
+    invalidRejected: true,
+  });
+});
+
+test("Windows agent binary paste endpoint is authenticated and session scoped", () => {
+  const source = String.raw`
+import http.client
+import json
+import os
+import runpy
+import tempfile
+import threading
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+
+class FakeSession:
+    exited = False
+
+with tempfile.TemporaryDirectory() as root:
+    state = module["AgentState"]({"pasteImageDir": root, "token": "agent-token"})
+    state.sessions["pane-one"] = FakeSession()
+    module["Handler"].state = state
+    server = module["ThreadingHTTPServer"](("127.0.0.1", 0), module["Handler"])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    stage_id = "paste-" + ("c" * 36)
+    path = "/sessions/pane-one/paste-images/" + stage_id + "?extension=png"
+    png = b"\x89PNG\r\n\x1a\nbody"
+
+    unauthorized = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    unauthorized.request("POST", path, body=png, headers={"content-type": "application/octet-stream"})
+    unauthorized_status = unauthorized.getresponse().status
+    unauthorized.close()
+
+    accepted = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    accepted.request("POST", path, body=png, headers={
+        "authorization": "Bearer agent-token",
+        "content-type": "application/octet-stream",
+    })
+    response = accepted.getresponse()
+    staged = json.loads(response.read())
+    accepted_status = response.status
+    accepted.close()
+
+    health_connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    health_connection.request("GET", "/health")
+    health = json.loads(health_connection.getresponse().read())
+    health_connection.close()
+
+    deleted_connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    deleted_connection.request("DELETE", "/sessions/pane-one/paste-images/" + stage_id, headers={
+        "authorization": "Bearer agent-token",
+    })
+    deleted = json.loads(deleted_connection.getresponse().read())
+    deleted_connection.close()
+    remains = os.path.exists(staged["targetPath"])
+    server.shutdown()
+    server.server_close()
+    print(json.dumps({
+        "unauthorized": unauthorized_status,
+        "accepted": accepted_status,
+        "capabilities": health["capabilities"],
+        "protocol": health["protocolVersion"],
+        "deleted": deleted["removed"],
+        "remains": remains,
+    }))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    unauthorized: 401,
+    accepted: 201,
+    capabilities: ["paste-images-v1"],
+    protocol: 4,
+    deleted: true,
+    remains: false,
+  });
+});
+
 test("Windows agent verifies and stages helper bundles supplied with pane creation", () => {
   const source = String.raw`
 import base64

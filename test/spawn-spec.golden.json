@@ -122,6 +122,12 @@
       "file": "ssh",
       "args": [
         "-tt",
+        "-o",
+        "ControlPath=/run/user/1000/wmux/ssh-control/pane-64548b37bd7ac4b6f53cfd24.sock",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=3600",
         "operator@windows-box",
         "pwsh",
         "-NoLogo",

@@ -5,6 +5,12 @@ import { sessionDriverForMachine, type ManagedSession } from "./session-driver.j
 import { streamPathForMachine } from "./streams.js";
 import { resolveHelperUrl } from "./helper-url.js";
 import type { AttachReplay } from "./terminal-checkpoint.js";
+import {
+  PasteImageStageError,
+  PasteImageStaging,
+  type PasteImageStager,
+  type StagedPasteImage,
+} from "./paste-image-staging.js";
 
 export type ClientMessage = PaneClientMessage;
 
@@ -79,6 +85,7 @@ export class SessionManager {
   private socketState = new Map<WebSocket, SocketState>();
   private ignoredSessionExits = new WeakSet<ManagedSession>();
   private sessionMachines = new Map<string, MachineConfig>();
+  private paneInputEpochs = new Map<string, number>();
   private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
   private durableRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
   private readonly currentMachines: () => MachineConfig[];
@@ -89,12 +96,52 @@ export class SessionManager {
     private readonly accessToken = "",
     private readonly bootstrapTokenForMachine: (machineId: string) => string | undefined = () => undefined,
     private readonly onPaneReferencesChanged: () => void = () => undefined,
+    private readonly pasteImages: PasteImageStager = new PasteImageStaging(),
   ) {
     this.currentMachines = typeof machines === "function" ? machines : () => machines;
   }
 
   hasLiveSessionsForMachine(machineId: string): boolean {
     return [...this.sessions.values()].some((session) => session.pane.machineId === machineId && !session.isExited);
+  }
+
+  hasLivePaneSession(paneId: string): boolean {
+    const session = this.sessions.get(paneId);
+    return Boolean(this.state.findPane(paneId) && session && !session.isExited && this.sessionMachines.has(paneId));
+  }
+
+  async stagePasteImage(paneId: string, data: Buffer): Promise<StagedPasteImage> {
+    const pane = this.state.findPane(paneId);
+    const session = this.sessions.get(paneId);
+    const inputEpoch = this.paneInputEpochs.get(paneId) ?? 0;
+    if (!pane) throw new PasteImageStageError(404, "pane_not_found");
+    if (!session || session.isExited || !this.sessionMachines.has(paneId)) {
+      throw new PasteImageStageError(409, "paste_image_pane_not_live");
+    }
+    if (session.attachReady) await session.attachReady;
+    const machine = this.sessionMachines.get(paneId);
+    if (this.state.findPane(paneId) !== pane || this.sessions.get(paneId) !== session || session.isExited || !machine) {
+      throw new PasteImageStageError(409, "paste_image_pane_not_live");
+    }
+    const staged = await this.pasteImages.stage(paneId, structuredClone(machine), data);
+    if (
+      this.state.findPane(paneId) !== pane
+      || this.sessions.get(paneId) !== session
+      || session.isExited
+      || this.sessionMachines.get(paneId) !== machine
+      || (this.paneInputEpochs.get(paneId) ?? 0) !== inputEpoch
+    ) {
+      await this.pasteImages.discard(paneId, staged.stageId).catch(() => undefined);
+      if ((this.paneInputEpochs.get(paneId) ?? 0) !== inputEpoch) {
+        throw new PasteImageStageError(409, "paste_image_input_changed");
+      }
+      throw new PasteImageStageError(409, "paste_image_pane_not_live");
+    }
+    return staged;
+  }
+
+  discardPasteImage(paneId: string, stageId: string): Promise<boolean> {
+    return this.pasteImages.discard(paneId, stageId);
   }
 
   attach(paneId: string, socket: WebSocket, cols: number, rows: number): void {
@@ -127,7 +174,9 @@ export class SessionManager {
       if (message.type === "input") {
         this.promoteResizeOwner(paneId, socket, session);
         if (isAgentInterruptInput(message.data)) this.state.interruptAgentForPane(paneId);
-        if ((message.terminalResponse || isTerminalProtocolResponseInput(message.data)) && session.writeTerminalResponse) {
+        const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
+        if (!terminalResponse) this.advancePaneInputEpoch(paneId);
+        if (terminalResponse && session.writeTerminalResponse) {
           session.writeTerminalResponse(message.data);
         }
         else session.write(message.data);
@@ -259,6 +308,7 @@ export class SessionManager {
     if (!pane) return false;
     const size = normalizeSize(cols, rows);
     const session = this.ensureSession(pane, size.cols, size.rows);
+    this.advancePaneInputEpoch(paneId);
     session.write(data);
     return true;
   }
@@ -349,6 +399,8 @@ export class SessionManager {
         void sessionDriverForMachine(exitedMachine).dispose(exitedMachine, pane.id, false);
       }
       this.sessionMachines.delete(pane.id);
+      this.paneInputEpochs.delete(pane.id);
+      if (exitedMachine) void this.pasteImages.cleanupPane(pane.id, exitedMachine);
       if (context.tab.panes.length > 1) {
         this.state.removePane(pane.id);
       } else if (context.workspace.tabs.length > 1) {
@@ -413,6 +465,8 @@ export class SessionManager {
     }
     this.sessions.clear();
     this.sessionMachines.clear();
+    this.paneInputEpochs.clear();
+    this.pasteImages.dispose();
   }
 
   private replayOutputFor(pane: PaneState, session: ManagedSession): AttachReplay {
@@ -521,11 +575,15 @@ export class SessionManager {
     const sessionMachine = this.sessionMachines.get(paneId);
     this.sessions.delete(paneId);
     this.sessionMachines.delete(paneId);
+    this.paneInputEpochs.delete(paneId);
     this.resizeOwners.delete(paneId);
     if (session) session.kill();
     const fallbackMachineId = machineId ?? session?.pane.machineId ?? this.state.findPane(paneId)?.machineId;
     const machine = resolveDisposalMachine(sessionMachine, this.currentMachines(), fallbackMachineId);
-    if (machine) void sessionDriverForMachine(machine).dispose(machine, paneId, Boolean(session));
+    if (machine) {
+      void sessionDriverForMachine(machine).dispose(machine, paneId, Boolean(session));
+      void this.pasteImages.cleanupPane(paneId, machine);
+    }
     this.broadcast(paneId, { type: "removed", paneId });
     for (const socket of this.sockets.get(paneId) ?? []) {
       this.socketState.delete(socket);
@@ -554,6 +612,10 @@ export class SessionManager {
   private send(socket: WebSocket, payload: PaneServerMessage): void {
     if (socket.readyState !== socket.OPEN) return;
     socket.send(JSON.stringify(payload));
+  }
+
+  private advancePaneInputEpoch(paneId: string): void {
+    this.paneInputEpochs.set(paneId, (this.paneInputEpochs.get(paneId) ?? 0) + 1);
   }
 
   private parse(raw: string): ClientMessage | null {

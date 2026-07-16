@@ -75,6 +75,7 @@ export interface WindowsAgentHealth {
   helperBundleVersion?: string;
   conptyAvailable?: boolean;
   pywinptyAvailable?: boolean;
+  capabilities?: string[];
 }
 
 export type WindowsAgentUpdateActivator = (machine: MachineConfig, port?: number) => Promise<number | void>;
@@ -96,6 +97,58 @@ export const deleteWindowsAgentSession = (machine: MachineConfig, paneId: string
   if (!url) return;
   void requestJson("DELETE", `${url}/sessions/${encodeURIComponent(paneId)}`, undefined, 5000, authHeaders(machine))
     .catch((error) => console.warn(`wmux: Windows agent delete failed for ${paneId}: ${formatError(error)}`));
+};
+
+interface WindowsAgentPasteImageResponse {
+  stageId: string;
+  targetPath: string;
+  bytes: number;
+}
+
+export class WindowsAgentPasteImageUnsupportedError extends Error {}
+
+export const stageWindowsAgentPasteImage = async (
+  machine: MachineConfig,
+  paneId: string,
+  stageId: string,
+  extension: string,
+  data: Buffer,
+): Promise<string> => {
+  const url = windowsAgentUrl(machine);
+  if (!url) throw new Error("missing Windows agent URL");
+  const health = await requestJson<WindowsAgentHealth>("GET", `${url}/health`, undefined, 3000, authHeaders(machine));
+  if ((health.protocolVersion ?? 0) < 4 || !health.capabilities?.includes("paste-images-v1")) {
+    throw new WindowsAgentPasteImageUnsupportedError("Windows agent does not support paste image staging");
+  }
+  const response = await requestBinary<WindowsAgentPasteImageResponse>(
+    "POST",
+    `${url}/sessions/${encodeURIComponent(paneId)}/paste-images/${encodeURIComponent(stageId)}?extension=${encodeURIComponent(extension)}`,
+    data,
+    15_000,
+    authHeaders(machine),
+  );
+  if (
+    response.stageId !== stageId
+    || response.bytes !== data.length
+    || typeof response.targetPath !== "string"
+  ) throw new Error("invalid Windows agent staging response");
+  return response.targetPath;
+};
+
+export const deleteWindowsAgentPasteImage = async (
+  machine: MachineConfig,
+  paneId: string,
+  stageId: string,
+): Promise<void> => {
+  const url = windowsAgentUrl(machine);
+  if (!url) return;
+  await requestJson(
+    "DELETE",
+    `${url}/sessions/${encodeURIComponent(paneId)}/paste-images/${encodeURIComponent(stageId)}`,
+    undefined,
+    5000,
+    authHeaders(machine),
+  );
 };
 
 const authHeaders = (machine: MachineConfig): Record<string, string> =>
@@ -751,6 +804,48 @@ const requestJson = <T>(
     if (data) request.write(data);
     request.end();
   });
+
+const requestBinary = <T>(
+  method: string,
+  rawUrl: string,
+  data: Buffer,
+  timeoutMs: number,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> => new Promise((resolve, reject) => {
+  const url = new URL(rawUrl);
+  const client = url.protocol === "https:" ? https : http;
+  const request = client.request(url, {
+    method,
+    timeout: timeoutMs,
+    headers: {
+      ...extraHeaders,
+      "content-type": "application/octet-stream",
+      "content-length": String(data.length),
+    },
+  }, (response) => {
+    const chunks: Buffer[] = [];
+    let responseBytes = 0;
+    response.on("data", (chunk) => {
+      responseBytes += chunk.length;
+      if (responseBytes <= 64 * 1024) chunks.push(Buffer.from(chunk));
+    });
+    response.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+        reject(new Error(`HTTP ${response.statusCode ?? 0}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw) as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+  request.on("timeout", () => request.destroy(new Error(`request timed out after ${timeoutMs}ms`)));
+  request.on("error", reject);
+  request.end(data);
+});
 
 const formatError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

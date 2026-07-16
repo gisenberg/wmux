@@ -5,6 +5,7 @@ import { canRefreshDurableSessionClient, durableSessionName } from "./durable-se
 import { streamPathForMachine } from "./streams.js";
 import { resolveHelperUrl } from "./helper-url.js";
 import type { MachineConfig, PtySpawnSpec, SessionBackend } from "./types.js";
+import { sshControlArgs } from "./ssh-control.js";
 import {
   buildWindowsPowerShellBootstrapUrl,
   encodePowerShellCommand,
@@ -86,7 +87,7 @@ const sshBackend: Backend = {
         helperPathExport: `export PATH="$wmux_helper_dir:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH";`,
         useSystemdScope: false,
       });
-    const runtimePath = stageSshRuntime(machine, target, sessionName, remoteCommand);
+    const runtimePath = stageSshRuntime(machine, target, sessionName, remoteCommand, extraEnv.WMUX_PANE_ID);
     return { file: "/bin/sh", args: [runtimePath], cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
   },
 };
@@ -109,7 +110,7 @@ const powershellSshBackend: Backend = {
   spawnSpec: (machine, { extraEnv, env, startCwd }) => {
     if (!machine.host) throw new Error(`Machine ${machine.id} is missing host`);
     const target = machine.user ? `${machine.user}@${machine.host}` : machine.host;
-    const args = ["-tt"];
+    const args = ["-tt", ...sshControlArgs(extraEnv.WMUX_PANE_ID, true)];
     if (machine.port) args.push("-p", String(machine.port));
     const { WMUX_BOOTSTRAP_TOKEN: bootstrapToken, ...remoteEnv } = extraEnv;
     const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, remoteEnv, bootstrapToken);
@@ -604,6 +605,7 @@ const stageSshRuntime = (
   target: string,
   sessionName: string,
   innerScript: string,
+  paneId: string,
 ): string => {
   const base = process.env.XDG_RUNTIME_DIR?.startsWith("/")
     ? process.env.XDG_RUNTIME_DIR
@@ -618,7 +620,10 @@ const stageSshRuntime = (
   const remoteName = `${stem}.sh`;
   const temporaryPayloadPath = `${payloadPath}.${process.pid}.tmp`;
   const temporaryWrapperPath = `${wrapperPath}.${process.pid}.tmp`;
-  const sshOptions = machine.port ? `-p ${shellQuote(String(machine.port))} ` : "";
+  const sshOptions = [
+    ...sshControlArgs(paneId, true),
+    ...(machine.port ? ["-p", String(machine.port)] : []),
+  ].map(shellQuote).join(" ");
   const remoteRuntimeExpression = `\${XDG_CACHE_HOME:-\$HOME/.cache}/wmux/runtimes/${remoteName}`;
   const stageCommand = `
 set -eu
@@ -644,11 +649,11 @@ wmux_payload=${shellQuote(payloadPath)}
 wmux_wrapper=$0
 wmux_cleanup() { rm -f "$wmux_payload" "$wmux_wrapper"; }
 trap wmux_cleanup EXIT HUP INT TERM
-ssh -T ${sshOptions}${shellQuote(target)} ${shellQuote(stageCommand)} < "$wmux_payload"
+ssh -T ${sshOptions} ${shellQuote(target)} ${shellQuote(stageCommand)} < "$wmux_payload"
 rm -f "$wmux_payload"
 trap - EXIT HUP INT TERM
 rm -f "$wmux_wrapper"
-exec ssh -t ${sshOptions}${shellQuote(target)} ${shellQuote(launchCommand)}
+exec ssh -t ${sshOptions} ${shellQuote(target)} ${shellQuote(launchCommand)}
 `;
 
   fs.writeFileSync(temporaryPayloadPath, payload, { mode: 0o600 });

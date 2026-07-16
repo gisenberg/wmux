@@ -28,6 +28,7 @@ import type {
   TerminalRun,
   Workspace,
 } from "./types";
+import { imagesFromClipboard } from "./clipboard-images";
 import { mobileAgentLaunchCommand, type MobileAgentLauncher } from "./mobile-agent-launch";
 
 interface MobileAgentSurfaceProps {
@@ -255,7 +256,7 @@ export function MobileAgentSurface({
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const pastedImages = imagesFromClipboard(event.clipboardData);
+    const pastedImages = imagesFromClipboard(event.clipboardData, isSupportedImageMimeType);
     if (pastedImages.length === 0) return;
     event.preventDefault();
     appendPastedImages(pastedImages);
@@ -915,17 +916,6 @@ export const sendMobileComposerInput = async (
 ) => {
   await sendInput(paneId, message);
   await sendInput(paneId, "\r");
-};
-
-const imagesFromClipboard = (clipboardData: DataTransfer): File[] => {
-  const files: File[] = [];
-  for (const item of Array.from(clipboardData.items ?? [])) {
-    if (item.kind !== "file") continue;
-    const file = item.getAsFile();
-    if (file && isSupportedImageMimeType(file.type || item.type)) files.push(file);
-  }
-  if (files.length) return files;
-  return Array.from(clipboardData.files ?? []).filter((file) => isSupportedImageMimeType(file.type));
 };
 
 const isSupportedImageMimeType = (mimeType: string): boolean =>

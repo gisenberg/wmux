@@ -118,6 +118,9 @@ test("POSIX SSH staging includes the hook installer beside its event helper", ()
   assert.ok(Buffer.byteLength(spec.args[0]) < 1024, "spawn argv remains bounded");
 
   const wrapper = fs.readFileSync(spec.args[0], "utf8");
+  assert.match(wrapper, /ControlPath=.*wmux\/ssh-control\/pane-[0-9a-f]{24}\.sock/);
+  assert.match(wrapper, /ControlMaster=auto/);
+  assert.match(wrapper, /ControlPersist=3600/);
   const payloadMatch = wrapper.match(/wmux_payload='([^']+)'/);
   assert.ok(payloadMatch, "wrapper identifies its staged payload");
   const command = fs.readFileSync(payloadMatch[1], "utf8");
@@ -130,4 +133,11 @@ test("POSIX SSH staging includes the hook installer beside its event helper", ()
   assert.match(command, /\$HOME\/\.local\/bin/);
   assert.match(command, /chmod 600 "\$HOME\/\.wmux\/(?:token|url)"/);
   assert.equal(wrapper.includes(extraEnv.WMUX_TOKEN), false, "credentials stay in the staged payload");
+});
+
+test("PowerShell SSH panes create the same private per-pane control master", () => {
+  const spec = buildSpawnSpec(machines[8].machine, 120, 40, extraEnv);
+  assert.ok(spec.args.some((arg) => arg.startsWith("ControlPath=") && arg.includes("/wmux/ssh-control/")));
+  assert.ok(spec.args.includes("ControlMaster=auto"));
+  assert.ok(spec.args.includes("ControlPersist=3600"));
 });

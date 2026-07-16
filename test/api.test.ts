@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { api } from "../src/client/src/api.ts";
+import { setToken } from "../src/client/src/token.ts";
 
 test("create requests carry browser-local source pane context", async () => {
   const originalFetch = globalThis.fetch;
@@ -27,4 +28,39 @@ test("create requests carry browser-local source pane context", async () => {
       body: { machineId: "local", sourcePaneId: "pane_source" },
     },
   ]);
+});
+
+test("pane image staging sends authenticated raw bytes without a client path", async () => {
+  const originalFetch = globalThis.fetch;
+  const image = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });
+  const requests: Array<{ path: string; init?: RequestInit }> = [];
+  setToken("browser-token");
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ path: String(input), init });
+    return new Response(JSON.stringify({
+      stageId: `paste-${"a".repeat(36)}`,
+      targetPath: "/tmp/wmux/image.png",
+      mimeType: "image/png",
+      bytes: 4,
+      expiresAt: new Date().toISOString(),
+    }), { status: init?.method === "DELETE" ? 200 : 201, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const staged = await api.stagePanePasteImage("pane / one", image);
+    await api.discardPanePasteImage("pane / one", staged.stageId);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setToken("");
+  }
+
+  assert.equal(requests[0].path, "/api/panes/pane%20%2F%20one/paste-images");
+  assert.equal(requests[0].init?.method, "POST");
+  assert.equal(requests[0].init?.body, image);
+  assert.deepEqual(requests[0].init?.headers, {
+    "content-type": "application/octet-stream",
+    authorization: "Bearer browser-token",
+  });
+  assert.equal(requests[1].path, `/api/panes/pane%20%2F%20one/paste-images/paste-${"a".repeat(36)}`);
+  assert.equal(requests[1].init?.method, "DELETE");
 });

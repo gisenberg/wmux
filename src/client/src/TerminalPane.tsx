@@ -21,6 +21,8 @@ import { configureTerminalInput } from "./terminal-input";
 import { isTerminalProtocolResponse } from "./terminal-protocol";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { writeBrowserClipboard } from "./clipboard";
+import { api } from "./api";
+import { canApplyStagedPasteImage, imagesFromClipboard, quoteStagedImagePath } from "./clipboard-images";
 import { Osc52Parser } from "./terminal-osc52";
 import { RectangularSelection } from "./terminal-rectangular-selection";
 import { PaneSocketController } from "./pane-socket";
@@ -132,6 +134,8 @@ export const TerminalPane = memo(function TerminalPane({
   const onActivateRef = useRef(onActivate);
   const activeRef = useRef(active);
   const focusSignalRef = useRef(focusSignal);
+  const connectedRef = useRef(false);
+  const inputEpochRef = useRef(0);
   const [connected, setConnected] = useState(false);
   const [connectionIssue, setConnectionIssue] = useState("");
   const [kittyMediaItems, setKittyMediaItems] = useState<TerminalMedia[]>([]);
@@ -148,6 +152,7 @@ export const TerminalPane = memo(function TerminalPane({
   }, [onActivate]);
 
   useEffect(() => {
+    if (activeRef.current !== active) inputEpochRef.current += 1;
     activeRef.current = active;
   }, [active]);
 
@@ -610,6 +615,8 @@ export const TerminalPane = memo(function TerminalPane({
         },
         onConnectionChange: (nextConnected, issue) => {
           if (cancelled) return;
+          if (connectedRef.current !== nextConnected) inputEpochRef.current += 1;
+          connectedRef.current = nextConnected;
           setConnected(nextConnected);
           setConnectionIssue(issue);
         },
@@ -753,9 +760,11 @@ export const TerminalPane = memo(function TerminalPane({
             onActivateRef.current();
             term.focus();
             term.clearSelection();
+            inputEpochRef.current += 1;
             sendInput(socketRef.current, pending.sequence);
           }
         } else if (browserGesture && event.button === 0 && hasMouseTracking(term)) {
+          inputEpochRef.current += 1;
           sendInput(socketRef.current, mousePressSequence(event, term));
           sendInput(socketRef.current, mouseReleaseSequence(event, term));
         }
@@ -792,6 +801,59 @@ export const TerminalPane = memo(function TerminalPane({
         }
       };
       pasteListener = (event) => {
+        const image = event.clipboardData ? imagesFromClipboard(event.clipboardData)[0] : undefined;
+        if (image) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          const captured = { paneId: pane.id, inputEpoch: ++inputEpochRef.current };
+          void api.stagePanePasteImage(pane.id, image).then(async (staged) => {
+            const canApply = canApplyStagedPasteImage(captured, {
+              paneId: pane.id,
+              inputEpoch: inputEpochRef.current,
+              mounted: !cancelled && terminalRef.current === term && Boolean(containerRef.current?.isConnected),
+              active: activeRef.current,
+              visible: document.visibilityState === "visible",
+              connected: connectedRef.current && socketRef.current?.readyState === WebSocket.OPEN,
+            });
+            if (!canApply) {
+              await api.discardPanePasteImage(pane.id, staged.stageId).catch(() => undefined);
+              if (!cancelled) setConnectionIssue("Image paste discarded because the active pane changed.");
+              return;
+            }
+            let quotedPath: string;
+            try {
+              quotedPath = quoteStagedImagePath(staged.targetPath);
+            } catch {
+              await api.discardPanePasteImage(pane.id, staged.stageId).catch(() => undefined);
+              if (!cancelled) setConnectionIssue("Image paste failed: invalid staged path.");
+              return;
+            }
+            try {
+              if (term.getViewportY() > 0) term.scrollToBottom();
+              rectangularSelection?.clear();
+              term.clearSelection();
+              term.paste(quotedPath);
+            } catch {
+              await api.discardPanePasteImage(pane.id, staged.stageId).catch(() => undefined);
+              if (!cancelled) setConnectionIssue("Image paste failed while applying the staged path.");
+            }
+          }).catch((error: unknown) => {
+            if (cancelled) return;
+            const code = error instanceof Error ? error.message : "paste_image_stage_failed";
+            const detail = code === "paste_image_target_unsupported"
+              ? "this pane target does not support image paste"
+              : code === "paste_image_pane_not_live"
+                ? "the pane is not connected"
+                : code === "paste_image_input_changed"
+                  ? "pane input changed while the image was staging"
+                  : code === "paste_image_unsupported_type"
+                    ? "the clipboard image type is not supported"
+                    : "staging failed";
+            setConnectionIssue(`Image paste failed: ${detail}.`);
+          });
+          return;
+        }
         const text = event.clipboardData?.getData("text/plain") || event.clipboardData?.getData("text") || "";
         if (!text) return;
         event.preventDefault();
@@ -831,11 +893,13 @@ export const TerminalPane = memo(function TerminalPane({
         if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
           if (event.key === "ArrowLeft") {
             rectangularSelection?.clear();
+            inputEpochRef.current += 1;
             sendInput(socketRef.current, "\x1bb");
             return true;
           }
           if (event.key === "ArrowRight") {
             rectangularSelection?.clear();
+            inputEpochRef.current += 1;
             sendInput(socketRef.current, "\x1bf");
             return true;
           }
@@ -845,7 +909,10 @@ export const TerminalPane = memo(function TerminalPane({
       term.attachCustomWheelEventHandler((event) => {
         if (!event.shiftKey && hasMouseTracking(term)) {
           const sequence = mouseWheelSequence(event, term);
-          if (sequence) sendInput(socketRef.current, sequence);
+          if (sequence) {
+            inputEpochRef.current += 1;
+            sendInput(socketRef.current, sequence);
+          }
           return true;
         }
         const lines = wheelLines(event, term);
@@ -855,6 +922,7 @@ export const TerminalPane = memo(function TerminalPane({
 
       term.onData((data) => {
         const terminalResponse = isTerminalProtocolResponse(data);
+        if (!terminalResponse) inputEpochRef.current += 1;
         if (!terminalResponse) rectangularSelection?.clear();
         if (awaitingRestart && !terminalResponse) {
           awaitingRestart = false;
@@ -913,6 +981,7 @@ export const TerminalPane = memo(function TerminalPane({
       terminalRef.current?.dispose();
       socketRef.current = null;
       terminalRef.current = null;
+      connectedRef.current = false;
       fitAddonRef.current = null;
       reconnectRef.current = null;
       pendingOsc52Ref.current = undefined;
@@ -944,6 +1013,7 @@ export const TerminalPane = memo(function TerminalPane({
   const canSplit = currentMachine?.reachable ?? false;
   const rerunLastCommand = () => {
     if (!lastRun?.command || !socketRef.current) return;
+    inputEpochRef.current += 1;
     sendInput(socketRef.current, `${lastRun.command}\r`);
   };
   const copyLastCommand = () => {
