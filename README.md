@@ -330,14 +330,38 @@ wmux-notify --title "Build" --body "Completed"
 wmux-run -- npm test
 wmux-media ./image.png
 git diff | wmux-copy
-wmux-hooks install opencode
 wmux-agent-profile plan
 wmux-agent-profile status
 ```
 
+### Agent lifecycle hooks
+
+Staging the `wmux-hooks` and `wmux-agent-event` helper commands does not enable
+agent integration by itself. Install hooks for each agent, on each host and user
+account where that agent runs:
+
+```bash
+wmux-hooks install claude
+wmux-hooks install codex
+wmux-hooks install opencode
+wmux-hooks status
+```
+
+The Claude installer merges lifecycle commands into `~/.claude/settings.json`.
+The Codex installer merges commands into `~/.codex/hooks.json`; start a new
+Codex session, run `/hooks`, and review and trust the wmux command before
+expecting events. Codex sandbox or approval settings do not replace this hook
+trust step.
+
 `wmux-hooks install opencode` writes an auto-loaded global TypeScript plugin to
 `${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/wmux.ts`; it does not modify
-`opencode.json`. POSIX installation is supported; Windows installer parity is not included.
+`opencode.json`. POSIX installation is supported; OpenCode's Windows installer
+parity is not included.
+
+On Windows, run `wmux-windows-setup install-hooks`, then review and trust the
+command with `/hooks` in a new Codex session. Dynamically registered hosts do
+not receive broad wmux API credentials; lifecycle hooks on those hosts require
+separately provisioned API authentication or event posts fail with `401`.
 
 OpenCode's semantic Copy action can write directly through OSC 52 (`ESC ] 52 ; c ; base64`). wmux
 accepts only canonical UTF-8 write requests up to 1 MiB, removes every OSC 52 request from terminal
@@ -357,8 +381,9 @@ Personal agent instructions and skills can live in a private
 pane starts. See [Agent profiles](docs/AGENT_PROFILES.md) and the sanitized
 [`examples/wmux-agent-profile`](examples/wmux-agent-profile).
 
-Remote helpers are installed when a new pane starts; existing shells are not
-retrofitted automatically.
+Remote helper commands are staged when a new pane starts; existing shells are
+not retrofitted automatically, and agent hooks still require the explicit setup
+above.
 
 ## Experimental Windows Session Agent
 
