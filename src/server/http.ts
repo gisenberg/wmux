@@ -20,9 +20,10 @@ import {
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { buildDoctorReport } from "./doctor.js";
 import { HostRegistryError, type HostRegistry } from "./host-registry.js";
+import { LoginAttemptThrottle } from "./login-throttle.js";
 import { readDurableSessionCwd } from "./durable-session.js";
 import { resolveMachineStatuses } from "./machines.js";
-import { observedClientAddress } from "./proxy-address.js";
+import { normalizeIpAddress, observedClientAddress } from "./proxy-address.js";
 import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
 import type {
@@ -106,8 +107,13 @@ export const readBinaryBody = async (
   return Buffer.concat(chunks, total);
 };
 
-const sendJson = (response: http.ServerResponse, status: number, payload: unknown): void => {
-  response.writeHead(status, { "content-type": "application/json" });
+const sendJson = (
+  response: http.ServerResponse,
+  status: number,
+  payload: unknown,
+  headers: Record<string, string> = {},
+): void => {
+  response.writeHead(status, { "content-type": "application/json", ...headers });
   response.end(JSON.stringify(payload));
 };
 
@@ -142,6 +148,7 @@ export const createHttpServer = (
   const machineStatusResolver = options.healthResolvers?.machines ?? resolveMachineStatuses;
   const streamStatusResolver = options.healthResolvers?.streams ?? resolveStreamStatuses;
   const trustedProxies = options.trustedProxies ?? new Set<string>();
+  const loginAttempts = new LoginAttemptThrottle();
   const currentMachines = typeof machineSource === "function" ? machineSource : () => machineSource;
   const root = clientRoot();
   const streamRequests = new StreamRequestStore();
@@ -359,15 +366,29 @@ export const createHttpServer = (
           sendJson(response, 404, { error: "login_disabled" });
           return;
         }
+        const clientAddress = observedClientAddress(request, trustedProxies)
+          ?? normalizeIpAddress(request.socket.remoteAddress)
+          ?? "unknown";
+        const attempt = loginAttempts.attempt(clientAddress);
+        if (!attempt.allowed) {
+          sendJson(
+            response,
+            429,
+            { error: "login_rate_limited", retryAfterMs: attempt.retryAfterMs },
+            { "retry-after": String(Math.max(1, Math.ceil(attempt.retryAfterMs / 1_000))) },
+          );
+          return;
+        }
         const body = (await readBody(request)) as { username?: unknown; password?: unknown };
         if (typeof body.username !== "string" || typeof body.password !== "string") {
           sendJson(response, 400, { error: "invalid_credentials_format" });
           return;
         }
-        if (!verifyCredentials(auth, body.username, body.password)) {
+        if (!await verifyCredentials(auth, body.username, body.password)) {
           sendJson(response, 401, { error: "invalid_credentials" });
           return;
         }
+        loginAttempts.reset(clientAddress);
         const token = issueSessionToken(auth.sessionSecret, SESSION_TTL_MS, Date.now());
         sendJson(response, 200, { token, expiresInMs: SESSION_TTL_MS });
         return;

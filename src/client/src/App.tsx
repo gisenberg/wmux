@@ -25,6 +25,7 @@ import type { OpenTuiSidebarMachine, OpenTuiSidebarWorkspace } from "./OpenTuiSi
 import { OpenTuiTopbar } from "./OpenTuiTopbar";
 import { applyClientViewToState, loadActivePaneSelections, loadActiveTabSelections, markWorkspaceNotificationsReadInState, parseRouteTarget, workspaceTabPath } from "./route-state";
 import { compactMiddlePath, normalizeUserPath } from "./path-display";
+import { reconcileIncomingRevision } from "./reconcile";
 import { ScreenStreamViewer } from "./ScreenStream";
 import { Toasts, useToasts } from "./Toasts";
 import { useAppRouting } from "./useAppRouting";
@@ -191,12 +192,14 @@ export function App() {
     bootstrapRetryTimer.current = undefined;
     try {
       const payload = await api.bootstrap();
-      const routed = await activateRouteTarget(payload);
+      const routed = activateRouteTarget(payload);
       if (requestId !== bootstrapRequestId.current) return;
       bootstrapRetryAttempt.current = 0;
       setLoadError(null);
       setAuthRequired(false);
-      store.set(routed);
+      const current = store.get();
+      const next = reconcileIncomingRevision(current, routed);
+      if (next !== current) store.set(next);
     } catch (nextError) {
       if (requestId !== bootstrapRequestId.current) return;
       // An auth failure routes to the login screen instead of the fatal overlay.
@@ -468,7 +471,7 @@ export function App() {
     await runPending("settings:save", "Saving settings...", async () => {
       const response = await api.updateSettings(nextSettings);
       setPreviewSettings(null);
-      store.set(response.state);
+      await refresh(response.state);
       setSettingsOpen(false);
     });
   };
@@ -1883,7 +1886,7 @@ const describeActionError = (error: unknown): string => {
   return message.length > 160 ? `${message.slice(0, 157)}…` : message;
 };
 
-const activateRouteTarget = async (payload: BootstrapPayload): Promise<BootstrapPayload> =>
+const activateRouteTarget = (payload: BootstrapPayload): BootstrapPayload =>
   applyClientViewToState(
     payload,
     parseRouteTarget(window.location.pathname),

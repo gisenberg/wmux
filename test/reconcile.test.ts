@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isIncomingRevisionStale, reconcile } from "../src/client/src/reconcile.js";
+import { isIncomingRevisionStale, reconcile, reconcileIncomingRevision } from "../src/client/src/reconcile.js";
 
 test("returns the previous reference when content is deep-equal", () => {
   const prev = { workspaces: [{ id: "a", tabs: [{ id: "t", panes: [] }] }], count: 1 };
@@ -59,4 +59,13 @@ test("rejects delayed snapshots without rejecting same-revision health refreshes
   assert.equal(isIncomingRevisionStale({ revision: 12 }, { revision: 12 }), false);
   assert.equal(isIncomingRevisionStale({ revision: 12 }, { revision: 13 }), false);
   assert.equal(isIncomingRevisionStale(null, { revision: 1 }), false);
+});
+
+test("revision-aware reconciliation keeps newer state and accepts same-revision refreshes", () => {
+  const current = { revision: 12, value: "socket" };
+  assert.equal(reconcileIncomingRevision(current, { revision: 11, value: "http" }), current);
+  assert.deepEqual(reconcileIncomingRevision(current, { revision: 12, value: "health" }), {
+    revision: 12,
+    value: "health",
+  });
 });

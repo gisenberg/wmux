@@ -33,5 +33,10 @@ export const isIncomingRevisionStale = (
   incoming: { revision: number },
 ): boolean => Boolean(current && incoming.revision < current.revision);
 
+export const reconcileIncomingRevision = <T extends { revision: number }>(
+  current: T | null | undefined,
+  incoming: T,
+): T => current && isIncomingRevisionStale(current, incoming) ? current : reconcile(current, incoming);
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

@@ -54,7 +54,7 @@ const main = async (): Promise<void> => {
   if (!configuredPublicUrl) process.env.WMUX_PUBLIC_URL = publicUrl;
   if (!isAllowedBindHost(host)) {
     throw new Error(
-      `Refusing to bind ${host}. Use loopback, Tailscale 100.64.0.0/10, or an RFC1918/internal interface.`,
+      `Refusing to bind ${host}. Use loopback, Tailscale 100.64.0.0/10, RFC1918, IPv6 ULA, or explicitly allow the address with WMUX_ALLOWED_BIND_RANGES.`,
     );
   }
 

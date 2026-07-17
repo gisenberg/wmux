@@ -165,25 +165,48 @@ export const hashPassword = (password: string): string => {
   return `scrypt$${salt.toString("hex")}$${derived.toString("hex")}`;
 };
 
-const verifyPasswordHash = (password: string, stored: string): boolean => {
+const parsePasswordHash = (stored: string): { salt: Buffer; expected: Buffer } | null => {
   const parts = stored.split("$");
-  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  if (parts.length !== 3 || parts[0] !== "scrypt") return null;
   const salt = Buffer.from(parts[1], "hex");
   const expected = Buffer.from(parts[2], "hex");
-  if (salt.length === 0 || expected.length === 0) return false;
+  if (salt.length === 0 || expected.length !== SCRYPT_KEYLEN) return null;
+  return { salt, expected };
+};
+
+const verifyPasswordHash = (password: string, stored: string): boolean => {
+  const parsed = parsePasswordHash(stored);
+  if (!parsed) return false;
   let derived: Buffer;
   try {
-    derived = crypto.scryptSync(password, salt, expected.length);
+    derived = crypto.scryptSync(password, parsed.salt, parsed.expected.length);
   } catch {
     return false;
   }
-  return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
+  return crypto.timingSafeEqual(derived, parsed.expected);
 };
 
-export const verifyCredentials = (auth: AuthConfig, username: string, password: string): boolean => {
+const verifyPasswordHashAsync = async (password: string, stored: string): Promise<boolean> => {
+  const parsed = parsePasswordHash(stored);
+  if (!parsed) return false;
+  let derived: Buffer;
+  try {
+    derived = await new Promise<Buffer>((resolve, reject) => {
+      crypto.scrypt(password, parsed.salt, parsed.expected.length, (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      });
+    });
+  } catch {
+    return false;
+  }
+  return crypto.timingSafeEqual(derived, parsed.expected);
+};
+
+export const verifyCredentials = async (auth: AuthConfig, username: string, password: string): Promise<boolean> => {
   if (!auth.credentials) return false;
   const userMatches = timingSafeStringEqual(auth.credentials.username, username);
-  const passwordMatches = verifyPasswordHash(password, auth.credentials.passwordHash);
+  const passwordMatches = await verifyPasswordHashAsync(password, auth.credentials.passwordHash);
   // Evaluate both regardless of the username result to keep timing uniform.
   return userMatches && passwordMatches;
 };

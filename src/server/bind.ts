@@ -1,22 +1,47 @@
-import os from "node:os";
 import net from "node:net";
+import { isAllowedRegistrationAddress, normalizeIpAddress } from "./proxy-address.js";
 
-const privateRanges = [
-  /^10\./,
-  /^127\./,
-  /^172\.(1[6-9]|2\d|3[0-1])\./,
-  /^192\.168\./,
-  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
-];
+const addressValue = (address: string): bigint => {
+  if (net.isIP(address) === 4) {
+    return address.split(".").reduce((value, octet) => (value << 8n) | BigInt(Number(octet)), 0n);
+  }
+  const [left = "", right = ""] = address.split("::");
+  const leftParts = left ? left.split(":") : [];
+  const rightParts = right ? right.split(":") : [];
+  const missing = 8 - leftParts.length - rightParts.length;
+  const parts = [...leftParts, ...Array.from({ length: missing }, () => "0"), ...rightParts];
+  return parts.reduce((value, part) => (value << 16n) | BigInt(`0x${part}`), 0n);
+};
+
+const matchesAllowedRange = (host: string, entry: string): boolean => {
+  const [rawNetwork, rawPrefix] = entry.split("/");
+  const network = normalizeIpAddress(rawNetwork);
+  if (!network) throw new Error(`WMUX_ALLOWED_BIND_RANGES contains a non-IP value: ${entry}`);
+  const version = net.isIP(network);
+  const bits = version === 4 ? 32 : 128;
+  const prefix = rawPrefix === undefined ? bits : Number(rawPrefix);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > bits || entry.split("/").length > 2) {
+    throw new Error(`WMUX_ALLOWED_BIND_RANGES contains an invalid CIDR: ${entry}`);
+  }
+  const normalizedHost = normalizeIpAddress(host);
+  if (!normalizedHost || net.isIP(normalizedHost) !== version) return false;
+  const shift = BigInt(bits - prefix);
+  return (addressValue(normalizedHost) >> shift) === (addressValue(network) >> shift);
+};
+
+const isExplicitlyAllowedBindHost = (host: string): boolean =>
+  (process.env.WMUX_ALLOWED_BIND_RANGES ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .some((entry) => matchesAllowedRange(host, entry));
 
 export const isAllowedBindHost = (host: string): boolean => {
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (host === "::1") return true;
-  if (privateRanges.some((range) => range.test(host))) return true;
-  const interfaces = os.networkInterfaces();
-  return Object.values(interfaces)
-    .flat()
-    .some((address) => address?.address === host && !address.internal);
+  const normalized = normalizeIpAddress(host);
+  if (normalized === "0.0.0.0" || normalized === "::") return false;
+  if (isAllowedRegistrationAddress(host)) return true;
+  return isExplicitlyAllowedBindHost(host);
 };
 
 const normalizeHost = (value: string | undefined): string | null => {

@@ -41,7 +41,7 @@ Useful service commands:
 
 ## Network Safety
 
-The service must only bind to loopback, Tailscale `100.64.0.0/10`, or RFC1918/internal addresses. Do not weaken the bind checks in `src/server/bind.ts` without adding a replacement control that still prevents public internet exposure. The current dogfood service is expected to bind to the host's Tailscale IP, not `0.0.0.0`.
+The service must only bind to loopback, Tailscale `100.64.0.0/10`, RFC1918, IPv6 ULA, or an unusual internal IP/CIDR explicitly listed in `WMUX_ALLOWED_BIND_RANGES`. Keep that override IP-only and narrowly scoped; it must not become a hostname, wildcard, or public-network escape hatch. Do not weaken the bind checks in `src/server/bind.ts` without adding a replacement control that still prevents public internet exposure. The current dogfood service is expected to bind to the host's Tailscale IP, not `0.0.0.0`.
 
 For MagicDNS names or reverse-proxy hostnames, set `WMUX_ALLOWED_HOSTS` to a comma-separated allowlist. `*.ts.net` is allowed for Tailscale host headers.
 

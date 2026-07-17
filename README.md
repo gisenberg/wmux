@@ -52,7 +52,12 @@ the terminal process or screen pixels.
 
 ## Quick Start
 
-Requirements: Node.js 22+, npm, and a supported local PTY environment.
+Server requirements: Linux or macOS, Node.js 22+, npm, and `/bin/sh` with a
+supported local PTY environment. Windows is supported as a remote
+`powershell-ssh` target, but not as the wmux server host. Running the complete
+development check (`npm run check`) additionally requires Bash and Python 3;
+individual TypeScript and client build commands may work elsewhere, but the
+full development workflow is supported on Linux and macOS.
 
 ```bash
 npm install
@@ -72,9 +77,17 @@ To listen on Tailscale, use the machine's Tailscale IPv4 address:
 npm run start -- --host 100.x.y.z --port 3478
 ```
 
-wmux refuses wildcard and public bind addresses. It accepts loopback,
-Tailscale `100.64.0.0/10`, RFC1918, and other explicitly supported internal
-addresses.
+wmux refuses wildcard and public bind addresses by default. It accepts
+loopback, Tailscale `100.64.0.0/10`, RFC1918, and IPv6 ULA addresses. If an
+internal network uses another range, explicitly allow only that exact IP or
+CIDR with `WMUX_ALLOWED_BIND_RANGES`:
+
+```bash
+WMUX_ALLOWED_BIND_RANGES=198.18.20.0/24 npm run start -- --host 198.18.20.44 --port 3478
+```
+
+This variable is a security-boundary override; do not use it to expose wmux on
+a public address or with a wildcard CIDR.
 
 For HTTPS, set both certificate paths and the browser-facing URL:
 
@@ -114,9 +127,9 @@ scripts/install-user-service.sh
 ```
 
 It chooses the first Tailscale IPv4 address when available. Override it with
-`WMUX_HOST`, `WMUX_PORT`, `WMUX_CERT_FILE`, `WMUX_KEY_FILE`, and
-`WMUX_PUBLIC_URL`, and (when helper callbacks need a different private route)
-`WMUX_HELPER_URL`.
+`WMUX_HOST`, `WMUX_PORT`, `WMUX_CERT_FILE`, `WMUX_KEY_FILE`,
+`WMUX_PUBLIC_URL`, and `WMUX_ALLOWED_BIND_RANGES`, and (when helper callbacks
+need a different private route) `WMUX_HELPER_URL`.
 
 ```bash
 systemctl --user status wmux.service
@@ -172,7 +185,9 @@ cp wmux.config.example.json wmux.config.json
   `v0.1.1-linux`, `v0.1.1-mac`, and `v0.1.1-win`. Local and Windows platforms
   are inferred; POSIX SSH defaults to `linux`, so set `"platform": "mac"` for
   a Mac SSH host.
-- Set `WMUX_ALLOWED_HOSTS` for non-`*.ts.net` MagicDNS or proxy hostnames.
+- Set `WMUX_ALLOWED_HOSTS` for non-`*.ts.net` MagicDNS or proxy request
+  hostnames. This does not expand the bind-address policy; use the narrowly
+  scoped `WMUX_ALLOWED_BIND_RANGES` override for an unusual internal IP range.
 
 Never commit machine inventories, credentials, tokens, private-key paths, or
 personal service URLs. Windows setup is covered in

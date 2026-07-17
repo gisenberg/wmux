@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { api } from "./api";
 import type { AppStore } from "./app-store";
-import { isIncomingRevisionStale, reconcile } from "./reconcile";
+import { reconcileIncomingRevision } from "./reconcile";
 import {
   activatePaneInState,
   activateWorkspaceTabInState,
@@ -55,7 +55,6 @@ export function useAppRouting(options: UseAppRoutingOptions) {
   const refresh = useCallback(
     async (nextState?: BootstrapPayload) => {
       const incoming = nextState ?? (await api.bootstrap());
-      if (isIncomingRevisionStale(store.get(), incoming)) return;
       const routed = applyClientViewToState(
         incoming,
         parseRouteTarget(window.location.pathname),
@@ -64,7 +63,9 @@ export function useAppRouting(options: UseAppRoutingOptions) {
       );
       // Structural sharing: keep previous object identities for unchanged
       // subtrees so memoized panes/tabs skip re-rendering on resyncs.
-      store.set(reconcile(store.get(), routed));
+      const current = store.get();
+      const next = reconcileIncomingRevision(current, routed);
+      if (next !== current) store.set(next);
     },
     [store],
   );

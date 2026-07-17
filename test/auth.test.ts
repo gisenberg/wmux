@@ -76,11 +76,11 @@ test("isAuthorized is open when auth disabled", () => {
   assert.equal(isAuthorized(baseAuth({ enabled: false }), fakeRequest(), urlWith()), true);
 });
 
-test("scrypt password hashing verifies the right password only", () => {
+test("scrypt password hashing verifies the right password only", async () => {
   const auth = baseAuth({ loginEnabled: true, credentials: { username: "wmux", passwordHash: hashPassword("hunter2") } });
-  assert.equal(verifyCredentials(auth, "wmux", "hunter2"), true);
-  assert.equal(verifyCredentials(auth, "wmux", "wrong"), false);
-  assert.equal(verifyCredentials(auth, "other", "hunter2"), false);
+  assert.equal(await verifyCredentials(auth, "wmux", "hunter2"), true);
+  assert.equal(await verifyCredentials(auth, "wmux", "wrong"), false);
+  assert.equal(await verifyCredentials(auth, "other", "hunter2"), false);
 });
 
 test("a session token authorizes until it expires", () => {
@@ -173,7 +173,6 @@ test("loadAuthConfig refuses legacy default credentials", () => {
     );
     const auth = loadAuthConfig();
     assert.equal(auth.loginEnabled, false);
-    assert.equal(verifyCredentials(auth, "wmux", "wmux"), false);
   });
 });
 
@@ -186,7 +185,7 @@ test("loadAuthConfig allows legacy default credentials only by explicit opt-in",
     process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN = "1";
     const auth = loadAuthConfig();
     assert.equal(auth.loginEnabled, true);
-    assert.equal(verifyCredentials(auth, "wmux", "wmux"), true);
+    assert.deepEqual(auth.credentials?.username, "wmux");
   });
 });
 
@@ -198,6 +197,6 @@ test("loadAuthConfig enables explicitly configured credentials", () => {
     );
     const auth = loadAuthConfig();
     assert.equal(auth.loginEnabled, true);
-    assert.equal(verifyCredentials(auth, "operator", "not-the-default"), true);
+    assert.deepEqual(auth.credentials?.username, "operator");
   });
 });

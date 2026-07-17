@@ -13,6 +13,7 @@ Environment=WMUX_CERT_FILE=
 Environment=WMUX_KEY_FILE=
 Environment=WMUX_PUBLIC_URL=
 Environment=WMUX_HELPER_URL=
+Environment=WMUX_ALLOWED_BIND_RANGES=
 ExecStartPre=/usr/bin/env node scripts/wmux-wait-bind ${WMUX_HOST}
 ExecStart=/usr/bin/npm run dev -- --host ${WMUX_HOST} --port ${WMUX_PORT}
 Restart=on-failure

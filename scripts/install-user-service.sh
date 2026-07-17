@@ -8,6 +8,7 @@ CERT_FILE="${WMUX_CERT_FILE:-}"
 KEY_FILE="${WMUX_KEY_FILE:-}"
 PUBLIC_URL="${WMUX_PUBLIC_URL:-}"
 HELPER_URL="${WMUX_HELPER_URL:-}"
+ALLOWED_BIND_RANGES="${WMUX_ALLOWED_BIND_RANGES:-}"
 HELPER_URL="${HELPER_URL#"${HELPER_URL%%[![:space:]]*}"}"
 HELPER_URL="${HELPER_URL%"${HELPER_URL##*[![:space:]]}"}"
 
@@ -92,6 +93,7 @@ sed \
   -e "s#Environment=WMUX_KEY_FILE=.*#Environment=WMUX_KEY_FILE=${KEY_FILE}#" \
   -e "s#Environment=WMUX_PUBLIC_URL=.*#Environment=WMUX_PUBLIC_URL=${PUBLIC_URL}#" \
   -e "s#Environment=WMUX_HELPER_URL=.*#Environment=WMUX_HELPER_URL=${HELPER_URL}#" \
+  -e "s#Environment=WMUX_ALLOWED_BIND_RANGES=.*#Environment=WMUX_ALLOWED_BIND_RANGES=${ALLOWED_BIND_RANGES}#" \
   "${ROOT_DIR}/deploy/wmux.service.example" > "${HOME}/.config/systemd/user/wmux.service"
 
 systemctl --user daemon-reload
