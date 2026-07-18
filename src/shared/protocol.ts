@@ -205,6 +205,11 @@ export interface WmuxSettings {
   machineAliases: Record<string, string>;
 }
 
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  '"Fira Code", "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace';
+export const MIN_TERMINAL_FONT_SIZE = 10;
+export const MAX_TERMINAL_FONT_SIZE = 24;
+
 export interface BootstrapPayload {
   revision: number;
   healthEpoch: number;
@@ -214,8 +219,10 @@ export interface BootstrapPayload {
   notifications: TerminalNotification[];
   agentEvents: AgentActivity[];
   runs: TerminalRun[];
+  terminalFontFamily: string;
   settings: WmuxSettings;
   keybindings: KeybindingMap;
+  settingsDefaults: WmuxSettings;
   streams: StreamStatus[];
 }
 

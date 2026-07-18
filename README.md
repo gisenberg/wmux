@@ -156,6 +156,8 @@ cp wmux.config.example.json wmux.config.json
 
 ```json
 {
+  "terminalFontFamily": "\"MesloLGM Nerd Font\"",
+  "terminalFontSize": 15,
   "machines": [
     {
       "id": "linux-box",
@@ -179,6 +181,15 @@ cp wmux.config.example.json wmux.config.json
 ```
 
 - `WMUX_CONFIG_PATH` selects one explicit file and disables fallback.
+- `terminalFontFamily` accepts a browser CSS font-family stack and
+  `terminalFontSize` accepts an integer from 10 through 24. These values are
+  startup-loaded defaults; restart wmux after changing them. wmux bundles
+  `"MesloLGM Nerd Font"` (the terminal-safe Mono variant) and Fira Code.
+  Other preferred fonts must be installed on each browser device, and wmux
+  appends its bundled Fira Code/monospace fallback stack.
+- `terminalFontFamily` is config-only. Settings saved in
+  `~/.wmux/settings.json` can override `terminalFontSize`; use
+  **Settings → Reset → Save** to adopt a changed size default.
 - wmux adds the local machine unless `"localMachine": false` is set.
 - `kind: "local"` always executes on the current wmux server. Its display
   name does not make it a remote target, and its `cwd` must exist on that
@@ -349,10 +360,11 @@ token. wmux is not a hardened multi-user service.
   needed.
 - Settings persist in `~/.wmux/settings.json` and include an app-wide color
   scheme shared by terminal, canvas and DOM chrome, dialogs, and browser chrome;
-  terminal size, scrollback, user-facing host aliases,
+  terminal font size, scrollback, user-facing host aliases,
   inactive-tab streaming, and terminal scroll mode. Hidden cached tabs suspend
   terminal sockets by default while preserving their mounted terminal views;
-  choose live streaming to retain the previous behavior.
+  choose live streaming to retain the previous behavior. The terminal font
+  family remains config-owned.
 - New local, SSH, and Windows panes receive the selected scheme as
   `WMUX_COLOR_SCHEME` plus `WMUX_COLOR_MODE=dark|light`. Browser terminals
   answer OSC 4/10/11 palette queries from the live scheme, including after a

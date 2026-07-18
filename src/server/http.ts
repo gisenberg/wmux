@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { resolveKeybindings } from "../shared/keybindings.js";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { readAgentProfileBundle } from "./agent-profile.js";
 import {
   type AuthConfig,
@@ -141,6 +142,15 @@ const clientRoot = (): string => {
   return path.resolve(here, "../client");
 };
 
+const bundledMesloFontFiles = {
+  regular: "meslo-lgm-nerd-font-mono-regular.woff2",
+  bold: "meslo-lgm-nerd-font-mono-bold.woff2",
+  italic: "meslo-lgm-nerd-font-mono-italic.woff2",
+  "bold-italic": "meslo-lgm-nerd-font-mono-bold-italic.woff2",
+} as const;
+
+type BundledMesloFontFace = keyof typeof bundledMesloFontFiles;
+
 type WmuxHttpServer = http.Server | https.Server;
 
 export const createHttpServer = (
@@ -156,6 +166,7 @@ export const createHttpServer = (
     hostRegistry?: HostRegistry;
     registrationToken?: string;
     trustedProxies?: ReadonlySet<string>;
+    terminalFontFamily?: string;
     healthRefreshIntervals?: { machines?: number; streams?: number };
     healthResolvers?: {
       machines?: typeof resolveMachineStatuses;
@@ -249,8 +260,10 @@ export const createHttpServer = (
       notifications: snapshot.notifications,
       agentEvents: snapshot.agentEvents,
       runs: snapshot.runs,
+      terminalFontFamily: options.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
       settings: settings.snapshot(),
       keybindings: options.keybindings ?? resolveKeybindings(),
+      settingsDefaults: settings.defaultsSnapshot(),
       streams: streamStatuses,
     };
   };
@@ -348,10 +361,14 @@ export const createHttpServer = (
     const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? bindHost}`);
     const machines = currentMachines();
 
+    const bundledMesloFont = request.method === "GET" || request.method === "HEAD"
+      ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
+      : null;
+
     // Token gate: everything under /api requires a valid token, except the
-    // unauthenticated bootstrap endpoints (liveness, auth capability probe, and
-    // login itself). The static app shell is served unauthenticated so the
-    // browser can load and then present its stored token.
+    // unauthenticated bootstrap endpoints. The static app shell and bundled
+    // client assets are served outside /api so the browser can load before it
+    // presents its stored token.
     const unauthenticatedApi = new Set(["/api/health", "/api/auth-info", "/api/login"]);
     const registrationPost = url.pathname === "/api/registry/hosts" && request.method === "POST";
     const registrationAuthorized =
@@ -381,6 +398,14 @@ export const createHttpServer = (
     }
 
     try {
+      if (bundledMesloFont) {
+        const face = bundledMesloFont[1] as BundledMesloFontFace;
+        if (!serveBundledMesloFont(root, face, request.method === "HEAD", response)) {
+          sendJson(response, 404, { error: "font_not_found" });
+        }
+        return;
+      }
+
       if (url.pathname === "/api/health" && request.method === "GET") {
         sendJson(response, 200, { ok: true });
         return;
@@ -1416,6 +1441,31 @@ const staticHeaders = (filePath: string): Record<string, string> => {
     headers["cache-control"] = "public, max-age=31536000, immutable";
   }
   return headers;
+};
+
+const serveBundledMesloFont = (
+  root: string,
+  face: BundledMesloFontFace,
+  headOnly: boolean,
+  response: http.ServerResponse,
+): boolean => {
+  const fileName = bundledMesloFontFiles[face];
+  const candidates = [
+    path.join(root, "fonts", "meslo", fileName),
+    path.join(root, "public", "fonts", "meslo", fileName),
+  ];
+  const filePath = candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!filePath) return false;
+  const stat = fs.statSync(filePath);
+  response.writeHead(200, {
+    "content-type": "font/woff2",
+    "content-length": String(stat.size),
+    "cache-control": "public, max-age=31536000, immutable",
+    "x-content-type-options": "nosniff",
+  });
+  if (headOnly) response.end();
+  else fs.createReadStream(filePath).pipe(response);
+  return true;
 };
 
 const machineExists = (machines: MachineConfig[], machineId: string): boolean =>

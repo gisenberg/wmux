@@ -46,6 +46,7 @@ import { summarizeWorkspaceVersion } from "./workspace-version";
 import { useMobileViewportState } from "./mobile-viewport";
 import { loadMachineTargetId, persistMachineTargetId, resolveMachineTargetId } from "./machine-target";
 import { workspacePresentationDescriptor, workspacePresentationMachineId } from "./workspace-presentation";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "./types";
 import type {
   AgentActivity,
   BootstrapPayload,
@@ -314,6 +315,7 @@ export function App() {
     [appleKeybindings, keybindings],
   );
   const persistedSettings = state?.settings ?? defaultSettings;
+  const settingsDefaults = state?.settingsDefaults ?? defaultSettings;
   const settings = previewSettings ?? persistedSettings;
   const displayMachines = useMemo(() => machines.map((machine) => withMachineAlias(machine, settings)), [machines, settings]);
   const notifications = state?.notifications ?? [];
@@ -1744,6 +1746,7 @@ export function App() {
                     keybindings={keybindings}
                     appleKeybindings={appleKeybindings}
                     machines={displayMachines}
+                    terminalFontFamily={state?.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY}
                     terminalFontSize={settings.terminalFontSize}
                     terminalScrollbackRows={persistedSettings.terminalScrollbackRows}
                     unreadByPaneId={unreadByPaneId}
@@ -1804,6 +1807,7 @@ export function App() {
           settings={persistedSettings}
           keybindings={keybindings}
           appleKeybindings={appleKeybindings}
+          defaults={settingsDefaults}
           surface={openTuiMode && !mobileViewport.isMobile ? settingsSurface : "dom"}
           onPreview={setPreviewSettings}
           onSave={updateSettings}

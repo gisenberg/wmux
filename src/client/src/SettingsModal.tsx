@@ -4,6 +4,7 @@ import { api } from "./api";
 import { OpenTuiSettingsModal } from "./OpenTuiSettingsModal";
 import { terminalColorSchemes } from "./color-schemes";
 import { compileKeybindings, eventMatchesAction } from "../../shared/keybindings";
+import { MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE } from "./types";
 import type { DurableSessionAudit, KeybindingMap, MachineStatus, WmuxSettings } from "./types";
 
 export type SettingsSurface = "opentui" | "dom";
@@ -23,6 +24,7 @@ export function SettingsModal({
   settings,
   keybindings,
   appleKeybindings,
+  defaults = defaultSettings,
   surface = "dom",
   onPreview,
   onSave,
@@ -34,6 +36,7 @@ export function SettingsModal({
   settings: WmuxSettings;
   keybindings: KeybindingMap;
   appleKeybindings: boolean;
+  defaults?: WmuxSettings;
   surface?: SettingsSurface;
   onPreview: (settings: WmuxSettings | null) => void;
   onSave: (settings: WmuxSettings) => void | Promise<void>;
@@ -41,7 +44,7 @@ export function SettingsModal({
   onUseDomFallback?: () => void;
   onUseOpenTui?: () => void;
 }) {
-  const [draft, setDraft] = useState<WmuxSettings>(() => normalizeSettings(settings));
+  const [draft, setDraft] = useState<WmuxSettings>(() => normalizeSettings(settings, defaults.terminalFontSize));
   const [saving, setSaving] = useState(false);
   const [sessionAudit, setSessionAudit] = useState<DurableSessionAudit | null>(null);
   const [sessionAuditError, setSessionAuditError] = useState("");
@@ -49,11 +52,11 @@ export function SettingsModal({
   const compiledKeybindings = useMemo(() => compileKeybindings(keybindings), [keybindings]);
 
   useEffect(() => {
-    setDraft(normalizeSettings(settings));
-  }, [settings]);
+    setDraft(normalizeSettings(settings, defaults.terminalFontSize));
+  }, [defaults, settings]);
 
   const applyDraft = (nextSettings: WmuxSettings) => {
-    const normalized = normalizeSettings(nextSettings);
+    const normalized = normalizeSettings(nextSettings, defaults.terminalFontSize);
     setDraft(normalized);
     onPreview(normalized);
   };
@@ -72,11 +75,11 @@ export function SettingsModal({
   const save = useCallback(async (nextDraft = draft) => {
     setSaving(true);
     try {
-      await onSave(normalizeSettings(nextDraft));
+      await onSave(normalizeSettings(nextDraft, defaults.terminalFontSize));
     } finally {
       setSaving(false);
     }
-  }, [draft, onSave]);
+  }, [defaults.terminalFontSize, draft, onSave]);
 
   useEffect(() => {
     if (surface !== "dom") return;
@@ -127,7 +130,7 @@ export function SettingsModal({
       <OpenTuiSettingsModal
         machines={machines}
         draft={draft}
-        defaultSettings={defaultSettings}
+        defaultSettings={defaults}
         sessionAudit={sessionAudit}
         sessionAuditError={sessionAuditError}
         sessionAuditLoading={sessionAuditLoading}
@@ -368,7 +371,7 @@ export function SettingsModal({
         <div className="settings-actions">
           <button
             type="button"
-            onClick={() => applyDraft({ ...defaultSettings })}
+            onClick={() => applyDraft({ ...defaults })}
           >
             Reset
           </button>
@@ -384,8 +387,11 @@ export function SettingsModal({
   );
 }
 
-const normalizeSettings = (settings: WmuxSettings): WmuxSettings => ({
-  terminalFontSize: clampFontSize(settings.terminalFontSize),
+const normalizeSettings = (
+  settings: WmuxSettings,
+  terminalFontSizeFallback = defaultSettings.terminalFontSize,
+): WmuxSettings => ({
+  terminalFontSize: clampFontSize(settings.terminalFontSize, terminalFontSizeFallback),
   terminalScrollbackRows: clampScrollbackRows(settings.terminalScrollbackRows),
   colorScheme: terminalColorSchemes.some((scheme) => scheme.id === settings.colorScheme)
     ? settings.colorScheme
@@ -406,15 +412,13 @@ const normalizeSettings = (settings: WmuxSettings): WmuxSettings => ({
   ),
 });
 
-const clampFontSize = (value: number): number => {
-  const fallback = defaultSettings.terminalFontSize;
+const clampFontSize = (value: number, fallback = defaultSettings.terminalFontSize): number => {
   const numeric = Number.isFinite(value) ? value : fallback;
-  return Math.min(24, Math.max(10, Math.round(numeric)));
+  return Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, Math.round(numeric)));
 };
 
 const clampScrollbackRows = (value: number): number => {
-  const fallback = defaultSettings.terminalScrollbackRows;
-  const numeric = Number.isFinite(value) ? value : fallback;
+  const numeric = Number.isFinite(value) ? value : defaultSettings.terminalScrollbackRows;
   return Math.min(200_000, Math.max(1_000, Math.round(numeric)));
 };
 

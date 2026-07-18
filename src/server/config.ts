@@ -10,6 +10,7 @@ import {
   type KeybindingMap,
   type KeybindingOverrides,
 } from "../shared/keybindings.js";
+import { MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE } from "../shared/protocol.js";
 import { localMachine } from "./machines.js";
 import type { MachineConfig } from "./types.js";
 
@@ -97,6 +98,11 @@ export const configSchema = z.object({
   // Container deployments may not want to expose a shell inside the wmux container.
   localMachine: z.boolean().optional(),
   keybindings: keybindingOverridesSchema.optional(),
+  terminalFontFamily: z.string().trim().min(1).max(256)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00-\x1f\x7f]+$/, "terminal font family must not contain control characters")
+    .optional(),
+  terminalFontSize: z.number().int().min(MIN_TERMINAL_FONT_SIZE).max(MAX_TERMINAL_FONT_SIZE).optional(),
 }).superRefine((config, context) => {
   const overrides = config.keybindings as KeybindingOverrides | undefined;
   const errors = validateKeybindingMap(resolveKeybindings(overrides));
@@ -108,6 +114,8 @@ export const configSchema = z.object({
 export interface AppConfig {
   machines: MachineConfig[];
   keybindings: KeybindingMap;
+  terminalFontFamily?: string;
+  terminalFontSize?: number;
 }
 
 const candidates = (): string[] => process.env.WMUX_CONFIG_PATH
@@ -122,8 +130,13 @@ export const loadConfig = (): AppConfig => {
     const machines = parsed.machines ?? [];
     const keybindings = resolveKeybindings(parsed.keybindings as KeybindingOverrides | undefined);
     const hasLocal = machines.some((machine) => machine.id === "local");
-    if (hasLocal || parsed.localMachine === false) return { machines, keybindings };
-    return { machines: [localMachine(), ...machines], keybindings };
+    const configuredMachines = hasLocal || parsed.localMachine === false ? machines : [localMachine(), ...machines];
+    return {
+      machines: configuredMachines,
+      keybindings,
+      terminalFontFamily: parsed.terminalFontFamily,
+      terminalFontSize: parsed.terminalFontSize,
+    };
   }
   if (process.env.WMUX_CONFIG_PATH) {
     throw new Error(`WMUX_CONFIG_PATH does not exist: ${path.resolve(process.env.WMUX_CONFIG_PATH)}`);

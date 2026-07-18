@@ -41,6 +41,22 @@ test("legacy settings migrate while preserving normalized values", () => {
   });
 });
 
+test("configured font size supplies a default while persisted settings override it", () => {
+  withTempSettings((filePath) => {
+    const configured = new SettingsStore(filePath, {
+      terminalFontSize: 16,
+    });
+    assert.equal(configured.snapshot().terminalFontSize, 16);
+
+    configured.update({ terminalFontSize: 18 });
+    const reloaded = new SettingsStore(filePath, {
+      terminalFontSize: 20,
+    });
+    assert.equal(reloaded.snapshot().terminalFontSize, 18);
+    assert.equal(reloaded.defaultsSnapshot().terminalFontSize, 20);
+  });
+});
+
 test("version 1 and version 2 settings migrate to inactive tab suspension", () => {
   withTempSettings((filePath) => {
     fs.writeFileSync(filePath, JSON.stringify({

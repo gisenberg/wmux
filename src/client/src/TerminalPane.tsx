@@ -15,7 +15,7 @@ import {
   type KittyMaterializedImage,
   type KittyPlaceholderStripState,
 } from "./kitty-graphics";
-import { ensureWmuxFonts, WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { ensureWmuxFonts, terminalFontFamilyStack } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
 import { isTerminalProtocolResponse } from "../../shared/terminal-protocol";
@@ -102,6 +102,7 @@ interface Props {
   appleKeybindings: boolean;
   unreadCount: number;
   machines: MachineStatus[];
+  terminalFontFamily: string;
   terminalFontSize: number;
   terminalScrollbackRows: number;
   mediaItems: TerminalMedia[];
@@ -127,6 +128,7 @@ export const TerminalPane = memo(function TerminalPane({
   appleKeybindings,
   unreadCount,
   machines,
+  terminalFontFamily,
   terminalFontSize,
   terminalScrollbackRows,
   mediaItems,
@@ -823,12 +825,12 @@ export const TerminalPane = memo(function TerminalPane({
     };
 
     const start = async () => {
-      await Promise.all([ensureGhostty(), ensureWmuxFonts()]);
+      await Promise.all([ensureGhostty(), ensureWmuxFonts(terminalFontFamily, terminalFontSize)]);
       if (cancelled || !containerRef.current) return;
       const term = new Terminal({
         cursorBlink: true,
         fontSize: terminalFontSize,
-        fontFamily: WMUX_MONO_FONT_FAMILY,
+        fontFamily: terminalFontFamilyStack(terminalFontFamily),
         scrollback: terminalScrollbackRows,
         theme: colorScheme.terminal,
       });
@@ -1275,13 +1277,21 @@ export const TerminalPane = memo(function TerminalPane({
   useEffect(() => {
     const term = terminalRef.current;
     if (!term?.renderer) return;
-    term.renderer.setFontSize(terminalFontSize);
-    requestAnimationFrame(() => {
-      fitAddonRef.current?.fit();
-      const metrics = readCellMetrics(term);
-      if (metrics) setTerminalMetrics(metrics);
+    let cancelled = false;
+    void ensureWmuxFonts(terminalFontFamily, terminalFontSize).then(() => {
+      if (cancelled || !term.renderer) return;
+      term.options.fontSize = terminalFontSize;
+      term.options.fontFamily = terminalFontFamilyStack(terminalFontFamily);
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+        const metrics = readCellMetrics(term);
+        if (metrics) setTerminalMetrics(metrics);
+      });
     });
-  }, [terminalFontSize]);
+    return () => {
+      cancelled = true;
+    };
+  }, [terminalFontFamily, terminalFontSize]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -1322,6 +1332,7 @@ export const TerminalPane = memo(function TerminalPane({
         title: runTitle(lastRun),
       }
     : undefined;
+  const resolvedTerminalFontFamily = terminalFontFamilyStack(terminalFontFamily);
 
   return (
     <section
@@ -1358,7 +1369,11 @@ export const TerminalPane = memo(function TerminalPane({
           if (event.pointerType !== "touch") terminalRef.current?.focus();
         }}
       >
-        <div ref={containerRef} className="terminal-host" />
+        <div
+          ref={containerRef}
+          className="terminal-host"
+          style={{ fontFamily: resolvedTerminalFontFamily }}
+        />
         {(() => {
           void rectangleVersion;
           const range = rectangularSelectionRef.current?.visibleOverlay;

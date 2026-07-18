@@ -11,6 +11,7 @@ interface Props {
   keybindings: KeybindingMap;
   appleKeybindings: boolean;
   machines: MachineStatus[];
+  terminalFontFamily: string;
   terminalFontSize: number;
   terminalScrollbackRows: number;
   unreadByPaneId: Map<string, number>;
@@ -37,6 +38,7 @@ export const LayoutView = memo(function LayoutView({
   keybindings,
   appleKeybindings,
   machines,
+  terminalFontFamily,
   terminalFontSize,
   terminalScrollbackRows,
   unreadByPaneId,
@@ -125,6 +127,7 @@ export const LayoutView = memo(function LayoutView({
           appleKeybindings={appleKeybindings}
           unreadCount={unreadByPaneId.get(pane.id) ?? 0}
           machines={machines}
+          terminalFontFamily={terminalFontFamily}
           terminalFontSize={terminalFontSize}
           terminalScrollbackRows={terminalScrollbackRows}
           mediaItems={mediaByPaneId.get(pane.id) ?? emptyMedia}
@@ -179,6 +182,7 @@ interface LayoutPaneProps {
   appleKeybindings: boolean;
   unreadCount: number;
   machines: MachineStatus[];
+  terminalFontFamily: string;
   terminalFontSize: number;
   terminalScrollbackRows: number;
   mediaItems: TerminalMedia[];
@@ -206,6 +210,7 @@ const LayoutPane = memo(function LayoutPane({
   appleKeybindings,
   unreadCount,
   machines,
+  terminalFontFamily,
   terminalFontSize,
   terminalScrollbackRows,
   mediaItems,
@@ -237,6 +242,7 @@ const LayoutPane = memo(function LayoutPane({
       appleKeybindings={appleKeybindings}
       unreadCount={unreadCount}
       machines={machines}
+      terminalFontFamily={terminalFontFamily}
       terminalFontSize={terminalFontSize}
       terminalScrollbackRows={terminalScrollbackRows}
       mediaItems={mediaItems}

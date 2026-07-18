@@ -14,6 +14,15 @@ under [`vendor/ghostty-web-pr169`](vendor/ghostty-web-pr169); its exact source,
 build details, and checksum are recorded in that directory's `UPSTREAM.md`.
 Package metadata and installed license files are authoritative.
 
+## MesloLGM Nerd Font
+
+The WOFF2 files under `src/client/public/fonts/meslo/` are format conversions of
+the MesloLGM Nerd Font Mono faces from the official Nerd Fonts v3.4.0 Meslo
+release. Meslo LG is copyright 2009, 2010, 2013 André Berg and is distributed
+under the Apache License 2.0. The Nerd Fonts patch and project attribution are
+preserved with the assets. Exact source, checksums, conversion details, and
+license copies are recorded in that directory's `UPSTREAM.md`.
+
 ## Retro fonts
 
 ### C64 Pro Mono

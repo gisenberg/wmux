@@ -60,6 +60,21 @@ test("uses a configured shortcut while preserving defaults for omitted actions",
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
 });
 
+test("registers and loads the bundled Meslo terminal font", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop Chromium font coverage");
+  const result = await page.evaluate(async () => {
+    const loaded = await document.fonts.load('400 14px "MesloLGM Nerd Font"');
+    const faces = [...document.fonts]
+      .filter((face) => face.family === "MesloLGM Nerd Font")
+      .map((face) => ({ style: face.style, weight: face.weight, status: face.status }));
+    return { loadedCount: loaded.length, faces };
+  });
+
+  expect(result.loadedCount).toBe(1);
+  expect(result.faces).toContainEqual({ style: "normal", weight: "400", status: "loaded" });
+  expect(result.faces).toHaveLength(4);
+});
+
 test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }) => {
   const before = await request.get("/api/bootstrap");
   expect(before.ok()).toBeTruthy();
