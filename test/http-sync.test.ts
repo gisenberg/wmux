@@ -240,8 +240,14 @@ test("health polls publish only meaningful typed deltas to every browser", async
     await sleep(90);
     assert.equal(messages.flat().some((message) => (message as { type?: string }).type === "health"), false, "checkedAt-only polls stay quiet");
     changed = true;
+    const receivedChangedHealth = (items: unknown[]): boolean => {
+      const health = items.filter((message): message is { type: "health"; machines?: MachineStatus[]; streams?: StreamStatus[] } =>
+        (message as { type?: string }).type === "health");
+      return health.some((message) => message.machines?.[0]?.reachable === true)
+        && health.some((message) => message.streams?.[0]?.live === true);
+    };
     const deadline = Date.now() + 1_000;
-    while (Date.now() < deadline && messages.some((items) => !items.some((message) => (message as { type?: string; machines?: unknown[] }).type === "health" && (message as { machines?: unknown[] }).machines))) await sleep(10);
+    while (Date.now() < deadline && messages.some((items) => !receivedChangedHealth(items))) await sleep(10);
     for (const received of messages) {
       const health = received.filter((message): message is { type: "health"; healthEpoch: number; machines?: MachineStatus[]; streams?: StreamStatus[] } => (message as { type?: string }).type === "health");
       assert.ok(health.some((message) => message.machines?.[0]?.reachable === true && message.machines[0].checkedAt.startsWith("machine-")));
