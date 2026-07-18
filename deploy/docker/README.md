@@ -1,8 +1,10 @@
 # Docker deployment
 
-The Compose stack builds directly from a normal wmux checkout. It runs as the
-unprivileged `node` user and stores wmux state, generated auth tokens, settings,
-and durable session metadata in the `wmux-data` volume.
+Release images are published for `linux/amd64` and `linux/arm64` at
+`ghcr.io/gisenberg/wmux`. The Compose stack can pull one of those images or
+build directly from a normal wmux checkout. It runs as the unprivileged `node`
+user and stores wmux state, generated auth tokens, settings, and durable session
+metadata in the `wmux-data` volume.
 
 ## Start
 
@@ -10,6 +12,18 @@ From the repository root:
 
 ```bash
 cp deploy/docker/.env.example deploy/docker/.env
+WMUX_IMAGE=ghcr.io/gisenberg/wmux:0.1.2 \
+  docker compose --env-file deploy/docker/.env \
+  -f deploy/docker/docker-compose.yml pull
+WMUX_IMAGE=ghcr.io/gisenberg/wmux:0.1.2 \
+  docker compose --env-file deploy/docker/.env \
+  -f deploy/docker/docker-compose.yml up -d --no-build
+```
+
+Use an immutable version tag for normal deployments. The moving `0.1` and
+`latest` tags are also published. To build the checkout instead:
+
+```bash
 docker compose --env-file deploy/docker/.env \
   -f deploy/docker/docker-compose.yml up -d --build
 ```
@@ -115,9 +129,27 @@ docker compose --env-file deploy/docker/.env \
   node scripts/wmux-set-password --username you
 ```
 
-Rebuild and restart after updating the checkout:
+Pull and restart when following a published tag:
+
+```bash
+WMUX_IMAGE=ghcr.io/gisenberg/wmux:0.1.2 \
+  docker compose --env-file deploy/docker/.env \
+  -f deploy/docker/docker-compose.yml pull
+WMUX_IMAGE=ghcr.io/gisenberg/wmux:0.1.2 \
+  docker compose --env-file deploy/docker/.env \
+  -f deploy/docker/docker-compose.yml up -d --no-build
+```
+
+Rebuild and restart after updating a source checkout:
 
 ```bash
 docker compose --env-file deploy/docker/.env \
   -f deploy/docker/docker-compose.yml up -d --build
 ```
+
+Tagged releases also carry OCI source, version, revision, and license labels,
+plus an SBOM and registry-backed build-provenance attestation. A Gitea Actions
+mirror can copy the exact GHCR manifest using
+`.gitea/workflows/release-container.yml`; configure the repository variables
+`CONTAINER_REGISTRY` and `CONTAINER_USERNAME` and the `REGISTRY_TOKEN` secret
+on that Gitea instance. The registry must use trusted HTTPS.

@@ -1,0 +1,66 @@
+name: Mirror release container
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror GHCR image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ gitea.ref_name }}
+      SOURCE_IMAGE: ghcr.io/${{ gitea.repository }}
+      TARGET_IMAGE: ${{ vars.CONTAINER_REGISTRY }}/${{ gitea.repository }}
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Validate release configuration
+        run: |
+          set -eu
+          test -n "${{ vars.CONTAINER_REGISTRY }}"
+          test -n "${{ vars.CONTAINER_USERNAME }}"
+          case "${RELEASE_TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Unexpected release tag: ${RELEASE_TAG}" >&2; exit 1 ;;
+          esac
+      - name: Log in to the Gitea registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ${{ vars.CONTAINER_REGISTRY }}
+          username: ${{ vars.CONTAINER_USERNAME }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+      - name: Wait for the canonical GHCR image
+        run: |
+          set -eu
+          version="${RELEASE_TAG#v}"
+          for attempt in $(seq 1 60); do
+            if docker buildx imagetools inspect "${SOURCE_IMAGE}:${version}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for ${SOURCE_IMAGE}:${version}" >&2
+          exit 1
+      - name: Copy release tags without rebuilding
+        run: |
+          set -eu
+          version="${RELEASE_TAG#v}"
+          minor="${version%.*}"
+          docker buildx imagetools create \
+            --tag "${TARGET_IMAGE}:${version}" \
+            --tag "${TARGET_IMAGE}:${minor}" \
+            --tag "${TARGET_IMAGE}:latest" \
+            "${SOURCE_IMAGE}:${version}"
+      - name: Verify mirrored manifest digest
+        run: |
+          set -eu
+          version="${RELEASE_TAG#v}"
+          source_digest="$(docker buildx imagetools inspect "${SOURCE_IMAGE}:${version}" | awk '/^Digest:/ {print $2; exit}')"
+          target_digest="$(docker buildx imagetools inspect "${TARGET_IMAGE}:${version}" | awk '/^Digest:/ {print $2; exit}')"
+          test -n "${source_digest}"
+          test "${source_digest}" = "${target_digest}"

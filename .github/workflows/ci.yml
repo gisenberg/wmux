@@ -54,3 +54,42 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
+
+  container:
+    name: Container smoke test
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg "WMUX_VERSION=$(node -p 'require("./package.json").version')" \
+            --build-arg "WMUX_REVISION=${GITHUB_SHA}" \
+            --build-arg "WMUX_SOURCE=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --tag wmux:ci \
+            --file deploy/docker/Dockerfile .
+      - name: Start and verify image health
+        run: |
+          set -eu
+          name="wmux-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "WMUX_CI_CONTAINER=${name}" >> "${GITHUB_ENV}"
+          docker run --detach --name "${name}" \
+            --env WMUX_DISABLE_AUTH=1 \
+            wmux:ci
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${name}")"
+            if [ "${status}" = healthy ]; then
+              exit 0
+            fi
+            if [ "${status}" = exited ] || [ "${status}" = dead ] || [ "${status}" = unhealthy ]; then
+              break
+            fi
+            sleep 2
+          done
+          docker logs "${name}"
+          exit 1
+      - name: Remove smoke-test container
+        if: always()
+        run: docker rm --force "${WMUX_CI_CONTAINER}" 2>/dev/null || true

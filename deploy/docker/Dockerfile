@@ -23,6 +23,18 @@ RUN npm prune --omit=dev \
 
 FROM node:22-bookworm-slim AS runtime
 
+ARG WMUX_VERSION=dev
+ARG WMUX_REVISION=unknown
+ARG WMUX_SOURCE=https://github.com/gisenberg/wmux
+
+LABEL org.opencontainers.image.title="wmux" \
+  org.opencontainers.image.description="A single-user browser terminal multiplexer for private networks." \
+  org.opencontainers.image.url="${WMUX_SOURCE}" \
+  org.opencontainers.image.source="${WMUX_SOURCE}" \
+  org.opencontainers.image.version="${WMUX_VERSION}" \
+  org.opencontainers.image.revision="${WMUX_REVISION}" \
+  org.opencontainers.image.licenses="MIT"
+
 ENV NODE_ENV=production \
   HOME=/home/node \
   WMUX_PORT=3478
