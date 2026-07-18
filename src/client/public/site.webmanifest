@@ -1,0 +1,11 @@
+{
+  "name": "wmux",
+  "short_name": "wmux",
+  "description": "Private-network browser terminal multiplexer",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "orientation": "any"
+}

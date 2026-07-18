@@ -59,6 +59,14 @@ secondary actions consume roughly a quarter of the usable area above the
 keyboard. Landscape is more constrained. The controls remain reachable, but
 the transcript has less useful space than necessary.
 
+### 6. Workspace routes leave the installed app
+
+Selecting a workspace from either the navigation drawer or command palette
+opens the direct workspace route in iOS's modal Safari sheet. The underlying
+installed app stays on the previous workspace. The page advertises a status-bar
+style, but does not declare standalone capability or publish a web app manifest
+whose scope includes direct workspace and tab routes.
+
 ## Implemented fix set
 
 1. Preserve an already-detected keyboard-open state while the visual viewport
@@ -72,6 +80,9 @@ the transcript has less useful space than necessary.
    short settling delay, with the same treatment on orientation changes.
 5. Compact the keyboard-open composer without shrinking any interactive target
    below 44px or removing Focus terminal and Actions.
+6. Publish standalone install metadata and a web app manifest with `/` as both
+   its start URL and scope so direct workspace routes remain inside the pinned
+   app.
 
 ## Acceptance criteria
 
@@ -87,5 +98,6 @@ the transcript has less useful space than necessary.
   to the pane backend.
 - The keyboard-open composer retains 44px touch targets while giving more
   height back to the thread.
+- Workspace and tab navigation remains in the installed app instead of opening
+  the modal Safari browser.
 - Desktop behavior and the `?legacy=1` fallback remain unchanged.
-

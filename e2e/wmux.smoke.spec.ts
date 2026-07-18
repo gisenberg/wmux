@@ -8,6 +8,20 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
 });
 
+test("publishes standalone app metadata for direct workspace routes", async ({ page, request }) => {
+  await expect(page.locator('meta[name="mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
+  await expect(page.locator('meta[name="apple-mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/site.webmanifest");
+
+  const response = await request.get("/site.webmanifest");
+  expect(response.ok()).toBeTruthy();
+  expect(await response.json()).toMatchObject({
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+  });
+});
+
 test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }) => {
   const before = await request.get("/api/bootstrap");
   expect(before.ok()).toBeTruthy();
