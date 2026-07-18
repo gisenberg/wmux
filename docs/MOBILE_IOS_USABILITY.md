@@ -75,6 +75,15 @@ Island. Other mobile surfaces already consume the left and right safe-area
 insets, but the terminal host and Canvas chrome still use the full edge-to-edge
 width.
 
+### 8. Startup profiles tint the browser-owned safe-area bands
+
+The retro startup presentation fills the complete `viewport-fit=cover`
+surface with its current profile color. iOS samples those pixels for the
+standalone status-bar and home-indicator bands, then can retain that sampled
+color after wmux has switched to its normal dark chrome. A light or saturated
+boot profile therefore leaves unrelated accent bands at the top or bottom of
+the running app.
+
 ## Implemented fix set
 
 1. Preserve an already-detected keyboard-open state while the visual viewport
@@ -96,6 +105,9 @@ width.
 7. Apply the existing horizontal safe-area inset variables to the terminal
    host, pane toolbar, and Canvas mobile chrome so fitting uses only visible
    landscape width.
+8. Give the document and browser safe areas a stable dark underlay, opt the
+   standalone status bar into transparent composition, and constrain retro
+   profile colors to the safe-area-adjusted boot framebuffer.
 
 ## Acceptance criteria
 
@@ -115,4 +127,6 @@ width.
   the modal Safari browser.
 - Landscape terminal columns, pane controls, and status text remain outside the
   sensor cutout in both keyboard states.
+- Retro startup profile colors remain visible inside the boot framebuffer but
+  cannot tint the status-bar or home-indicator bands during or after launch.
 - Desktop behavior and the `?legacy=1` fallback remain unchanged.

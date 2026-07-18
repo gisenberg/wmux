@@ -9,8 +9,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("publishes standalone app metadata for direct workspace routes", async ({ page, request }) => {
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#050505");
   await expect(page.locator('meta[name="mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
   await expect(page.locator('meta[name="apple-mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
+  await expect(page.locator('meta[name="apple-mobile-web-app-status-bar-style"]')).toHaveAttribute(
+    "content",
+    "black-translucent",
+  );
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/site.webmanifest");
 
   const response = await request.get("/site.webmanifest");
@@ -394,6 +399,46 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
 
   await chrome.getByRole("button", { name: "Open actions" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+});
+
+test("mobile boot profiles cannot tint browser safe-area chrome", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only safe-area coverage");
+
+  const bootColors = await page.evaluate(() => {
+    const screen = document.createElement("main");
+    screen.className = "retro-boot-screen";
+    screen.style.setProperty("--retro-page", "#55ccee");
+    screen.style.setProperty("--retro-background", "#55ccee");
+    screen.style.setProperty("--wmux-mobile-top-inset", "31px");
+    screen.style.setProperty("--wmux-mobile-right-inset", "13px");
+    screen.style.setProperty("--wmux-mobile-bottom-inset", "29px");
+    screen.style.setProperty("--wmux-mobile-left-inset", "17px");
+    const bezel = document.createElement("section");
+    bezel.className = "retro-boot-bezel";
+    screen.append(bezel);
+    document.body.append(screen);
+
+    const screenStyle = getComputedStyle(screen);
+    const bezelStyle = getComputedStyle(bezel);
+    const result = {
+      screen: screenStyle.backgroundColor,
+      bezel: bezelStyle.backgroundColor,
+      padding: [
+        screenStyle.paddingTop,
+        screenStyle.paddingRight,
+        screenStyle.paddingBottom,
+        screenStyle.paddingLeft,
+      ],
+    };
+    screen.remove();
+    return result;
+  });
+
+  expect(bootColors).toEqual({
+    screen: "rgb(5, 5, 5)",
+    bezel: "rgb(85, 204, 238)",
+    padding: ["31px", "13px", "29px", "17px"],
+  });
 });
 
 test("mobile chat retains focus and bottom anchoring across viewport changes", async ({ page, request }, testInfo) => {

@@ -171,6 +171,7 @@
   --red: #be3e37;
   --green: #45b86a;
   --blue: #5097ff;
+  --wmux-browser-chrome: #050505;
 }
 
 * {
@@ -184,6 +185,7 @@ body,
   margin: 0;
   overflow: hidden;
   touch-action: manipulation;
+  background: var(--wmux-browser-chrome);
 }
 
 #root {
@@ -3475,9 +3477,14 @@ button.active-tool {
   white-space: nowrap;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 800px), (max-height: 500px) and (pointer: coarse) {
   .retro-boot-screen {
-    padding: 0;
+    background: var(--wmux-browser-chrome);
+    padding:
+      var(--wmux-mobile-top-inset, max(0px, env(safe-area-inset-top)))
+      var(--wmux-mobile-right-inset, max(0px, env(safe-area-inset-right)))
+      var(--wmux-mobile-bottom-inset, max(0px, env(safe-area-inset-bottom)))
+      var(--wmux-mobile-left-inset, max(0px, env(safe-area-inset-left)));
   }
 
   .retro-boot-bezel,
