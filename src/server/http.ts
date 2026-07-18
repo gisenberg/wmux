@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
+import { resolveKeybindings } from "../shared/keybindings.js";
 import { readAgentProfileBundle } from "./agent-profile.js";
 import {
   type AuthConfig,
@@ -29,6 +30,7 @@ import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
 import type {
   EventClientMessage,
   EventServerMessage,
+  KeybindingMap,
   MachineConfig,
   MachineSource,
   MachineStatus,
@@ -159,6 +161,7 @@ export const createHttpServer = (
       machines?: typeof resolveMachineStatuses;
       streams?: typeof resolveStreamStatuses;
     };
+    keybindings?: KeybindingMap;
   },
 ): Promise<WmuxHttpServer> => {
   const { auth, hostRegistry, registrationToken } = options;
@@ -247,6 +250,7 @@ export const createHttpServer = (
       agentEvents: snapshot.agentEvents,
       runs: snapshot.runs,
       settings: settings.snapshot(),
+      keybindings: options.keybindings ?? resolveKeybindings(),
       streams: streamStatuses,
     };
   };

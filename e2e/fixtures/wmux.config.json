@@ -1,4 +1,7 @@
 {
+  "keybindings": {
+    "terminal.wordPrevious": ["Alt+ArrowLeft", "Ctrl+Shift+KeyP"]
+  },
   "machines": [
     {
       "id": "local",

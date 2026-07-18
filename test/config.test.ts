@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { configSchema, loadConfig } from "../src/server/config.js";
+import { defaultKeybindings } from "../src/shared/keybindings.js";
 
 const machine = (overrides: Record<string, unknown>) => ({
   machines: [{ id: "box", name: "Box", kind: "ssh", host: "box.ts.net", user: "me", ...overrides }],
@@ -94,4 +95,52 @@ test("localMachine false suppresses the implicit local machine", () => {
     else process.env.WMUX_CONFIG_PATH = previousConfigPath;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("keybinding config preserves missing defaults and supports explicit disable", () => {
+  const parsed = configSchema.safeParse({
+    keybindings: {
+      "commandPalette.open": ["Ctrl+Shift+KeyP"],
+      "sidebar.toggle": [],
+    },
+  });
+  assert.equal(parsed.success, true);
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-config-"));
+  const configPath = path.join(directory, "config.json");
+  const previousConfigPath = process.env.WMUX_CONFIG_PATH;
+  try {
+    process.env.WMUX_CONFIG_PATH = configPath;
+    fs.writeFileSync(configPath, JSON.stringify({
+      keybindings: {
+        "commandPalette.open": ["Ctrl+Shift+KeyP"],
+        "sidebar.toggle": [],
+      },
+    }));
+    const loaded = loadConfig();
+    assert.deepEqual(loaded.keybindings["commandPalette.open"], ["Ctrl+Shift+KeyP"]);
+    assert.deepEqual(loaded.keybindings["sidebar.toggle"], []);
+    assert.deepEqual(loaded.keybindings["workspace.new"], defaultKeybindings["workspace.new"]);
+
+    fs.writeFileSync(configPath, JSON.stringify({ machines: [] }));
+    assert.deepEqual(loadConfig().keybindings, defaultKeybindings);
+  } finally {
+    if (previousConfigPath === undefined) delete process.env.WMUX_CONFIG_PATH;
+    else process.env.WMUX_CONFIG_PATH = previousConfigPath;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("example config lists every default keybinding", () => {
+  const example = JSON.parse(fs.readFileSync(path.resolve("wmux.config.example.json"), "utf8")) as {
+    keybindings?: unknown;
+  };
+  assert.deepEqual(example.keybindings, defaultKeybindings);
+  assert.equal(configSchema.safeParse(example).success, true);
+});
+
+test("keybinding config rejects unknown actions, malformed chords, and collisions", () => {
+  assert.equal(configSchema.safeParse({ keybindings: { "unknown.action": ["Ctrl+KeyK"] } }).success, false);
+  assert.equal(configSchema.safeParse({ keybindings: { "commandPalette.open": ["Ctrl+K"] } }).success, false);
+  assert.equal(configSchema.safeParse({ keybindings: { "commandPalette.open": ["Ctrl+KeyB"] } }).success, false);
 });

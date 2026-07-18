@@ -27,6 +27,39 @@ test("publishes standalone app metadata for direct workspace routes", async ({ p
   });
 });
 
+test("uses a configured shortcut while preserving defaults for omitted actions", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop keyboard coverage");
+
+  await page.addInitScript(() => {
+    const inputs: string[] = [];
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (typeof data === "string") {
+        try {
+          const message = JSON.parse(data) as { type?: string; data?: string };
+          if (message.type === "input" && typeof message.data === "string") inputs.push(message.data);
+        } catch {
+          // Ignore non-JSON websocket traffic.
+        }
+      }
+      return originalSend.call(this, data);
+    };
+    (window as unknown as { __wmuxKeybindingInputs: string[] }).__wmuxKeybindingInputs = inputs;
+  });
+  await page.reload();
+  const activePane = page.locator(".terminal-pane.active");
+  await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+  await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
+
+  await page.keyboard.press("Control+Shift+P");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __wmuxKeybindingInputs: string[] }).__wmuxKeybindingInputs.join(""),
+  )).toContain("\x1bb");
+
+  await page.keyboard.press("Control+K");
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+});
+
 test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }) => {
   const before = await request.get("/api/bootstrap");
   expect(before.ok()).toBeTruthy();
@@ -287,7 +320,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
       scheme: "dracula",
     });
     await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#282a36");
-    await settings.getByRole("button", { name: "Save" }).click();
+    await page.keyboard.press("Control+S");
 
     await expect.poll(async () => {
       const response = await request.get("/api/bootstrap");

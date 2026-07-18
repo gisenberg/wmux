@@ -183,6 +183,7 @@ cp wmux.config.example.json wmux.config.json
 - `kind: "local"` always executes on the current wmux server. Its display
   name does not make it a remote target, and its `cwd` must exist on that
   server.
+
 - Local and POSIX SSH machines default to `sessionBackend: "auto"`, preferring
   `tmux`, then `screen`; use `"pty"` to force a raw session.
 - Use `kind: "powershell-ssh"` for Windows hosts reached from Linux or macOS.
@@ -210,6 +211,51 @@ When moving the service to another computer, do not copy a server-relative
 as an explicit SSH machine if it should remain a target. See
 [docs/SERVER_MIGRATION.md](docs/SERVER_MIGRATION.md) for the state, session,
 stream, helper-credential, SSH host-key, and HTTPS cutover checklist.
+
+### Keybindings
+
+Keybindings are configured only in `wmux.config.json`. They are loaded when
+wmux starts, so restart the service after changing them. If `keybindings` is
+missing or empty, every current default remains active. A partial map replaces
+only the named actions; omitted actions keep their defaults. Use an empty array
+to disable one action:
+
+```json
+{
+  "keybindings": {
+    "commandPalette.open": ["Ctrl+Shift+KeyP"],
+    "sidebar.toggle": []
+  }
+}
+```
+
+Each chord uses exact modifiers followed by a layout-independent browser key
+code. Supported modifiers are `Primary`, `Ctrl`, `Alt`, `Shift`, and `Meta`;
+`Primary` resolves to Command on Apple clients and Ctrl elsewhere. Common key
+codes include `KeyK`, `Digit1`, `BracketLeft`, `Comma`, `Tab`, and
+`ArrowLeft`. Extra modifiers do not match. Invalid chords, unknown actions,
+duplicates, and bindings that collide in an active context prevent wmux from
+starting instead of silently changing behavior.
+
+Available actions are:
+
+- System: `commandPalette.open`, `settings.open`, `settings.save`, and
+  `sidebar.toggle`.
+- Workspaces: `workspace.new`, `workspace.close`, `workspace.previous`,
+  `workspace.next`, and `workspace.select1` through `workspace.select9`.
+- Tabs: `tab.new`, `tab.close`, `tab.previous`, `tab.next`, and `tab.select1`
+  through `tab.select9`.
+- Panes and activity: `pane.splitRight`, `pane.splitDown`,
+  `pane.focusPrevious`, `pane.focusNext`, and `notification.latestUnread`.
+- Terminal handling: `terminal.insertNewline`, `terminal.wordPrevious`, and
+  `terminal.wordNext`.
+
+`settings.open` has no default because the former `Cmd+,` command-palette
+label was not backed by an operative shortcut. Widget navigation such as Tab,
+Enter, arrows, and Escape remains standard dialog behavior, and rectangular
+selection remains an `Alt/Option+drag` mouse gesture.
+Terminal copy and paste retain their fixed browser-aware shortcuts because
+their clipboard event handling is not exposed as a configurable action.
 
 ### Dynamic host registration
 
@@ -322,6 +368,9 @@ creation, splits, settings, diagnostics, activity, and session audit actions.
 
 ### Keyboard shortcuts
 
+These are the defaults. Override individual actions through the `keybindings`
+map above without redefining the rest.
+
 | Action | Shortcut |
 | --- | --- |
 | Command palette | `Cmd/Ctrl+K` |
@@ -334,8 +383,12 @@ creation, splits, settings, diagnostics, activity, and session audit actions.
 | Close workspace | `Cmd/Ctrl+Shift+W` |
 | Workspace 1–8 / last | `Cmd/Ctrl+1–8` / `Cmd/Ctrl+9` |
 | Tab 1–8 / last | `Alt+1–8` / `Alt+9` |
+| Previous/next workspace | `Cmd+Ctrl+[` / `Cmd+Ctrl+]`; also `Ctrl+Alt+[` / `Ctrl+Alt+]` |
+| Previous/next tab | `Cmd/Ctrl+Shift+[` / `Cmd/Ctrl+Shift+]`; also `Ctrl+Shift+Tab` / `Ctrl+Tab` |
 | Previous/next word | `Option/Alt+Left/Right` |
 | Insert terminal newline | `Shift+Enter` (sends `Ctrl+J` / LF) |
+| Copy selected terminal text | `Cmd/Ctrl+C` or `Cmd/Ctrl+Shift+C` |
+| Paste terminal text/image | `Cmd/Ctrl+V` or `Cmd/Ctrl+Shift+V` |
 | Rectangular terminal selection | `Alt/Option+drag`; use `Ctrl+Alt+drag` when a Linux window manager reserves `Alt+drag` |
 | Focus neighboring pane | `Option+Cmd+Arrow` / `Alt+Ctrl+Arrow` |
 | Latest unread notification | `Cmd/Ctrl+Shift+U` |
