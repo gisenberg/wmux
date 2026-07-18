@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $global:ProgressPreference = 'SilentlyContinue'
+$AgentFirewallRuleName = 'wmux-windows-agent-from-server'
+$AgentRolloutPortCount = 8
 
 function Get-CommandPath([string]$Name) {
   $Command = Get-Command $Name -ErrorAction SilentlyContinue
@@ -95,6 +97,122 @@ function Get-WmuxHelperDir {
   return (Join-Path $env:LOCALAPPDATA 'wmux\bin')
 }
 
+function Get-WindowsAgentPortRange {
+  $ConfigPath = if ($env:WMUX_WINDOWS_AGENT_CONFIG) {
+    $env:WMUX_WINDOWS_AGENT_CONFIG
+  } else {
+    Join-Path $HOME '.wmux\windows-agent.json'
+  }
+  $Document = if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+    Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+  } else {
+    [pscustomobject]@{}
+  }
+  $BasePort = if ($Document.port) { [int]$Document.port } else { 3481 }
+  $LastPort = $BasePort + $AgentRolloutPortCount
+  if ($BasePort -lt 1 -or $LastPort -gt 65535) {
+    throw "The Windows agent base port must leave room for $AgentRolloutPortCount rollout ports (maximum base port: $([int](65535 - $AgentRolloutPortCount)))."
+  }
+  [pscustomobject]@{
+    basePort = $BasePort
+    lastPort = $LastPort
+    localPort = "$BasePort-$LastPort"
+  }
+}
+
+function Test-IsInternalAddress([System.Net.IPAddress]$Address) {
+  $Bytes = $Address.GetAddressBytes()
+  if ($Bytes.Length -eq 4) {
+    return (
+      $Bytes[0] -eq 10 -or
+      ($Bytes[0] -eq 172 -and $Bytes[1] -ge 16 -and $Bytes[1] -le 31) -or
+      ($Bytes[0] -eq 192 -and $Bytes[1] -eq 168) -or
+      ($Bytes[0] -eq 100 -and $Bytes[1] -ge 64 -and $Bytes[1] -le 127)
+    )
+  }
+  return ($Bytes.Length -eq 16 -and (($Bytes[0] -band 0xfe) -eq 0xfc))
+}
+
+function Test-IsAdministrator {
+  $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+  $Principal = [System.Security.Principal.WindowsPrincipal]::new($Identity)
+  return $Principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-WindowsAgentFirewallReport {
+  $PortRange = Get-WindowsAgentPortRange
+  $Rule = Get-NetFirewallRule -Name $AgentFirewallRuleName -ErrorAction SilentlyContinue
+  $PortFilter = if ($Rule) { $Rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
+  $AddressFilter = if ($Rule) { $Rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
+  [ordered]@{
+    ruleName = $AgentFirewallRuleName
+    expectedLocalPort = $PortRange.localPort
+    configured = [bool](
+      $Rule -and
+      [string]$Rule.Enabled -eq 'True' -and
+      [string]$Rule.Direction -eq 'Inbound' -and
+      [string]$Rule.Action -eq 'Allow' -and
+      [string]$PortFilter.Protocol -eq 'TCP' -and
+      [string]$PortFilter.LocalPort -eq $PortRange.localPort
+    )
+    enabled = if ($Rule) { [string]$Rule.Enabled } else { $null }
+    localPort = if ($PortFilter) { [string]$PortFilter.LocalPort } else { $null }
+    remoteAddress = if ($AddressFilter) { @($AddressFilter.RemoteAddress) } else { @() }
+  }
+}
+
+function Set-WindowsAgentFirewall([string[]]$RemoteAddresses) {
+  if (-not (Test-IsAdministrator)) {
+    throw 'Configuring the Windows agent firewall requires an elevated PowerShell session.'
+  }
+  if (-not $RemoteAddresses -or $RemoteAddresses.Count -eq 0) {
+    $RemoteAddresses = @($env:WMUX_WINDOWS_AGENT_REMOTE_ADDRESSES -split ',' | Where-Object { $_ })
+  }
+  $ValidatedAddresses = @()
+  foreach ($Value in $RemoteAddresses) {
+    $Text = ([string]$Value).Trim()
+    $Parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($Text, [ref]$Parsed) -or -not (Test-IsInternalAddress $Parsed)) {
+      throw "Windows agent firewall addresses must be exact Tailscale, RFC1918, or IPv6 ULA literals; rejected: $Text"
+    }
+    $ValidatedAddresses += $Parsed.ToString()
+  }
+  if ($ValidatedAddresses.Count -eq 0) {
+    throw 'Pass the wmux server internal IP, or set WMUX_WINDOWS_AGENT_REMOTE_ADDRESSES, before configuring the agent firewall.'
+  }
+
+  $PortRange = Get-WindowsAgentPortRange
+  $Existing = Get-NetFirewallRule -Name $AgentFirewallRuleName -ErrorAction SilentlyContinue
+  if ($Existing) {
+    Set-NetFirewallRule `
+      -Name $AgentFirewallRuleName `
+      -Enabled True `
+      -Direction Inbound `
+      -Profile Any `
+      -Action Allow `
+      -ErrorAction Stop | Out-Null
+    $Existing | Get-NetFirewallPortFilter -ErrorAction Stop | Set-NetFirewallPortFilter `
+      -Protocol TCP `
+      -LocalPort $PortRange.localPort `
+      -ErrorAction Stop | Out-Null
+    $Existing | Get-NetFirewallAddressFilter -ErrorAction Stop | Set-NetFirewallAddressFilter `
+      -RemoteAddress $ValidatedAddresses `
+      -ErrorAction Stop | Out-Null
+  } else {
+    New-NetFirewallRule `
+      -Name $AgentFirewallRuleName `
+      -DisplayName 'wmux Windows session agent' `
+      -Enabled True `
+      -Direction Inbound `
+      -Protocol TCP `
+      -LocalPort $PortRange.localPort `
+      -RemoteAddress $ValidatedAddresses `
+      -Profile Any `
+      -Action Allow | Out-Null
+  }
+  Write-Output "Allowed Windows agent TCP ports $($PortRange.localPort) from $($ValidatedAddresses -join ', ') in $AgentFirewallRuleName."
+}
+
 function Invoke-WmuxHelper([string]$Name, [string[]]$HelperArgs) {
   $Command = Get-Command $Name -ErrorAction SilentlyContinue
   if ($Command) {
@@ -187,6 +305,7 @@ function Get-WindowsWmuxReport {
   $HeartbeatTaskInfo = if ($HeartbeatTask) { Get-ScheduledTaskInfo -TaskName 'wmux-heartbeat' -ErrorAction SilentlyContinue } else { $null }
   $AgentTask = Get-ScheduledTask -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue
   $AgentTaskInfo = if ($AgentTask) { Get-ScheduledTaskInfo -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue } else { $null }
+  $AgentFirewall = Get-WindowsAgentFirewallReport
   $SunshineCommand = Get-SunshineCommand
   $SunshineUrl = if ($env:WMUX_SUNSHINE_URL) { $env:WMUX_SUNSHINE_URL } else { 'https://127.0.0.1:47990' }
   [ordered]@{
@@ -213,6 +332,7 @@ function Get-WindowsWmuxReport {
     agentTaskState = if ($AgentTask) { [string]$AgentTask.State } else { 'missing' }
     agentTaskLastRunTime = if ($AgentTaskInfo) { $AgentTaskInfo.LastRunTime.ToString('o') } else { $null }
     agentTaskLastTaskResult = if ($AgentTaskInfo) { $AgentTaskInfo.LastTaskResult } else { $null }
+    agentFirewall = $AgentFirewall
     commands = [ordered]@{
       ffmpeg = Get-CommandPath 'ffmpeg.exe'
       python = Get-WorkingPythonPath 'python.exe' @()
@@ -334,7 +454,7 @@ function Start-Sunshine {
 
 function Show-Usage {
   Write-Error @'
-usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-heartbeat|heartbeat-status|heartbeat-logs|install-stream|stream-status|install-agent|agent-status|agent-logs|install-hooks|status]
+usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-heartbeat|heartbeat-status|heartbeat-logs|install-stream|stream-status|install-agent|configure-agent-firewall|agent-firewall-status|agent-status|agent-logs|install-hooks|status]
 
 validate       Print a JSON report for Windows wmux prerequisites and helper state.
 persist-path   Add %LOCALAPPDATA%\wmux\bin to the persistent user PATH.
@@ -349,6 +469,8 @@ heartbeat-logs Show the wmux heartbeat logs.
 install-stream Install/start the per-user wmux stream-agent Scheduled Task.
 stream-status  Show the wmux stream-agent Scheduled Task status.
 install-agent  Install/start the per-user wmux Windows session agent Scheduled Task.
+configure-agent-firewall IP... Allow the base and eight rollout ports from exact internal wmux server IPs (requires elevation).
+agent-firewall-status Show the managed Windows agent firewall rule as JSON.
 agent-status   Show the wmux Windows session agent Scheduled Task status.
 agent-logs     Show the wmux Windows session agent logs.
 install-hooks  Install Claude and Codex hooks using wmux-hooks.
@@ -357,6 +479,7 @@ status         Alias for validate.
 }
 
 $Action = if ($args.Count -gt 0) { [string]$args[0] } else { 'validate' }
+$ActionArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
 
 switch ($Action) {
   'validate' {
@@ -400,6 +523,16 @@ switch ($Action) {
   }
   'install-agent' {
     Invoke-WmuxHelper 'wmux-windows-agent-service' @('install')
+    $Firewall = Get-WindowsAgentFirewallReport
+    if (-not $Firewall.configured) {
+      Write-Warning "Windows agent rollouts require inbound TCP $($Firewall.expectedLocalPort). From an elevated shell, run: wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>"
+    }
+  }
+  'configure-agent-firewall' {
+    Set-WindowsAgentFirewall $ActionArgs
+  }
+  'agent-firewall-status' {
+    Get-WindowsAgentFirewallReport | ConvertTo-Json -Depth 6
   }
   'agent-status' {
     Invoke-WmuxHelper 'wmux-windows-agent-service' @('status')

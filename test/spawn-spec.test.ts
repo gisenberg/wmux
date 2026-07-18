@@ -185,3 +185,17 @@ test("PowerShell SSH bootstrap selects the correct static or registered credenti
   });
   assert.equal(registeredUrl.searchParams.get("token"), "registered-bootstrap-capability");
 });
+
+test("PowerShell SSH profile loading is opt-in", () => {
+  const defaultSpec = buildSpawnSpec(machines[8].machine, 120, 40, extraEnv);
+  const profileSpec = buildSpawnSpec(
+    { ...machines[8].machine, loadPowerShellProfile: true },
+    120,
+    40,
+    extraEnv,
+  );
+  assert.ok(defaultSpec.args.includes("-NoProfile"));
+  assert.equal(profileSpec.args.includes("-NoProfile"), false);
+  assert.ok(profileSpec.args.includes("-NoExit"));
+  assert.ok(profileSpec.args.includes("-EncodedCommand"));
+});

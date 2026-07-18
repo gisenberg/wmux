@@ -112,6 +112,22 @@ test("fresh store remains idle when no machines are configured", () => {
   });
 });
 
+test("server-only PowerShell profile preferences are not persisted in state", () => {
+  withTempState((filePath) => {
+    const snapshot = new StateStore([
+      {
+        id: "windows",
+        name: "Windows",
+        kind: "powershell-ssh",
+        host: "windows.ts.net",
+        loadPowerShellProfile: true,
+      },
+    ], filePath).snapshot();
+    assert.equal(snapshot.machines[0].loadPowerShellProfile, undefined);
+    assert.doesNotMatch(fs.readFileSync(filePath, "utf8"), /loadPowerShellProfile/);
+  });
+});
+
 test("fresh store does not pin a retained registered machine", () => {
   withTempState((filePath) => {
     const registeredMachines: MachineConfig[] = [

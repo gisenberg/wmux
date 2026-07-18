@@ -18,6 +18,23 @@ test("accepts normal machine configs", () => {
   assert.equal(configSchema.safeParse(machine({ platform: "darwin" })).success, false);
 });
 
+test("PowerShell profile loading is opt-in and limited to powershell-ssh machines", () => {
+  const windowsMachine = machine({ kind: "powershell-ssh", loadPowerShellProfile: true });
+  const parsed = configSchema.parse(windowsMachine);
+  assert.equal(parsed.machines?.[0].loadPowerShellProfile, true);
+  assert.equal(configSchema.safeParse(machine({ loadPowerShellProfile: true })).success, false);
+  assert.ok(configSchema.safeParse(machine({ kind: "powershell-ssh" })).success);
+});
+
+test("Windows agent ports reserve the bounded rollout range", () => {
+  const windowsAgent = (agentPort: number) => machine({
+    kind: "powershell-ssh",
+    sessionBackend: "agent",
+    agentPort,
+  });
+  assert.ok(configSchema.safeParse(windowsAgent(65527)).success);
+  assert.equal(configSchema.safeParse(windowsAgent(65528)).success, false);
+});
 test("rejects machine ids that could escape scripts, paths, or URLs", () => {
   for (const id of ["a b", "a;rm -rf /", "a/../b", "$(x)", "a'b", "", "-lead", "x".repeat(65)]) {
     assert.equal(configSchema.safeParse(machine({ id })).success, false, `id ${JSON.stringify(id)} should be rejected`);

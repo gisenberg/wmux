@@ -45,10 +45,19 @@ export const machineSchema = z.object({
   cwd: z.string().optional(),
   command: z.array(z.string()).min(1).optional(),
   sessionBackend: z.enum(["auto", "pty", "tmux", "screen", "agent"]).optional(),
+  loadPowerShellProfile: z.boolean().optional(),
   agentUrl: z.string().url().optional(),
-  agentPort: z.number().int().positive().optional(),
+  agentPort: z.number().int().min(1).max(65527, "agentPort must leave eight adjacent rollout ports").optional(),
   agentToken: z.string().optional(),
   stream: streamSchema.optional(),
+}).superRefine((machine, context) => {
+  if (machine.loadPowerShellProfile !== undefined && machine.kind !== "powershell-ssh") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["loadPowerShellProfile"],
+      message: "loadPowerShellProfile is only valid for powershell-ssh machines",
+    });
+  }
 });
 
 export const configSchema = z.object({

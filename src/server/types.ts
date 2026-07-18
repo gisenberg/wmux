@@ -28,6 +28,8 @@ export interface MachineConfig {
   cwd?: string;
   command?: string[];
   sessionBackend?: SessionBackend;
+  /** Load the standard PowerShell profile chain for interactive powershell-ssh panes. */
+  loadPowerShellProfile?: boolean;
   agentUrl?: string;
   agentPort?: number;
   agentToken?: string;

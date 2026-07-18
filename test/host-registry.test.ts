@@ -100,6 +100,7 @@ test("registration accepts only remote-safe machine fields", () => {
   const forbiddenMachines = [
     { id: "bad-command", name: "Bad", kind: "ssh", command: ["id"] },
     { id: "bad-url", name: "Bad", kind: "powershell-ssh", agentUrl: "http://127.0.0.1:9" },
+    { id: "bad-profile", name: "Bad", kind: "powershell-ssh", loadPowerShellProfile: true },
     { id: "bad-stream", name: "Bad", kind: "ssh", stream: { gatewayUrl: "http://127.0.0.1:9" } },
     { id: "bad-local", name: "Bad", kind: "local" },
     { id: "bad-service", name: "Bad", kind: "service" },

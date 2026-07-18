@@ -45,6 +45,20 @@ test("bundle stages and runs the agent profile helper", () => {
   assert.match(bootstrap, /apply --quiet/);
 });
 
+test("Windows bootstrap wraps profile prompts only when profile loading is enabled", () => {
+  const defaultBootstrap = buildWindowsPowerShellBootstrap(machine, undefined, {});
+  const profileBootstrap = buildWindowsPowerShellBootstrap(
+    { ...machine, loadPowerShellProfile: true },
+    undefined,
+    {},
+  );
+  assert.match(defaultBootstrap, /__wmuxInstallPrompt \$false/);
+  assert.match(profileBootstrap, /__wmuxInstallPrompt \$true/);
+  assert.match(profileBootstrap, /__wmuxOriginalPrompt/);
+  assert.match(profileBootstrap, /Set-PSReadLineOption -PredictionSource None/);
+  assert.match(profileBootstrap, /\$ErrorActionPreference = \$WmuxOriginalErrorActionPreference/);
+});
+
 test("Windows agent config prefers ConPTY with stdio fallback", () => {
   assert.equal(buildWindowsHelperBundle(machine).agentConfig.backend, "auto");
 });
@@ -144,7 +158,7 @@ test("health probe reports the staged and expected bundle versions", () => {
 
 test("agent bundle uses the platform release and exposes protocol compatibility separately", () => {
   assert.match(expectedWindowsAgentReleaseVersion(), /^v\d+\.\d+\.\d+-win$/);
-  assert.ok(expectedWindowsAgentProtocolVersion() >= 4);
+  assert.equal(expectedWindowsAgentProtocolVersion(), 5);
   const agent = buildWindowsHelperBundle(machine).files.find((file) => file.name === "wmux-windows-agent.py");
   assert.ok(agent);
   const content = Buffer.from(agent.dataBase64, "base64").toString("utf8");
@@ -177,4 +191,17 @@ test("Windows agent service drains staged updates and refuses unsafe restarts", 
   assert.ok(content.includes("Disable-ScheduledTask -TaskName $TaskName"));
   assert.ok(content.includes("Get-AgentGenerationTasks"));
   assert.ok(!content.includes("Start-Process -FilePath $PowerShell"));
+});
+
+test("Windows setup manages the bounded agent firewall range", () => {
+  const bundle = buildWindowsHelperBundle(machine);
+  const helper = bundle.files.find((file) => file.name === "wmux-windows-setup.ps1");
+  assert.ok(helper, "bundle includes wmux-windows-setup.ps1");
+  const content = Buffer.from(helper.dataBase64, "base64").toString("utf8");
+  assert.ok(content.includes("$AgentRolloutPortCount = 8"));
+  assert.ok(content.includes("'configure-agent-firewall'"));
+  assert.ok(content.includes("$BasePort + $AgentRolloutPortCount"));
+  assert.ok(content.includes("Test-IsInternalAddress"));
+  assert.ok(content.includes("-RemoteAddress $ValidatedAddresses"));
+  assert.ok(content.includes("Windows agent rollouts require inbound TCP"));
 });

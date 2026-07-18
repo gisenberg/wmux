@@ -125,6 +125,7 @@ export const buildWindowsPowerShellBootstrap = (
     : "$Bundle = Invoke-RestMethod -Method Get -Uri $BundleUrl -Headers $WmuxHeaders -TimeoutSec 20";
 
   return `
+$WmuxOriginalErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 ${envLines}
 
@@ -254,7 +255,9 @@ $StartCwd = __wmuxNormalizeStartCwd $env:WMUX_START_CWD
 if ($StartCwd) {
   Set-Location -LiteralPath $StartCwd -ErrorAction SilentlyContinue
 }
+__wmuxInstallPrompt ${machine.loadPowerShellProfile === true ? "$true" : "$false"}
 __wmuxEmitCwd
+$ErrorActionPreference = $WmuxOriginalErrorActionPreference
 `;
 };
 
