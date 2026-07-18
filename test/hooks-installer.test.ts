@@ -107,6 +107,14 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", async 
     await execFileAsync(hooksScript, ["install", "opencode"], {
       env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome },
     });
+    const pluginPackage = path.join(configHome, "node_modules", "@opencode-ai", "plugin");
+    const effectPackage = path.join(configHome, "node_modules", "effect");
+    fs.mkdirSync(pluginPackage, { recursive: true });
+    fs.mkdirSync(effectPackage, { recursive: true });
+    fs.writeFileSync(path.join(pluginPackage, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(path.join(pluginPackage, "index.js"), 'export const tool = Object.assign((value) => value, { schema: { string: () => ({ optional: () => ({}) }), number: () => ({ optional: () => ({}) }), boolean: () => ({ optional: () => ({}) }) } });\n');
+    fs.writeFileSync(path.join(effectPackage, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(path.join(effectPackage, "index.js"), 'export const Effect = { runPromise: (fn) => fn() };\n');
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
     const createPlugin = pluginModule.default as (input: Record<string, unknown>) => Promise<Record<string, (...args: unknown[]) => Promise<void>>>;

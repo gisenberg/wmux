@@ -354,6 +354,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-media` | Render images, audio, or video through the browser |
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
 | `wmux-hooks` | Install Claude, Codex, or OpenCode lifecycle hooks |
+| `wmux-opencode-run` | POSIX staged runner for delegated OpenCode requests in a visible durable pane |
 | `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
 
@@ -395,6 +396,20 @@ trust step.
 `${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/wmux.ts`; it does not modify
 `opencode.json`. POSIX installation is supported; OpenCode's Windows installer
 parity is not included.
+
+`wmux-opencode-run` is the POSIX-first remote delegation transport. It accepts a
+single Base64 JSON request over pane stdin and keeps the OpenCode run visible in
+its durable pane for inspection and recovery. `autoApprove` probes the installed
+OpenCode CLI and uses its advertised `--auto` or `--dangerously-skip-permissions`
+option; it fails closed if neither is available and should only be used for work
+you authorize. Delegations leave their durable workspace open by default;
+`close_on_success` closes only after a successful result and completed lifecycle
+event. Failed, stopped, and timed-out workspaces remain available for inspection.
+The permission-gated `wmux_close` tool accepts `workspace_id` to explicitly
+close a workspace later, but refuses anything not recorded as agent-created.
+Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require
+manual recovery. Restart OpenCode after installing or updating the plugin so it
+loads the generated tools.
 
 On Windows, run `wmux-windows-setup install-hooks`, then review and trust the
 command with `/hooks` in a new Codex session. Dynamically registered hosts do

@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""Run one OpenCode request supplied as a base64 JSON line from a wmux pane."""
+import base64
+import json
+import os
+import re
+import selectors
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+# JSON escaping can expand a byte-bounded prompt before the request is Base64 encoded.
+MAX_LINE = 1_100_000
+MAX_PROMPT = 128 * 1024
+MAX_TEXT = 64_000
+TERMINATION_GRACE = 2.0
+HELP_PROBE_TIMEOUT = 5.0
+MAX_HELP_OUTPUT = 256 * 1024
+
+
+def bounded(value):
+    if not isinstance(value, str):
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= MAX_TEXT:
+        return value
+    return encoded[:MAX_TEXT].decode("utf-8", errors="ignore")
+
+
+def append_bounded(current, value):
+    return bounded((current + "\n" if current else "") + value)
+
+
+def emit(kind, value):
+    encoded = base64.b64encode(json.dumps(value, separators=(",", ":")).encode()).decode()
+    print("%s %s" % (kind, encoded), flush=True)
+
+
+def fail(run_id, message, code=2):
+    emit("WMUX_OPENCODE_RESULT", {"runId": run_id, "ok": False, "error": bounded(message)})
+    print("WMUX_OPENCODE_DONE %s %d" % (run_id, code), flush=True)
+    return code
+
+
+def request_from_stdin():
+    tty_state = None
+    if sys.stdin.isatty():
+        import termios
+        tty_state = termios.tcgetattr(sys.stdin.fileno())
+        quiet = termios.tcgetattr(sys.stdin.fileno())
+        quiet[3] &= ~termios.ECHO
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, quiet)
+    try:
+        print("WMUX_OPENCODE_READY", flush=True)
+        line = sys.stdin.buffer.readline(MAX_LINE + 1)
+    finally:
+        if tty_state is not None:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, tty_state)
+            print(flush=True)
+    if len(line) > MAX_LINE:
+        raise ValueError("request is too large")
+    try:
+        decoded = base64.b64decode(line.strip(), validate=True)
+        request = json.loads(decoded)
+    except Exception as error:
+        raise ValueError("request must be Base64 JSON") from error
+    if not isinstance(request, dict):
+        raise ValueError("request must be an object")
+    return request
+
+
+def validate(request):
+    run_id, prompt, directory = (request.get(key) for key in ("runId", "prompt", "directory"))
+    if not isinstance(run_id, str) or not run_id or len(run_id) > 128 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for c in run_id):
+        raise ValueError("invalid runId")
+    if not isinstance(prompt, str) or not prompt or len(prompt.encode()) > MAX_PROMPT:
+        raise ValueError("invalid prompt")
+    if not isinstance(directory, str) or not directory.startswith("/") or len(directory) > 4096 or "\x00" in directory:
+        raise ValueError("invalid directory")
+    if not os.path.isdir(directory):
+        raise ValueError("directory does not exist")
+    for key in ("agent", "title"):
+        if key in request and (not isinstance(request[key], str) or len(request[key]) > 512 or "\x00" in request[key]):
+            raise ValueError("invalid %s" % key)
+    if "autoApprove" in request and not isinstance(request["autoApprove"], bool):
+        raise ValueError("invalid autoApprove")
+    return run_id, prompt, directory
+
+
+def nested_text(value):
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return ""
+    for key in ("text", "message", "error", "data", "part"):
+        nested = nested_text(value.get(key))
+        if nested:
+            return nested
+    return ""
+
+
+class ForwardedSignal(Exception):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def process_group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop_process_group(child, signum, grace=TERMINATION_GRACE):
+    if child is None:
+        return
+    pgid = child.pid
+    if process_group_alive(pgid):
+        try:
+            os.killpg(pgid, signum)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + grace
+    while process_group_alive(pgid) and time.monotonic() < deadline:
+        remaining = max(0.0, deadline - time.monotonic())
+        if child.poll() is None:
+            try:
+                child.wait(timeout=min(0.05, remaining))
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            time.sleep(min(0.05, remaining))
+    if process_group_alive(pgid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if child.poll() is None:
+        child.wait()
+
+
+def advertised_option(output, option):
+    return re.search(r"(?:^|[\s[,])" + re.escape(option) + r"(?=$|[\s=,\]])", output, flags=re.MULTILINE) is not None
+
+
+def auto_approve_option(executable, env):
+    child = None
+    selector = selectors.DefaultSelector()
+    captured = bytearray()
+    previous_handlers = {}
+    def forward_signal(signum, _frame):
+        raise ForwardedSignal(signum)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        previous_handlers[signum] = signal.signal(signum, forward_signal)
+    try:
+        child = subprocess.Popen(
+            [executable, "run", "--help"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+        assert child.stdout is not None
+        os.set_blocking(child.stdout.fileno(), False)
+        selector.register(child.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + HELP_PROBE_TIMEOUT
+        eof = False
+        while not eof or child.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stop_process_group(child, signal.SIGKILL, 0)
+                raise ValueError("OpenCode auto-approval capability probe timed out")
+            events = selector.select(min(0.05, remaining))
+            for key, _events in events:
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 8192)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    eof = True
+                    continue
+                available = MAX_HELP_OUTPUT - len(captured)
+                if available > 0:
+                    captured.extend(chunk[:available])
+        code = child.wait()
+    except OSError as error:
+        stop_process_group(child, signal.SIGKILL, 0)
+        raise ValueError("OpenCode auto-approval capability probe failed") from error
+    except KeyboardInterrupt:
+        stop_process_group(child, signal.SIGINT)
+        raise
+    except ForwardedSignal as forwarded:
+        stop_process_group(child, forwarded.signum)
+        raise
+    finally:
+        selector.close()
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+    if code != 0:
+        raise ValueError("OpenCode auto-approval capability probe failed")
+    output = captured.decode("utf-8", errors="replace")
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    if advertised_option(output, "--auto"):
+        return "--auto"
+    if advertised_option(output, "--dangerously-skip-permissions"):
+        return "--dangerously-skip-permissions"
+    raise ValueError("installed OpenCode does not advertise an auto-approval option")
+
+
+def main():
+    run_id = "unknown"
+    try:
+        request = request_from_stdin()
+        candidate_run_id = request.get("runId")
+        if isinstance(candidate_run_id, str) and candidate_run_id and len(candidate_run_id) <= 128 and all(
+            char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for char in candidate_run_id
+        ):
+            run_id = candidate_run_id
+        run_id, prompt, directory = validate(request)
+    except ValueError as error:
+        return fail(run_id, str(error))
+    executable = shutil.which("opencode")
+    if not executable:
+        return fail(run_id, "opencode executable not found", 127)
+    env = os.environ.copy()
+    env["WMUX_DELEGATED_RUN"] = "1"
+    argv = [executable, "run", "--format", "json", "--dir", directory]
+    if request.get("title"):
+        argv.extend(["--title", request["title"]])
+    if request.get("agent"):
+        argv.extend(["--agent", request["agent"]])
+    if request.get("autoApprove"):
+        try:
+            argv.append(auto_approve_option(executable, env))
+        except ValueError as error:
+            return fail(run_id, str(error))
+        except KeyboardInterrupt:
+            return fail(run_id, "cancelled by Ctrl-C", 130)
+        except ForwardedSignal as forwarded:
+            return 128 + forwarded.signum
+    result, error = "", ""
+    prompt_forms = {prompt, json.dumps(prompt, ensure_ascii=False)[1:-1], json.dumps(prompt)[1:-1]}
+    child = None
+    previous_handlers = {}
+    def forward_signal(signum, _frame):
+        raise ForwardedSignal(signum)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        previous_handlers[signum] = signal.signal(signum, forward_signal)
+    try:
+        child = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            start_new_session=True,
+        )
+        assert child.stdin is not None and child.stdout is not None
+        child.stdin.write(prompt)
+        child.stdin.close()
+        for line in child.stdout:
+            visible = line
+            for prompt_form in prompt_forms:
+                if prompt_form:
+                    visible = visible.replace(prompt_form, "[redacted]")
+            sys.stdout.write(visible)
+            sys.stdout.flush()
+            try:
+                parsed = json.loads(line)
+                kind = parsed.get("type") if isinstance(parsed, dict) else None
+                if kind == "text":
+                    candidate = nested_text(parsed.get("part")) or nested_text(parsed.get("text"))
+                    if candidate:
+                        result = append_bounded(result, candidate)
+                elif kind == "error":
+                    candidate = nested_text(parsed.get("error")) or nested_text(parsed)
+                    if candidate:
+                        error = append_bounded(error, candidate)
+            except json.JSONDecodeError:
+                pass
+        code = child.wait()
+    except KeyboardInterrupt:
+        stop_process_group(child, signal.SIGINT)
+        return fail(run_id, "cancelled by Ctrl-C", 130)
+    except ForwardedSignal as forwarded:
+        stop_process_group(child, forwarded.signum)
+        return 128 + forwarded.signum
+    except OSError as exc:
+        stop_process_group(child, signal.SIGKILL, 0)
+        return fail(run_id, str(exc), 127)
+    finally:
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+    ok = code == 0
+    emit("WMUX_OPENCODE_RESULT", {"runId": run_id, "ok": ok, "result": bounded(result), "error": bounded(error)})
+    print("WMUX_OPENCODE_DONE %s %d" % (run_id, code), flush=True)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

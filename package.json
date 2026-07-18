@@ -25,7 +25,7 @@
     "test:e2e:chromium": "playwright test --project=chromium --project=mobile-chromium",
     "docs:screenshots": "playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
-    "check:scripts": "PYTHONPYCACHEPREFIX=test-results/pycache python3 -m py_compile scripts/wmux-agent-event scripts/wmux-agent-profile scripts/wmux-copy scripts/wmux-run scripts/wmux-stream-agent scripts/wmux-windows-agent skills/wmux/scripts/wmuxctl.py test/windows-agent-drain-smoke.py && node --check scripts/wmux-hooks && node --check scripts/wmux-moonlight-gateway && node --check scripts/wmux-set-password && bash -n scripts/install-user-service.sh scripts/install-stream-service.sh scripts/install-heartbeat-service.sh scripts/install-tailscale-cert-service.sh scripts/wmux-cert-renew scripts/wmux-heartbeat scripts/wmux-media scripts/wmux-notify scripts/wmux-title",
+    "check:scripts": "PYTHONPYCACHEPREFIX=test-results/pycache python3 -m py_compile scripts/wmux-agent-event scripts/wmux-agent-profile scripts/wmux-copy scripts/wmux-run scripts/wmux-opencode-run scripts/wmux-stream-agent scripts/wmux-windows-agent skills/wmux/scripts/wmuxctl.py test/windows-agent-drain-smoke.py && node --check scripts/wmux-hooks && node --check scripts/wmux-moonlight-gateway && node --check scripts/wmux-set-password && bash -n scripts/install-user-service.sh scripts/install-stream-service.sh scripts/install-heartbeat-service.sh scripts/install-tailscale-cert-service.sh scripts/wmux-cert-renew scripts/wmux-heartbeat scripts/wmux-media scripts/wmux-notify scripts/wmux-title",
     "check": "npm test && npm run typecheck && npm run check:scripts && npm run build"
   },
   "dependencies": {

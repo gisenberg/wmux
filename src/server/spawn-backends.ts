@@ -747,6 +747,9 @@ __WMUX_HOOKS_HELPER__
 cat > "$wmux_helper_dir/wmux-run" <<'__WMUX_RUN_HELPER__'
 ${localHelperScript("wmux-run")}
 __WMUX_RUN_HELPER__
+cat > "$wmux_helper_dir/wmux-opencode-run" <<'__WMUX_OPENCODE_RUN_HELPER__'
+${localHelperScript("wmux-opencode-run")}
+__WMUX_OPENCODE_RUN_HELPER__
 cat > "$wmux_helper_dir/wmux-copy" <<'__WMUX_COPY_HELPER__'
 ${localHelperScript("wmux-copy")}
 __WMUX_COPY_HELPER__
@@ -762,7 +765,7 @@ __WMUX_SUNSHINE_SETUP_HELPER__
 cat > "$wmux_helper_dir/wmux-agent-profile" <<'__WMUX_AGENT_PROFILE_HELPER__'
 ${localHelperScript("wmux-agent-profile")}
 __WMUX_AGENT_PROFILE_HELPER__
-chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile";
+chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile";
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-clip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wclip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmclip" 2>/dev/null || true;
@@ -780,6 +783,7 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-agent-event" "$wmux_path_dir/wmux-agent-event" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-hooks" "$wmux_path_dir/wmux-hooks" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-run" "$wmux_path_dir/wmux-run" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-opencode-run" "$wmux_path_dir/wmux-opencode-run" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-copy" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-clip" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wclip" 2>/dev/null || true;
