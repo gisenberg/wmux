@@ -133,6 +133,20 @@ function Test-IsInternalAddress([System.Net.IPAddress]$Address) {
   return ($Bytes.Length -eq 16 -and (($Bytes[0] -band 0xfe) -eq 0xfc))
 }
 
+function Test-AreExactInternalAddresses([object[]]$Addresses) {
+  if (-not $Addresses -or $Addresses.Count -eq 0) { return $false }
+  foreach ($Value in $Addresses) {
+    $Parsed = $null
+    if (
+      -not [System.Net.IPAddress]::TryParse(([string]$Value).Trim(), [ref]$Parsed) -or
+      -not (Test-IsInternalAddress $Parsed)
+    ) {
+      return $false
+    }
+  }
+  return $true
+}
+
 function Test-IsAdministrator {
   $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
   $Principal = [System.Security.Principal.WindowsPrincipal]::new($Identity)
@@ -144,6 +158,7 @@ function Get-WindowsAgentFirewallReport {
   $Rule = Get-NetFirewallRule -Name $AgentFirewallRuleName -ErrorAction SilentlyContinue
   $PortFilter = if ($Rule) { $Rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
   $AddressFilter = if ($Rule) { $Rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
+  $RemoteAddresses = if ($AddressFilter) { @($AddressFilter.RemoteAddress) } else { @() }
   [ordered]@{
     ruleName = $AgentFirewallRuleName
     expectedLocalPort = $PortRange.localPort
@@ -153,11 +168,12 @@ function Get-WindowsAgentFirewallReport {
       [string]$Rule.Direction -eq 'Inbound' -and
       [string]$Rule.Action -eq 'Allow' -and
       [string]$PortFilter.Protocol -eq 'TCP' -and
-      [string]$PortFilter.LocalPort -eq $PortRange.localPort
+      [string]$PortFilter.LocalPort -eq $PortRange.localPort -and
+      (Test-AreExactInternalAddresses $RemoteAddresses)
     )
     enabled = if ($Rule) { [string]$Rule.Enabled } else { $null }
     localPort = if ($PortFilter) { [string]$PortFilter.LocalPort } else { $null }
-    remoteAddress = if ($AddressFilter) { @($AddressFilter.RemoteAddress) } else { @() }
+    remoteAddress = $RemoteAddresses
   }
 }
 

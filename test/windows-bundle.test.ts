@@ -202,6 +202,7 @@ test("Windows setup manages the bounded agent firewall range", () => {
   assert.ok(content.includes("'configure-agent-firewall'"));
   assert.ok(content.includes("$BasePort + $AgentRolloutPortCount"));
   assert.ok(content.includes("Test-IsInternalAddress"));
+  assert.ok(content.includes("Test-AreExactInternalAddresses $RemoteAddresses"));
   assert.ok(content.includes("-RemoteAddress $ValidatedAddresses"));
   assert.ok(content.includes("Windows agent rollouts require inbound TCP"));
 });
