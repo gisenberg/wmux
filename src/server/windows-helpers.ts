@@ -72,7 +72,7 @@ export const buildWindowsPowerShellBootstrapUrl = (
   machine: MachineConfig,
   startCwd: string | undefined,
   extraEnv: Record<string, string>,
-  bootstrapToken = extraEnv.WMUX_TOKEN,
+  bootstrapToken?: string,
 ): string => {
   const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
   const wmuxPort = process.env.WMUX_PORT ?? "3478";
@@ -84,7 +84,8 @@ export const buildWindowsPowerShellBootstrapUrl = (
   }
   // The helper endpoints are token-gated; the WS/one-liner fetch can only carry
   // the token on the query string.
-  if (bootstrapToken) url.searchParams.set("token", bootstrapToken);
+  const effectiveBootstrapToken = bootstrapToken || extraEnv.WMUX_TOKEN;
+  if (effectiveBootstrapToken) url.searchParams.set("token", effectiveBootstrapToken);
   return url.toString();
 };
 

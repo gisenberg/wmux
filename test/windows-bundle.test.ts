@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   buildWindowsHelperBundle,
   buildWindowsPowerShellBootstrap,
+  buildWindowsPowerShellBootstrapUrl,
   buildWindowsHealthProbeScript,
   expectedWindowsAgentProtocolVersion,
   expectedWindowsAgentReleaseVersion,
@@ -102,6 +103,23 @@ test("bootstrap persists wmux auth fallback files for Windows helpers", () => {
   const script = buildWindowsPowerShellBootstrap(machine, undefined, { WMUX_TOKEN: "fixed-token" });
   assert.ok(script.includes("Join-Path $StateDir 'token'"), "bootstrap must write the token fallback file");
   assert.ok(script.includes("Join-Path $StateDir 'url'"), "bootstrap must write the URL fallback file");
+});
+
+test("bootstrap URL falls back from an empty capability to the static wmux token", () => {
+  const url = new URL(buildWindowsPowerShellBootstrapUrl(machine, undefined, { WMUX_TOKEN: "static-token" }, ""));
+  assert.equal(url.searchParams.get("token"), "static-token");
+});
+
+test("bootstrap URL prefers a registered-host capability over the broad wmux token", () => {
+  const url = new URL(
+    buildWindowsPowerShellBootstrapUrl(machine, undefined, { WMUX_TOKEN: "broad-token" }, "bootstrap-capability"),
+  );
+  assert.equal(url.searchParams.get("token"), "bootstrap-capability");
+});
+
+test("bootstrap URL omits credentials when neither token path is available", () => {
+  const url = new URL(buildWindowsPowerShellBootstrapUrl(machine, undefined, {}, ""));
+  assert.equal(url.searchParams.has("token"), false);
 });
 
 test("Windows bootstrap stages the helper callback URL ahead of the public URL", () => {

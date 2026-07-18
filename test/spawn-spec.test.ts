@@ -159,3 +159,28 @@ test("PowerShell SSH panes create the same private per-pane control master", () 
   assert.ok(spec.args.includes("ControlMaster=auto"));
   assert.ok(spec.args.includes("ControlPersist=3600"));
 });
+
+test("PowerShell SSH bootstrap selects the correct static or registered credential", () => {
+  const bootstrapUrl = (environment: Record<string, string>): URL => {
+    const spec = buildSpawnSpec(machines[8].machine, 120, 40, environment);
+    const encodedIndex = spec.args.indexOf("-EncodedCommand");
+    assert.ok(encodedIndex >= 0);
+    const command = Buffer.from(spec.args[encodedIndex + 1], "base64").toString("utf16le");
+    const match = command.match(/irm '([^']+)'/);
+    assert.ok(match, "spawn command contains the quoted helper bootstrap URL");
+    return new URL(match[1]);
+  };
+
+  const staticUrl = bootstrapUrl({
+    ...extraEnv,
+    WMUX_BOOTSTRAP_TOKEN: "",
+  });
+  assert.equal(staticUrl.searchParams.get("token"), extraEnv.WMUX_TOKEN);
+
+  const registeredUrl = bootstrapUrl({
+    ...extraEnv,
+    WMUX_TOKEN: "",
+    WMUX_BOOTSTRAP_TOKEN: "registered-bootstrap-capability",
+  });
+  assert.equal(registeredUrl.searchParams.get("token"), "registered-bootstrap-capability");
+});
