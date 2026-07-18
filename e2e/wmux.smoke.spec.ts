@@ -39,6 +39,53 @@ test("creates a workspace through the command palette and preserves its direct l
   await expect(page).toHaveURL(new RegExp(`${directPath.replaceAll("/", "\\/")}$`));
 });
 
+test("pastes text after a full reload without forwarding Ctrl+V to the pane", async ({
+  page,
+  context,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop clipboard coverage");
+
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: new URL(page.url()).origin,
+  });
+  await page.addInitScript(() => {
+    const inputs: string[] = [];
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (typeof data === "string") {
+        try {
+          const message = JSON.parse(data) as { type?: string; data?: string };
+          if (message.type === "input" && typeof message.data === "string") inputs.push(message.data);
+        } catch {
+          // Ignore non-JSON websocket traffic.
+        }
+      }
+      return originalSend.call(this, data);
+    };
+    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs = inputs;
+  });
+  await page.reload();
+
+  const activePane = page.locator(".terminal-pane.active");
+  await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+  await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
+  await page.evaluate(() => {
+    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs.length = 0;
+  });
+
+  const text = "wmux-paste-after-refresh";
+  await page.evaluate((value) => navigator.clipboard.writeText(value), text);
+  await page.keyboard.press("Control+V");
+
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs.join(""),
+  )).toContain(text);
+  const paneInputs = await page.evaluate(() =>
+    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs,
+  );
+  expect(paneInputs).not.toContain("\x16");
+});
+
 test("keeps the loaded UI and recovers when a wake-up bootstrap briefly fails", async ({ page }) => {
   let failures = 0;
   let requests = 0;

@@ -179,6 +179,7 @@ export const TerminalPane = memo(function TerminalPane({
     let mouseGestureEndListener: (() => void) | undefined;
     let contextMenuListener: ((event: MouseEvent) => void) | undefined;
     let copyListener: ((event: ClipboardEvent) => void) | undefined;
+    let pasteKeyListener: ((event: KeyboardEvent) => void) | undefined;
     let pasteListener: ((event: ClipboardEvent) => void) | undefined;
     let windowFocusListener: (() => void) | undefined;
     let windowBlurListener: (() => void) | undefined;
@@ -819,6 +820,12 @@ export const TerminalPane = memo(function TerminalPane({
           void navigator.clipboard?.writeText(selection);
         }
       };
+      pasteKeyListener = (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.code !== "KeyV") return;
+        // Keep Ghostty from forwarding Ctrl+V before the browser dispatches
+        // the text/image paste event. Do not prevent the browser default.
+        event.stopImmediatePropagation();
+      };
       pasteListener = (event) => {
         const image = event.clipboardData ? imagesFromClipboard(event.clipboardData)[0] : undefined;
         if (image) {
@@ -884,6 +891,7 @@ export const TerminalPane = memo(function TerminalPane({
         term.paste(text);
       };
       term.element?.addEventListener("copy", copyListener, { capture: true });
+      term.element?.addEventListener("keydown", pasteKeyListener, { capture: true });
       term.element?.addEventListener("paste", pasteListener, { capture: true });
       windowFocusListener = announceResizeStateSoon;
       windowBlurListener = announceResizeState;
@@ -992,6 +1000,7 @@ export const TerminalPane = memo(function TerminalPane({
       if (mouseGestureEndListener) document.removeEventListener("mouseup", mouseGestureEndListener);
       if (contextMenuListener) terminalRef.current?.element?.removeEventListener("contextmenu", contextMenuListener, { capture: true });
       if (copyListener) terminalRef.current?.element?.removeEventListener("copy", copyListener, { capture: true });
+      if (pasteKeyListener) terminalRef.current?.element?.removeEventListener("keydown", pasteKeyListener, { capture: true });
       if (pasteListener) terminalRef.current?.element?.removeEventListener("paste", pasteListener, { capture: true });
       if (windowFocusListener) window.removeEventListener("focus", windowFocusListener);
       if (windowBlurListener) window.removeEventListener("blur", windowBlurListener);
