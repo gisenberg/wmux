@@ -151,7 +151,7 @@ export class SessionManager {
       return;
     }
     const initialSize = normalizeSize(cols, rows);
-    const recycledIdleDurableClient = this.recycleIdleDurableClient(pane);
+    this.recycleIdleDurableClient(pane);
     if (!this.sockets.has(paneId)) this.sockets.set(paneId, new Set());
     const paneSockets = this.sockets.get(paneId);
     paneSockets?.add(socket);
@@ -219,7 +219,7 @@ export class SessionManager {
         resizeOwner,
         replay: attachReplay.data,
         replayKind: attachReplay.kind,
-        ...(recycledIdleDurableClient && attachReplay.kind === "raw" && attachReplay.data === ""
+        ...(this.shouldUseDurableClientRefresh(pane) && attachReplay.kind === "raw" && attachReplay.data === ""
           ? { waitForRefresh: true as const }
           : {}),
       });

@@ -95,7 +95,7 @@ test("idle durable-client recycle keeps the old endpoint snapshot through later 
   }
 });
 
-test("ready flags only an empty raw replay after an idle durable client recycle", async () => {
+test("ready holds every empty durable-refresh replay, including a late attach to a live client", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-refresh-ready-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
@@ -110,11 +110,13 @@ test("ready flags only an empty raw replay after an idle durable client recycle"
   };
   const internals = manager as unknown as {
     recycleIdleDurableClient: (candidate: typeof pane) => boolean;
+    shouldUseDurableClientRefresh: (candidate: typeof pane) => boolean;
     ensureSession: (candidate: typeof pane, cols: number, rows: number) => typeof session;
     replayOutputFor: () => { data: string; kind: "raw" | "checkpoint" };
     scheduleDurableClientRefresh: () => void;
   };
   internals.recycleIdleDurableClient = () => true;
+  internals.shouldUseDurableClientRefresh = () => true;
   internals.ensureSession = () => session;
   internals.replayOutputFor = () => ({ data: "", kind: "raw" });
   internals.scheduleDurableClientRefresh = () => undefined;
@@ -124,6 +126,13 @@ test("ready flags only an empty raw replay after an idle durable client recycle"
     assert.equal(ready.waitForRefresh, true);
 
     fake(client).close();
+    const lateClient = socket();
+    internals.recycleIdleDurableClient = () => false;
+    manager.attach(pane.id, lateClient, 80, 24);
+    const lateReady = await waitForMessage(lateClient, (message) => message.type === "ready");
+    assert.equal(lateReady.waitForRefresh, true);
+
+    fake(lateClient).close();
     const checkpointClient = socket();
     internals.replayOutputFor = () => ({ data: "checkpoint", kind: "checkpoint" });
     manager.attach(pane.id, checkpointClient, 80, 24);
@@ -139,7 +148,7 @@ test("ready flags only an empty raw replay after an idle durable client recycle"
 
     fake(replayClient).close();
     const ordinaryClient = socket();
-    internals.recycleIdleDurableClient = () => false;
+    internals.shouldUseDurableClientRefresh = () => false;
     internals.replayOutputFor = () => ({ data: "", kind: "raw" });
     manager.attach(pane.id, ordinaryClient, 80, 24);
     const ordinaryReady = await waitForMessage(ordinaryClient, (message) => message.type === "ready");
