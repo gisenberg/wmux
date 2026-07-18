@@ -6,6 +6,7 @@ import { probeWindowsAgent, WindowsAgentSession } from "../src/server/windows-ag
 import {
   expectedWindowsAgentProtocolVersion,
   expectedWindowsAgentReleaseVersion,
+  windowsHelperBundleVersion,
 } from "../src/server/windows-helpers.js";
 import { TerminalCheckpoint } from "../src/server/terminal-checkpoint.js";
 import type { MachineConfig, PaneState } from "../src/server/types.js";
@@ -130,6 +131,60 @@ test("Windows agent detach preserves the remote session while kill deletes it", 
   killed.kill();
   await waitUntil(() => deleted.includes("/sessions/pane_kill"));
 
+  server.close();
+  await once(server, "close");
+});
+
+test("Windows agent session creation forwards the PowerShell profile preference", async () => {
+  let createBody: Record<string, unknown> | undefined;
+  const server = http.createServer(async (request, response) => {
+    const path = request.url ?? "";
+    if (request.method === "POST" && path === "/sessions/pane_profile") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      createBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      await new Promise((resolve) => setTimeout(resolve, 5_100));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "pane_profile", pid: 123, base: 0, cursor: 0 }));
+      return;
+    }
+    if (request.method === "GET" && path.includes("/output")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ base: 0, cursor: 0, dataBase64: "", exited: false }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_profile",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+      loadPowerShellProfile: true,
+    },
+    80,
+    24,
+  );
+
+  await waitUntil(() => createBody !== undefined);
+  assert.equal(createBody?.loadPowerShellProfile, true);
+  await session.attachReady;
+  assert.equal(session.isExited, false);
+  session.detach();
   server.close();
   await once(server, "close");
 });
@@ -364,6 +419,70 @@ test("a new pane cancels a legacy global drain and rolls onto a side-by-side gen
     new Promise<void>((resolve) => server.close(() => resolve())),
     new Promise<void>((resolve) => generationServer.close(() => resolve())),
   ]);
+});
+
+test("an unreachable side-by-side generation reports the required firewall range", async () => {
+  let helperBundleVersion = "stale";
+  const server = http.createServer((request, response) => {
+    const path = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && path === "/health") {
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedWindowsAgentReleaseVersion(),
+        protocolVersion: Math.max(1, expectedWindowsAgentProtocolVersion() - 1),
+        helperBundleVersion,
+        activeSessions: 1,
+      }));
+      return;
+    }
+    if (request.method === "GET" && path === "/sessions") {
+      response.end(JSON.stringify({ sessions: [{ id: "pane_existing", status: "running" }] }));
+      return;
+    }
+    if (request.method === "POST" && path.startsWith("/sessions/__wmux_update_")) {
+      helperBundleVersion = windowsHelperBundleVersion();
+      response.end(JSON.stringify({ id: path.split("/")[2], status: "running" }));
+      return;
+    }
+    if (request.method === "DELETE" && path.startsWith("/sessions/__wmux_update_")) {
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_firewall",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+    },
+    80,
+    24,
+    {},
+    async () => 1,
+  );
+  await session.attachReady;
+  assert.equal(session.isExited, true);
+  assert.match(session.replayOutput, /is not reachable from wmux/);
+  assert.match(session.replayOutput, new RegExp(`allow inbound TCP ${address.port}-${address.port + 8}`));
+  assert.match(session.replayOutput, /configure-agent-firewall/);
+  server.close();
+  await once(server, "close");
 });
 
 test("OSC 7 cwd wins over a stale cwd returned by an older Windows agent", async () => {

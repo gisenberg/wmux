@@ -2,7 +2,7 @@
 
 This runbook registers a Windows machine, such as `windows-box`, as a wmux node from a Linux server.
 
-wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host. Do not use the legacy `kind: "powershell"` WSMan transport from the wmux server.
+wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host by default. A static machine may opt into PowerShell's standard profile chain with `"loadPowerShellProfile": true`. Do not use the legacy `kind: "powershell"` WSMan transport from the wmux server.
 
 References:
 
@@ -171,9 +171,18 @@ Update `wmux.config.json` or `~/.wmux/config.json`:
   "kind": "powershell-ssh",
   "host": "100.64.0.30",
   "user": "operator",
-  "port": 22
+  "port": 22,
+  "loadPowerShellProfile": true
 }
 ```
+
+Profile loading is disabled when the field is omitted and applies to both
+plain SSH and `sessionBackend: "agent"` panes. wmux preserves a profile-defined
+prompt behind its OSC 7 cwd wrapper, but still disables PSReadLine predictions
+to avoid ghost text and applies the pane's requested starting directory after
+the profile runs. Only new pane processes load the profile. Health probes,
+helper invocations, update commands, dynamic heartbeat registrations, and the
+legacy WSMan transport continue to use `-NoProfile`.
 
 Build and restart the service if code changed; restart is enough for config-only changes:
 
@@ -300,6 +309,7 @@ wmux-windows-setup install-deps
 wmux-windows-setup install-stream
 wmux-windows-setup stream-status
 wmux-windows-setup install-agent
+wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>
 wmux-windows-setup agent-status
 ```
 
@@ -310,6 +320,8 @@ Notes:
 - `install-deps` uses `winget` to install `Gyan.FFmpeg` and `Python.Python.3.12` when missing, then installs `pywinpty` with pip. It executes Python during detection so the Microsoft Store app-execution alias is not mistaken for an installed runtime.
 - `install-stream` installs and starts the per-user `wmux-stream-agent` Scheduled Task.
 - `install-agent` installs and starts the per-user `wmux-windows-agent` Scheduled Task for experimental restart-durable sessions.
+- `configure-agent-firewall` must run from an elevated PowerShell session. It allows the configured base `agentPort` and eight adjacent rollout ports only from the exact Tailscale/RFC1918/IPv6 ULA wmux server addresses passed on the command line. For the default base port, the bounded range is `3481-3489`. `install-agent` warns when this managed rule is absent or stale.
+- `agent-firewall-status` prints the expected range and current managed-rule state as JSON. If you manage Windows Firewall separately, create an equivalent exact-source rule for the same nine-port range; opening only the base port prevents safe side-by-side updates.
 - Both Windows Scheduled Tasks start at user logon, start when available, restart after failure, have no fixed execution-time cutoff, and launch through hidden PowerShell wrappers instead of visible `cmd.exe` windows.
 
 If you are running setup from plain SSH before the helper directory is on PATH, invoke the staged script by path:
@@ -362,7 +374,7 @@ curl -fsS -X DELETE http://100.64.0.10:3478/api/streams/windows-box/request/wind
 
 ## 7. Validate The Windows Session Agent
 
-The experimental session agent listens on the configured Tailscale/internal host, defaulting to port `3481`:
+The experimental session agent listens on the configured Tailscale/internal host, defaulting to port `3481`. Automatic upgrades use one of the next eight ports, so all nine ports must be reachable from the wmux server:
 
 ```bash
 curl -fsS http://100.64.0.30:3481/health | jq .
@@ -374,7 +386,7 @@ Expected:
 {
   "ok": true,
   "releaseVersion": "v0.1.2-win",
-  "protocolVersion": 1,
+  "protocolVersion": 5,
   "machine": "windows-box",
   "backend": "conpty",
   "conptyAvailable": true,
@@ -427,6 +439,7 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - The wmux server can SSH to the Windows user on `100.64.0.30:22` without a password prompt.
 - `ssh -tt operator@100.64.0.30 pwsh -NoLogo -NoProfile` opens an interactive prompt from the wmux server.
 - Windows firewall exposes SSH only to Tailscale/internal clients.
+- Windows firewall exposes the agent's base-through-eight rollout range only to the wmux server's exact internal address.
 - `wmux.config.json` uses `kind: "powershell-ssh"`, not legacy `kind: "powershell"`.
 - `/api/bootstrap` reports `windows-box` as reachable.
 - Creating a wmux workspace on `windows-box` opens an interactive PowerShell session.
@@ -438,13 +451,16 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - `curl http://100.64.0.30:3481/health` reports the Windows session agent as healthy.
 - A direct `/sessions/:id` create/input/output/delete smoke test returns command output.
 - Creating a new pane against an outdated agent stages the current release and starts a side-by-side Scheduled Task generation on an unused adjacent port. The new pane moves to that generation, existing panes remain pinned to their owning generation, and wmux persists the selected port for restart-safe routing.
+- `wmux-windows-setup agent-firewall-status` reports the configured base-through-eight agent port range as allowed from the wmux server.
 - `wmux-windows-agent-service activate-update` remains the manual in-place restart-when-idle flow; `cancel-update` cancels it. `rollout-update --port PORT` is the lower-level generation launcher used by wmux.
 - `wmux-windows-setup install-hooks` reports Claude and Codex hooks installed; `/hooks` in a new Codex session shows the direct PowerShell command ready for review/trust.
 - Changing directories in PowerShell updates the pane cwd, and a same-host split starts in that directory.
+- With `loadPowerShellProfile` enabled, a profile-defined function and prompt are available in each new direct or agent-backed pane while cwd tracking still works.
 
 ## Known Limits
 
 - Legacy Windows SSH PowerShell panes are not durable. Agent-backed Windows panes are owned by `wmux-windows-agent`; wmux service shutdown detaches its client while explicit pane closure deletes the owned pane process and its Windows Job Object, terminating detached descendants.
 - Windows helper staging and cwd reporting require a new pane after the wmux service has been updated. For agent-backed hosts, that pane also activates a staged agent update when it is safe.
+- `wmuxctl run` and `wmuxctl ps` automatically recognize the standard `PS ...>` readiness prompt. An arbitrary profile-defined prompt may not match; after confirming the custom prompt is visible, use `--no-wait-ready` or target the pane with `wmuxctl send`.
 - Windows screen streaming is validated on a dogfood Windows host through FFmpeg/gdigrab and the supervised per-user Scheduled Task. Locked/logged-out behavior and a fuller Windows wmux agent are still not implemented.
-- The managed Windows session agent uses `backend: "auto"`, preferring pywinpty-backed ConPTY and falling back to terminal-normalized stdio when pywinpty is unavailable. It is restart-durable across `wmux.service` restarts while the owning Windows agent generation keeps running. Agent releases use the same platform-suffixed wmux version shown by the UI (for example, `v0.1.2-win`); the HTTP protocol version is reported separately. Automatic rollout is side-by-side; protocol v2 separates update-pending from hard-drain state, and protocol v3 refreshes durable callback state on attach. It supports terminal-safe stdio newlines, byte-exact resize boundaries, and applying an available `wmux-agent-profile` before a new PowerShell session. Legacy agents use a compatibility watcher plus a best-effort 80x24 replay fallback. A forced Windows-agent restart still kills owned pane processes, so process preservation across an unexpected agent crash and broad full-screen app validation remain pending.
+- The managed Windows session agent uses `backend: "auto"`, preferring pywinpty-backed ConPTY and falling back to terminal-normalized stdio when pywinpty is unavailable. It is restart-durable across `wmux.service` restarts while the owning Windows agent generation keeps running. Agent releases use the same platform-suffixed wmux version shown by the UI (for example, `v0.1.2-win`); the HTTP protocol version is reported separately. Automatic rollout is side-by-side; protocol v2 separates update-pending from hard-drain state, protocol v3 refreshes durable callback state on attach, and protocol v5 carries the per-session PowerShell profile preference. It supports terminal-safe stdio newlines, byte-exact resize boundaries, and applying an available `wmux-agent-profile` before a new PowerShell session. Legacy agents use a compatibility watcher plus a best-effort 80x24 replay fallback. A forced Windows-agent restart still kills owned pane processes, so process preservation across an unexpected agent crash and broad full-screen app validation remain pending.

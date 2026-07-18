@@ -29,6 +29,7 @@ const ACTIVE_AGENT_STATUSES = new Set(["running", "started", "working", "waiting
 const stateMachines = (machines: MachineConfig[]): MachineConfig[] =>
   machines.map(({
     agentToken: _agentToken,
+    loadPowerShellProfile: _loadPowerShellProfile,
     source: _source,
     registeredAt: _registeredAt,
     lastSeenAt: _lastSeenAt,

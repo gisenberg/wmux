@@ -81,6 +81,8 @@ export interface WindowsAgentHealth {
 export type WindowsAgentUpdateActivator = (machine: MachineConfig, port?: number) => Promise<number | void>;
 
 const MAX_REPLAY_BYTES = 2 * 1024 * 1024;
+const SESSION_CREATE_TIMEOUT_MS = 30_000;
+const UPDATE_ACTIVATION_TIMEOUT_MS = 30_000;
 
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
   if (machine.agentUrl) return machine.agentUrl.replace(/\/+$/, "");
@@ -311,18 +313,23 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     try {
       const helperBundle = buildWindowsHelperBundle(this.machine);
       if (!await this.ensureCurrentAgent(helperBundle)) return;
-      const response = await this.post<AgentSessionResponse>(`/sessions/${encodeURIComponent(this.pane.id)}`, {
-        cols: this.cols,
-        rows: this.rows,
-        cwd: this.cwd || this.machine.cwd || "",
-        shell: this.machine.shell || "",
-        helperBundle: { bundleVersion: helperBundle.bundleVersion, files: helperBundle.files },
-        env: {
-          WMUX_MACHINE_ID: this.machine.id,
-          WMUX_MACHINE_NAME: this.machine.name,
-          ...this.extraEnv,
+      const response = await this.post<AgentSessionResponse>(
+        `/sessions/${encodeURIComponent(this.pane.id)}`,
+        {
+          cols: this.cols,
+          rows: this.rows,
+          cwd: this.cwd || this.machine.cwd || "",
+          shell: this.machine.shell || "",
+          loadPowerShellProfile: this.machine.loadPowerShellProfile === true,
+          helperBundle: { bundleVersion: helperBundle.bundleVersion, files: helperBundle.files },
+          env: {
+            WMUX_MACHINE_ID: this.machine.id,
+            WMUX_MACHINE_NAME: this.machine.name,
+            ...this.extraEnv,
+          },
         },
-      });
+        SESSION_CREATE_TIMEOUT_MS,
+      );
       this.pidValue = response.pid ?? 0;
       this.cursor = typeof response.base === "number" ? response.base : 0;
       if (response.cwd) {
@@ -435,8 +442,18 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const rolloutPort = await this.selectRolloutPort();
     const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
     if (typeof activatedPort === "number") {
+      const basePort = this.baseAgentPort();
       this.routeToAgentPort(activatedPort);
-      const current = await this.get<WindowsAgentHealth>("/health", 3000);
+      let current: WindowsAgentHealth;
+      try {
+        current = await this.get<WindowsAgentHealth>("/health", 3000);
+      } catch (error) {
+        throw new Error(
+          `new Windows agent generation on port ${activatedPort} is not reachable from wmux; `
+          + `allow inbound TCP ${basePort}-${basePort + 8} from the wmux server `
+          + `(wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>): ${formatError(error)}`,
+        );
+      }
       const currentRelease = current.releaseVersion ?? current.version;
       if (
         current.ok !== true
@@ -633,10 +650,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     return requestJson<T>("GET", `${url}${path}`, undefined, timeoutMs, authHeaders(this.machine));
   }
 
-  private async post<T = unknown>(path: string, body: unknown): Promise<T> {
+  private async post<T = unknown>(path: string, body: unknown, timeoutMs = 5000): Promise<T> {
     const url = this.agentUrl;
     if (!url) throw new Error(`machine ${this.machine.id} is missing Windows agent URL`);
-    return requestJson<T>("POST", `${url}${path}`, body, 5000, authHeaders(this.machine));
+    return requestJson<T>("POST", `${url}${path}`, body, timeoutMs, authHeaders(this.machine));
   }
 
   private async delete<T = unknown>(path: string): Promise<T> {
@@ -736,7 +753,7 @@ exit $LASTEXITCODE
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       finish(new Error(`timed out activating the Windows agent update on ${machine.id}`));
-    }, 15_000);
+    }, UPDATE_ACTIVATION_TIMEOUT_MS);
     child.stderr.setEncoding("utf8");
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {

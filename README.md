@@ -171,7 +171,8 @@ cp wmux.config.example.json wmux.config.json
       "kind": "powershell-ssh",
       "platform": "win",
       "host": "windows-box",
-      "user": "operator"
+      "user": "operator",
+      "loadPowerShellProfile": true
     }
   ]
 }
@@ -186,6 +187,12 @@ cp wmux.config.example.json wmux.config.json
   `tmux`, then `screen`; use `"pty"` to force a raw session.
 - Use `kind: "powershell-ssh"` for Windows hosts reached from Linux or macOS.
   It requires OpenSSH Server and PowerShell 7 on Windows.
+- Static `powershell-ssh` machines may set `"loadPowerShellProfile": true` to
+  load PowerShell's standard profile chain in new direct and agent-backed
+  panes. It defaults to disabled. wmux wraps a profile-defined prompt to retain
+  cwd reporting, continues to disable PSReadLine predictions, and does not load
+  profiles for health probes or other maintenance commands. Dynamic heartbeat
+  registrations and legacy WSMan `powershell` machines do not support the flag.
 - Host release labels use `v<wmux-version>-<platform>`, such as
   `v0.1.1-linux`, `v0.1.1-mac`, and `v0.1.1-win`. Local and Windows platforms
   are inferred; POSIX SSH defaults to `linux`, so set `"platform": "mac"` for
@@ -416,6 +423,7 @@ optional Windows agent owns pane processes and replay independently:
 ```powershell
 wmux-windows-setup install-deps
 wmux-windows-setup install-agent
+wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>
 wmux-windows-setup agent-status
 ```
 
@@ -429,7 +437,8 @@ Opt in from the machine's untracked config:
   "user": "operator",
   "sessionBackend": "agent",
   "agentPort": 3481,
-  "agentToken": "replace-with-a-long-random-token"
+  "agentToken": "replace-with-a-long-random-token",
+  "loadPowerShellProfile": true
 }
 ```
 
@@ -439,7 +448,13 @@ stdio is the fallback when `pywinpty` is unavailable. Existing explicit
 outdated agent and starts a side-by-side agent generation automatically. The
 new pane uses that generation while existing panes remain pinned to the agent
 that owns them; generation ports are persisted so wmux restarts reconnect each
-pane correctly. A pane shows rollout progress while its generation starts.
+pane correctly. The Windows firewall must allow the configured `agentPort` and
+the next eight ports from the wmux server (for the default, `3481-3489`);
+`configure-agent-firewall` installs that exact-source, bounded rule and requires
+an elevated PowerShell session. A pane shows rollout progress while its
+generation starts.
+Changing `loadPowerShellProfile` affects only newly created pane processes;
+reattaching an existing agent-owned pane does not rerun its profile.
 
 For a manual in-place restart after the agent becomes idle, use:
 

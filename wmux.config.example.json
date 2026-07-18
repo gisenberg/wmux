@@ -25,7 +25,8 @@
       "user": "operator",
       "port": 22,
       "sessionBackend": "agent",
-      "agentPort": 3481
+      "agentPort": 3481,
+      "loadPowerShellProfile": true
     }
   ]
 }

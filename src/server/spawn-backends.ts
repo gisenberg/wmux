@@ -116,11 +116,9 @@ const powershellSshBackend: Backend = {
     const { WMUX_BOOTSTRAP_TOKEN: bootstrapToken, ...remoteEnv } = extraEnv;
     const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, remoteEnv, bootstrapToken);
     const bootstrapCommand = `iex (irm ${powershellQuote(bootstrapUrl)})`;
+    args.push(target, machine.shell ?? "pwsh", "-NoLogo");
+    if (machine.loadPowerShellProfile !== true) args.push("-NoProfile");
     args.push(
-      target,
-      machine.shell ?? "pwsh",
-      "-NoLogo",
-      "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",
       "-NoExit",

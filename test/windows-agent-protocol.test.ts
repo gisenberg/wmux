@@ -8,6 +8,28 @@ import type { MachineConfig } from "../src/server/types.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("Windows agent conditionally loads PowerShell profiles for interactive sessions", () => {
+  const source = String.raw`
+import json
+import runpy
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+without_profile = module["powershell_command"]("pwsh", "C:/work", False)
+with_profile = module["powershell_command"]("pwsh", "C:/work", True)
+print(json.dumps({
+    "withoutProfile": without_profile,
+    "withProfile": with_profile,
+}))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const commands = JSON.parse(result.stdout);
+  assert.ok(commands.withoutProfile.includes("-NoProfile"));
+  assert.equal(commands.withProfile.includes("-NoProfile"), false);
+  assert.match(commands.withProfile.at(-1), /__wmuxInstallPrompt \$true/);
+  assert.match(commands.withoutProfile.at(-1), /__wmuxInstallPrompt \$false/);
+});
+
 test("Windows agent URLs bracket IPv6 callback addresses", () => {
   const machine: MachineConfig = {
     id: "dynamic-v6",
@@ -274,7 +296,7 @@ with tempfile.TemporaryDirectory() as root:
     unauthorized: 401,
     accepted: 201,
     capabilities: ["paste-images-v1"],
-    protocol: 4,
+    protocol: 5,
     deleted: true,
     remains: false,
   });

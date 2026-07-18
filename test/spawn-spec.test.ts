@@ -159,3 +159,17 @@ test("PowerShell SSH panes create the same private per-pane control master", () 
   assert.ok(spec.args.includes("ControlMaster=auto"));
   assert.ok(spec.args.includes("ControlPersist=3600"));
 });
+
+test("PowerShell SSH profile loading is opt-in", () => {
+  const defaultSpec = buildSpawnSpec(machines[8].machine, 120, 40, extraEnv);
+  const profileSpec = buildSpawnSpec(
+    { ...machines[8].machine, loadPowerShellProfile: true },
+    120,
+    40,
+    extraEnv,
+  );
+  assert.ok(defaultSpec.args.includes("-NoProfile"));
+  assert.equal(profileSpec.args.includes("-NoProfile"), false);
+  assert.ok(profileSpec.args.includes("-NoExit"));
+  assert.ok(profileSpec.args.includes("-EncodedCommand"));
+});

@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 RELEASE_VERSION = "__WMUX_WINDOWS_AGENT_RELEASE_VERSION__"
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 DEFAULT_REPLAY_BYTES = 2 * 1024 * 1024
 MAX_PASTE_IMAGE_BYTES = 8 * 1024 * 1024
 PASTE_IMAGE_TTL_SECONDS = 60 * 60
@@ -489,9 +489,23 @@ function global:__wmuxEmitCwd {
   } catch {}
 }
 
-function global:prompt {
-  __wmuxEmitCwd
-  "PS $($executionContext.SessionState.Path.CurrentLocation)> "
+function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
+  if (-not (Test-Path variable:global:__wmuxPromptInstalled)) {
+    $ExistingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
+    $global:__wmuxOriginalPrompt = if ($ExistingPrompt) { $ExistingPrompt.ScriptBlock } else { $null }
+  }
+  $global:__wmuxPreserveOriginalPrompt = $PreserveExisting
+  function global:prompt {
+    __wmuxEmitCwd
+    if ($global:__wmuxPreserveOriginalPrompt -and $global:__wmuxOriginalPrompt) {
+      try {
+        & $global:__wmuxOriginalPrompt
+        return
+      } catch {}
+    }
+    "PS $($executionContext.SessionState.Path.CurrentLocation)> "
+  }
+  $global:__wmuxPromptInstalled = $true
 }
 
 try {
@@ -500,10 +514,11 @@ try {
 """
 
 
-def powershell_bootstrap(cwd: str) -> str:
+def powershell_bootstrap(cwd: str, preserve_prompt: bool) -> str:
     escaped_cwd = cwd.replace("'", "''")
+    preserve_prompt_literal = "$true" if preserve_prompt else "$false"
     return (
-        "\n$ErrorActionPreference = 'Continue'\n"
+        "\n$WmuxOriginalErrorActionPreference = $ErrorActionPreference\n$ErrorActionPreference = 'Continue'\n"
         + CWD_PROMPT_PS1
         + f"""
 $AgentProfileHelper = if ($env:WMUX_HELPER_DIR) {{ Join-Path $env:WMUX_HELPER_DIR 'wmux-agent-profile.cmd' }} else {{ $null }}
@@ -513,23 +528,29 @@ if ($AgentProfileHelper -and (Test-Path -LiteralPath $AgentProfileHelper -PathTy
 if ('{escaped_cwd}') {{
   Set-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue
 }}
+__wmuxInstallPrompt {preserve_prompt_literal}
 __wmuxEmitCwd
+$ErrorActionPreference = $WmuxOriginalErrorActionPreference
 """
     )
 
 
-def powershell_command(shell: str, cwd: str) -> list[str]:
+def powershell_command(shell: str, cwd: str, load_profile: bool = False) -> list[str]:
     executable = shell or "pwsh"
-    return [
+    command = [
         executable,
         "-NoLogo",
-        "-NoProfile",
+    ]
+    if not load_profile:
+        command.append("-NoProfile")
+    command.extend([
         "-ExecutionPolicy",
         "Bypass",
         "-NoExit",
         "-Command",
-        powershell_bootstrap(cwd),
-    ]
+        powershell_bootstrap(cwd, load_profile),
+    ])
+    return command
 
 
 def session_environment(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
@@ -552,7 +573,7 @@ def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -
     shell = str(payload.get("shell") or config_string(config, "shell", "pwsh"))
     lower_shell = os.path.basename(shell).lower()
     if lower_shell in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
-        return powershell_command(shell, cwd)
+        return powershell_command(shell, cwd, payload.get("loadPowerShellProfile") is True)
     return shell
 
 
