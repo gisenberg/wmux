@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { cwdFromDurableSessionOutput } from "../src/server/durable-session.js";
 import { sessionCapabilitiesForMachine, sessionDriverForMachine } from "../src/server/session-driver.js";
 import type { MachineConfig } from "../src/server/types.js";
 
@@ -35,4 +36,12 @@ test("powershell SSH agent sessions use the agent-owned driver", () => {
     agentOwned: true,
     refreshClient: false,
   });
+});
+
+test("durable cwd parsing ignores login-profile output before the tmux result", () => {
+  assert.equal(
+    cwdFromDurableSessionOutput("login notice\n/misleading/profile/path\nwmux-cwd:/home/operator/project\n"),
+    "/home/operator/project",
+  );
+  assert.equal(cwdFromDurableSessionOutput("login notice\n/misleading/profile/path\n"), undefined);
 });

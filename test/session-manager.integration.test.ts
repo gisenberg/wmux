@@ -452,6 +452,59 @@ test("late attach receives an authoritative checkpoint for a full-screen PTY", {
 });
 
 test(
+  "new and reattached tmux panes synchronize cwd after the durable session is ready",
+  { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
+  async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-cwd-"));
+    const initialCwd = path.join(dir, "initial");
+    const movedCwd = path.join(dir, "moved");
+    fs.mkdirSync(initialCwd);
+    fs.mkdirSync(movedCwd);
+    const machine: MachineConfig = {
+      id: "local",
+      name: "Local",
+      kind: "local",
+      shell: "/bin/sh",
+      sessionBackend: "tmux",
+      cwd: initialCwd,
+    };
+    const state = new StateStore([machine], path.join(dir, "state.json"));
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const sessionName = durableSessionName(pane.id);
+    const firstManager = new SessionManager(state, [machine]);
+    let secondManager: SessionManager | undefined;
+    const first = socket();
+    try {
+      firstManager.attach(pane.id, first, 80, 24);
+      await waitForMessage(first, (message) => message.type === "ready");
+      await waitForCondition(() => state.findPane(pane.id)?.cwd === initialCwd, 5_000);
+
+      fake(first).message({ type: "input", data: `cd '${movedCwd}' && printf 'cwd-moved\\n'\r` });
+      await waitForMessage(first, (message) => message.type === "output" && message.data.includes("cwd-moved"));
+      await waitForCondition(() => {
+        const result = spawnSync("tmux", ["display-message", "-p", "-t", sessionName, "#{pane_current_path}"], {
+          encoding: "utf8",
+        });
+        return result.status === 0 && result.stdout.trim() === movedCwd;
+      });
+
+      firstManager.disposeAll();
+      state.updatePane(pane.id, { cwd: undefined });
+      secondManager = new SessionManager(state, [machine]);
+      const second = socket();
+      secondManager.attach(pane.id, second, 88, 26);
+      await waitForMessage(second, (message) => message.type === "ready");
+      await waitForCondition(() => state.findPane(pane.id)?.cwd === movedCwd, 5_000);
+    } finally {
+      firstManager.disposeAll();
+      secondManager?.disposeAll();
+      spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: "ignore" });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "tmux pane survives manager disposal and explicit close kills its durable session",
   { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
   async () => {

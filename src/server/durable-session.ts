@@ -3,6 +3,7 @@ import { runCommand } from "./child-process.js";
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 const remotePathBootstrap = (): string => `export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"`;
+const CWD_OUTPUT_PREFIX = "wmux-cwd:";
 
 export const durableSessionName = (paneId?: string): string =>
   `wmux_${(paneId || "unknown").replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -22,12 +23,23 @@ export const readDurableSessionCwd = async (
   const sessionName = durableSessionName(paneId);
   const query =
     `${machine.kind === "ssh" ? `${remotePathBootstrap()}; ` : ""}` +
-    `command -v tmux >/dev/null 2>&1 && tmux display-message -p -t ${shellQuote(sessionName)} '#{pane_current_path}' 2>/dev/null`;
+    `command -v tmux >/dev/null 2>&1 && tmux display-message -p -t ${shellQuote(sessionName)} ` +
+    `${shellQuote(`${CWD_OUTPUT_PREFIX}#{pane_current_path}`)} 2>/dev/null`;
   const result = machine.kind === "local"
     ? await runCommand("/bin/sh", ["-lc", query], { timeoutMs: 1500 })
     : await runRemote(machine, query, 4000);
   if (!result || result.status !== 0) return undefined;
-  return sanitizeCwd(result.stdout.split(/\r?\n/)[0]);
+  return cwdFromDurableSessionOutput(result.stdout);
+};
+
+export const cwdFromDurableSessionOutput = (stdout: string): string | undefined => {
+  const lines = stdout.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].startsWith(CWD_OUTPUT_PREFIX)) continue;
+    const cwd = sanitizeCwd(lines[index].slice(CWD_OUTPUT_PREFIX.length));
+    if (cwd) return cwd;
+  }
+  return undefined;
 };
 
 export const refreshDurableSessionClient = async (

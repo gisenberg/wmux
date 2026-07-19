@@ -27,6 +27,12 @@ interface SocketState {
 // so a transient failure never destroys persisted workspace state.
 const MIN_DELIBERATE_EXIT_UPTIME_MS = 3000;
 
+// A new durable session is created behind the PTY client. The first tmux cwd
+// query can therefore win the startup race and find no session yet, especially
+// while an SSH runtime is still being staged. Retry briefly so pane state is
+// populated even when tmux consumed the shell's initial OSC 7 before attach.
+const DURABLE_CWD_REFRESH_RETRY_DELAYS_MS = [100, 500, 1500, 3000] as const;
+
 /**
  * A deliberate shell exit (which collapses the pane/tab/workspace) is a clean
  * exit code after the session ran long enough to be a real session. Everything
@@ -329,7 +335,6 @@ export class SessionManager {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
     const driver = sessionDriverForMachine(machine);
-    void this.refreshPaneCwdFromBackend(pane, machine);
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
       void sessionDriverForMachine(previousSessionMachine).dispose(previousSessionMachine, pane.id, false);
     }
@@ -362,6 +367,7 @@ export class SessionManager {
     this.sessions.set(pane.id, session);
     this.sessionMachines.set(pane.id, structuredClone(machine));
     this.state.updatePane(pane.id, { status: "running", exitCode: undefined, title: pane.title });
+    this.schedulePaneCwdRefresh(pane, machine, session);
 
     session.on("output", (data) => {
       this.broadcast(pane.id, { type: "output", paneId: pane.id, data });
@@ -417,9 +423,39 @@ export class SessionManager {
     return session;
   }
 
-  private async refreshPaneCwdFromBackend(pane: PaneState, machine: MachineConfig): Promise<void> {
-    const cwd = await sessionDriverForMachine(machine).readCwd(machine, pane.id);
-    if (cwd && cwd !== pane.cwd) this.state.updatePane(pane.id, { cwd });
+  private schedulePaneCwdRefresh(pane: PaneState, machine: MachineConfig, session: ManagedSession): void {
+    const driver = sessionDriverForMachine(machine);
+    if (driver.capabilities(machine).cwd !== "multiplexer") return;
+
+    let retryIndex = 0;
+    const refresh = async (): Promise<void> => {
+      if (this.sessions.get(pane.id) !== session || session.isExited) return;
+      const cwdBeforeRead = this.state.findPane(pane.id)?.cwd;
+      let cwd: string | undefined;
+      try {
+        cwd = await driver.readCwd(machine, pane.id);
+      } catch {
+        cwd = undefined;
+      }
+      if (this.sessions.get(pane.id) !== session || session.isExited) return;
+      const currentPane = this.state.findPane(pane.id);
+      if (!currentPane || currentPane.machineId !== machine.id || currentPane.cwd !== cwdBeforeRead) return;
+      if (cwd) {
+        if (cwd !== currentPane.cwd) this.state.updatePane(pane.id, { cwd });
+        return;
+      }
+
+      const delayMs = DURABLE_CWD_REFRESH_RETRY_DELAYS_MS[retryIndex];
+      retryIndex += 1;
+      if (delayMs === undefined) return;
+      const timer = setTimeout(() => {
+        this.durableRefreshTimers.delete(timer);
+        void refresh();
+      }, delayMs);
+      timer.unref?.();
+      this.durableRefreshTimers.add(timer);
+    };
+    void refresh();
   }
 
   private broadcast(paneId: string, payload: PaneServerMessage): void {
