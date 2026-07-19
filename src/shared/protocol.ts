@@ -1,3 +1,7 @@
+import type { KeybindingMap } from "./keybindings.js";
+
+export type { KeybindingAction, KeybindingMap } from "./keybindings.js";
+
 export type MachineKind = "local" | "ssh" | "powershell" | "powershell-ssh" | "service";
 export type MachinePlatform = "linux" | "mac" | "win";
 export type SessionBackend = "auto" | "pty" | "tmux" | "screen" | "agent";
@@ -201,6 +205,7 @@ export interface BootstrapPayload {
   agentEvents: AgentActivity[];
   runs: TerminalRun[];
   settings: WmuxSettings;
+  keybindings: KeybindingMap;
   streams: StreamStatus[];
 }
 

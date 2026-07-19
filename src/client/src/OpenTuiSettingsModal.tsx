@@ -24,7 +24,8 @@ import {
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { terminalColorSchemes } from "./color-schemes";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
-import type { DurableSessionAudit, MachineStatus, WmuxSettings } from "./types";
+import { compileKeybindings, eventMatchesAction } from "../../shared/keybindings";
+import type { DurableSessionAudit, KeybindingMap, MachineStatus, WmuxSettings } from "./types";
 
 interface OpenTuiSettingsModalProps {
   machines: MachineStatus[];
@@ -34,6 +35,8 @@ interface OpenTuiSettingsModalProps {
   sessionAuditError: string;
   sessionAuditLoading: boolean;
   saving: boolean;
+  keybindings: KeybindingMap;
+  appleKeybindings: boolean;
   onApplyDraft: (settings: WmuxSettings) => void;
   onSave: (settings: WmuxSettings) => void | Promise<void>;
   onCancel: () => void;
@@ -157,6 +160,8 @@ export function OpenTuiSettingsModal({
   sessionAuditError,
   sessionAuditLoading,
   saving,
+  keybindings,
+  appleKeybindings,
   onApplyDraft,
   onSave,
   onCancel,
@@ -174,6 +179,7 @@ export function OpenTuiSettingsModal({
   const [editing, setEditing] = useState<EditState | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [viewportRows, setViewportRows] = useState(32);
+  const compiledKeybindings = useMemo(() => compileKeybindings(keybindings), [keybindings]);
 
   useEffect(() => {
     draftRef.current = draft;
@@ -348,11 +354,12 @@ export function OpenTuiSettingsModal({
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (eventMatchesAction(event, compiledKeybindings, "settings.save", appleKeybindings)) {
+      event.preventDefault();
+      void activate("save");
+      return;
+    }
     if (event.metaKey || event.ctrlKey) {
-      if (event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void activate("save");
-      }
       return;
     }
 

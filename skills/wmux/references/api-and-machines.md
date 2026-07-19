@@ -8,6 +8,11 @@
 - Token sources: `WMUX_TOKEN`, `WMUX_TOKEN_PATH`, or `~/.wmux/token`
 - URL sources: `WMUX_URL`, `~/.wmux/url`, then `http://127.0.0.1:3478`
 
+The static config also owns the browser `keybindings` map. Omitted actions use
+wmux defaults, an empty array disables one action, and changes take effect
+after restarting wmux. Keybindings are returned by `/api/bootstrap`; they are
+not part of the writable server settings API.
+
 All `/api/*` endpoints except `/api/health`, `/api/auth-info`, and `/api/login` require normal wmux authorization. `POST /api/registry/hosts` is the exception: it always requires the separate catalog-write registration token from `WMUX_REGISTRATION_TOKEN` or `~/.wmux/registration-token`, even when main auth is disabled. The shared token can create or update any dynamic ID, so provision it only to trusted hosts.
 
 Never print or commit the token. Prefer environment variables or local token files.

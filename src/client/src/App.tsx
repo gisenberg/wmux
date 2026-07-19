@@ -37,6 +37,8 @@ import { Toasts, useToasts } from "./Toasts";
 import { useAppRouting } from "./useAppRouting";
 import { useEventStream } from "./useEventStream";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
+import { isApplePlatform } from "./keybinding-platform";
+import { defaultKeybindings, displayBindingForAction, type KeybindingAction } from "../../shared/keybindings";
 import { usePaneActions } from "./usePaneActions";
 import { maxSidebarWidth, useSidebar } from "./useSidebar";
 import { writeBrowserClipboard } from "./clipboard";
@@ -305,6 +307,12 @@ export function App() {
     [renderedTabKeys, tabViewsByKey],
   );
   const machines = state?.machines ?? [];
+  const keybindings = state?.keybindings ?? defaultKeybindings;
+  const appleKeybindings = useMemo(isApplePlatform, []);
+  const shortcutFor = useCallback(
+    (action: KeybindingAction) => displayBindingForAction(keybindings, action, appleKeybindings),
+    [appleKeybindings, keybindings],
+  );
   const persistedSettings = state?.settings ?? defaultSettings;
   const settings = previewSettings ?? persistedSettings;
   const displayMachines = useMemo(() => machines.map((machine) => withMachineAlias(machine, settings)), [machines, settings]);
@@ -760,8 +768,11 @@ export function App() {
 
   const activePaneForSplit = activeTab?.panes.find((candidate) => candidate.id === activeTab.activePaneId);
   useKeyboardShortcuts({
+    keybindings,
+    apple: appleKeybindings,
     modalOpen: settingsOpen || commandPaletteOpen || diagnosticsOpen,
     openCommandPalette,
+    openSettings,
     toggleSidebar,
     createWorkspace: () => createWorkspace(targetMachineId),
     createTab: () => createTab(targetMachineId),
@@ -833,7 +844,7 @@ export function App() {
         title: "Open settings",
         subtitle: "Ghostty settings, host aliases, durable session audit",
         section: "System",
-        shortcut: "Cmd+,",
+        shortcut: shortcutFor("settings.open"),
         run: openSettings,
       },
       {
@@ -900,7 +911,7 @@ export function App() {
         title: sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
         subtitle: "Toggle workspace and host navigation",
         section: "View",
-        shortcut: "Cmd+B",
+        shortcut: shortcutFor("sidebar.toggle"),
         run: toggleSidebar,
         keywords: ["left", "navigation", "panel"],
       },
@@ -927,7 +938,7 @@ export function App() {
         title: `New workspace on ${selectedMachine?.name ?? targetMachineId}`,
         subtitle: "Create a new workspace on the target host",
         section: "Create",
-        shortcut: "Cmd+N",
+        shortcut: shortcutFor("workspace.new"),
         disabled: !selectedMachine?.reachable,
         run: () => createWorkspace(targetMachineId),
         keywords: ["session"],
@@ -937,7 +948,7 @@ export function App() {
         title: `New tab on ${selectedMachine?.name ?? targetMachineId}`,
         subtitle: activeWorkspace?.name,
         section: "Create",
-        shortcut: "Cmd+T",
+        shortcut: shortcutFor("tab.new"),
         disabled: !selectedMachine?.reachable || !activeWorkspace,
         run: () => createTab(targetMachineId),
         keywords: ["session"],
@@ -947,7 +958,7 @@ export function App() {
         title: `Split right on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
         subtitle: activeTab?.title,
         section: "Pane",
-        shortcut: "Cmd+D",
+        shortcut: shortcutFor("pane.splitRight"),
         disabled: !activePane || !activePaneMachine?.reachable,
         run: () => activePane && splitPane(activePane.id, "vertical"),
         keywords: ["vertical", "pane"],
@@ -957,7 +968,7 @@ export function App() {
         title: `Split down on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
         subtitle: activeTab?.title,
         section: "Pane",
-        shortcut: "Shift+Cmd+D",
+        shortcut: shortcutFor("pane.splitDown"),
         disabled: !activePane || !activePaneMachine?.reachable,
         run: () => activePane && splitPane(activePane.id, "horizontal"),
         keywords: ["horizontal", "pane"],
@@ -996,7 +1007,7 @@ export function App() {
         title: "Close current tab",
         subtitle: activeTab?.title,
         section: "Close",
-        shortcut: "Cmd+W",
+        shortcut: shortcutFor("tab.close"),
         disabled: !activeWorkspace || !activeTab,
         run: closeActiveTab,
       },
@@ -1005,7 +1016,7 @@ export function App() {
         title: "Close current workspace",
         subtitle: activeWorkspace?.name,
         section: "Close",
-        shortcut: "Shift+Cmd+W",
+        shortcut: shortcutFor("workspace.close"),
         disabled: !state || !activeWorkspace,
         run: closeActiveWorkspace,
       },
@@ -1014,7 +1025,7 @@ export function App() {
         title: "Jump to latest unread",
         subtitle: `${unreadNotifications.length} unread notifications`,
         section: "Navigate",
-        shortcut: "Shift+Cmd+U",
+        shortcut: shortcutFor("notification.latestUnread"),
         disabled: unreadNotifications.length === 0,
         run: jumpLatestUnread,
         keywords: ["notification"],
@@ -1111,6 +1122,7 @@ export function App() {
     state,
     unreadByWorkspaceId,
     unreadNotifications.length,
+    shortcutFor,
   ]);
 
   if (!state && loadError && !authRequired) {
@@ -1729,6 +1741,8 @@ export function App() {
                     inactiveTabStreaming={settings.inactiveTabStreaming}
                     tuiFrameRate={settings.tuiFrameRate}
                     terminalScrollMode={settings.terminalScrollMode}
+                    keybindings={keybindings}
+                    appleKeybindings={appleKeybindings}
                     machines={displayMachines}
                     terminalFontSize={settings.terminalFontSize}
                     terminalScrollbackRows={persistedSettings.terminalScrollbackRows}
@@ -1788,6 +1802,8 @@ export function App() {
         <SettingsModal
           machines={machines}
           settings={persistedSettings}
+          keybindings={keybindings}
+          appleKeybindings={appleKeybindings}
           surface={openTuiMode && !mobileViewport.isMobile ? settingsSurface : "dom"}
           onPreview={setPreviewSettings}
           onSave={updateSettings}

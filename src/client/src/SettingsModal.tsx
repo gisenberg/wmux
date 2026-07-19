@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { OpenTuiSettingsModal } from "./OpenTuiSettingsModal";
 import { terminalColorSchemes } from "./color-schemes";
-import type { DurableSessionAudit, MachineStatus, WmuxSettings } from "./types";
+import { compileKeybindings, eventMatchesAction } from "../../shared/keybindings";
+import type { DurableSessionAudit, KeybindingMap, MachineStatus, WmuxSettings } from "./types";
 
 export type SettingsSurface = "opentui" | "dom";
 
@@ -20,6 +21,8 @@ export const defaultSettings: WmuxSettings = {
 export function SettingsModal({
   machines,
   settings,
+  keybindings,
+  appleKeybindings,
   surface = "dom",
   onPreview,
   onSave,
@@ -29,6 +32,8 @@ export function SettingsModal({
 }: {
   machines: MachineStatus[];
   settings: WmuxSettings;
+  keybindings: KeybindingMap;
+  appleKeybindings: boolean;
   surface?: SettingsSurface;
   onPreview: (settings: WmuxSettings | null) => void;
   onSave: (settings: WmuxSettings) => void | Promise<void>;
@@ -41,19 +46,11 @@ export function SettingsModal({
   const [sessionAudit, setSessionAudit] = useState<DurableSessionAudit | null>(null);
   const [sessionAuditError, setSessionAuditError] = useState("");
   const [sessionAuditLoading, setSessionAuditLoading] = useState(false);
+  const compiledKeybindings = useMemo(() => compileKeybindings(keybindings), [keybindings]);
 
   useEffect(() => {
     setDraft(normalizeSettings(settings));
   }, [settings]);
-
-  useEffect(() => {
-    if (surface !== "dom") return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onCancel, surface]);
 
   const applyDraft = (nextSettings: WmuxSettings) => {
     const normalized = normalizeSettings(nextSettings);
@@ -72,14 +69,30 @@ export function SettingsModal({
     applyDraft({ ...draft, machineAliases });
   };
 
-  const save = async (nextDraft = draft) => {
+  const save = useCallback(async (nextDraft = draft) => {
     setSaving(true);
     try {
       await onSave(normalizeSettings(nextDraft));
     } finally {
       setSaving(false);
     }
-  };
+  }, [draft, onSave]);
+
+  useEffect(() => {
+    if (surface !== "dom") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCancel();
+        return;
+      }
+      if (!eventMatchesAction(event, compiledKeybindings, "settings.save", appleKeybindings)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void save();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [appleKeybindings, compiledKeybindings, onCancel, save, surface]);
 
   const runSessionAudit = async () => {
     setSessionAuditLoading(true);
@@ -119,6 +132,8 @@ export function SettingsModal({
         sessionAuditError={sessionAuditError}
         sessionAuditLoading={sessionAuditLoading}
         saving={saving}
+        keybindings={keybindings}
+        appleKeybindings={appleKeybindings}
         onApplyDraft={applyDraft}
         onSave={save}
         onCancel={onCancel}

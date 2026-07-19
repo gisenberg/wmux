@@ -2,6 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import {
+  isKeybindingAction,
+  parseKeyChord,
+  resolveKeybindings,
+  validateKeybindingMap,
+  type KeybindingMap,
+  type KeybindingOverrides,
+} from "../shared/keybindings.js";
 import { localMachine } from "./machines.js";
 import type { MachineConfig } from "./types.js";
 
@@ -60,14 +68,46 @@ export const machineSchema = z.object({
   }
 });
 
+const keybindingOverridesSchema = z.record(z.array(z.string().min(1).max(80)).max(16)).superRefine((bindings, context) => {
+  for (const [action, chords] of Object.entries(bindings)) {
+    if (!isKeybindingAction(action)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [action],
+        message: `unknown keybinding action ${JSON.stringify(action)}`,
+      });
+      continue;
+    }
+    for (const [index, chord] of chords.entries()) {
+      try {
+        parseKeyChord(chord);
+      } catch (error) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [action, index],
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+});
+
 export const configSchema = z.object({
   machines: z.array(machineSchema).optional(),
   // Container deployments may not want to expose a shell inside the wmux container.
   localMachine: z.boolean().optional(),
+  keybindings: keybindingOverridesSchema.optional(),
+}).superRefine((config, context) => {
+  const overrides = config.keybindings as KeybindingOverrides | undefined;
+  const errors = validateKeybindingMap(resolveKeybindings(overrides));
+  for (const message of errors) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["keybindings"], message });
+  }
 });
 
 export interface AppConfig {
   machines: MachineConfig[];
+  keybindings: KeybindingMap;
 }
 
 const candidates = (): string[] => process.env.WMUX_CONFIG_PATH
@@ -80,12 +120,13 @@ export const loadConfig = (): AppConfig => {
     const raw = JSON.parse(fs.readFileSync(candidate, "utf8"));
     const parsed = configSchema.parse(raw);
     const machines = parsed.machines ?? [];
+    const keybindings = resolveKeybindings(parsed.keybindings as KeybindingOverrides | undefined);
     const hasLocal = machines.some((machine) => machine.id === "local");
-    if (hasLocal || parsed.localMachine === false) return { machines };
-    return { machines: [localMachine(), ...machines] };
+    if (hasLocal || parsed.localMachine === false) return { machines, keybindings };
+    return { machines: [localMachine(), ...machines], keybindings };
   }
   if (process.env.WMUX_CONFIG_PATH) {
     throw new Error(`WMUX_CONFIG_PATH does not exist: ${path.resolve(process.env.WMUX_CONFIG_PATH)}`);
   }
-  return { machines: [localMachine()] };
+  return { machines: [localMachine()], keybindings: resolveKeybindings() };
 };

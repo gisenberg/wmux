@@ -17,7 +17,7 @@ import {
 } from "./kitty-graphics";
 import { ensureWmuxFonts, WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
-import { configureTerminalInput, isBareShiftEnter } from "./terminal-input";
+import { configureTerminalInput } from "./terminal-input";
 import { isTerminalProtocolResponse } from "./terminal-protocol";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { writeBrowserClipboard } from "./clipboard";
@@ -27,6 +27,7 @@ import { Osc52Parser } from "./terminal-osc52";
 import { RectangularSelection } from "./terminal-rectangular-selection";
 import { useColorScheme } from "./color-scheme-context";
 import { PaneSocketController } from "./pane-socket";
+import { compileKeybindings, eventMatchesAction, type CompiledKeybindingMap } from "../../shared/keybindings";
 import {
   type KittyInlineImage,
   type KittyVirtualPlacement,
@@ -79,6 +80,7 @@ import {
 } from "./terminal-pane-runtime";
 import type {
   MachineStatus,
+  KeybindingMap,
   PaneState,
   SplitDirection,
   TerminalMedia,
@@ -93,6 +95,8 @@ interface Props {
   inactiveTabStreaming: "suspend" | "live";
   tuiFrameRate: 15 | 30 | 60;
   terminalScrollMode: TerminalScrollMode;
+  keybindings: KeybindingMap;
+  appleKeybindings: boolean;
   unreadCount: number;
   machines: MachineStatus[];
   terminalFontSize: number;
@@ -116,6 +120,8 @@ export const TerminalPane = memo(function TerminalPane({
   inactiveTabStreaming,
   tuiFrameRate,
   terminalScrollMode,
+  keybindings,
+  appleKeybindings,
   unreadCount,
   machines,
   terminalFontSize,
@@ -141,6 +147,8 @@ export const TerminalPane = memo(function TerminalPane({
   const discardPendingOutputRef = useRef<(() => void) | null>(null);
   const tuiFrameRateRef = useRef(tuiFrameRate);
   const terminalScrollModeRef = useRef(terminalScrollMode);
+  const keybindingsRef = useRef<CompiledKeybindingMap>(compileKeybindings(keybindings));
+  const appleKeybindingsRef = useRef(appleKeybindings);
   const outputCarryRef = useRef("");
   const osc52ParserRef = useRef(new Osc52Parser());
   const pendingOsc52Ref = useRef<{ text: string; generation: number; expiresAt: number } | undefined>();
@@ -182,6 +190,11 @@ export const TerminalPane = memo(function TerminalPane({
   useEffect(() => {
     terminalScrollModeRef.current = terminalScrollMode;
   }, [terminalScrollMode]);
+
+  useEffect(() => {
+    keybindingsRef.current = compileKeybindings(keybindings);
+    appleKeybindingsRef.current = appleKeybindings;
+  }, [appleKeybindings, keybindings]);
 
   useEffect(() => {
     if (activeRef.current !== active) inputEpochRef.current += 1;
@@ -1036,7 +1049,12 @@ export const TerminalPane = memo(function TerminalPane({
       };
 
       term.attachCustomKeyEventHandler((event) => {
-        if (isBareShiftEnter(event)) {
+        if (eventMatchesAction(
+          event,
+          keybindingsRef.current,
+          "terminal.insertNewline",
+          appleKeybindingsRef.current,
+        )) {
           forwardTerminalData("\n");
           return true;
         }
@@ -1051,19 +1069,17 @@ export const TerminalPane = memo(function TerminalPane({
           else term.copySelection();
           return true;
         }
-        if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-          if (event.key === "ArrowLeft") {
-            rectangularSelection?.clear();
-            inputEpochRef.current += 1;
-            sendInput(socketRef.current, "\x1bb");
-            return true;
-          }
-          if (event.key === "ArrowRight") {
-            rectangularSelection?.clear();
-            inputEpochRef.current += 1;
-            sendInput(socketRef.current, "\x1bf");
-            return true;
-          }
+        if (eventMatchesAction(event, keybindingsRef.current, "terminal.wordPrevious", appleKeybindingsRef.current)) {
+          rectangularSelection?.clear();
+          inputEpochRef.current += 1;
+          sendInput(socketRef.current, "\x1bb");
+          return true;
+        }
+        if (eventMatchesAction(event, keybindingsRef.current, "terminal.wordNext", appleKeybindingsRef.current)) {
+          rectangularSelection?.clear();
+          inputEpochRef.current += 1;
+          sendInput(socketRef.current, "\x1bf");
+          return true;
         }
         return false;
       });

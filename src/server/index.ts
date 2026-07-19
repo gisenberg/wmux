@@ -96,6 +96,7 @@ const main = async (): Promise<void> => {
     hostRegistry,
     registrationToken: registrationAuth.token,
     trustedProxies,
+    keybindings: config.keybindings,
   });
   // Persist the helper callback URL next to ~/.wmux/token: helpers and agent hooks
   // in existing durable panes read this before their stale inherited env.
