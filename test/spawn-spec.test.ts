@@ -146,10 +146,16 @@ test("POSIX SSH staging includes the hook installer beside its event helper", ()
   assert.match(command, /wmux-hooks/);
   assert.match(command, /wmux-agent-event/);
   assert.match(command, /wmux-opencode-run/);
+  assert.match(command, /wmux-agent-run/);
+  assert.match(command, /wmuxctl/);
   assert.match(command, /chmod \+x .*wmux-hooks/);
   assert.match(command, /chmod \+x .*wmux-opencode-run/);
+  assert.match(command, /chmod \+x .*wmux-agent-run/);
+  assert.match(command, /chmod \+x .*wmuxctl/);
   assert.match(command, /ln -sf .*wmux-hooks/);
   assert.match(command, /ln -sf .*wmux-opencode-run/);
+  assert.match(command, /ln -sf .*wmux-agent-run/);
+  assert.match(command, /ln -sf .*wmuxctl/);
   assert.match(command, /wmux-agent-profile/);
   assert.match(command, /wmux-agent-profile apply --quiet/);
   assert.match(command, /\$HOME\/\.local\/bin/);

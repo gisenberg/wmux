@@ -242,6 +242,209 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
   }
 });
 
+test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-"));
+  const promptPath = path.join(root, "prompt.md");
+  const prompt = "private parity task Ω";
+  fs.writeFileSync(promptPath, prompt);
+  const inputs: Array<Record<string, unknown>> = [];
+  const lifecycle: Array<Record<string, unknown>> = [];
+  let runId = "";
+  let upgradeCount = 0;
+  let deleted = false;
+  const machine = { id: "linux-box", kind: "ssh", platform: "linux", reachable: true };
+  const workspace = {
+    id: "ws_delegate",
+    machineId: "linux-box",
+    activeTabId: "tab_delegate",
+    tabs: [{
+      id: "tab_delegate",
+      activePaneId: "pane_delegate",
+      panes: [{ id: "pane_delegate", machineId: "linux-box" }],
+    }],
+  };
+  const jsonResponse = (response: http.ServerResponse, body: unknown, status = 200) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      jsonResponse(response, { machines: [machine], workspaces: [workspace] });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_delegate/title") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, {}));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/agent-events") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        lifecycle.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        jsonResponse(response, {}, 201);
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/panes/pane_delegate/input") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        inputs.push(body);
+        if (inputs.length === 3) {
+          const delegated = JSON.parse(Buffer.from(body.data, "base64").toString("utf8"));
+          runId = delegated.runId;
+          assert.deepEqual(delegated, {
+            runId,
+            runtime: "codex",
+            prompt,
+            directory: "/srv/project",
+            unattended: true,
+            writeAccess: true,
+            title: "Parity review",
+            model: "gpt-test",
+          });
+        }
+        jsonResponse(response, {});
+      });
+      return;
+    }
+    if (request.method === "DELETE" && request.url === "/api/workspaces/ws_delegate") {
+      deleted = true;
+      jsonResponse(response, { removed: true });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("upgrade", (request, socket) => {
+    upgradeCount += 1;
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    let replay = "operator@host /srv/project ❯ ";
+    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount === 3) {
+      const result = Buffer.from(JSON.stringify({ runId, runtime: "codex", ok: true, result: "review complete", error: "" })).toString("base64");
+      replay = `WMUX_AGENT_RESULT ${result}\r\nWMUX_AGENT_DONE ${runId} 0\r\n`;
+    }
+    socket.end(websocketFrame({ type: "ready", paneId: "pane_delegate", replay }));
+  });
+
+  const url = await listen(server);
+  try {
+    const delegated = await cli(url, [
+      "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
+      "--title", "Parity review", "--model", "gpt-test", "--write-access", "--unattended", "--close-on-success",
+    ]);
+    const result = JSON.parse(delegated.stdout);
+    assert.equal(result.state, "completed");
+    assert.equal(result.result, "review complete");
+    assert.equal(result.closed, true);
+    assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
+    assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), ["wmux-agent-run", "\r"]);
+    assert.equal(inputs.some((body) => String(body.data).includes(prompt)), false);
+    assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message })), [
+      { agent: "codex", status: "running", message: undefined },
+      { agent: "codex", status: "completed", message: "review complete" },
+    ]);
+    assert.equal(deleted, true);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("wmuxctl delegate records failure and preserves the workspace when setup fails", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-fail-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "setup failure prompt");
+  const lifecycle: Array<Record<string, unknown>> = [];
+  let interrupted = false;
+  const workspace = {
+    id: "ws_failed",
+    machineId: "linux-box",
+    activeTabId: "tab_failed",
+    tabs: [{ id: "tab_failed", activePaneId: "pane_failed", panes: [{ id: "pane_failed", machineId: "linux-box" }] }],
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ machines: [{ id: "linux-box", kind: "local", platform: "linux", reachable: true }] }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace, state: {} }));
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_failed/title") {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end('{"error":"title unavailable"}');
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/panes/pane_failed/input") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        interrupted = JSON.parse(Buffer.concat(chunks).toString("utf8")).data === "\u0003";
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/agent-events") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        lifecycle.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end("{}");
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const url = await listen(server);
+  try {
+    await assert.rejects(
+      cli(url, ["delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath]),
+      (error: { stdout?: string }) => {
+        const result = JSON.parse(error.stdout ?? "{}");
+        assert.equal(result.state, "failed");
+        assert.equal(result.closed, false);
+        assert.match(result.error, /HTTP 500/);
+        return true;
+      },
+    );
+    assert.equal(interrupted, true);
+    assert.deepEqual(lifecycle.map((event) => event.status), ["failed"]);
+    assert.equal(lifecycle[0].message && String(lifecycle[0].message).includes("setup failure prompt"), false);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Windows wmux-title sends the bearer token used by authenticated APIs", () => {
   const helper = fs.readFileSync(path.join(repoRoot, "scripts", "windows", "wmux-title.ps1"), "utf8");
   assert.match(helper, /function Get-WmuxToken/);

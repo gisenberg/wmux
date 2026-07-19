@@ -354,7 +354,8 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-media` | Render images, audio, or video through the browser |
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
 | `wmux-hooks` | Install Claude, Codex, or OpenCode lifecycle hooks |
-| `wmux-opencode-run` | POSIX staged runner for delegated OpenCode requests in a visible durable pane |
+| `wmuxctl delegate` | Run a visible one-shot OpenCode, Codex, or Claude task on a POSIX target |
+| `wmux-agent-run` | Internal POSIX staged runner used by agent delegation |
 | `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
 
@@ -386,7 +387,10 @@ wmux-hooks status
 Installed harness hooks silently no-op when the agent is launched outside a
 wmux pane, so one global hook configuration can be shared across environments.
 
-The Claude installer merges lifecycle commands into `~/.claude/settings.json`.
+The Claude installer merges lifecycle commands into `~/.claude/settings.json`
+and installs a small generated delegation skill at
+`~/.claude/skills/wmux/SKILL.md`. An existing skill not marked as wmux-managed is
+preserved instead of overwritten.
 The Codex installer merges commands into `~/.codex/hooks.json`; start a new
 Codex session, run `/hooks`, and review and trust the wmux command before
 expecting events. Codex sandbox or approval settings do not replace this hook
@@ -397,14 +401,34 @@ trust step.
 `opencode.json`. POSIX installation is supported; OpenCode's Windows installer
 parity is not included.
 
-`wmux-opencode-run` is the POSIX-first remote delegation transport. It accepts a
-single Base64 JSON request over pane stdin and keeps the OpenCode run visible in
-its durable pane for inspection and recovery. `autoApprove` probes the installed
-OpenCode CLI and uses its advertised `--auto` or `--dangerously-skip-permissions`
-option; it fails closed if neither is available and should only be used for work
-you authorize. Delegations leave their durable workspace open by default;
-`close_on_success` closes only after a successful result and completed lifecycle
-event. Failed, stopped, and timed-out workspaces remain available for inspection.
+`wmuxctl delegate` provides the same visible one-shot delegation path for
+OpenCode, Codex, and Claude on POSIX local/SSH targets. It accepts the prompt
+from a file or stdin, creates a fresh durable agent workspace, starts the staged
+`wmux-agent-run` transport, records lifecycle events, and returns a bounded
+result plus the direct workspace URL. For example:
+
+```bash
+wmuxctl delegate codex linux-box --directory /srv/project \
+  --prompt-file /tmp/task.md --title "Review authentication"
+wmuxctl delegate claude linux-box --directory /srv/project \
+  --prompt-file /tmp/fix.md --title "Fix authentication" --write-access
+```
+
+Codex defaults to its read-only sandbox and Claude defaults to plan permission
+mode. `--write-access` opts into Codex workspace writes or Claude accepted edits;
+it does not bypass approval prompts. OpenCode cannot enforce a comparable
+read-only mode, so its delegation requires explicit `--write-access`.
+`--unattended` separately opts into the runtime's non-interactive approval
+bypass and should only be used for work explicitly authorized on a trusted
+target. For OpenCode, the staged runner probes the installed CLI and uses its
+advertised `--auto` or `--dangerously-skip-permissions` option, failing closed
+if neither is available. Prompts are sent through pane stdin rather than shell
+arguments and are redacted from returned terminal output.
+
+Delegations leave their durable workspace open by default;
+`--close-on-success` (`close_on_success` in the OpenCode tool) closes only after
+a successful result and completed lifecycle event. Failed, stopped, and
+timed-out workspaces remain available for inspection.
 The permission-gated `wmux_close` tool accepts `workspace_id` to explicitly
 close a workspace later, but refuses anything not recorded as agent-created.
 The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions
@@ -413,6 +437,10 @@ OpenCode permission of `allow`, `ask`, or `deny` takes precedence.
 Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require
 manual recovery. Restart OpenCode after installing or updating the plugin so it
 loads the generated tools.
+
+The older `wmux-opencode-run` helper remains staged for compatibility with
+existing integrations; new callers should use `wmux-agent-run` through
+`wmuxctl delegate`.
 
 On Windows, run `wmux-windows-setup install-hooks`, then review and trust the
 command with `/hooks` in a new Codex session. Dynamically registered hosts do

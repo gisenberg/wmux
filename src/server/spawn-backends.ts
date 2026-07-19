@@ -750,6 +750,9 @@ __WMUX_RUN_HELPER__
 cat > "$wmux_helper_dir/wmux-opencode-run" <<'__WMUX_OPENCODE_RUN_HELPER__'
 ${localHelperScript("wmux-opencode-run")}
 __WMUX_OPENCODE_RUN_HELPER__
+cat > "$wmux_helper_dir/wmux-agent-run" <<'__WMUX_AGENT_RUN_HELPER__'
+${localHelperScript("wmux-agent-run")}
+__WMUX_AGENT_RUN_HELPER__
 cat > "$wmux_helper_dir/wmux-copy" <<'__WMUX_COPY_HELPER__'
 ${localHelperScript("wmux-copy")}
 __WMUX_COPY_HELPER__
@@ -765,7 +768,10 @@ __WMUX_SUNSHINE_SETUP_HELPER__
 cat > "$wmux_helper_dir/wmux-agent-profile" <<'__WMUX_AGENT_PROFILE_HELPER__'
 ${localHelperScript("wmux-agent-profile")}
 __WMUX_AGENT_PROFILE_HELPER__
-chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile";
+cat > "$wmux_helper_dir/wmuxctl" <<'__WMUX_CTL_HELPER__'
+${localSkillScript("wmux", "scripts", "wmuxctl.py")}
+__WMUX_CTL_HELPER__
+chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-agent-run" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile" "$wmux_helper_dir/wmuxctl";
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-clip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wclip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmclip" 2>/dev/null || true;
@@ -784,6 +790,7 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-hooks" "$wmux_path_dir/wmux-hooks" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-run" "$wmux_path_dir/wmux-run" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-opencode-run" "$wmux_path_dir/wmux-opencode-run" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-agent-run" "$wmux_path_dir/wmux-agent-run" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-copy" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-clip" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wclip" 2>/dev/null || true;
@@ -792,6 +799,7 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_path_dir/wmux-stream-agent-service" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_path_dir/wmux-sunshine-setup" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-agent-profile" "$wmux_path_dir/wmux-agent-profile" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmuxctl" "$wmux_path_dir/wmuxctl" 2>/dev/null || true;
       fi;
       ;;
   esac;
@@ -805,5 +813,13 @@ const localHelperScript = (name: string): string => {
     return fs.readFileSync(path.join(process.cwd(), "scripts", name), "utf8");
   } catch {
     return `#!/bin/sh\necho '${name} is unavailable on this host' >&2\nexit 127\n`;
+  }
+};
+
+const localSkillScript = (...segments: string[]): string => {
+  try {
+    return fs.readFileSync(path.join(process.cwd(), "skills", ...segments), "utf8");
+  } catch {
+    return `#!/bin/sh\necho 'wmux skill helper is unavailable on this host' >&2\nexit 127\n`;
   }
 };

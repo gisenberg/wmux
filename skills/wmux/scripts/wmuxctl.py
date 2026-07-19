@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -165,19 +166,23 @@ class WmuxClient:
         status: str,
         title: str,
         summary: str,
+        message: str = "",
     ) -> None:
+        body = {
+            "workspaceId": workspace_id,
+            "tabId": tab_id,
+            "paneId": pane_id,
+            "agent": agent,
+            "status": status,
+            "title": title,
+            "summary": summary,
+        }
+        if message:
+            body["message"] = message
         self.request(
             "POST",
             "/api/agent-events",
-            {
-                "workspaceId": workspace_id,
-                "tabId": tab_id,
-                "paneId": pane_id,
-                "agent": agent,
-                "status": status,
-                "title": title,
-                "summary": summary,
-            },
+            body,
         )
 
     def send_input(self, pane_id: str, data: str, cols: int, rows: int) -> dict[str, Any]:
@@ -610,6 +615,165 @@ def cmd_run(client: WmuxClient, args: argparse.Namespace) -> int:
     return 0
 
 
+def read_delegate_prompt(args: argparse.Namespace) -> str:
+    if args.prompt_file and args.prompt_file != "-":
+        try:
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+        except OSError as error:
+            raise SystemExit(f"wmuxctl: cannot read delegation prompt: {error}") from error
+    elif not sys.stdin.isatty():
+        prompt = sys.stdin.read()
+    else:
+        raise SystemExit("wmuxctl: provide --prompt-file or pipe the delegation prompt on stdin")
+    if not prompt or len(prompt.encode("utf-8")) > 128 * 1024:
+        raise SystemExit("wmuxctl: delegation prompt must be 1..131072 UTF-8 bytes")
+    return prompt
+
+
+def decode_agent_result(output: str, run_id: str) -> tuple[dict[str, Any], int]:
+    payload: dict[str, Any] | None = None
+    exit_code: int | None = None
+    for line in clean_terminal_text(output).splitlines():
+        if line.startswith("WMUX_AGENT_RESULT "):
+            encoded = line.removeprefix("WMUX_AGENT_RESULT ")
+            try:
+                candidate = json.loads(base64.b64decode(encoded, validate=True).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("runId") == run_id
+                and isinstance(candidate.get("ok"), bool)
+            ):
+                payload = candidate
+            continue
+        match = re.fullmatch(r"WMUX_AGENT_DONE ([A-Za-z0-9._-]+) (-?\d+)", line)
+        if match and match.group(1) == run_id:
+            exit_code = int(match.group(2))
+    if payload is None or exit_code is None:
+        raise SystemExit("wmuxctl: delegated result was incomplete")
+    return payload, exit_code
+
+
+def redact_delegate_text(value: Any, secrets: list[str], limit: int = 64_000) -> str:
+    text = value if isinstance(value, str) else ""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    encoded = text.encode("utf-8")
+    if len(encoded) > limit:
+        text = encoded[:limit].decode("utf-8", errors="ignore")
+    return text.strip()
+
+
+def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
+    prompt = read_delegate_prompt(args)
+    if not os.path.isabs(args.directory) or "\x00" in args.directory:
+        raise SystemExit("wmuxctl: delegation directory must be an absolute POSIX path")
+    if args.runtime == "opencode" and not args.write_access:
+        raise SystemExit("wmuxctl: OpenCode delegation cannot enforce read-only mode; add --write-access explicitly")
+    bootstrap = client.bootstrap()
+    machine = next((item for item in bootstrap.get("machines", []) if item.get("id") == args.machine), None)
+    if not machine or machine.get("reachable") is not True:
+        raise SystemExit(f"wmuxctl: machine is not reachable: {args.machine}")
+    if machine.get("kind") not in {"local", "ssh"} or machine.get("platform") not in {"linux", "mac"}:
+        raise SystemExit("wmuxctl: delegated agent runs require a POSIX local or SSH target")
+
+    title = args.title or f"{args.runtime.capitalize()} delegation"
+    workspace, _state = client.create_workspace(args.machine)
+    info = describe_workspace(client.url, workspace)
+    run_id = str(uuid.uuid4())
+    secrets = [prompt, client.token]
+    try:
+        client.set_workspace_title(workspace["id"], title)
+        client.record_agent_event(
+            info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "running", title,
+            f"{args.runtime.capitalize()} delegation running",
+        )
+        info["shellReadySeconds"] = round(
+            wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows), 3
+        )
+        submit_line(client, info["paneId"], "wmux-agent-run", True, args.cols, args.rows)
+        wait_for_output(client, info["paneId"], r"(?m)^WMUX_AGENT_READY$", args.ready_timeout, args.cols, args.rows)
+        request = {
+            "runId": run_id,
+            "runtime": args.runtime,
+            "prompt": prompt,
+            "directory": args.directory,
+            "unattended": args.unattended,
+            "writeAccess": args.write_access,
+            "title": title,
+        }
+        if args.model:
+            request["model"] = args.model
+        if args.runtime == "opencode" and args.opencode_agent:
+            request["agent"] = args.opencode_agent
+        encoded = base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode()
+        submit_line(client, info["paneId"], encoded, True, args.cols, args.rows)
+        _match, output, elapsed = wait_for_output(
+            client,
+            info["paneId"],
+            rf"(?m)^WMUX_AGENT_DONE {re.escape(run_id)} -?\d+$",
+            args.timeout,
+            args.cols,
+            args.rows,
+        )
+        payload, exit_code = decode_agent_result(output, run_id)
+        ok = exit_code == 0 and payload.get("ok") is True
+        detail = redact_delegate_text(payload.get("result") if ok else payload.get("error") or payload.get("result"), secrets)
+        if not detail:
+            detail = "Delegated task completed without text output." if ok else f"Delegated task failed with exit code {exit_code}."
+        status = "completed" if ok else "failed"
+        client.record_agent_event(
+            info["workspaceId"], info["tabId"], info["paneId"], args.runtime, status, title,
+            f"{args.runtime.capitalize()} delegation {status}", detail,
+        )
+        info.update({
+            "runId": run_id,
+            "runtime": args.runtime,
+            "state": status,
+            "elapsedSeconds": round(elapsed, 3),
+            "result": detail if ok else "",
+            "error": "" if ok else detail,
+            "closed": False,
+        })
+        if ok and args.close_on_success:
+            try:
+                info["closed"] = bool(client.close_workspace(info["workspaceId"]).get("removed"))
+            except SystemExit as error:
+                info["closeWarning"] = str(error)
+        print_json(info)
+        return 0 if ok else 1
+    except KeyboardInterrupt:
+        try:
+            client.send_input(info["paneId"], "\x03", args.cols, args.rows)
+            client.record_agent_event(
+                info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "stopped", title,
+                f"{args.runtime.capitalize()} delegation stopped",
+            )
+        except SystemExit:
+            pass
+        info.update({"runId": run_id, "runtime": args.runtime, "state": "stopped", "closed": False})
+        print_json(info)
+        return 130
+    except SystemExit as error:
+        try:
+            client.send_input(info["paneId"], "\x03", args.cols, args.rows)
+        except SystemExit:
+            pass
+        detail = redact_delegate_text(str(error), secrets)
+        try:
+            client.record_agent_event(
+                info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "failed", title,
+                f"{args.runtime.capitalize()} delegation failed", detail,
+            )
+        except SystemExit:
+            pass
+        info.update({"runId": run_id, "runtime": args.runtime, "state": "failed", "error": detail, "closed": False})
+        print_json(info)
+        return 1
+
+
 def cmd_output(client: WmuxClient, args: argparse.Namespace) -> int:
     ready = client.read_pane_output(args.pane, args.cols, args.rows, args.timeout)
     replay = str(ready.get("replay") or "")
@@ -785,6 +949,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cols", type=int, default=120)
     run.add_argument("--rows", type=int, default=36)
     run.set_defaults(func=cmd_run, enter=True)
+
+    delegate = subparsers.add_parser("delegate", help="run a visible one-shot OpenCode, Codex, or Claude task")
+    delegate.add_argument("runtime", choices=("opencode", "codex", "claude"), help="agent CLI to run in the target pane")
+    delegate.add_argument("machine", help="reachable POSIX machine id")
+    delegate.add_argument("--directory", required=True, help="absolute target working directory")
+    delegate.add_argument("--prompt-file", default="", help="UTF-8 prompt file; use - or omit with piped stdin")
+    delegate.add_argument("--title", default="", help="workspace and lifecycle title")
+    delegate.add_argument("--model", default="", help="optional runtime-specific model")
+    delegate.add_argument("--opencode-agent", default="", help="optional OpenCode agent name")
+    delegate.add_argument("--write-access", action="store_true", help="allow repository edits; otherwise use read-only/plan mode")
+    delegate.add_argument("--unattended", action="store_true", help="disable agent approval prompts; dangerous on trusted targets only")
+    delegate.add_argument("--close-on-success", action="store_true", help="close the workspace only after success")
+    delegate.add_argument("--timeout", type=float, default=900, help="delegated task timeout in seconds")
+    delegate.add_argument("--ready-timeout", type=float, default=30, help="shell/helper readiness timeout in seconds")
+    delegate.add_argument("--cols", type=int, default=120)
+    delegate.add_argument("--rows", type=int, default=36)
+    delegate.set_defaults(func=cmd_delegate)
 
     output = subparsers.add_parser("output", help="print the bounded replay buffer for a pane")
     output.add_argument("pane", help="pane id")

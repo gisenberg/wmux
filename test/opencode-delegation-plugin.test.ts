@@ -143,7 +143,7 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
         this.readyState = 1;
         this.onopen?.();
         for (const listener of this.listeners.get("open") ?? []) listener();
-        this.emit({ type: "ready", replay: "old replay\r\nWMUX_OPENCODE_READY\r\nstarting shell\r\n" });
+        this.emit({ type: "ready", replay: "old replay\r\nWMUX_AGENT_READY\r\nstarting shell\r\n" });
         setTimeout(() => {
           this.promptEmitted = true;
           this.emit({ type: "output", data: "\u001b[35moperator@host /repo ❯\u001b[0m " });
@@ -173,8 +173,8 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
       }
       const line = this.pending;
       this.pending = "";
-      if (line === "wmux-opencode-run") {
-        this.emit({ type: "output", data: "wmux-opencode-run\r\n\u001b[32mWMUX_OPENCODE_READY\u001b[0m\r" });
+      if (line === "wmux-agent-run") {
+        this.emit({ type: "output", data: "wmux-agent-run\r\n\u001b[32mWMUX_AGENT_READY\u001b[0m\r" });
         return;
       }
       this.decodedRequest = JSON.parse(Buffer.from(line, "base64").toString("utf8")) as Record<string, unknown>;
@@ -183,18 +183,18 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
       const runId = String(this.decodedRequest.runId);
       const encode = (value: Record<string, unknown>) => Buffer.from(JSON.stringify(value)).toString("base64");
       this.emit({ type: "output", data: "x".repeat(600 * 1024) + "\r" });
-      this.emit({ type: "output", data: `WMUX_OPENCODE_RESULT ${encode({ runId, ok: true, result: "stale result" })}\r` });
-      this.emit({ type: "output", data: "WMUX_OPENCODE_RESULT not-base64!\r" });
-      this.emit({ type: "output", data: `WMUX_OPENCODE_RESULT ${encode({ runId: "another-run", ok: true, result: "wrong run" })}\r` });
-      this.emit({ type: "output", data: `echo WMUX_OPENCODE_DONE ${runId} 99\r` });
+      this.emit({ type: "output", data: `WMUX_AGENT_RESULT ${encode({ runId, ok: true, result: "stale result" })}\r` });
+      this.emit({ type: "output", data: "WMUX_AGENT_RESULT not-base64!\r" });
+      this.emit({ type: "output", data: `WMUX_AGENT_RESULT ${encode({ runId: "another-run", ok: true, result: "wrong run" })}\r` });
+      this.emit({ type: "output", data: `echo WMUX_AGENT_DONE ${runId} 99\r` });
       const failed = mode === "failure";
       this.emit({
         type: "output",
-        data: `\u001b[36mWMUX_OPENCODE_RESULT ${encode(failed
+        data: `\u001b[36mWMUX_AGENT_RESULT ${encode(failed
           ? { runId, ok: false, error: "delegated failure" }
           : { runId, ok: true, result: "delegated ✓" })}\u001b[0m\r`,
       });
-      this.emit({ type: "output", data: `\u001b[32mWMUX_OPENCODE_DONE ${runId} ${failed ? 1 : 0}\u001b[0m\r` });
+      this.emit({ type: "output", data: `\u001b[32mWMUX_AGENT_DONE ${runId} ${failed ? 1 : 0}\u001b[0m\r` });
     }
 
     close() {
@@ -316,7 +316,7 @@ test("generated OpenCode delegation tool runs permission, pane protocol, result 
       assert.equal(socket.authorized, true);
       assert.equal(socket.closed, true);
       assert.equal(socket.inputBeforePrompt, false);
-      assert.deepEqual(socket.sent.slice(0, 4).map((item) => item.data), ["wmux-opencode-run", "\r", socket.sent[2].data, "\r"]);
+      assert.deepEqual(socket.sent.slice(0, 4).map((item) => item.data), ["wmux-agent-run", "\r", socket.sent[2].data, "\r"]);
       assert.ok(socket.sent[1].at - socket.sent[0].at >= 75, "command and Enter are separated");
       assert.ok(socket.sent[3].at - socket.sent[2].at >= 75, "request and Enter are separated");
       assert.equal(socket.sent.some((item) => item.data.includes(prompt)), false);
@@ -326,7 +326,9 @@ test("generated OpenCode delegation tool runs permission, pane protocol, result 
         directory: repoRoot,
         agent: "build",
         title: "Delegated build",
-        autoApprove: true,
+        runtime: "opencode",
+        unattended: true,
+        writeAccess: true,
       });
       assert.deepEqual(metadata[0], {
         title: "Delegated build",
