@@ -456,10 +456,16 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
     if (typeof activatedPort === "number") {
       const basePort = this.baseAgentPort();
-      this.routeToAgentPort(activatedPort);
+      const activatedUrl = this.urlForAgentPort(activatedPort);
       let current: WindowsAgentHealth;
       try {
-        current = await this.get<WindowsAgentHealth>("/health", 3000);
+        current = await requestJson<WindowsAgentHealth>(
+          "GET",
+          `${activatedUrl}/health`,
+          undefined,
+          3000,
+          authHeaders(this.machine),
+        );
       } catch (error) {
         throw new Error(
           `new Windows agent generation on port ${activatedPort} is not reachable from wmux; `
@@ -476,6 +482,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       ) {
         throw new Error(`new Windows agent generation on port ${activatedPort} did not report the staged version`);
       }
+      // Persist the selected generation only after it is reachable and reports
+      // the staged version. Otherwise a failed rollout would strand retries on
+      // an unavailable adjacent port instead of the still-running base agent.
+      this.routeToAgentPort(activatedPort);
       this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${activatedPort}; opening pane.\r\n`);
       return !this.stopped;
     }

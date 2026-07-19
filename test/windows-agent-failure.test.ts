@@ -481,8 +481,11 @@ test("an unreachable side-by-side generation reports the required firewall range
     {},
     async () => 1,
   );
+  const selectedPorts: number[] = [];
+  session.on("agentPort", (port) => selectedPorts.push(port));
   await session.attachReady;
   assert.equal(session.isExited, true);
+  assert.deepEqual(selectedPorts, [], "an unreachable generation is not persisted for the next retry");
   assert.match(session.replayOutput, /is not reachable from wmux/);
   assert.match(session.replayOutput, new RegExp(`allow inbound TCP ${address.port}-${address.port + 8}`));
   assert.match(session.replayOutput, /configure-agent-firewall/);
