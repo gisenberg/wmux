@@ -203,6 +203,11 @@ test("Windows agent service drains staged updates and refuses unsafe restarts", 
   assert.ok(content.includes("Remove-LegacyHeartbeatTask"));
   assert.ok(content.includes("heartbeatEnabled -NotePropertyValue $false"));
   assert.ok(content.includes("heartbeatOwner -NotePropertyValue $false"));
+  assert.ok(content.includes("'retire-generation'"));
+  assert.ok(content.includes("function Remove-AgentGeneration"));
+  assert.ok(content.includes("the base agent cannot be retired"));
+  assert.ok(content.includes("restartWhenIdle = $false"));
+  assert.ok(content.includes("refusing to retire generation $Port with $ActiveSessions active pane session(s)"));
   assert.ok(!content.includes("Start-Process -FilePath $PowerShell"));
 });
 

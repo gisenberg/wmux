@@ -227,7 +227,7 @@ function Get-AgentLogonType {
 }
 
 function Show-Usage {
-  Write-Error 'usage: wmux-windows-agent-service [install|rollout-update --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
+  Write-Error 'usage: wmux-windows-agent-service [install|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
 }
 
 function Start-AgentGeneration {
@@ -288,6 +288,69 @@ function Start-AgentGeneration {
     Start-Sleep -Milliseconds 250
   } while ([DateTime]::UtcNow -lt $Deadline)
   throw "Windows agent generation on port $Port did not become healthy"
+}
+
+function Remove-AgentGeneration {
+  param([int]$Port)
+  $BaseDocument = if (Test-Path -LiteralPath $Config -PathType Leaf) {
+    Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+  } else {
+    [pscustomobject]@{}
+  }
+  $BasePort = if ($BaseDocument.port) { [int]$BaseDocument.port } else { 3481 }
+  if ($Port -le $BasePort -or $Port -gt ($BasePort + 8)) {
+    throw "retire-generation port must be within $($BasePort + 1)-$($BasePort + 8); the base agent cannot be retired"
+  }
+
+  $GenerationTaskName = "$TaskName-$Port"
+  $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
+  $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+  $GenerationTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
+  if (-not (Test-Path -LiteralPath $GenerationConfig -PathType Leaf)) {
+    if ($GenerationTask) { throw "refusing to retire generation $Port without its health configuration" }
+    [pscustomobject]@{ port = $Port; retired = $true; alreadyAbsent = $true } | ConvertTo-Json -Compress
+    return
+  }
+
+  $Document = Get-Content -LiteralPath $GenerationConfig -Raw | ConvertFrom-Json
+  $HostValue = if ($Document.host) { [string]$Document.host } else { '127.0.0.1' }
+  if ($HostValue -in @('0.0.0.0', '::')) { $HostValue = '127.0.0.1' }
+  $Headers = @{}
+  if ($Document.token) { $Headers.Authorization = "Bearer $($Document.token)" }
+  $HealthUrl = "http://${HostValue}:$Port/health"
+  $DrainUrl = "http://${HostValue}:$Port/drain"
+  $Health = Invoke-RestMethod -Method GET -Uri $HealthUrl -Headers $Headers -TimeoutSec 3
+  $ActiveSessions = Get-ActiveSessionCount $Health
+  if ($ActiveSessions -gt 0) {
+    throw "refusing to retire generation $Port with $ActiveSessions active pane session(s)"
+  }
+
+  # Close the create/retire race in the agent before removing its supervisor.
+  $Drain = Invoke-RestMethod `
+    -Method POST `
+    -Uri $DrainUrl `
+    -Headers $Headers `
+    -ContentType 'application/json' `
+    -Body (@{ restartWhenIdle = $false; allowNewSessions = $false } | ConvertTo-Json -Compress) `
+    -TimeoutSec 3
+  $ActiveSessions = Get-ActiveSessionCount $Drain
+  if ($ActiveSessions -gt 0) {
+    Invoke-RestMethod -Method DELETE -Uri $DrainUrl -Headers $Headers -TimeoutSec 3 | Out-Null
+    throw "refusing to retire generation $Port after $ActiveSessions pane session(s) became active"
+  }
+
+  if ($GenerationTask) {
+    Disable-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue | Out-Null
+    Stop-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $GenerationTaskName -Confirm:$false -ErrorAction Stop
+  }
+  $AgentPid = if ($Health.pid) { [int]$Health.pid } else { 0 }
+  if ($AgentPid -gt 0 -and $AgentPid -ne $PID) {
+    Stop-Process -Id $AgentPid -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath $GenerationConfig -Force
+  Remove-Item -LiteralPath $GenerationWrapper -Force -ErrorAction SilentlyContinue
+  [pscustomobject]@{ port = $Port; retired = $true; activeSessions = 0 } | ConvertTo-Json -Compress
 }
 
 function Start-UpdateRestartWatcher {
@@ -474,6 +537,9 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
   }
   'rollout-update' {
     Start-AgentGeneration -Port $GenerationPort
+  }
+  'retire-generation' {
+    Remove-AgentGeneration -Port $GenerationPort
   }
   'cancel-update' {
     $Drain = Invoke-AgentRequest -Method DELETE -Path '/drain'

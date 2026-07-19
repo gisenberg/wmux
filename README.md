@@ -529,6 +529,16 @@ restart still terminates its pane processes. See the
 [Windows registration runbook](docs/WINDOWS_NODE_REGISTRATION.md) for setup and
 validation.
 
+An unused side-by-side generation can be retired without risking live panes:
+
+```powershell
+wmux-windows-agent-service retire-generation --port 3482
+```
+
+The helper refuses the base port, unreachable generations, and generations
+with active sessions. It enters a hard drain and rechecks the session count
+before removing the generation's Scheduled Task, process, config, and wrapper.
+
 ## Persistence
 
 wmux stores workspace layout in `~/.wmux/state.json` using versioned, atomic,
