@@ -60,6 +60,85 @@ test("uses a configured shortcut while preserving defaults for omitted actions",
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
 });
 
+test("keeps split shortcuts active while the terminal input is focused", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop keyboard coverage");
+
+  await page.addInitScript(() => {
+    const inputs: string[] = [];
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (typeof data === "string") {
+        try {
+          const message = JSON.parse(data) as { type?: string; data?: string; terminalResponse?: boolean };
+          if (message.type === "input" && typeof message.data === "string" && message.terminalResponse !== true) {
+            inputs.push(message.data);
+          }
+        } catch {
+          // Ignore non-JSON websocket traffic.
+        }
+      }
+      return originalSend.call(this, data);
+    };
+    (window as unknown as { __wmuxSplitShortcutInputs: string[] }).__wmuxSplitShortcutInputs = inputs;
+  });
+
+  const workspaces: Array<{ id: string; activeTabId: string }> = [];
+  try {
+    for (let workspaceCount = 0; workspaceCount < 2; workspaceCount += 1) {
+      const response = await request.post("/api/workspaces", { data: { machineId: "local" } });
+      expect(response.ok()).toBeTruthy();
+      workspaces.push((await response.json() as {
+        workspace: { id: string; activeTabId: string };
+      }).workspace);
+    }
+
+    const cases = [
+      { workspace: workspaces[0], shortcut: "Control+D", direction: "vertical" },
+      { workspace: workspaces[1], shortcut: "Control+Shift+D", direction: "horizontal" },
+    ] as const;
+
+    for (const { workspace, shortcut, direction } of cases) {
+      await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+      await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+      const activePane = page.locator(".terminal-pane.active");
+      await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+      const terminalInput = activePane.locator(".terminal-host textarea");
+      await terminalInput.evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
+      await expect.poll(() => terminalInput.evaluate((textarea) => document.activeElement === textarea)).toBe(true);
+      await page.evaluate(() => {
+        (window as unknown as { __wmuxSplitShortcutInputs: string[] }).__wmuxSplitShortcutInputs.length = 0;
+      });
+
+      await page.keyboard.press(shortcut);
+
+      await expect.poll(async () => {
+        const response = await request.get("/api/bootstrap");
+        const bootstrap = await response.json() as {
+          workspaces: Array<{
+            id: string;
+            tabs: Array<{ id: string; layout: { type: string; direction?: string } }>;
+          }>;
+        };
+        return bootstrap.workspaces
+          .find(({ id }) => id === workspace.id)
+          ?.tabs.find(({ id }) => id === workspace.activeTabId)
+          ?.layout;
+      }).toMatchObject({ type: "split", direction });
+
+      const paneInputs = await page.evaluate(() =>
+        (window as unknown as { __wmuxSplitShortcutInputs: string[] }).__wmuxSplitShortcutInputs,
+      );
+      expect(paneInputs).toEqual([]);
+      expect(paneInputs).not.toContain("\x04");
+    }
+  } finally {
+    for (const workspace of workspaces.reverse()) {
+      const response = await request.delete(`/api/workspaces/${workspace.id}`);
+      expect(response.ok()).toBeTruthy();
+    }
+  }
+});
+
 test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }) => {
   const before = await request.get("/api/bootstrap");
   expect(before.ok()).toBeTruthy();
@@ -177,6 +256,7 @@ test("drags canvas workspace rows into a persisted order", async ({ page, reques
 test("pastes text after a full reload without forwarding Ctrl+V to the pane", async ({
   page,
   context,
+  request,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop clipboard coverage");
 
@@ -199,26 +279,37 @@ test("pastes text after a full reload without forwarding Ctrl+V to the pane", as
     };
     (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs = inputs;
   });
-  await page.reload();
+  const response = await request.post("/api/workspaces", { data: { machineId: "local" } });
+  expect(response.ok()).toBeTruthy();
+  const workspace = (await response.json() as {
+    workspace: { id: string; activeTabId: string };
+  }).workspace;
 
-  const activePane = page.locator(".terminal-pane.active");
-  await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
-  await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
-  await page.evaluate(() => {
-    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs.length = 0;
-  });
+  try {
+    await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    const activePane = page.locator(".terminal-pane.active");
+    await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+    await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
+    await page.evaluate(() => {
+      (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs.length = 0;
+    });
 
-  const text = "wmux-paste-after-refresh";
-  await page.evaluate((value) => navigator.clipboard.writeText(value), text);
-  await page.keyboard.press("Control+V");
+    const text = "wmux-paste-after-refresh";
+    await page.evaluate((value) => navigator.clipboard.writeText(value), text);
+    await page.keyboard.press("Control+V");
 
-  await expect.poll(() => page.evaluate(() =>
-    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs.join(""),
-  )).toContain(text);
-  const paneInputs = await page.evaluate(() =>
-    (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs,
-  );
-  expect(paneInputs).not.toContain("\x16");
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs.join(""),
+    )).toContain(text);
+    const paneInputs = await page.evaluate(() =>
+      (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs,
+    );
+    expect(paneInputs).not.toContain("\x16");
+  } finally {
+    const removed = await request.delete(`/api/workspaces/${workspace.id}`);
+    expect(removed.ok()).toBeTruthy();
+  }
 });
 
 test("copies tmux default-selection OSC 52 requests to the browser clipboard", async ({
