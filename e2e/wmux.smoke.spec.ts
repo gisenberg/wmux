@@ -221,6 +221,55 @@ test("pastes text after a full reload without forwarding Ctrl+V to the pane", as
   expect(paneInputs).not.toContain("\x16");
 });
 
+test("copies tmux default-selection OSC 52 requests to the browser clipboard", async ({
+  page,
+  context,
+  request,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop clipboard coverage");
+
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: new URL(page.url()).origin,
+  });
+
+  let bootstrapResponse = await request.get("/api/bootstrap");
+  let bootstrap = await bootstrapResponse.json() as {
+    activeWorkspaceId?: string;
+    workspaces: Array<{
+      id: string;
+      activeTabId: string;
+      tabs: Array<{ id: string; panes: Array<{ id: string }> }>;
+    }>;
+  };
+  if (bootstrap.workspaces.length === 0) {
+    const created = await request.post("/api/workspaces", { data: { machineId: "local" } });
+    expect(created.ok()).toBeTruthy();
+    await page.reload();
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    bootstrapResponse = await request.get("/api/bootstrap");
+    bootstrap = await bootstrapResponse.json();
+  }
+
+  const workspace = bootstrap.workspaces.find(({ id }) => id === bootstrap.activeWorkspaceId)
+    ?? bootstrap.workspaces[0];
+  const tab = workspace.tabs.find(({ id }) => id === workspace.activeTabId) ?? workspace.tabs[0];
+  const pane = tab.panes[0];
+  expect(pane).toBeTruthy();
+
+  const activePane = page.locator(".terminal-pane.active");
+  await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+  await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
+
+  const copiedText = "wmux Codex copy ✓";
+  const encoded = Buffer.from(copiedText).toString("base64");
+  await page.evaluate(() => navigator.clipboard.writeText("wmux-copy-sentinel"));
+  await page.keyboard.type(`printf '\\033]52;;${encoded}\\a'`);
+  await page.keyboard.press("Enter");
+
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copiedText);
+  await expect(page.getByRole("button", { name: "Copy terminal request" })).toBeHidden();
+});
+
 test("sends Shift+Enter as one Ctrl+J newline while preserving plain Enter", async ({
   page,
   request,

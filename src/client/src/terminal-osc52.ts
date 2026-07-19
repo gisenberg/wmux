@@ -13,7 +13,7 @@ export const MAX_OSC52_DECODED_BYTES = 1024 * 1024;
 // request without retaining its payload indefinitely.
 export const MAX_OSC52_ENCODED_CHARS = Math.ceil(MAX_OSC52_DECODED_BYTES / 3) * 4;
 
-/** Streaming OSC 52 write filter. Only c;BASE64 requests are surfaced. */
+/** Streaming OSC 52 write filter. Only clipboard/default BASE64 writes are surfaced. */
 export class Osc52Parser {
   private carry = "";
   private body = "";
@@ -79,7 +79,8 @@ export class Osc52Parser {
   private finish(writes: Osc52Write[]): void {
     if (!this.discarded) {
       const separator = this.body.indexOf(";");
-      if (separator !== -1 && this.body.slice(0, separator) === "c") {
+      const selection = separator === -1 ? undefined : this.body.slice(0, separator);
+      if (separator !== -1 && (selection === "c" || selection === "")) {
         const encoded = this.body.slice(separator + 1);
         const decoded = decodeCanonicalUtf8(encoded);
         if (decoded !== null) writes.push({ text: decoded });

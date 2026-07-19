@@ -502,8 +502,9 @@ command with `/hooks` in a new Codex session. Dynamically registered hosts do
 not receive broad wmux API credentials; lifecycle hooks on those hosts require
 separately provisioned API authentication or event posts fail with `401`.
 
-OpenCode's semantic Copy action can write directly through OSC 52 (`ESC ] 52 ; c ; base64`). wmux
-accepts only canonical UTF-8 write requests up to 1 MiB, removes every OSC 52 request from terminal
+OpenCode's semantic Copy action and Codex's `/copy` command can write through OSC 52. wmux accepts
+canonical UTF-8 writes to the `c` clipboard selection (`ESC ] 52 ; c ; base64`) and tmux's empty
+default selection (`ESC ] 52 ; ; base64`) up to 1 MiB, removes every OSC 52 request from terminal
 rendering, and never sends or persists its payload. Reconnect replay never writes the clipboard. Live
 requests write automatically only in the focused foreground pane during a browser user activation;
 otherwise the newest request is available as **Copy terminal request** in that pane's toolbar for 60 seconds.

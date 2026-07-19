@@ -14,11 +14,13 @@ const collect = (chunks: string[]) => {
   );
 };
 
-test("OSC 52 accepts canonical c writes with BEL and ST across every boundary", () => {
-  for (const terminator of ["\x07", "\x1b\\"]) {
-    const sequence = `before${osc("c;aGVsbG8=", terminator)}after`;
-    for (let index = 0; index <= sequence.length; index += 1) {
-      assert.deepEqual(collect([sequence.slice(0, index), sequence.slice(index)]), { text: "beforeafter", writes: ["hello"] });
+test("OSC 52 accepts canonical clipboard and tmux default writes with BEL and ST across every boundary", () => {
+  for (const selection of ["c", ""]) {
+    for (const terminator of ["\x07", "\x1b\\"]) {
+      const sequence = `before${osc(`${selection};aGVsbG8=`, terminator)}after`;
+      for (let index = 0; index <= sequence.length; index += 1) {
+        assert.deepEqual(collect([sequence.slice(0, index), sequence.slice(index)]), { text: "beforeafter", writes: ["hello"] });
+      }
     }
   }
 });
@@ -26,7 +28,7 @@ test("OSC 52 accepts canonical c writes with BEL and ST across every boundary", 
 test("OSC 52 strips invalid, unsupported, query, and adjacent requests without changing other OSC", () => {
   const other = "\x1b]777;wmux;cursor=1\x07";
   assert.deepEqual(
-    collect([`a${other}${osc("p;aGVsbG8=")}${osc("c;?")}${osc("c;YQ=")}${osc("c;")}b${osc("c;eA==")}c`]),
+    collect([`a${other}${osc("p;aGVsbG8=")}${osc("c;?")}${osc(";?")}${osc("c;YQ=")}${osc("c;")}b${osc("c;eA==")}c`]),
     { text: `a${other}bc`, writes: ["x"] },
   );
 });
