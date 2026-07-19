@@ -119,6 +119,7 @@ test("local durable reattach uses a fresh systemd scope", () => {
   assert.ok(firstUnit, "first attach has a pane-identifying scope name");
   assert.ok(secondUnit, "second attach has a pane-identifying scope name");
   assert.notEqual(firstUnit, secondUnit, "reattach cannot collide with the surviving tmux scope");
+  assert.match(firstRuntime, /tmux set-option -t 'wmux_pane_fixed001' status off/);
 });
 
 test("raw local panes apply an available agent profile before the shell", () => {

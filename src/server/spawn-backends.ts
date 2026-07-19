@@ -548,6 +548,7 @@ const durableShellScript = ({
   const tmuxCommand = [
     `tmux has-session -t ${tmuxTarget} 2>/dev/null || ${tmuxCreateCommand}`,
     `tmux set-option -t ${tmuxTarget} history-limit 100000 >/dev/null 2>&1 || true`,
+    `tmux set-option -t ${tmuxTarget} status off >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} mouse on >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} allow-passthrough on >/dev/null 2>&1 || true`,
     `tmux set-option -s user-keys[99] ${shellQuote("\\033[9000\\;")} >/dev/null 2>&1 || true`,
