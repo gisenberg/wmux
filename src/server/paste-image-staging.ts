@@ -105,7 +105,7 @@ export class PasteImageStaging implements PasteImageStager {
         throw new PasteImageStageError(422, "paste_image_target_unsupported");
       }
       try {
-        validateTargetPath(targetPath, adapter === "powershell-ssh" || adapter === "windows-agent");
+        validateTargetPath(targetPath, adapter);
       } catch (error) {
         await discardStagedTarget({ paneId, stageId, targetPath, extension: validated.extension, machine, adapter })
           .catch(() => undefined);
@@ -236,11 +236,16 @@ const publicStage = (record: StageRecord): StagedPasteImage => ({
   expiresAt: record.expiresAt,
 });
 
-const validateTargetPath = (targetPath: string, windows: boolean): void => {
+const validateTargetPath = (targetPath: string, adapter: StageRecord["adapter"]): void => {
   if (!targetPath || targetPath.length > 4096 || /[\x00-\x1f\x7f-\x9f]/.test(targetPath)) {
     throw new Error("invalid staged path");
   }
-  if (windows ? !/^[A-Za-z]:[\\/]/.test(targetPath) : !targetPath.startsWith("/")) {
+  const absolute = adapter === "local"
+    ? path.isAbsolute(targetPath)
+    : adapter === "powershell-ssh" || adapter === "windows-agent"
+      ? /^[A-Za-z]:[\\/]/.test(targetPath)
+      : targetPath.startsWith("/");
+  if (!absolute) {
     throw new Error("staged path is not absolute");
   }
 };

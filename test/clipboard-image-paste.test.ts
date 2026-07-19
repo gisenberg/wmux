@@ -67,8 +67,10 @@ test("local staging creates private generated files and discard is pane scoped",
     assert.equal(staged.bytes, png.length);
     assert.ok(staged.targetPath.startsWith(`${root}${path.sep}`));
     assert.deepEqual(fs.readFileSync(staged.targetPath), png);
-    assert.equal(fs.statSync(path.dirname(staged.targetPath)).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(staged.targetPath).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(path.dirname(staged.targetPath)).mode & 0o777, 0o700);
+      assert.equal(fs.statSync(staged.targetPath).mode & 0o777, 0o600);
+    }
     assert.equal(await staging.discard("other-pane", staged.stageId), false);
     assert.equal(fs.existsSync(staged.targetPath), true);
     assert.equal(await staging.discard("pane-local", staged.stageId), true);
