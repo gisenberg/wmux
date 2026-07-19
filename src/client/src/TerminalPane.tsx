@@ -18,7 +18,7 @@ import {
 import { ensureWmuxFonts, WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
-import { isTerminalProtocolResponse } from "./terminal-protocol";
+import { isTerminalProtocolResponse } from "../../shared/terminal-protocol";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { writeBrowserClipboard } from "./clipboard";
 import { api } from "./api";

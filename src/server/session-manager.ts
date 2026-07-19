@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import { isTerminalProtocolResponse } from "../shared/terminal-protocol.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
 import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
@@ -694,9 +695,7 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
   return null;
 };
 
-const TERMINAL_PROTOCOL_RESPONSE_INPUT = /^(?:(?:\x1b\[[?>]?[0-9;]*c)|(?:\x1b\[(?:0n|[0-9]+;[0-9]+R)))+$/;
-
-export const isTerminalProtocolResponseInput = (data: string): boolean => TERMINAL_PROTOCOL_RESPONSE_INPUT.test(data);
+export const isTerminalProtocolResponseInput = isTerminalProtocolResponse;
 
 const normalizeSize = (cols: number, rows: number): { cols: number; rows: number } => ({
   cols: Number.isFinite(cols) && cols >= 2 ? Math.floor(cols) : 80,

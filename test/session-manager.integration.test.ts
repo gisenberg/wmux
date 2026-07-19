@@ -344,6 +344,9 @@ test("server recognizes terminal replies from stale browser clients", () => {
   assert.equal(isTerminalProtocolResponseInput("\x1b[?62;22c"), true);
   assert.equal(isTerminalProtocolResponseInput("\x1b[?62;22c\x1b[?62;22c"), true);
   assert.equal(isTerminalProtocolResponseInput("\x1b[12;40R"), true);
+  assert.equal(isTerminalProtocolResponseInput("\x1bP>|libghostty 0.1.0-dev\x1b\\"), true);
+  assert.equal(isTerminalProtocolResponseInput("\x1b[>1;0;0c\x1bP>|libghostty 0.1.0-dev\x1b\\"), true);
+  assert.equal(isTerminalProtocolResponseInput("\x1bP>|other-terminal 1.0\x1b\\"), false);
   assert.equal(isTerminalProtocolResponseInput("\x1b[A"), false);
 });
 
