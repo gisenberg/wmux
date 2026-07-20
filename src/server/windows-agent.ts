@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
-import type { MachineConfig, PaneState } from "./types.js";
+import type { MachineConfig, PaneStartupPhase, PaneState } from "./types.js";
 import {
   buildWindowsHelperBundle,
   expectedWindowsAgentProtocolVersion,
@@ -19,6 +19,7 @@ interface AgentEvents {
   title: [string];
   cwd: [string];
   agentPort: [number];
+  phase: [PaneStartupPhase, string];
   exit: [number | null];
 }
 
@@ -245,7 +246,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     });
     this.cwd = pane.cwd ?? "";
     this.agentUrl = windowsAgentUrl(machine);
-    void this.start();
+    queueMicrotask(() => void this.start());
   }
 
   get pid(): number {
@@ -324,8 +325,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   private async start(): Promise<void> {
     try {
+      this.reportPhase("checking-agent", "Checking Windows agent…");
       const helperBundle = buildWindowsHelperBundle(this.machine);
       if (!await this.ensureCurrentAgent(helperBundle)) return;
+      this.reportPhase("creating-session", `Opening PowerShell on ${this.machine.name}…`);
       const response = await this.post<AgentSessionResponse>(
         `/sessions/${encodeURIComponent(this.pane.id)}`,
         {
@@ -354,6 +357,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       const replayCols = response.cols ?? (historyBytes > 0 ? 80 : this.cols);
       const replayRows = response.rows ?? (historyBytes > 0 ? 24 : this.rows);
       this.checkpoint.reframe(replayCols, replayRows);
+      if (historyBytes > 0) this.reportPhase("replaying", "Restoring terminal state…");
       await this.hydrateReplay(response.cursor ?? this.cursor);
       this.ready = true;
       const pendingResize = this.pendingResize;
@@ -413,6 +417,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       if (!existing && activeSessions > 0) {
         const currentGeneration = await this.findCurrentGeneration(helperBundle);
         if (currentGeneration !== undefined) {
+          this.reportPhase("starting-generation", `Routing to Windows agent generation ${currentGeneration}…`);
           this.routeToAgentPort(currentGeneration);
           this.appendAndEmit(`\r\n[wmux] Current Windows agent generation is ready on port ${currentGeneration}; opening pane.\r\n`);
         }
@@ -445,6 +450,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     else this.reportRollingUpdate(actualDisplay, expectedDisplay, activeSessions);
     if (!health.draining) {
       if (health.helperBundleVersion !== helperBundle.bundleVersion) {
+        this.reportPhase("staging-helpers", "Staging current Windows helpers…");
         const stagingId = `__wmux_update_${this.pane.id}_${Date.now().toString(36)}`;
         try {
           await this.post(`/sessions/${encodeURIComponent(stagingId)}`, {
@@ -464,16 +470,19 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       // Nothing is owned by the outdated base process, so replace it in place.
       // Existing side-by-side generations have independent tasks and remain
       // available to panes already pinned to them.
+      this.reportPhase("starting-generation", "Updating the Windows agent…");
       await this.activateUpdate(this.machine);
     } else {
       const currentGeneration = await this.findCurrentGeneration(helperBundle);
       if (currentGeneration !== undefined) {
+        this.reportPhase("starting-generation", `Routing to Windows agent generation ${currentGeneration}…`);
         this.routeToAgentPort(currentGeneration);
         this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${currentGeneration}; opening pane.\r\n`);
         return !this.stopped;
       }
 
       const rolloutPort = await this.selectRolloutPort();
+      this.reportPhase("starting-generation", `Starting Windows agent generation ${rolloutPort}…`);
       const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
       if (typeof activatedPort === "number") {
         const basePort = this.baseAgentPort();
@@ -610,6 +619,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       return;
     }
     this.appendAndEmit(`\r\n[wmux] Updating Windows agent ${actual} → ${expected}; waiting for its service to restart.\r\n`);
+  }
+
+  private reportPhase(phase: PaneStartupPhase, label: string): void {
+    this.emit("phase", phase, label);
   }
 
   private reportRollingUpdate(actual: string, expected: string, activeSessions: number): void {

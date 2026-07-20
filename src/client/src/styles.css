@@ -2669,6 +2669,29 @@ button.active-tool {
   pointer-events: auto;
 }
 
+.terminal-startup-status {
+  position: absolute;
+  z-index: 21;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  background: var(--terminal-background);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.terminal-startup-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: mutation-status-spin 750ms linear infinite;
+}
+
 .pane-toolbar {
   min-width: 0;
   border-bottom: 1px solid var(--line);

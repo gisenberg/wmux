@@ -43,7 +43,13 @@ import type {
   WmuxSettings,
 } from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
-import type { StateStore } from "./state.js";
+import {
+  StateIdConflictError,
+  type SplitCreationIds,
+  type StateStore,
+  type TabCreationIds,
+  type WorkspaceCreationIds,
+} from "./state.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsStore } from "./settings.js";
 import {
@@ -624,13 +630,20 @@ export const createHttpServer = (
           machineId?: string;
           sourcePaneId?: string;
           createdBy?: "user" | "agent";
+          clientIds?: unknown;
         };
         const machineId = resolveMachineId(machines, body.machineId);
+        const clientIds = parseClientCreationIds(body.clientIds, {
+          workspaceId: "ws",
+          tabId: "tab",
+          paneId: "pane",
+        }) as WorkspaceCreationIds | undefined;
         const sourcePane = body.sourcePaneId ? state.findPane(body.sourcePaneId) ?? undefined : undefined;
         const workspace = state.createWorkspace(
           machineId,
           await cwdForSourcePane(state, machines, sourcePane, machineId),
           body.createdBy === "agent" ? "agent" : "user",
+          clientIds,
         );
         sendJson(response, 201, { workspace, state: currentPayload() });
         return;
@@ -919,14 +932,20 @@ export const createHttpServer = (
 
       const tabs = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs$/);
       if (tabs && request.method === "POST") {
-        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string };
+        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string; clientIds?: unknown };
         const snapshot = state.snapshot();
         const workspace = snapshot.workspaces.find((candidate) => candidate.id === tabs[1]);
         const sourcePane = body.sourcePaneId
           ? workspace?.tabs.flatMap((tab) => tab.panes).find((pane) => pane.id === body.sourcePaneId)
           : undefined;
         const machineId = resolveMachineId(machines, body.machineId, workspace?.machineId);
-        const tab = state.createTab(tabs[1], machineId, await cwdForSourcePane(state, machines, sourcePane, machineId));
+        const clientIds = parseClientCreationIds(body.clientIds, { tabId: "tab", paneId: "pane" }) as TabCreationIds | undefined;
+        const tab = state.createTab(
+          tabs[1],
+          machineId,
+          await cwdForSourcePane(state, machines, sourcePane, machineId),
+          clientIds,
+        );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
       }
@@ -952,6 +971,7 @@ export const createHttpServer = (
           paneId?: string;
           direction?: "horizontal" | "vertical";
           machineId?: string;
+          clientIds?: unknown;
         };
         if (!body.paneId || (body.direction !== "horizontal" && body.direction !== "vertical")) {
           sendJson(response, 400, { error: "invalid_split" });
@@ -963,12 +983,14 @@ export const createHttpServer = (
           .flatMap((tab) => tab.panes)
           .find((pane) => pane.id === body.paneId);
         const machineId = resolveMachineId(machines, body.machineId, sourcePane?.machineId);
+        const clientIds = parseClientCreationIds(body.clientIds, { paneId: "pane" }) as SplitCreationIds | undefined;
         const tab = state.splitPane(
           split[1],
           body.paneId,
           body.direction,
           machineId,
           await cwdForSourcePane(state, machines, sourcePane, machineId),
+          clientIds,
         );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
@@ -1060,6 +1082,10 @@ export const createHttpServer = (
     } catch (error) {
       if (error instanceof HttpError || error instanceof HostRegistryError || error instanceof PasteImageStageError) {
         sendJson(response, error.status, { error: error.code });
+        return;
+      }
+      if (error instanceof StateIdConflictError) {
+        sendJson(response, 409, { error: "client_id_conflict" });
         return;
       }
       // Log full detail server-side but never leak internal messages/paths to
@@ -1294,6 +1320,30 @@ const cwdForSourcePane = async (
   const cwd = machine ? await readDurableSessionCwd(machine, sourcePane.id) : undefined;
   if (cwd && cwd !== sourcePane.cwd) state.updatePane(sourcePane.id, { cwd });
   return cwd ?? sourcePane.cwd;
+};
+
+const clientIdPattern = (prefix: string): RegExp => new RegExp(`^${prefix}_[0-9a-f]{16,64}$`);
+
+const parseClientCreationIds = (
+  value: unknown,
+  fields: Record<string, string>,
+): Record<string, string> | undefined => {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "invalid_client_ids");
+  }
+  const record = value as Record<string, unknown>;
+  const expectedKeys = Object.keys(fields);
+  if (Object.keys(record).length !== expectedKeys.length) throw new HttpError(400, "invalid_client_ids");
+  const result: Record<string, string> = {};
+  for (const key of expectedKeys) {
+    const id = record[key];
+    if (typeof id !== "string" || !clientIdPattern(fields[key]).test(id)) {
+      throw new HttpError(400, "invalid_client_ids");
+    }
+    result[key] = id;
+  }
+  return result;
 };
 
 const maxAttachmentBytes = 8 * 1024 * 1024;

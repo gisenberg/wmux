@@ -282,8 +282,16 @@ export type PaneClientMessage =
   | { type: "activate"; cols: number; rows: number; foreground?: boolean };
 
 export type PaneReplayKind = "raw" | "checkpoint";
+export type PaneStartupPhase =
+  | "connecting"
+  | "checking-agent"
+  | "staging-helpers"
+  | "starting-generation"
+  | "creating-session"
+  | "replaying";
 
 export type PaneServerMessage =
+  | { type: "starting"; paneId: string; phase: PaneStartupPhase; label: string }
   | {
       type: "ready";
       paneId: string;

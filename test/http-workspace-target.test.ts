@@ -74,6 +74,52 @@ test("workspace creation rejects an explicit unknown machine", async () => {
   });
 });
 
+test("workspace creation accepts idempotent validated client ids", async () => {
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  await withServer(machines, async (baseUrl) => {
+    const clientIds = {
+      workspaceId: `ws_${"a".repeat(32)}`,
+      tabId: `tab_${"b".repeat(32)}`,
+      paneId: `pane_${"c".repeat(32)}`,
+    };
+    const first = await postWorkspace(baseUrl, { machineId: "local", clientIds });
+    const firstPayload = await first.json() as { workspace: { id: string }; state: { revision: number } };
+    const second = await postWorkspace(baseUrl, { machineId: "local", clientIds });
+    const secondPayload = await second.json() as { workspace: { id: string }; state: { revision: number } };
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal(firstPayload.workspace.id, clientIds.workspaceId);
+    assert.equal(secondPayload.workspace.id, clientIds.workspaceId);
+    assert.equal(secondPayload.state.revision, firstPayload.state.revision);
+  });
+});
+
+test("workspace creation rejects malformed or conflicting client ids", async () => {
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  await withServer(machines, async (baseUrl) => {
+    const malformed = await postWorkspace(baseUrl, {
+      machineId: "local",
+      clientIds: { workspaceId: "ws_short", tabId: "tab_short", paneId: "pane_short" },
+    });
+    assert.equal(malformed.status, 400);
+    assert.deepEqual(await malformed.json(), { error: "invalid_client_ids" });
+
+    const clientIds = {
+      workspaceId: `ws_${"a".repeat(32)}`,
+      tabId: `tab_${"b".repeat(32)}`,
+      paneId: `pane_${"c".repeat(32)}`,
+    };
+    assert.equal((await postWorkspace(baseUrl, { machineId: "local", clientIds })).status, 201);
+    const conflict = await postWorkspace(baseUrl, {
+      machineId: "local",
+      clientIds: { ...clientIds, tabId: `tab_${"d".repeat(32)}` },
+    });
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), { error: "client_id_conflict" });
+  });
+});
+
 test("workspace creation reports when no machine target exists", async () => {
   await withServer([], async (baseUrl) => {
     const response = await postWorkspace(baseUrl);

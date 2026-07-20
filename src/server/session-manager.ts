@@ -174,6 +174,7 @@ export class SessionManager {
       socket.close(1011, error instanceof Error ? error.message : "session start failed");
       return;
     }
+    this.send(socket, { type: "starting", paneId, phase: "connecting", label: "Opening terminal…" });
     const resizeOwner = this.ensureResizeOwner(paneId, socket, session, initialSize);
 
     socket.on("message", (raw) => {
@@ -388,6 +389,9 @@ export class SessionManager {
       machine.agentUrl = undefined;
       this.sessionMachines.set(pane.id, structuredClone(machine));
       this.state.updatePane(pane.id, { agentPort });
+    });
+    session.on("phase", (phase, label) => {
+      this.broadcast(pane.id, { type: "starting", paneId: pane.id, phase, label });
     });
     session.on("exit", (code) => {
       if (this.ignoredSessionExits.has(session)) return;

@@ -106,6 +106,7 @@ interface Props {
   terminalScrollbackRows: number;
   mediaItems: TerminalMedia[];
   lastRun?: TerminalRun;
+  pendingLabel?: string;
   focusSignal?: number;
   onActivate: () => void;
   onSplit: (direction: SplitDirection, machineId?: string) => void;
@@ -131,6 +132,7 @@ export const TerminalPane = memo(function TerminalPane({
   terminalScrollbackRows,
   mediaItems,
   lastRun,
+  pendingLabel,
   focusSignal = 0,
   onActivate,
   onSplit,
@@ -175,6 +177,7 @@ export const TerminalPane = memo(function TerminalPane({
   const inputEpochRef = useRef(0);
   const [connected, setConnected] = useState(false);
   const [connectionIssue, setConnectionIssue] = useState("");
+  const [startupLabel, setStartupLabel] = useState("Connecting to terminal…");
   const [kittyMediaItems, setKittyMediaItems] = useState<TerminalMedia[]>([]);
   const [kittyInlineItems, setKittyInlineItems] = useState<KittyInlineImage[]>([]);
   const [terminalMetrics, setTerminalMetrics] = useState<CellMetrics>({ width: 8, height: 16 });
@@ -238,6 +241,12 @@ export const TerminalPane = memo(function TerminalPane({
     let socketController: PaneSocketController | undefined;
     let scrollDisposable: { dispose: () => void } | undefined;
     let renderDisposable: { dispose: () => void } | undefined;
+    if (pendingLabel) {
+      setTerminalReady(false);
+      setConnected(false);
+      return;
+    }
+    setStartupLabel("Connecting to terminal…");
     let bufferDisposable: { dispose: () => void } | undefined;
     let mouseDownListener: ((event: MouseEvent) => void) | undefined;
     let mouseUpListener: ((event: MouseEvent) => void) | undefined;
@@ -779,45 +788,50 @@ export const TerminalPane = memo(function TerminalPane({
           connectedRef.current = nextConnected;
           setConnected(nextConnected);
           setConnectionIssue(issue);
+          if (!nextConnected) setStartupLabel(issue || "Connecting to terminal…");
         },
         onOpen: (socket) => {
           sendResizeMessage(socket, activeRef.current ? "activate" : "resize", term, foreground());
         },
         onMessage: (message) => {
           if (cancelled) return;
-        if (message.type === "ready") {
-          setTerminalReady(false);
-          resetPendingOutput();
-          pendingOsc52Ref.current = undefined;
-          if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
-          setHasPendingOsc52(false);
-          term.clear();
-          setKittyInlineItems([]);
-          if (message.replay) startReplayDrain(term, message.replay);
-          else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
-          else revealTerminal();
-        }
-        if (message.type === "output") {
-          if (replayDraining()) replayBufferedOutput.push(message.data);
-          else handleOutput(term, message.data);
-          durableRefreshRevealGate?.noteOutput();
-        }
-        if (message.type === "exit") {
-          cancelPendingReveal();
-          finishReplayDrainNow(term, false);
-          flushQueuedTerminalText(term);
-          term.write(`\r\n[wmux] process exited with code ${message.code}. Press any key to restart.\r\n`);
-          revealTerminal();
-          setConnectionIssue(`Process exited with code ${message.code}`);
-          awaitingRestart = true;
-        }
-        if (message.type === "removed") {
-          cancelPendingReveal();
-          finishReplayDrainNow(term, false);
-          flushQueuedTerminalText(term);
-          removed = true;
-          socketController?.markRemoved();
-        }
+          if (message.type === "starting") {
+            setStartupLabel(message.label);
+          }
+          if (message.type === "ready") {
+            setStartupLabel(message.replay ? "Restoring terminal state…" : "Preparing terminal…");
+            setTerminalReady(false);
+            resetPendingOutput();
+            pendingOsc52Ref.current = undefined;
+            if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
+            setHasPendingOsc52(false);
+            term.clear();
+            setKittyInlineItems([]);
+            if (message.replay) startReplayDrain(term, message.replay);
+            else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
+            else revealTerminal();
+          }
+          if (message.type === "output") {
+            if (replayDraining()) replayBufferedOutput.push(message.data);
+            else handleOutput(term, message.data);
+            durableRefreshRevealGate?.noteOutput();
+          }
+          if (message.type === "exit") {
+            cancelPendingReveal();
+            finishReplayDrainNow(term, false);
+            flushQueuedTerminalText(term);
+            term.write(`\r\n[wmux] process exited with code ${message.code}. Press any key to restart.\r\n`);
+            revealTerminal();
+            setConnectionIssue(`Process exited with code ${message.code}`);
+            awaitingRestart = true;
+          }
+          if (message.type === "removed") {
+            cancelPendingReveal();
+            finishReplayDrainNow(term, false);
+            flushQueuedTerminalText(term);
+            removed = true;
+            socketController?.markRemoved();
+          }
         },
       });
     };
@@ -1260,7 +1274,7 @@ export const TerminalPane = memo(function TerminalPane({
       reconnectRef.current = null;
       pendingOsc52Ref.current = undefined;
     };
-  }, [pane.id]);
+  }, [pane.id, pendingLabel]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -1359,6 +1373,12 @@ export const TerminalPane = memo(function TerminalPane({
         }}
       >
         <div ref={containerRef} className="terminal-host" />
+        {!terminalReady ? (
+          <div className="terminal-startup-status" role="status" aria-live="polite">
+            <span className="terminal-startup-spinner" aria-hidden="true" />
+            <span>{pendingLabel ?? startupLabel}</span>
+          </div>
+        ) : null}
         {(() => {
           void rectangleVersion;
           const range = rectangularSelectionRef.current?.visibleOverlay;
