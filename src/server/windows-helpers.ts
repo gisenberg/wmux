@@ -258,7 +258,7 @@ if (Test-Path -LiteralPath $ConsoleThemeHelper -PathType Leaf) {
 }
 $AgentProfileHelper = Join-Path $HelperDir 'wmux-agent-profile.cmd'
 if (Test-Path -LiteralPath $AgentProfileHelper -PathType Leaf) {
-  & $AgentProfileHelper apply --quiet
+  & $AgentProfileHelper apply --quiet${machine.source === "registered" ? " --optional-auth" : ""}
 }
 $StartCwd = __wmuxNormalizeStartCwd $env:WMUX_START_CWD
 if ($StartCwd) {

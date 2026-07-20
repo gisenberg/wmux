@@ -86,6 +86,7 @@ const sshBackend: Backend = {
         shellCommand: interactiveShellCommand(`"\${SHELL:-/bin/sh}"`, sessionName),
         extraEnv: remoteEnv,
         helperPathExport: `export PATH="$wmux_helper_dir:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH";`,
+        agentProfileOptionalAuth: machine.source === "registered",
         useSystemdScope: false,
       });
     const runtimePath = stageSshRuntime(machine, target, sessionName, remoteCommand, extraEnv.WMUX_PANE_ID);
@@ -149,6 +150,7 @@ const localBackend: Backend = {
         shellCommand: interactiveShellCommand(shellQuote(machine.shell ?? defaultShell()), sessionName),
         extraEnv,
         helperPathExport: `export PATH=${shellQuote(`${process.cwd()}/scripts`)}":$HOME/.local/bin:$PATH";`,
+        agentProfileOptionalAuth: false,
         useSystemdScope: false,
       });
       return {
@@ -497,6 +499,7 @@ interface DurableShellInput {
   shellCommand: string;
   extraEnv: Record<string, string>;
   helperPathExport?: string;
+  agentProfileOptionalAuth: boolean;
   useSystemdScope: boolean;
 }
 
@@ -509,6 +512,7 @@ const durableShellScript = ({
   shellCommand,
   extraEnv,
   helperPathExport,
+  agentProfileOptionalAuth,
 }: DurableShellInput): string => {
   const exports = Object.entries(extraEnv)
     .filter(([, value]) => value)
@@ -526,7 +530,8 @@ const durableShellScript = ({
     ? `( umask 077; mkdir -p "$HOME/.wmux" 2>/dev/null || true; ${credentialWrites.join(" ")} );`
     : "";
   const pathExport = helperPathExport ?? "";
-  const agentProfileApply = `${pathExport} if command -v wmux-agent-profile >/dev/null 2>&1; then wmux-agent-profile apply --quiet || true; fi;`;
+  const optionalAuth = agentProfileOptionalAuth ? " --optional-auth" : "";
+  const agentProfileApply = `${pathExport} if command -v wmux-agent-profile >/dev/null 2>&1; then wmux-agent-profile apply --quiet${optionalAuth} || true; fi;`;
   const startDir = cwd ? `cd ${shellQuote(cwd)} 2>/dev/null || true;` : "";
   const paneCommand = `${startDir} ${exports} ${pathExport} ${shellCommand}`;
   const tmuxCreateCommand = [

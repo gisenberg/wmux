@@ -48,6 +48,12 @@ class ProfileError(RuntimeError):
     pass
 
 
+class ProfileFetchError(ProfileError):
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 def sha256(value: bytes | str) -> str:
     if isinstance(value, str):
         value = value.encode("utf-8")
@@ -145,30 +151,38 @@ def wmux_url() -> str:
         return "http://127.0.0.1:3478"
 
 
-def wmux_token() -> str:
-    if os.environ.get("WMUX_TOKEN"):
-        return os.environ["WMUX_TOKEN"].strip()
+def wmux_tokens() -> list[str]:
     token_path = Path(os.environ.get("WMUX_TOKEN_PATH", Path.home() / ".wmux" / "token")).expanduser()
     try:
-        return token_path.read_text(encoding="utf-8").strip()
+        persisted = token_path.read_text(encoding="utf-8").strip()
     except OSError:
-        return ""
+        persisted = ""
+    inherited = os.environ.get("WMUX_TOKEN", "").strip()
+    # Durable shells retain their original environment across wmux restarts,
+    # while wmux refreshes the owner-only token file on every reattach. Keep
+    # the inherited value as a fallback for raw panes and custom token paths.
+    return list(dict.fromkeys(token for token in (persisted, inherited) if token))
 
 
 def load_remote() -> ProfileSource | None:
-    request = urllib.request.Request(f"{wmux_url()}/api/agent-profile")
-    token = wmux_token()
-    if token:
-        request.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise ProfileError(f"profile fetch failed: HTTP {exc.code}") from exc
-    except (OSError, ValueError) as exc:
-        raise ProfileError(f"profile fetch failed: {exc}") from exc
+    url = f"{wmux_url()}/api/agent-profile"
+    tokens = wmux_tokens() or [""]
+    for index, token in enumerate(tokens):
+        request = urllib.request.Request(url)
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.load(response)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            if exc.code == 401 and index + 1 < len(tokens):
+                continue
+            raise ProfileFetchError(f"profile fetch failed: HTTP {exc.code}", exc.code) from exc
+        except (OSError, ValueError) as exc:
+            raise ProfileFetchError(f"profile fetch failed: {exc}") from exc
     if not payload.get("exists"):
         return None
     manifest = payload.get("manifest")
@@ -832,6 +846,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--license", help="record an SPDX license identifier")
     parser.add_argument("--json", action="store_true", help="emit machine-readable results")
     parser.add_argument("--quiet", action="store_true", help="hide current/no-profile output")
+    parser.add_argument(
+        "--optional-auth",
+        action="store_true",
+        help="skip an unauthorized server profile during automatic registered-host startup",
+    )
     return parser.parse_args()
 
 
@@ -894,6 +913,10 @@ def main() -> int:
         if args.command == "apply":
             append_log(args.command, source.origin, results)
     except ProfileError as exc:
+        if args.optional_auth and isinstance(exc, ProfileFetchError) and exc.status == 401:
+            if not args.quiet:
+                print("wmux-agent-profile: profile skipped because this host has no profile authorization")
+            return 0
         print(f"wmux-agent-profile: {exc}", file=sys.stderr)
         return 2
     if args.json:

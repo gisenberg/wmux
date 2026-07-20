@@ -47,6 +47,12 @@ test("bundle stages and runs the agent profile helper", () => {
   assert.match(bootstrap, /apply --quiet/);
 });
 
+test("registered Windows bootstrap makes missing profile auth optional", () => {
+  const bootstrap = buildWindowsPowerShellBootstrap({ ...machine, source: "registered" }, undefined, {});
+  assert.match(bootstrap, /wmux-agent-profile\.cmd/);
+  assert.match(bootstrap, /apply --quiet --optional-auth/);
+});
+
 test("Windows bootstrap wraps profile prompts only when profile loading is enabled", () => {
   const defaultBootstrap = buildWindowsPowerShellBootstrap(machine, undefined, {});
   const profileBootstrap = buildWindowsPowerShellBootstrap(

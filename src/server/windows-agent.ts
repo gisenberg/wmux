@@ -334,6 +334,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
           cwd: this.cwd || this.machine.cwd || "",
           shell: this.machine.shell || "",
           loadPowerShellProfile: this.machine.loadPowerShellProfile === true,
+          agentProfileOptionalAuth: this.machine.source === "registered",
           helperBundle: { bundleVersion: helperBundle.bundleVersion, files: helperBundle.files },
           env: {
             WMUX_MACHINE_ID: this.machine.id,

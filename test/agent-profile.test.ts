@@ -258,3 +258,85 @@ test("status remains useful when the server profile cannot be fetched", () => {
   assert.equal(payload.state.lastProfile, "offline-profile");
   assert.match(payload.sourceError, /profile fetch failed/);
 });
+
+test("remote profile fetch prefers refreshed token state and falls back to the inherited token", () => {
+  const home = tempDir();
+  fs.mkdirSync(path.join(home, ".wmux"));
+  fs.writeFileSync(path.join(home, ".wmux", "token"), "refreshed-token\n", { mode: 0o600 });
+  const source = String.raw`
+import io
+import json
+import runpy
+import sys
+import urllib.error
+
+module = runpy.run_path(sys.argv[1])
+authorizations = []
+
+class Response(io.BytesIO):
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+
+def fake_urlopen(request, timeout):
+    authorization = request.get_header("Authorization") or ""
+    authorizations.append(authorization)
+    if authorization == "Bearer refreshed-token":
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+    return Response(b'{"exists": false}')
+
+module["load_remote"].__globals__["urllib"].request.urlopen = fake_urlopen
+module["load_remote"]()
+print(json.dumps(authorizations))
+`;
+  const result = spawnSync("python3", ["-c", source, helper], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_TOKEN: "inherited-token" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), ["Bearer refreshed-token", "Bearer inherited-token"]);
+});
+
+test("optional automatic profile auth quietly skips HTTP 401", () => {
+  const home = tempDir();
+  const source = String.raw`
+import contextlib
+import io
+import json
+import runpy
+import sys
+import urllib.error
+
+module = runpy.run_path(sys.argv[1])
+
+def fake_urlopen(request, timeout):
+    raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+module["load_remote"].__globals__["urllib"].request.urlopen = fake_urlopen
+results = []
+for arguments in (["apply", "--quiet", "--optional-auth"], ["apply", "--quiet"]):
+    sys.argv = [sys.argv[1], *arguments]
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        status = module["main"]()
+    results.append({"status": status, "stderr": stderr.getvalue()})
+print(json.dumps(results))
+`;
+  const result = spawnSync("python3", ["-c", source, helper], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      WMUX_TOKEN: "",
+      WMUX_TOKEN_PATH: path.join(home, "missing-token"),
+      WMUX_URL: "http://wmux.invalid",
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    { status: 0, stderr: "" },
+    { status: 2, stderr: "wmux-agent-profile: profile fetch failed: HTTP 401\n" },
+  ]);
+});
