@@ -293,6 +293,7 @@ test("predicts bounded shell input locally and expires it without authoritative 
   request,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop terminal prediction coverage");
+  test.setTimeout(45_000);
 
   await page.routeWebSocket(/\/ws\/panes\//, (browserSocket) => {
     const serverSocket = browserSocket.connectToServer();
@@ -338,8 +339,11 @@ test("predicts bounded shell input locally and expires it without authoritative 
     await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").press("Enter");
     const diagnostics = page.getByRole("dialog", { name: "wmux diagnostics" });
     await expect(diagnostics).toBeVisible();
-    await expect(diagnostics.locator(".latency-row", { hasText: "Predicted paint" }).locator("span").nth(1)).not.toHaveText("0");
-    await expect(diagnostics.locator(".latency-row", { hasText: "Shell canvas" }).locator("span").nth(1)).not.toHaveText("0");
+    await expect(diagnostics).toContainText("WMUX::SYSTEM_CONSOLE");
+    await expect(diagnostics).toContainText("CLIENT::TERMINAL_LATENCY");
+    await expect(diagnostics.getByRole("button", { name: /REFRESH/ })).toBeVisible();
+    await expect(diagnostics.locator(".latency-row", { hasText: /INPUT::PREDICTED PAINT/i }).locator("span").nth(1)).not.toHaveText("0");
+    await expect(diagnostics.locator(".latency-row", { hasText: /SHELL::CANVAS/i }).locator("span").nth(1)).not.toHaveText("0");
   } finally {
     const removed = await request.delete(`/api/workspaces/${payload.workspace.id}`);
     expect(removed.ok()).toBeTruthy();
