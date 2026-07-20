@@ -37,6 +37,7 @@ type ApiOptions = {
   failTitle?: boolean;
   failDelete?: boolean;
   holdFirstAgentEvent?: boolean;
+  parentPaneId?: string;
   workspaces?: FixtureWorkspace[];
   expectedToken?: string;
   rejectUnauthorized?: boolean;
@@ -258,10 +259,12 @@ const withGeneratedTool = async (
     "WMUX_TOKEN",
     "WMUX_TOKEN_PATH",
   ];
-  const saved = new Map(["HOME", "WMUX_URL", ...authKeys].map((key) => [key, process.env[key]]));
+  const saved = new Map(["HOME", "WMUX_URL", "WMUX_PANE_ID", ...authKeys].map((key) => [key, process.env[key]]));
   try {
     for (const key of authKeys) delete process.env[key];
     Object.assign(process.env, { HOME: home, WMUX_URL: api.url, ...authEnv });
+    if (apiOptions.parentPaneId === undefined) delete process.env.WMUX_PANE_ID;
+    else process.env.WMUX_PANE_ID = apiOptions.parentPaneId;
     await execFileAsync(hooksScript, ["install", "opencode"], { env: { ...process.env, XDG_CONFIG_HOME: configHome } });
     writeRuntimePackages(configHome);
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
@@ -440,6 +443,10 @@ posixTest("generated OpenCode delegation aborts a stalled running lifecycle requ
       api.requests.filter((request) => request.pathname === "/api/agent-events").map((request) => request.body?.status),
       ["running", "stopped"],
     );
+    assert.deepEqual(
+      api.requests.find((request) => request.pathname === "/api/workspaces")?.body,
+      { machineId: "posix-1", createdBy: "agent" },
+    );
   }, { holdFirstAgentEvent: true });
 });
 
@@ -514,7 +521,11 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
       assert.equal(output.includes("test-token-private"), false);
 
       const workspaceRequest = api.requests.find((request) => request.pathname === "/api/workspaces");
-      assert.deepEqual(workspaceRequest?.body, { machineId: "posix-1", createdBy: "agent" });
+      assert.deepEqual(workspaceRequest?.body, {
+        machineId: "posix-1",
+        createdBy: "agent",
+        parentPaneId: "pane-parent",
+      });
       assert.deepEqual(
         api.requests.filter((request) => request.pathname === "/api/workspaces/workspace-1/title").map((request) => request.body),
         [{ title: "Delegated build" }],
@@ -530,7 +541,7 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;
     }
-  });
+  }, { parentPaneId: "pane-parent" });
 });
 
 posixTest("generated wmux_close permission-gates ownership, closes agent workspaces, and is idempotent", async () => {

@@ -36,9 +36,9 @@ const websocketFrame = (value: unknown) => {
   return Buffer.concat([header, payload]);
 };
 
-const cli = (url: string, args: string[]) => execFileAsync("python3", [wmuxctl, "--url", url, ...args], {
+const cli = (url: string, args: string[], env: NodeJS.ProcessEnv = {}) => execFileAsync("python3", [wmuxctl, "--url", url, ...args], {
   cwd: repoRoot,
-  env: { ...process.env, WMUX_TOKEN: "test-token" },
+  env: { ...process.env, WMUX_TOKEN: "test-token", ...env },
 });
 
 test("wmuxctl output and wait read authenticated pane replay", async () => {
@@ -369,7 +369,7 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
 
   const url = await listen(server);
   try {
-    const sent = await cli(url, ["run", "windows-runner", "--title", "Fresh", "--new", "--line", "Get-Date"]);
+    const sent = await cli(url, ["run", "windows-runner", "--title", "Fresh", "--new", "--line", "Get-Date"], { WMUX_PANE_ID: "" });
     const result = JSON.parse(sent.stdout);
     assert.equal(result.paneId, "pane_new");
     assert.equal(typeof result.shellReadySeconds, "number");
@@ -387,6 +387,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
   fs.writeFileSync(promptPath, prompt);
   const inputs: Array<Record<string, unknown>> = [];
   const lifecycle: Array<Record<string, unknown>> = [];
+  const workspaceRequests: Array<Record<string, unknown>> = [];
   let runId = "";
   let upgradeCount = 0;
   let deleted = false;
@@ -411,8 +412,12 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
       return;
     }
     if (request.method === "POST" && request.url === "/api/workspaces") {
-      request.resume();
-      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        jsonResponse(response, { workspace, state: {} }, 201);
+      });
       return;
     }
     if (request.method === "POST" && request.url === "/api/workspaces/ws_delegate/title") {
@@ -487,7 +492,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     const delegated = await cli(url, [
       "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
       "--title", "Parity review", "--model", "gpt-test", "--write-access", "--unattended", "--close-on-success",
-    ]);
+    ], { WMUX_PANE_ID: "pane_parent" });
     const result = JSON.parse(delegated.stdout);
     assert.equal(result.state, "completed");
     assert.equal(result.result, "review complete");
@@ -495,6 +500,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
     assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), ["wmux-agent-run", "\r"]);
     assert.equal(inputs.some((body) => String(body.data).includes(prompt)), false);
+    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
     assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message })), [
       { agent: "codex", status: "running", message: undefined },
       { agent: "codex", status: "completed", message: "review complete" },
@@ -511,6 +517,7 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
   const promptPath = path.join(root, "prompt.md");
   fs.writeFileSync(promptPath, "setup failure prompt");
   const lifecycle: Array<Record<string, unknown>> = [];
+  const workspaceRequests: Array<Record<string, unknown>> = [];
   let interrupted = false;
   const workspace = {
     id: "ws_failed",
@@ -525,8 +532,10 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
       return;
     }
     if (request.method === "POST" && request.url === "/api/workspaces") {
-      request.resume();
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
         response.writeHead(201, { "content-type": "application/json" });
         response.end(JSON.stringify({ workspace, state: {} }));
       });
@@ -565,7 +574,7 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
   const url = await listen(server);
   try {
     await assert.rejects(
-      cli(url, ["delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath]),
+      cli(url, ["delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath], { WMUX_PANE_ID: "" }),
       (error: { stdout?: string }) => {
         const result = JSON.parse(error.stdout ?? "{}");
         assert.equal(result.state, "failed");
@@ -575,6 +584,7 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
       },
     );
     assert.equal(interrupted, true);
+    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent" }]);
     assert.deepEqual(lifecycle.map((event) => event.status), ["failed"]);
     assert.equal(lifecycle[0].message && String(lifecycle[0].message).includes("setup failure prompt"), false);
   } finally {

@@ -611,6 +611,7 @@ const delegate = tool({
 
     const { url, token } = wmuxConfig()
     if (!url) throw new Error("wmux URL is not configured")
+    const parentPaneId = process.env.WMUX_PANE_ID || ""
     const bootstrap: any = await requestJson(url, token, "/api/bootstrap", { signal: context.abort })
     const machine = Array.isArray(bootstrap.machines) && bootstrap.machines.find((candidate: any) =>
       candidate?.id === args.machine && candidate.reachable === true
@@ -621,7 +622,11 @@ const delegate = tool({
 
     const made: any = await requestJson(url, token, "/api/workspaces", {
       method: "POST",
-      body: JSON.stringify({ machineId: args.machine, createdBy: "agent" }),
+      body: JSON.stringify({
+        machineId: args.machine,
+        createdBy: "agent",
+        ...(parentPaneId ? { parentPaneId } : {}),
+      }),
       signal: context.abort,
     })
     const workspace = made?.workspace

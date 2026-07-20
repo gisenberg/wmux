@@ -36,6 +36,7 @@ test("legacy settings migrate while preserving normalized values", () => {
       tuiFrameRate: 15,
       terminalScrollMode: "batched",
       machineAliases: { local: "Home" },
+      collapsedWorkspaceIds: [],
     });
     assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_SETTINGS_SCHEMA_VERSION);
   });
@@ -71,6 +72,7 @@ test("version 1 and version 2 settings migrate to inactive tab suspension", () =
       tuiFrameRate: 15,
       terminalScrollMode: "batched",
       machineAliases: { local: "Home" },
+      collapsedWorkspaceIds: [],
     });
   });
 });

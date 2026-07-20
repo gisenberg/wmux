@@ -2,7 +2,7 @@ import { z } from "zod";
 import { machineSchema } from "./config.js";
 import type { LayoutNode, PersistedState } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 2;
+export const CURRENT_STATE_SCHEMA_VERSION = 3;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -51,6 +51,7 @@ const workspaceSchema = z.object({
   id: idSchema,
   name: z.string().max(500),
   createdBy: z.enum(["user", "agent"]).optional(),
+  parentWorkspaceId: idSchema.optional(),
   nameSource: titleSourceSchema.optional(),
   descriptor: z.string().max(2000).optional(),
   descriptorSource: titleSourceSchema.optional(),
@@ -101,6 +102,7 @@ const runSchema = z.object({
 const persistedStateSchema = z.object({
   schemaVersion: z.literal(CURRENT_STATE_SCHEMA_VERSION),
   revision: z.number().int().nonnegative().default(0),
+  workspaceTreeRevision: z.number().int().nonnegative().default(0),
   machines: z.array(machineSchema).default([]),
   workspaces: z.array(workspaceSchema),
   activeWorkspaceId: z.string().max(120),
@@ -109,21 +111,27 @@ const persistedStateSchema = z.object({
   runs: z.array(runSchema).default([]),
 }).strict().superRefine((state, context) => {
   const workspaceIds = new Set<string>();
+  const tabIdsGlobal = new Set<string>();
+  const paneIdsGlobal = new Set<string>();
   for (const [workspaceIndex, workspace] of state.workspaces.entries()) {
     if (workspaceIds.has(workspace.id)) {
       context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "id"], message: "duplicate workspace id" });
     }
     workspaceIds.add(workspace.id);
+    if (workspace.parentWorkspaceId === workspace.id) context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "parentWorkspaceId"], message: "workspace cannot parent itself" });
     const tabIds = new Set<string>();
     for (const [tabIndex, tab] of workspace.tabs.entries()) {
       if (tabIds.has(tab.id)) {
         context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "tabs", tabIndex, "id"], message: "duplicate tab id" });
       }
       tabIds.add(tab.id);
+      if (tabIdsGlobal.has(tab.id)) context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "tabs", tabIndex, "id"], message: "duplicate global tab id" });
+      tabIdsGlobal.add(tab.id);
       const paneIds = new Set(tab.panes.map((pane) => pane.id));
       if (paneIds.size !== tab.panes.length) {
         context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "tabs", tabIndex, "panes"], message: "duplicate pane id" });
       }
+      for (const pane of tab.panes) { if (paneIdsGlobal.has(pane.id)) context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "tabs", tabIndex, "panes"], message: "duplicate global pane id" }); paneIdsGlobal.add(pane.id); }
       if (!paneIds.has(tab.activePaneId)) {
         context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "tabs", tabIndex, "activePaneId"], message: "active pane is missing" });
       }
@@ -135,6 +143,14 @@ const persistedStateSchema = z.object({
     if (!tabIds.has(workspace.activeTabId)) {
       context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "activeTabId"], message: "active tab is missing" });
     }
+  }
+  const stack: string[] = [];
+  for (const [index, workspace] of state.workspaces.entries()) {
+    while (stack.length && stack.at(-1) !== workspace.parentWorkspaceId) stack.pop();
+    if (workspace.parentWorkspaceId && !workspaceIds.has(workspace.parentWorkspaceId)) context.addIssue({ code: "custom", path: ["workspaces", index, "parentWorkspaceId"], message: "workspace parent is missing or subtree is not contiguous" });
+    if (workspace.parentWorkspaceId && stack.at(-1) !== workspace.parentWorkspaceId) context.addIssue({ code: "custom", path: ["workspaces", index, "parentWorkspaceId"], message: "workspace subtree is not contiguous" });
+    if (stack.length >= 4) context.addIssue({ code: "custom", path: ["workspaces", index, "parentWorkspaceId"], message: "workspace tree exceeds maximum depth" });
+    stack.push(workspace.id);
   }
   if (state.workspaces.length > 0 && !workspaceIds.has(state.activeWorkspaceId)) {
     context.addIssue({ code: "custom", path: ["activeWorkspaceId"], message: "active workspace is missing" });
@@ -149,9 +165,9 @@ export interface ParsedPersistedState {
   migrated: boolean;
 }
 
-const migrateLegacyState = (record: Record<string, unknown>): Record<string, unknown> => ({
+const migratePreV2State = (record: Record<string, unknown>): Record<string, unknown> => ({
   ...record,
-  schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
+  schemaVersion: 2,
   workspaces: Array.isArray(record.workspaces)
     ? record.workspaces.map((workspace) => {
       if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return workspace;
@@ -181,6 +197,20 @@ const migrateLegacyState = (record: Record<string, unknown>): Record<string, unk
     : record.workspaces,
 });
 
+/** v2 workspaces were a newest-first root array; preserve that exact order as the v3 forest. */
+export const migrateV2ToV3State = (record: Record<string, unknown>): Record<string, unknown> => ({
+  ...record,
+  schemaVersion: 3,
+  workspaceTreeRevision: 0,
+  workspaces: Array.isArray(record.workspaces)
+    ? record.workspaces.map((workspace) => {
+      if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return workspace;
+      const { parentWorkspaceId: _parentWorkspaceId, ...root } = workspace as Record<string, unknown>;
+      return root;
+    })
+    : record.workspaces,
+});
+
 export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("state must be a JSON object");
@@ -190,11 +220,12 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion) && rawVersion > CURRENT_STATE_SCHEMA_VERSION) {
     throw new UnsupportedStateVersionError(rawVersion);
   }
-  if (rawVersion !== undefined && rawVersion !== 0 && rawVersion !== 1 && rawVersion !== CURRENT_STATE_SCHEMA_VERSION) {
+  if (rawVersion !== undefined && rawVersion !== 0 && rawVersion !== 1 && rawVersion !== 2 && rawVersion !== CURRENT_STATE_SCHEMA_VERSION) {
     throw new Error("state schemaVersion must be a supported integer");
   }
   const migrated = rawVersion !== CURRENT_STATE_SCHEMA_VERSION;
-  const candidate = migrated ? migrateLegacyState(record) : record;
+  const v2Candidate = rawVersion === 2 ? record : migratePreV2State(record);
+  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION ? record : migrateV2ToV3State(v2Candidate);
   return { state: persistedStateSchema.parse(candidate), migrated };
 };
 

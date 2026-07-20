@@ -1,10 +1,29 @@
 import { authHeaders } from "./token";
 import type { BootstrapPayload, DoctorReport, DurableSessionAudit, SplitDirection, WorkspaceReorderPosition, WmuxSettings } from "./types";
 
+export type ModalSettingsUpdate = Omit<WmuxSettings, "collapsedWorkspaceIds">;
+
+export const modalSettingsUpdate = (settings: WmuxSettings): ModalSettingsUpdate => ({
+  terminalFontSize: settings.terminalFontSize,
+  terminalScrollbackRows: settings.terminalScrollbackRows,
+  colorScheme: settings.colorScheme,
+  inactiveTabStreaming: settings.inactiveTabStreaming,
+  tuiFrameRate: settings.tuiFrameRate,
+  terminalScrollMode: settings.terminalScrollMode,
+  machineAliases: settings.machineAliases,
+});
+
 export class UnauthorizedError extends Error {
   constructor() {
     super("unauthorized");
     this.name = "UnauthorizedError";
+  }
+}
+
+export class WorkspaceReorderConflictError extends Error {
+  constructor(readonly state: BootstrapPayload) {
+    super("workspace tree changed");
+    this.name = "WorkspaceReorderConflictError";
   }
 }
 
@@ -88,10 +107,23 @@ export const api = {
   doctor: () => json<DoctorReport>("/api/doctor"),
   cleanupSession: (backend: "tmux" | "screen", name: string) =>
     json<DurableSessionAudit>(`/api/session-audit/${backend}/${encodeURIComponent(name)}`, { method: "DELETE" }),
-  updateSettings: (settings: WmuxSettings) =>
+  updateSettings: (settings: ModalSettingsUpdate) =>
     json<{ settings: WmuxSettings; state: BootstrapPayload }>("/api/settings", {
       method: "POST",
-      body: JSON.stringify(settings),
+      body: JSON.stringify({
+        terminalFontSize: settings.terminalFontSize,
+        terminalScrollbackRows: settings.terminalScrollbackRows,
+        colorScheme: settings.colorScheme,
+        inactiveTabStreaming: settings.inactiveTabStreaming,
+        tuiFrameRate: settings.tuiFrameRate,
+        terminalScrollMode: settings.terminalScrollMode,
+        machineAliases: settings.machineAliases,
+      }),
+    }),
+  updateCollapsedWorkspaceIds: (collapsedWorkspaceIds: string[]) =>
+    json<{ settings: WmuxSettings; state: BootstrapPayload }>("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ collapsedWorkspaceIds }),
     }),
   createWorkspace: (machineId: string, sourcePaneId?: string) =>
     json<{ workspace: BootstrapPayload["workspaces"][number]; state: BootstrapPayload }>("/api/workspaces", {
@@ -100,11 +132,25 @@ export const api = {
     }),
   closeWorkspace: (workspaceId: string) =>
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}`, { method: "DELETE" }),
-  reorderWorkspace: (workspaceId: string, targetWorkspaceId: string, position: WorkspaceReorderPosition) =>
-    json<{ state: BootstrapPayload }>("/api/workspaces/reorder", {
+  reorderWorkspace: async (
+    workspaceId: string,
+    targetWorkspaceId: string | undefined,
+    position: WorkspaceReorderPosition,
+    workspaceTreeRevision: number,
+  ): Promise<{ state: BootstrapPayload }> => {
+    const response = await fetch("/api/workspaces/reorder", {
       method: "POST",
-      body: JSON.stringify({ workspaceId, targetWorkspaceId, position }),
-    }),
+      headers: { "content-type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ workspaceId, ...(targetWorkspaceId ? { targetWorkspaceId } : {}), position, workspaceTreeRevision }),
+    });
+    if (response.status === 401) throw new UnauthorizedError();
+    if (response.status === 409) {
+      const body = await response.json() as { state: BootstrapPayload };
+      throw new WorkspaceReorderConflictError(body.state);
+    }
+    if (!response.ok) throw await responseError(response);
+    return response.json() as Promise<{ state: BootstrapPayload }>;
+  },
   setWorkspaceTitle: (workspaceId: string, title: string) =>
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/title`, {
       method: "POST",

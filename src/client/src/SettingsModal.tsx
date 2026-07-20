@@ -16,6 +16,7 @@ export const defaultSettings: WmuxSettings = {
   tuiFrameRate: 15,
   terminalScrollMode: "batched",
   machineAliases: {},
+  collapsedWorkspaceIds: [],
 };
 
 export function SettingsModal({
@@ -404,6 +405,7 @@ const normalizeSettings = (settings: WmuxSettings): WmuxSettings => ({
       .map(([machineId, alias]) => [machineId, cleanAlias(alias)] as const)
       .filter(([, alias]) => alias.length > 0),
   ),
+  collapsedWorkspaceIds: settings.collapsedWorkspaceIds ?? [],
 });
 
 const clampFontSize = (value: number): number => {

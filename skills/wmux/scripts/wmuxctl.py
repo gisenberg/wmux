@@ -184,8 +184,11 @@ class WmuxClient:
     def bootstrap(self) -> dict[str, Any]:
         return self.request("GET", "/api/bootstrap")
 
-    def create_workspace(self, machine_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        result = self.request("POST", "/api/workspaces", {"machineId": machine_id, "createdBy": "agent"})
+    def create_workspace(self, machine_id: str, parent_pane_id: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+        body = {"machineId": machine_id, "createdBy": "agent"}
+        if parent_pane_id:
+            body["parentPaneId"] = parent_pane_id
+        result = self.request("POST", "/api/workspaces", body)
         return result["workspace"], result["state"]
 
     def create_tab(self, workspace_id: str, machine_id: str, source_pane_id: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
@@ -809,7 +812,10 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         raise SystemExit("wmuxctl: delegated agent runs require a POSIX local or SSH target")
 
     title = args.title or f"{args.runtime.capitalize()} delegation"
-    workspace, _state = client.create_workspace(args.machine)
+    # This is inherited only by a newly created delegated workspace. Reused
+    # title matches retain their server-owned parent relationship.
+    parent_pane_id = os.environ.get("WMUX_PANE_ID", "")
+    workspace, _state = client.create_workspace(args.machine, parent_pane_id)
     info = describe_workspace(client.url, workspace)
     run_id = str(uuid.uuid4())
     secrets = [prompt, client.token]

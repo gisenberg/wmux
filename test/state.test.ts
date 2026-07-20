@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { StateStore } from "../src/server/state.js";
-import { CURRENT_STATE_SCHEMA_VERSION } from "../src/server/state-schema.js";
+import { StateStore, WorkspaceDepthError } from "../src/server/state.js";
+import { CURRENT_STATE_SCHEMA_VERSION, parsePersistedState } from "../src/server/state-schema.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
@@ -29,6 +29,105 @@ test("fresh store creates one workspace and persists atomically", () => {
     // No temp file should be left behind after an atomic write.
     assert.equal(fs.readdirSync(dir).some((name) => name.endsWith(".tmp")), false);
     JSON.parse(fs.readFileSync(filePath, "utf8")); // valid JSON
+  });
+});
+
+test("agent workspace children are preorder-first and parent deletion promotes them", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const root = store.snapshot().workspaces[0];
+    const child = store.createWorkspace("local", undefined, "agent", root.id);
+    const grandchild = store.createWorkspace("local", undefined, "agent", child.id);
+    assert.deepEqual(store.snapshot().workspaces.map((workspace) => workspace.id), [root.id, child.id, grandchild.id]);
+    const removedPaneIds = store.removeWorkspace(root.id);
+    const snapshot = store.snapshot();
+    assert.deepEqual(removedPaneIds, root.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id)));
+    assert.equal(snapshot.workspaces[0].parentWorkspaceId, undefined);
+    assert.equal(snapshot.workspaces[1].parentWorkspaceId, child.id);
+  });
+});
+
+test("workspace moves move whole subtrees and enforce tree revisions", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const root = store.snapshot().workspaces[0];
+    const child = store.createWorkspace("local", undefined, "agent", root.id);
+    const sibling = store.createWorkspace("local");
+    const revision = store.snapshot().workspaceTreeRevision;
+    assert.equal(store.reorderWorkspaceResult(sibling.id, root.id, "after", revision).ok, true);
+    assert.deepEqual(store.snapshot().workspaces.map((workspace) => workspace.id), [root.id, child.id, sibling.id]);
+    assert.equal(store.reorderWorkspaceResult(root.id, sibling.id, "before", revision).status, "conflict");
+    assert.equal(store.reorderWorkspaceResult(root.id, child.id, "into", store.snapshot().workspaceTreeRevision).status, "cycle");
+  });
+});
+
+test("workspace tree moves preserve subtree semantics and enforce depth", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const root = store.snapshot().workspaces[0];
+    const first = store.createWorkspace("local", undefined, "agent", root.id);
+    const second = store.createWorkspace("local", undefined, "agent", root.id);
+    const nested = store.createWorkspace("local", undefined, "agent", first.id);
+    const target = store.createWorkspace("local");
+    let revision = store.snapshot().workspaceTreeRevision;
+    assert.equal(store.reorderWorkspaceResult(second.id, first.id, "into", revision).ok, true);
+    assert.deepEqual(store.snapshot().workspaces.map((workspace) => workspace.id), [target.id, root.id, first.id, second.id, nested.id]);
+    revision = store.snapshot().workspaceTreeRevision;
+    assert.equal(store.reorderWorkspaceResult(second.id, first.id, "out-of", revision).ok, true);
+    assert.deepEqual(store.snapshot().workspaces.map((workspace) => workspace.id), [target.id, root.id, first.id, nested.id, second.id]);
+    assert.equal(store.reorderWorkspaceResult(root.id, undefined, "out-of", store.snapshot().workspaceTreeRevision).status, "invalid_outdent");
+    const beforeNoop = store.snapshot().workspaceTreeRevision;
+    assert.equal(store.reorderWorkspaceResult(second.id, first.id, "after", beforeNoop).changed, false);
+    assert.equal(store.snapshot().workspaceTreeRevision, beforeNoop);
+    store.setWorkspaceTitle(root.id, "unchanged tree");
+    store.updatePane(root.tabs[0].panes[0].id, { cwd: "/tmp" });
+    assert.equal(store.snapshot().workspaceTreeRevision, beforeNoop);
+  });
+});
+
+test("moving a tall subtree beyond depth three is rejected", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const destination = store.snapshot().workspaces[0];
+    const destinationChild = store.createWorkspace("local", undefined, "agent", destination.id);
+    const source = store.createWorkspace("local");
+    const level1 = store.createWorkspace("local", undefined, "agent", source.id);
+    const level2 = store.createWorkspace("local", undefined, "agent", level1.id);
+    store.createWorkspace("local", undefined, "agent", level2.id);
+    assert.equal(store.reorderWorkspaceResult(source.id, destinationChild.id, "into", store.snapshot().workspaceTreeRevision).status, "depth");
+  });
+});
+
+test("workspace creation rejects a child below depth three without mutating state", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const root = store.snapshot().workspaces[0];
+    const level1 = store.createWorkspace("local", undefined, "agent", root.id);
+    const level2 = store.createWorkspace("local", undefined, "agent", level1.id);
+    const level3 = store.createWorkspace("local", undefined, "agent", level2.id);
+    const before = store.snapshot();
+    assert.throws(() => store.createWorkspace("local", undefined, "agent", level3.id), WorkspaceDepthError);
+    assert.deepEqual(store.snapshot().workspaces, before.workspaces);
+    assert.equal(store.snapshot().workspaceTreeRevision, before.workspaceTreeRevision);
+    assert.equal(store.snapshot().revision, before.revision);
+    assert.equal(store.createWorkspace("local", undefined, "agent", level2.id).parentWorkspaceId, level2.id);
+  });
+});
+
+test("v2 state migrates roots to v3 without changing order", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const second = store.createWorkspace("local");
+    const v2 = store.snapshot() as unknown as Record<string, unknown>;
+    v2.schemaVersion = 2;
+    delete v2.workspaceTreeRevision;
+    const parsed = parsePersistedState(v2);
+    assert.equal(parsed.migrated, true);
+    assert.equal(parsed.state.workspaceTreeRevision, 0);
+    assert.deepEqual(parsed.state.workspaces.map((workspace) => workspace.id), [second.id, store.snapshot().workspaces[1].id]);
+    assert.equal(parsed.state.workspaces.every((workspace) => workspace.parentWorkspaceId === undefined), true);
+    fs.writeFileSync(filePath, JSON.stringify(v2));
+    assert.equal(new StateStore(machines, filePath).snapshot().workspaceTreeRevision, 0);
   });
 });
 

@@ -357,8 +357,17 @@ a query parameter. wmux is not a hardened multi-user service.
 ## Workspaces and Interaction
 
 - Workspaces contain linked tabs and draggable split panes.
-- Drag workspace rows in the sidebar to persist a custom order. Workspace-number
-  shortcuts follow that saved order; newly created workspaces start at the top.
+- The sidebar presents workspaces as nested branches. Branches can be collapsed
+  or expanded, and their collapse state is synchronized by the server. Desktop,
+  keyboard, and mobile controls support moving a workspace before, after, into,
+  or out of another branch. Nesting is limited to four levels.
+- Host filtering retains the ancestor context needed to understand matching
+  workspaces; moves that would leave the active filter context are disabled.
+  Workspace-number shortcuts follow the saved tree order, and newly created
+  workspaces start at the top level.
+- Closing a parent workspace promotes its children rather than killing their
+  panes. Tree nesting is sidebar workspace metadata; tmux/screen durability
+  remains owned by each pane.
 - Agents using the bundled skill can create or reuse visible workspaces. These
   persist like user-created workspaces, appear with an `AI` badge, and retain
   direct links for monitoring or handoff.
@@ -492,7 +501,10 @@ parity is not included.
 OpenCode, Codex, and Claude on POSIX local/SSH targets. It accepts the prompt
 from a file or stdin, creates a fresh durable agent workspace, starts the staged
 `wmux-agent-run` transport, records lifecycle events, and returns a bounded
-result plus the direct workspace URL. For example:
+result plus the direct workspace URL. When `WMUX_PANE_ID` is available, the new
+agent workspace is nested beneath the invoking wmux workspace; this uses the
+explicit pane context rather than title heuristics. Delegations started outside
+wmux remain root workspaces. For example:
 
 ```bash
 wmuxctl delegate codex linux-box --directory /srv/project \

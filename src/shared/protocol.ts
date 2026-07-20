@@ -86,7 +86,7 @@ export interface PaneState {
 
 export type TitleSource = "default" | "auto" | "user";
 export type WorkspaceCreator = "user" | "agent";
-export type WorkspaceReorderPosition = "before" | "after";
+export type WorkspaceReorderPosition = "before" | "after" | "into" | "out-of";
 export type SplitDirection = "horizontal" | "vertical";
 
 export type LayoutNode =
@@ -107,6 +107,8 @@ export interface Workspace {
   id: string;
   name: string;
   createdBy?: WorkspaceCreator;
+  /** Parent is represented by preorder placement in workspaces, never an order key. */
+  parentWorkspaceId?: string;
   nameSource?: TitleSource;
   descriptor?: string;
   descriptorSource?: TitleSource;
@@ -203,10 +205,12 @@ export interface WmuxSettings {
   tuiFrameRate: TuiFrameRate;
   terminalScrollMode: TerminalScrollMode;
   machineAliases: Record<string, string>;
+  collapsedWorkspaceIds: string[];
 }
 
 export interface BootstrapPayload {
   revision: number;
+  workspaceTreeRevision: number;
   healthEpoch: number;
   machines: MachineStatus[];
   workspaces: Workspace[];

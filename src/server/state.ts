@@ -101,6 +101,11 @@ interface SetAutoTitleInput {
 // window. flush() forces a synchronous write for shutdown/tests.
 const WRITE_DEBOUNCE_MS = 150;
 
+export class WorkspaceDepthError extends Error {
+  readonly code = "workspace_depth";
+  constructor() { super("workspace tree exceeds maximum depth"); this.name = "WorkspaceDepthError"; }
+}
+
 export class StateStore extends EventEmitter {
   private state: PersistedState;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -181,7 +186,10 @@ export class StateStore extends EventEmitter {
     }
   }
 
-  createWorkspace(machineId: string, cwd?: string, createdBy: "user" | "agent" = "user"): Workspace {
+  createWorkspace(machineId: string, cwd?: string, createdBy: "user" | "agent" = "user", parentWorkspaceId?: string): Workspace {
+    if (parentWorkspaceId && createdBy !== "agent") throw new Error("only agent workspaces may have a parent");
+    if (parentWorkspaceId && !this.state.workspaces.some((workspace) => workspace.id === parentWorkspaceId)) throw new Error("parent workspace not found");
+    if (parentWorkspaceId && this.depthForParent(parentWorkspaceId) >= 4) throw new WorkspaceDepthError();
     const pane = this.createPane(machineId, cwd);
     const tab: SurfaceTab = {
       id: createId("tab"),
@@ -196,6 +204,7 @@ export class StateStore extends EventEmitter {
       id: createId("ws"),
       name: this.nextWorkspaceName(machineId),
       ...(createdBy === "agent" ? { createdBy } : {}),
+      ...(parentWorkspaceId ? { parentWorkspaceId } : {}),
       nameSource: "default",
       descriptor: this.machineDescriptor(machineId),
       descriptorSource: "default",
@@ -205,28 +214,51 @@ export class StateStore extends EventEmitter {
       createdAt: now(),
       updatedAt: now(),
     };
-    this.state.workspaces.unshift(workspace);
+    if (parentWorkspaceId) this.state.workspaces.splice(this.childInsertIndex(parentWorkspaceId), 0, workspace);
+    else this.state.workspaces.unshift(workspace);
     this.state.activeWorkspaceId = workspace.id;
+    this.bumpWorkspaceTreeRevision();
     this.save();
     return workspace;
   }
 
   reorderWorkspace(
     workspaceId: string,
-    targetWorkspaceId: string,
+    targetWorkspaceId: string | undefined,
     position: WorkspaceReorderPosition,
   ): boolean {
-    const sourceIndex = this.state.workspaces.findIndex((workspace) => workspace.id === workspaceId);
-    const originalTargetIndex = this.state.workspaces.findIndex((workspace) => workspace.id === targetWorkspaceId);
-    if (sourceIndex === -1 || originalTargetIndex === -1) return false;
-    if (workspaceId === targetWorkspaceId) return true;
+    return this.reorderWorkspaceResult(workspaceId, targetWorkspaceId, position).ok;
+  }
 
-    const [workspace] = this.state.workspaces.splice(sourceIndex, 1);
-    const targetIndex = this.state.workspaces.findIndex((candidate) => candidate.id === targetWorkspaceId);
-    const insertionIndex = targetIndex + (position === "after" ? 1 : 0);
-    this.state.workspaces.splice(insertionIndex, 0, workspace);
-    if (sourceIndex !== insertionIndex) this.save();
-    return true;
+  reorderWorkspaceResult(workspaceId: string, targetWorkspaceId: string | undefined, position: WorkspaceReorderPosition, expectedRevision?: number): { ok: boolean; status?: "not_found" | "conflict" | "cycle" | "invalid_outdent" | "depth"; changed?: boolean } {
+    if (expectedRevision !== undefined && expectedRevision !== this.state.workspaceTreeRevision) return { ok: false, status: "conflict" };
+    const sourceIndex = this.state.workspaces.findIndex((workspace) => workspace.id === workspaceId);
+    const targetIndex = targetWorkspaceId ? this.state.workspaces.findIndex((workspace) => workspace.id === targetWorkspaceId) : -1;
+    if (sourceIndex < 0 || (position !== "out-of" && targetIndex < 0)) return { ok: false, status: "not_found" };
+    const source = this.state.workspaces[sourceIndex];
+    const sourceEnd = this.subtreeEnd(sourceIndex);
+    if (workspaceId === targetWorkspaceId || (targetIndex > sourceIndex && targetIndex < sourceEnd)) return { ok: false, status: "cycle" };
+    let parentWorkspaceId: string | undefined;
+    let insertionIndex: number;
+    if (position === "into") { parentWorkspaceId = targetWorkspaceId; insertionIndex = targetIndex + 1; }
+    else if (position === "out-of") {
+      if (!source.parentWorkspaceId) return { ok: false, status: "invalid_outdent" };
+      const parentIndex = this.state.workspaces.findIndex((workspace) => workspace.id === source.parentWorkspaceId);
+      parentWorkspaceId = this.state.workspaces[parentIndex].parentWorkspaceId;
+      insertionIndex = this.subtreeEnd(parentIndex);
+    } else {
+      parentWorkspaceId = this.state.workspaces[targetIndex].parentWorkspaceId;
+      insertionIndex = position === "before" ? targetIndex : this.subtreeEnd(targetIndex);
+    }
+    if (this.depthForParent(parentWorkspaceId) + this.subtreeHeight(sourceIndex) > 3) return { ok: false, status: "depth" };
+    const subtree = this.state.workspaces.splice(sourceIndex, sourceEnd - sourceIndex);
+    if (sourceIndex < insertionIndex) insertionIndex -= subtree.length;
+    subtree[0] = { ...source, ...(parentWorkspaceId ? { parentWorkspaceId } : {}) };
+    if (!parentWorkspaceId) delete subtree[0].parentWorkspaceId;
+    if (insertionIndex === sourceIndex && source.parentWorkspaceId === parentWorkspaceId) { this.state.workspaces.splice(sourceIndex, 0, ...subtree); return { ok: true, changed: false }; }
+    this.state.workspaces.splice(insertionIndex, 0, ...subtree);
+    this.bumpWorkspaceTreeRevision(); this.save();
+    return { ok: true, changed: true };
   }
 
   createTab(workspaceId: string, machineId?: string, cwd?: string): SurfaceTab {
@@ -320,29 +352,31 @@ export class StateStore extends EventEmitter {
   }
 
   removeWorkspace(workspaceId: string): string[] {
-    const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
+    const index = this.state.workspaces.findIndex((candidate) => candidate.id === workspaceId);
+    const workspace = this.state.workspaces[index];
     if (!workspace) return [];
     const paneIds = workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id));
-    this.state.workspaces = this.state.workspaces.filter((candidate) => candidate.id !== workspaceId);
+    const promotedChildren = this.state.workspaces.filter((candidate) => candidate.parentWorkspaceId === workspaceId);
+    for (const child of promotedChildren) {
+      if (workspace.parentWorkspaceId) child.parentWorkspaceId = workspace.parentWorkspaceId;
+      else delete child.parentWorkspaceId;
+    }
+    this.state.workspaces.splice(index, 1);
     this.state.notifications = this.state.notifications.filter(
       (notification) => notification.workspaceId !== workspaceId,
     );
     this.state.agentEvents = this.state.agentEvents.filter((event) => event.workspaceId !== workspaceId);
     this.state.runs = this.state.runs.filter((run) => run.workspaceId !== workspaceId);
     if (this.state.activeWorkspaceId === workspaceId) {
-      this.state.activeWorkspaceId = this.state.workspaces[0]?.id ?? "";
+      this.state.activeWorkspaceId = promotedChildren[0]?.id ?? this.state.workspaces[index]?.id ?? this.state.workspaces[index - 1]?.id ?? "";
     }
+    this.bumpWorkspaceTreeRevision();
     this.save();
     return paneIds;
   }
 
   closeWorkspaceAfterExit(workspaceId: string): void {
-    const paneIds = this.removeWorkspace(workspaceId);
-    if (paneIds.length === 0) return;
-    if (this.state.workspaces.length > 0 && this.state.activeWorkspaceId === workspaceId) {
-      this.state.activeWorkspaceId = this.state.workspaces[0].id;
-      this.save();
-    }
+    this.removeWorkspace(workspaceId);
   }
 
   updatePane(paneId: string, patch: Partial<PaneState>): void {
@@ -692,6 +726,7 @@ export class StateStore extends EventEmitter {
     const state: PersistedState = {
       schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
       revision: 0,
+      workspaceTreeRevision: 0,
       machines: safeMachines,
       workspaces: [],
       activeWorkspaceId: "",
@@ -786,6 +821,7 @@ export class StateStore extends EventEmitter {
 
   private normalizeRestoredState(state: PersistedState): PersistedState {
     state.revision = Math.max(0, Math.floor(state.revision || 0));
+    state.workspaceTreeRevision = Math.max(0, Math.floor(state.workspaceTreeRevision || 0));
     state.notifications ??= [];
     state.agentEvents ??= [];
     state.runs ??= [];
@@ -817,6 +853,38 @@ export class StateStore extends EventEmitter {
     }
     return state;
   }
+
+  private subtreeEnd(index: number): number {
+    const id = this.state.workspaces[index]?.id;
+    let cursor = index + 1;
+    while (cursor < this.state.workspaces.length && this.isDescendantOf(this.state.workspaces[cursor], id)) cursor += 1;
+    return cursor;
+  }
+
+  private isDescendantOf(workspace: Workspace, ancestorId: string | undefined): boolean {
+    let parent = workspace.parentWorkspaceId;
+    while (parent) { if (parent === ancestorId) return true; parent = this.state.workspaces.find((candidate) => candidate.id === parent)?.parentWorkspaceId; }
+    return false;
+  }
+
+  private childInsertIndex(parentId: string): number { return this.state.workspaces.findIndex((workspace) => workspace.id === parentId) + 1; }
+  private depthForParent(parentId: string | undefined): number {
+    let depth = 0; let parent = parentId;
+    while (parent) { depth += 1; parent = this.state.workspaces.find((workspace) => workspace.id === parent)?.parentWorkspaceId; }
+    return depth;
+  }
+  private subtreeHeight(index: number): number {
+    const rootId = this.state.workspaces[index].id;
+    let height = 0;
+    for (let cursor = index + 1; cursor < this.subtreeEnd(index); cursor += 1) {
+      let depth = 0;
+      let parent = this.state.workspaces[cursor].parentWorkspaceId;
+      while (parent && parent !== rootId) { depth += 1; parent = this.state.workspaces.find((candidate) => candidate.id === parent)?.parentWorkspaceId; }
+      if (parent === rootId) height = Math.max(height, depth + 1);
+    }
+    return height;
+  }
+  private bumpWorkspaceTreeRevision(): void { this.state.workspaceTreeRevision += 1; }
 }
 
 const replacePane = (node: LayoutNode, paneId: string, replacement: LayoutNode): LayoutNode => {

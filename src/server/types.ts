@@ -47,6 +47,7 @@ export type MachineSource = MachineConfig[] | (() => MachineConfig[]);
 export interface PersistedState {
   schemaVersion: number;
   revision: number;
+  workspaceTreeRevision: number;
   machines: MachineConfig[];
   workspaces: Workspace[];
   activeWorkspaceId: string;
