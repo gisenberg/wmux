@@ -278,7 +278,8 @@ test("a new Windows pane stages and safely activates an outdated agent", async (
     80,
     24,
     {},
-    async () => {
+    async (_machine, rolloutPort) => {
+      assert.equal(rolloutPort, undefined, "an idle base agent updates in place");
       const response = await fetch(`http://127.0.0.1:${address.port}/drain`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -293,6 +294,7 @@ test("a new Windows pane stages and safely activates an outdated agent", async (
   assert.equal(created, true);
   assert.match(session.replayOutput, new RegExp(`Updating Windows agent ${expectedRelease}/protocol ${expectedProtocol - 1} → ${expectedRelease}/protocol ${expectedProtocol}`));
   assert.match(session.replayOutput, new RegExp(`updated to ${expectedRelease}/protocol ${expectedProtocol}`));
+  assert.doesNotMatch(session.replayOutput, /new generation/);
   session.detach();
   server.close();
   await once(server, "close");

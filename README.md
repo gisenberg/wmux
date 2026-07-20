@@ -559,10 +559,11 @@ Opt in from the machine's untracked config:
 
 Managed configs use `backend: "auto"`: ConPTY is preferred and terminal-safe
 stdio is the fallback when `pywinpty` is unavailable. Existing explicit
-`"conpty"` or `"stdio"` values remain pinned. New pane creation stages an
-outdated agent and starts a side-by-side agent generation automatically. The
-new pane uses that generation while existing panes remain pinned to the agent
-that owns them; generation ports are persisted so wmux restarts reconnect each
+`"conpty"` or `"stdio"` values remain pinned. When the base agent is outdated
+and idle, new pane creation stages the update and safely restarts that base
+before attaching. If the base still owns panes, wmux instead starts a
+side-by-side agent generation; existing panes remain pinned to the agent that
+owns them, and generation ports are persisted so wmux restarts reconnect each
 pane correctly. The Windows firewall must allow the configured `agentPort` and
 the next eight ports from the wmux server (for the default, `3481-3489`);
 `configure-agent-firewall` installs that exact-source, bounded rule and requires

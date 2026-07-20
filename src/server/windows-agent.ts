@@ -427,7 +427,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       health.draining = false;
     }
 
-    this.reportRollingUpdate(actualDisplay, expectedDisplay, activeSessions);
+    if (activeSessions === 0) this.reportPendingUpdate(actualDisplay, expectedDisplay, activeSessions);
+    else this.reportRollingUpdate(actualDisplay, expectedDisplay, activeSessions);
     if (!health.draining) {
       if (health.helperBundleVersion !== helperBundle.bundleVersion) {
         const stagingId = `__wmux_update_${this.pane.id}_${Date.now().toString(36)}`;
@@ -445,54 +446,61 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       }
     }
 
-    const currentGeneration = await this.findCurrentGeneration(helperBundle);
-    if (currentGeneration !== undefined) {
-      this.routeToAgentPort(currentGeneration);
-      this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${currentGeneration}; opening pane.\r\n`);
-      return !this.stopped;
-    }
-
-    const rolloutPort = await this.selectRolloutPort();
-    const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
-    if (typeof activatedPort === "number") {
-      const basePort = this.baseAgentPort();
-      const activatedUrl = this.urlForAgentPort(activatedPort);
-      let current: WindowsAgentHealth;
-      try {
-        current = await requestJson<WindowsAgentHealth>(
-          "GET",
-          `${activatedUrl}/health`,
-          undefined,
-          3000,
-          authHeaders(this.machine),
-        );
-      } catch (error) {
-        throw new Error(
-          `new Windows agent generation on port ${activatedPort} is not reachable from wmux; `
-          + `allow inbound TCP ${basePort}-${basePort + 8} from the wmux server `
-          + `(wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>): ${formatError(error)}`,
-        );
+    if (activeSessions === 0) {
+      // Nothing is owned by the outdated base process, so replace it in place.
+      // Existing side-by-side generations have independent tasks and remain
+      // available to panes already pinned to them.
+      await this.activateUpdate(this.machine);
+    } else {
+      const currentGeneration = await this.findCurrentGeneration(helperBundle);
+      if (currentGeneration !== undefined) {
+        this.routeToAgentPort(currentGeneration);
+        this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${currentGeneration}; opening pane.\r\n`);
+        return !this.stopped;
       }
-      const currentRelease = current.releaseVersion ?? current.version;
-      if (
-        current.ok !== true
-        || currentRelease !== expectedRelease
-        || (current.protocolVersion ?? 0) < expectedProtocol
-        || current.helperBundleVersion !== helperBundle.bundleVersion
-      ) {
-        throw new Error(`new Windows agent generation on port ${activatedPort} did not report the staged version`);
-      }
-      // Persist the selected generation only after it is reachable and reports
-      // the staged version. Otherwise a failed rollout would strand retries on
-      // an unavailable adjacent port instead of the still-running base agent.
-      this.routeToAgentPort(activatedPort);
-      this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${activatedPort}; opening pane.\r\n`);
-      return !this.stopped;
-    }
 
-    // Compatibility path for custom activators that replace the base listener
-    // instead of returning a side-by-side generation port.
-    this.reportPendingUpdate(actualDisplay, expectedDisplay, health.activeSessions ?? 0);
+      const rolloutPort = await this.selectRolloutPort();
+      const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
+      if (typeof activatedPort === "number") {
+        const basePort = this.baseAgentPort();
+        const activatedUrl = this.urlForAgentPort(activatedPort);
+        let current: WindowsAgentHealth;
+        try {
+          current = await requestJson<WindowsAgentHealth>(
+            "GET",
+            `${activatedUrl}/health`,
+            undefined,
+            3000,
+            authHeaders(this.machine),
+          );
+        } catch (error) {
+          throw new Error(
+            `new Windows agent generation on port ${activatedPort} is not reachable from wmux; `
+            + `allow inbound TCP ${basePort}-${basePort + 8} from the wmux server `
+            + `(wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>): ${formatError(error)}`,
+          );
+        }
+        const currentRelease = current.releaseVersion ?? current.version;
+        if (
+          current.ok !== true
+          || currentRelease !== expectedRelease
+          || (current.protocolVersion ?? 0) < expectedProtocol
+          || current.helperBundleVersion !== helperBundle.bundleVersion
+        ) {
+          throw new Error(`new Windows agent generation on port ${activatedPort} did not report the staged version`);
+        }
+        // Persist the selected generation only after it is reachable and reports
+        // the staged version. Otherwise a failed rollout would strand retries on
+        // an unavailable adjacent port instead of the still-running base agent.
+        this.routeToAgentPort(activatedPort);
+        this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${activatedPort}; opening pane.\r\n`);
+        return !this.stopped;
+      }
+
+      // Compatibility path for custom activators that replace the base listener
+      // instead of returning a side-by-side generation port.
+      this.reportPendingUpdate(actualDisplay, expectedDisplay, activeSessions);
+    }
 
     while (!this.stopped) {
       await delay(500);
