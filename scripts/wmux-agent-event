@@ -187,6 +187,7 @@ def main():
     parser.add_argument("--summary", default="")
     parser.add_argument("--message", default="")
     parser.add_argument("--body", default="")
+    parser.add_argument("--run-id", default=os.environ.get("WMUX_DELEGATION_RUN_ID", ""))
     parser.add_argument("--pane", default=os.environ.get("WMUX_PANE_ID", ""))
     parser.add_argument("--workspace", default=os.environ.get("WMUX_WORKSPACE_ID", ""))
     parser.add_argument("--tab", default=os.environ.get("WMUX_TAB_ID", ""))
@@ -262,6 +263,8 @@ def main():
         "summary": clean_text(summary, 500),
         "body": clean_text(args.body, 500),
     }
+    if args.run_id:
+        payload["runId"] = clean_text(args.run_id, 128)
     if message:
         payload["message"] = message
     if args.pane:

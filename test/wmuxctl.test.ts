@@ -392,11 +392,124 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
     assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), ["wmux-agent-run", "\r"]);
     assert.equal(inputs.some((body) => String(body.data).includes(prompt)), false);
-    assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message })), [
-      { agent: "codex", status: "running", message: undefined },
-      { agent: "codex", status: "completed", message: "review complete" },
+    assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message, runId: event.runId })), [
+      { agent: "codex", status: "running", message: undefined, runId },
+      { agent: "codex", status: "completed", message: "review complete", runId },
     ]);
     assert.equal(deleted, true);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("wmuxctl delegate recovers a completed result from durable lifecycle status", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-recover-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "durable recovery task");
+  const lifecycle: Array<Record<string, unknown>> = [];
+  let runId = "";
+  let upgradeCount = 0;
+  const workspace = {
+    id: "ws_recover",
+    machineId: "linux-box",
+    activeTabId: "tab_recover",
+    tabs: [{
+      id: "tab_recover",
+      activePaneId: "pane_recover",
+      panes: [{ id: "pane_recover", machineId: "linux-box" }],
+    }],
+  };
+  const jsonResponse = (response: http.ServerResponse, body: unknown, status = 200) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      jsonResponse(response, {
+        machines: [{ id: "linux-box", kind: "ssh", platform: "linux", reachable: true }],
+        workspaces: [workspace],
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_recover/title") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, {}));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/agent-events") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        lifecycle.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        jsonResponse(response, {}, 201);
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/panes/pane_recover/input") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (typeof body.data === "string" && body.data !== "wmux-agent-run" && body.data !== "\r") {
+          runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
+        }
+        jsonResponse(response, {});
+      });
+      return;
+    }
+    if (request.method === "GET" && request.url === `/api/delegations/${runId}`) {
+      jsonResponse(response, {
+        delegation: {
+          runId,
+          state: "completed",
+          runtime: "codex",
+          title: "Recovered review",
+          summary: "Codex delegation completed",
+          result: "durable review result",
+          error: "",
+        },
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("upgrade", (request, socket) => {
+    upgradeCount += 1;
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    let replay = "operator@host /srv/project ❯ ";
+    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount === 3) replay = `WMUX_AGENT_DONE ${runId} 0\r\n`;
+    socket.end(websocketFrame({ type: "ready", paneId: "pane_recover", replay }));
+  });
+
+  const url = await listen(server);
+  try {
+    const delegated = await cli(url, [
+      "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
+      "--title", "Recovered review",
+    ]);
+    const result = JSON.parse(delegated.stdout);
+    assert.equal(result.state, "completed");
+    assert.equal(result.result, "durable review result");
+    assert.equal(lifecycle.length, 1);
+    assert.equal(lifecycle[0].status, "running");
+    assert.equal(lifecycle[0].runId, runId);
   } finally {
     await close(server);
     fs.rmSync(root, { recursive: true, force: true });

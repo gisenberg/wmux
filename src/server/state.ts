@@ -70,6 +70,7 @@ interface CreateClipboardInput extends TargetInput {
 }
 
 interface RecordAgentEventInput extends TargetInput {
+  runId?: string;
   agent?: string;
   status?: string;
   title?: string;
@@ -503,12 +504,14 @@ export class StateStore extends EventEmitter {
     const title = cleanTitle(input.title ?? "", "");
     const summary = cleanDescriptor(input.summary ?? input.body ?? "", "");
     const message = cleanAgentMessage(input.message ?? "");
+    const runId = cleanDelegationRunId(input.runId);
     const createdAt = now();
     if (ACTIVE_AGENT_STATUSES.has(status)) {
       this.markLatestAgentInterrupted(target.pane.id, agent, createdAt);
     }
     const agentEvent: AgentActivity = {
       id: createId("agent"),
+      ...(runId ? { runId } : {}),
       workspaceId: target.workspace.id,
       tabId: target.tab.id,
       paneId: target.pane.id,
@@ -562,6 +565,11 @@ export class StateStore extends EventEmitter {
       notification: notification ? structuredClone(notification) : undefined,
       agentEvent: structuredClone(agentEvent),
     };
+  }
+
+  agentEventForRun(runId: string): AgentActivity | undefined {
+    const event = this.state.agentEvents.find((candidate) => candidate.runId === runId);
+    return event ? structuredClone(event) : undefined;
   }
 
   interruptAgentForPane(paneId: string): boolean {
@@ -911,6 +919,11 @@ const cleanAgentMessage = (value: string): string =>
 const cleanEventId = (value?: string): string => {
   const cleaned = (value ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80);
   return cleaned;
+};
+
+const cleanDelegationRunId = (value?: string): string => {
+  const candidate = value ?? "";
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate) ? candidate : "";
 };
 
 const validIsoDate = (value?: string): string | null => {

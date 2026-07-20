@@ -2,7 +2,7 @@ import { z } from "zod";
 import { machineSchema } from "./config.js";
 import type { LayoutNode, PersistedState } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 2;
+export const CURRENT_STATE_SCHEMA_VERSION = 3;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -13,6 +13,7 @@ export class UnsupportedStateVersionError extends Error {
 
 const titleSourceSchema = z.enum(["default", "auto", "user"]);
 const idSchema = z.string().min(1).max(120);
+const delegationRunIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
 const timestampSchema = z.string().min(1).max(80);
 
 const paneSchema = z.object({
@@ -75,6 +76,7 @@ const notificationSchema = z.object({
 
 const agentEventSchema = z.object({
   id: idSchema,
+  runId: delegationRunIdSchema.optional(),
   workspaceId: idSchema,
   tabId: idSchema,
   paneId: idSchema,
@@ -190,7 +192,7 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion) && rawVersion > CURRENT_STATE_SCHEMA_VERSION) {
     throw new UnsupportedStateVersionError(rawVersion);
   }
-  if (rawVersion !== undefined && rawVersion !== 0 && rawVersion !== 1 && rawVersion !== CURRENT_STATE_SCHEMA_VERSION) {
+  if (rawVersion !== undefined && rawVersion !== 0 && rawVersion !== 1 && rawVersion !== 2 && rawVersion !== CURRENT_STATE_SCHEMA_VERSION) {
     throw new Error("state schemaVersion must be a supported integer");
   }
   const migrated = rawVersion !== CURRENT_STATE_SCHEMA_VERSION;

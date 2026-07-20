@@ -468,7 +468,10 @@ parity is not included.
 OpenCode, Codex, and Claude on POSIX local/SSH targets. It accepts the prompt
 from a file or stdin, creates a fresh durable agent workspace, starts the staged
 `wmux-agent-run` transport, records lifecycle events, and returns a bounded
-result plus the direct workspace URL. For example:
+result plus the direct workspace URL.
+Delegated agent hooks attach the generated run ID to persisted lifecycle events.
+If terminal replay misses the final result marker, `wmuxctl` reconciles through the authenticated durable delegation-status endpoint before reporting failure.
+For example:
 
 ```bash
 wmuxctl delegate codex linux-box --directory /srv/project \

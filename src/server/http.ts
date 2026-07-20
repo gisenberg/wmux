@@ -686,6 +686,7 @@ export const createHttpServer = (
 
       if (url.pathname === "/api/agent-events" && request.method === "POST") {
         const body = (await readBody(request)) as {
+          runId?: string;
           workspaceId?: string;
           tabId?: string;
           paneId?: string;
@@ -697,6 +698,7 @@ export const createHttpServer = (
           body?: string;
         };
         const result = state.recordAgentEvent({
+          runId: body.runId,
           workspaceId: body.workspaceId,
           tabId: body.tabId,
           paneId: body.paneId,
@@ -708,6 +710,34 @@ export const createHttpServer = (
           body: body.body,
         });
         sendJson(response, 201, { ...result, state: currentPayload() });
+        return;
+      }
+
+      const delegationStatusMatch = url.pathname.match(/^\/api\/delegations\/([A-Za-z0-9._-]{1,128})$/);
+      if (delegationStatusMatch && request.method === "GET") {
+        const runId = delegationStatusMatch[1];
+        const event = state.agentEventForRun(runId);
+        if (!event) {
+          sendJson(response, 404, { error: "delegation_not_found" });
+          return;
+        }
+        const successful = event.status === "completed";
+        const terminal = successful || ["failed", "error", "cancelled", "stopped", "timed_out"].includes(event.status);
+        sendJson(response, 200, {
+          delegation: {
+            runId,
+            state: terminal ? event.status : "running",
+            runtime: event.agent,
+            title: event.title,
+            summary: event.summary,
+            result: successful ? event.message ?? event.summary : "",
+            error: terminal && !successful ? event.message ?? event.summary : "",
+            workspaceId: event.workspaceId,
+            tabId: event.tabId,
+            paneId: event.paneId,
+            updatedAt: event.createdAt,
+          },
+        });
         return;
       }
 

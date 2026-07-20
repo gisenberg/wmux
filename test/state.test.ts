@@ -64,6 +64,19 @@ test("legacy terminal pane kinds are removed during migration", () => {
   });
 });
 
+test("version 2 state migrates to delegation-aware schema", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const previous = store.snapshot() as unknown as Record<string, unknown>;
+    previous.schemaVersion = 2;
+    fs.writeFileSync(filePath, JSON.stringify(previous));
+
+    const migrated = new StateStore(machines, filePath);
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+    assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+  });
+});
+
 test("state recovers from the last validated backup", () => {
   withTempState((filePath, dir) => {
     const store = new StateStore(machines, filePath);
@@ -318,6 +331,29 @@ test("agent messages are sanitized and persist across restart", () => {
 
     const reloaded = new StateStore(machines, filePath);
     assert.equal(reloaded.snapshot().agentEvents[0].message, "First line.\n\nSecond line.");
+  });
+});
+
+test("delegation lifecycle records remain queryable by run id after restart", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-durable-1",
+      agent: "codex",
+      status: "completed",
+      title: "Durable review",
+      summary: "Codex delegation completed",
+      message: "Review complete.",
+    });
+    store.flush();
+
+    const reloaded = new StateStore(machines, filePath);
+    const event = reloaded.agentEventForRun("run-durable-1");
+    assert.equal(event?.status, "completed");
+    assert.equal(event?.message, "Review complete.");
+    assert.equal(reloaded.agentEventForRun("missing"), undefined);
   });
 });
 

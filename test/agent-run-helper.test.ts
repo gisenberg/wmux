@@ -27,7 +27,7 @@ if runtime == 'opencode' and sys.argv[1:] == ['run','--help']:
     print('  --auto  automatically approve permissions')
     raise SystemExit(0)
 with open(os.environ['CAPTURE_PATH'],'w',encoding='utf-8') as handle:
-    json.dump({'runtime':runtime,'argv':sys.argv[1:],'stdin':sys.stdin.read(),'cwd':os.getcwd(),'delegated':os.environ.get('WMUX_DELEGATED_RUN')},handle)
+    json.dump({'runtime':runtime,'argv':sys.argv[1:],'stdin':sys.stdin.read(),'cwd':os.getcwd(),'delegated':os.environ.get('WMUX_DELEGATED_RUN'),'delegationRunId':os.environ.get('WMUX_DELEGATION_RUN_ID')},handle)
 prompt=os.environ['SECRET_PROMPT']
 if runtime == 'opencode':
     print(json.dumps({'type':'text','part':{'text':'OpenCode done'}}))
@@ -81,6 +81,7 @@ else:
       assert.equal(captured.stdin, prompt);
       assert.equal(captured.cwd, entry.runtime === "claude" ? dir : root);
       assert.equal(captured.delegated, "1");
+      assert.equal(captured.delegationRunId, `run-${index}`);
       assert.deepEqual(decodeResult(completed.stdout), {
         runId: `run-${index}`,
         runtime: entry.runtime,
