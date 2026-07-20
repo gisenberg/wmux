@@ -713,31 +713,15 @@ export const createHttpServer = (
         return;
       }
 
-      const delegationStatusMatch = url.pathname.match(/^\/api\/delegations\/([A-Za-z0-9._-]{1,128})$/);
+      const delegationStatusMatch = url.pathname.match(/^\/api\/delegations\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/);
       if (delegationStatusMatch && request.method === "GET") {
         const runId = delegationStatusMatch[1];
-        const event = state.agentEventForRun(runId);
-        if (!event) {
+        const delegation = state.delegationForRun(runId);
+        if (!delegation) {
           sendJson(response, 404, { error: "delegation_not_found" });
           return;
         }
-        const successful = event.status === "completed";
-        const terminal = successful || ["failed", "error", "cancelled", "stopped", "timed_out"].includes(event.status);
-        sendJson(response, 200, {
-          delegation: {
-            runId,
-            state: terminal ? event.status : "running",
-            runtime: event.agent,
-            title: event.title,
-            summary: event.summary,
-            result: successful ? event.message ?? event.summary : "",
-            error: terminal && !successful ? event.message ?? event.summary : "",
-            workspaceId: event.workspaceId,
-            tabId: event.tabId,
-            paneId: event.paneId,
-            updatedAt: event.createdAt,
-          },
-        });
+        sendJson(response, 200, { delegation });
         return;
       }
 

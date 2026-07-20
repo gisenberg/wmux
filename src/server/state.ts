@@ -11,6 +11,8 @@ import {
 } from "./state-schema.js";
 import type {
   AgentActivity,
+  DelegationRecord,
+  DelegationState,
   LayoutNode,
   MachineConfig,
   PaneState,
@@ -27,6 +29,17 @@ import type {
 
 const now = (): string => new Date().toISOString();
 const ACTIVE_AGENT_STATUSES = new Set(["running", "started", "working", "waiting"]);
+const TERMINAL_DELEGATION_STATES = new Set<DelegationState>([
+  "completed",
+  "failed",
+  "error",
+  "cancelled",
+  "stopped",
+  "timed_out",
+  "interrupted",
+]);
+const MAX_DELEGATIONS = 1_000;
+const DELEGATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const stateMachines = (machines: MachineConfig[]): MachineConfig[] =>
   machines.map(({
     agentToken: _agentToken,
@@ -503,11 +516,12 @@ export class StateStore extends EventEmitter {
     const status = cleanTitle(input.status ?? "updated", "updated").toLowerCase();
     const title = cleanTitle(input.title ?? "", "");
     const summary = cleanDescriptor(input.summary ?? input.body ?? "", "");
-    const message = cleanAgentMessage(input.message ?? "");
+    const delegationMessage = cleanDelegationMessage(input.message ?? "");
+    const message = cleanAgentMessage(delegationMessage);
     const runId = cleanDelegationRunId(input.runId);
     const createdAt = now();
     if (ACTIVE_AGENT_STATUSES.has(status)) {
-      this.markLatestAgentInterrupted(target.pane.id, agent, createdAt);
+      this.markLatestAgentInterrupted(target.pane.id, agent, createdAt, runId);
     }
     const agentEvent: AgentActivity = {
       id: createId("agent"),
@@ -524,6 +538,7 @@ export class StateStore extends EventEmitter {
     };
     this.state.agentEvents.unshift(agentEvent);
     this.state.agentEvents = this.state.agentEvents.slice(0, 300);
+    if (runId) this.recordDelegationEvent(agentEvent, delegationMessage);
 
     let workspaceChanged = false;
     if (title && target.workspace.nameSource !== "user") {
@@ -567,9 +582,9 @@ export class StateStore extends EventEmitter {
     };
   }
 
-  agentEventForRun(runId: string): AgentActivity | undefined {
-    const event = this.state.agentEvents.find((candidate) => candidate.runId === runId);
-    return event ? structuredClone(event) : undefined;
+  delegationForRun(runId: string): DelegationRecord | undefined {
+    const delegation = this.state.delegations.find((candidate) => candidate.runId === runId);
+    return delegation ? structuredClone(delegation) : undefined;
   }
 
   interruptAgentForPane(paneId: string): boolean {
@@ -579,12 +594,29 @@ export class StateStore extends EventEmitter {
     return true;
   }
 
-  private markLatestAgentInterrupted(paneId: string, agent: string | undefined, interruptedAt: string): boolean {
+  private markLatestAgentInterrupted(
+    paneId: string,
+    agent: string | undefined,
+    interruptedAt: string,
+    nextRunId = "",
+  ): boolean {
     const latest = this.state.agentEvents.find((candidate) => candidate.paneId === paneId && (!agent || candidate.agent === agent));
     if (!latest || !ACTIVE_AGENT_STATUSES.has(latest.status)) return false;
+    if (nextRunId && latest.runId === nextRunId) return false;
 
     latest.status = "interrupted";
     latest.summary = `${latest.agent} interrupted`;
+    if (latest.runId) {
+      const delegation = this.state.delegations.find((candidate) => candidate.runId === latest.runId);
+      if (delegation && !TERMINAL_DELEGATION_STATES.has(delegation.state)) {
+        delegation.state = "interrupted";
+        delegation.summary = latest.summary;
+        delegation.error = latest.summary;
+        delegation.updatedAt = interruptedAt;
+        this.moveDelegationToFront(delegation.runId);
+        this.pruneDelegations();
+      }
+    }
     const workspace = this.state.workspaces.find((candidate) => candidate.id === latest.workspaceId);
     if (workspace && workspace.descriptorSource !== "user") {
       workspace.descriptor = latest.summary;
@@ -592,6 +624,90 @@ export class StateStore extends EventEmitter {
       workspace.updatedAt = interruptedAt;
     }
     return true;
+  }
+
+  private recordDelegationEvent(event: AgentActivity, message: string, targetState: PersistedState = this.state): void {
+    if (!event.runId) return;
+    const existing = targetState.delegations.find((candidate) => candidate.runId === event.runId);
+    if (event.status === "observer_error") {
+      const observerError = message || event.summary;
+      if (existing) {
+        existing.observerError = observerError;
+        existing.updatedAt = event.createdAt;
+        this.moveDelegationToFront(existing.runId, targetState);
+      } else {
+        targetState.delegations.unshift({
+          runId: event.runId,
+          state: "running",
+          runtime: event.agent,
+          title: event.title,
+          summary: event.summary,
+          result: "",
+          error: "",
+          observerError,
+          workspaceId: event.workspaceId,
+          tabId: event.tabId,
+          paneId: event.paneId,
+          createdAt: event.createdAt,
+          updatedAt: event.createdAt,
+        });
+      }
+      this.pruneDelegations(targetState);
+      return;
+    }
+
+    const reportedState = delegationStateForStatus(event.status);
+    if (existing && TERMINAL_DELEGATION_STATES.has(existing.state) && (!reportedState || !TERMINAL_DELEGATION_STATES.has(reportedState))) {
+      this.pruneDelegations(targetState);
+      return;
+    }
+    const state = reportedState ?? existing?.state ?? "running";
+    const successful = state === "completed";
+    const terminal = TERMINAL_DELEGATION_STATES.has(state);
+    const detail = message || event.summary;
+    const delegation: DelegationRecord = existing ?? {
+      runId: event.runId,
+      state,
+      runtime: event.agent,
+      title: event.title,
+      summary: event.summary,
+      result: "",
+      error: "",
+      workspaceId: event.workspaceId,
+      tabId: event.tabId,
+      paneId: event.paneId,
+      createdAt: event.createdAt,
+      updatedAt: event.createdAt,
+    };
+    delegation.state = state;
+    delegation.runtime = event.agent;
+    delegation.title = event.title;
+    delegation.summary = event.summary;
+    delegation.workspaceId = event.workspaceId;
+    delegation.tabId = event.tabId;
+    delegation.paneId = event.paneId;
+    delegation.updatedAt = event.createdAt;
+    if (terminal) {
+      delegation.result = successful ? detail : "";
+      delegation.error = successful ? "" : detail;
+    }
+    if (!existing) targetState.delegations.unshift(delegation);
+    else this.moveDelegationToFront(delegation.runId, targetState);
+    this.pruneDelegations(targetState);
+  }
+
+  private moveDelegationToFront(runId: string, targetState: PersistedState = this.state): void {
+    const index = targetState.delegations.findIndex((candidate) => candidate.runId === runId);
+    if (index <= 0) return;
+    const [delegation] = targetState.delegations.splice(index, 1);
+    targetState.delegations.unshift(delegation);
+  }
+
+  private pruneDelegations(targetState: PersistedState = this.state, referenceTime = Date.now()): void {
+    const cutoff = referenceTime - DELEGATION_RETENTION_MS;
+    targetState.delegations = targetState.delegations
+      .filter((delegation) => !TERMINAL_DELEGATION_STATES.has(delegation.state) || Date.parse(delegation.updatedAt) >= cutoff)
+      .slice(0, MAX_DELEGATIONS);
   }
 
   recordRunEvent(input: RecordRunEventInput): TerminalRun {
@@ -705,6 +821,7 @@ export class StateStore extends EventEmitter {
       activeWorkspaceId: "",
       notifications: [],
       agentEvents: [],
+      delegations: [],
       runs: [],
     };
     this.state = state;
@@ -796,12 +913,24 @@ export class StateStore extends EventEmitter {
     state.revision = Math.max(0, Math.floor(state.revision || 0));
     state.notifications ??= [];
     state.agentEvents ??= [];
+    state.delegations ??= [];
     state.runs ??= [];
     for (const event of state.agentEvents) {
       const message = cleanAgentMessage(event.message ?? "");
       if (message) event.message = message;
       else delete event.message;
     }
+    const backfillRunIds = new Set(
+      state.agentEvents
+        .map((event) => event.runId)
+        .filter((runId): runId is string => Boolean(runId))
+        .filter((runId) => !state.delegations.some((delegation) => delegation.runId === runId)),
+    );
+    for (const event of [...state.agentEvents].reverse()) {
+      if (!event.runId || !backfillRunIds.has(event.runId)) continue;
+      this.recordDelegationEvent(event, cleanDelegationMessage(event.message ?? ""), state);
+    }
+    this.pruneDelegations(state);
     for (const workspace of state.workspaces) {
       workspace.nameSource ??= isDefaultWorkspaceName(workspace.name, workspace.machineId) ? "default" : "user";
       workspace.descriptor ??= this.machineDescriptor(workspace.machineId, state.machines ?? []);
@@ -908,13 +1037,16 @@ const cleanDescriptor = (value: string, fallback: string): string => {
 };
 
 const cleanAgentMessage = (value: string): string =>
+  cleanDelegationMessage(value).slice(0, 12_000);
+
+const cleanDelegationMessage = (value: string): string =>
   stripMarkup(value)
     .replace(/\r\n?/g, "\n")
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{4,}/g, "\n\n\n")
     .trim()
-    .slice(0, 12_000);
+    .slice(0, 64_000);
 
 const cleanEventId = (value?: string): string => {
   const cleaned = (value ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80);
@@ -924,6 +1056,16 @@ const cleanEventId = (value?: string): string => {
 const cleanDelegationRunId = (value?: string): string => {
   const candidate = value ?? "";
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate) ? candidate : "";
+};
+
+const delegationStateForStatus = (status: string): DelegationState | null => {
+  if (status === "waiting") return "waiting";
+  if (status === "completed") return "completed";
+  if (["failed", "error", "cancelled", "stopped", "timed_out", "interrupted"].includes(status)) {
+    return status as DelegationState;
+  }
+  if (ACTIVE_AGENT_STATUSES.has(status)) return "running";
+  return null;
 };
 
 const validIsoDate = (value?: string): string | null => {

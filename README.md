@@ -46,7 +46,7 @@ The desktop view and both mobile surfaces show the same live Codex workspace.
 | Session manager | One live client per pane, pinned backend snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and backend lifecycle |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Local PTYs, SSH with `tmux`/`screen` and per-pane control sockets, PowerShell over SSH, and the experimental Windows agent, which owns pane processes, replay, and dynamic-registration heartbeat |
-| Persistent state | Workspace layout, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
+| Persistent state | Workspace layout, delegation outcomes, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
 | Optional streaming | Machine-local MediaMTX capture or a Moonlight/Sunshine gateway, requested by the browser |
 
 The server owns canonical workspace state and one live session client per
@@ -470,7 +470,9 @@ from a file or stdin, creates a fresh durable agent workspace, starts the staged
 `wmux-agent-run` transport, records lifecycle events, and returns a bounded
 result plus the direct workspace URL.
 Delegated agent hooks attach the generated run ID to persisted lifecycle events.
-If terminal replay misses the final result marker, `wmuxctl` reconciles through the authenticated durable delegation-status endpoint before reporting failure.
+wmux maintains a dedicated delegation ledger separately from workspace activity, so an outcome remains queryable after its pane or workspace closes.
+`wmuxctl` races terminal replay against the authenticated delegation-status endpoint, allowing either completion signal to finish the request without waiting for the other to time out.
+Controller observation failures are recorded separately and never replace an agent's terminal outcome.
 For example:
 
 ```bash
@@ -609,6 +611,8 @@ before removing the generation's Scheduled Task, process, config, and wrapper.
 
 wmux stores workspace layout in `~/.wmux/state.json` using versioned, atomic,
 owner-only writes with a rolling validated backup.
+The same state file retains the newest 1,000 delegation records, expires terminal outcomes after 30 days, and keeps active outcomes until they become terminal or fall outside the count bound.
+Delegation records are independent of pane and workspace cleanup.
 
 | Backend | Survives browser refresh | Survives wmux restart |
 | --- | --- | --- |

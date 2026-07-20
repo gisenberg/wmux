@@ -516,6 +516,222 @@ test("wmuxctl delegate recovers a completed result from durable lifecycle status
   }
 });
 
+test("wmuxctl delegate finishes from lifecycle status when terminal replay has no markers", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-lifecycle-first-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "lifecycle-first task");
+  let runId = "";
+  let upgradeCount = 0;
+  let statusRequests = 0;
+  const workspace = {
+    id: "ws_lifecycle_first",
+    machineId: "linux-box",
+    activeTabId: "tab_lifecycle_first",
+    tabs: [{
+      id: "tab_lifecycle_first",
+      activePaneId: "pane_lifecycle_first",
+      panes: [{ id: "pane_lifecycle_first", machineId: "linux-box" }],
+    }],
+  };
+  const jsonResponse = (response: http.ServerResponse, body: unknown, status = 200) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      jsonResponse(response, {
+        machines: [{ id: "linux-box", kind: "ssh", platform: "linux", reachable: true }],
+        workspaces: [workspace],
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_lifecycle_first/title") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, {}));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/agent-events") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, {}, 201));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/panes/pane_lifecycle_first/input") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (typeof body.data === "string" && body.data !== "wmux-agent-run" && body.data !== "\r") {
+          runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
+        }
+        jsonResponse(response, {});
+      });
+      return;
+    }
+    if (request.method === "GET" && request.url === `/api/delegations/${runId}`) {
+      statusRequests += 1;
+      jsonResponse(response, {
+        delegation: {
+          runId,
+          state: "completed",
+          runtime: "codex",
+          title: "Lifecycle-first review",
+          summary: "Codex delegation completed",
+          result: "completed without replay markers",
+          error: "",
+        },
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("upgrade", (request, socket) => {
+    upgradeCount += 1;
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    let replay = "operator@host /srv/project ❯ ";
+    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount >= 3) replay = "agent output without control markers\r\n";
+    socket.end(websocketFrame({ type: "ready", paneId: "pane_lifecycle_first", replay }));
+  });
+
+  const url = await listen(server);
+  try {
+    const delegated = await cli(url, [
+      "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
+      "--title", "Lifecycle-first review", "--timeout", "10",
+    ]);
+    const result = JSON.parse(delegated.stdout);
+    assert.equal(result.state, "completed");
+    assert.equal(result.result, "completed without replay markers");
+    assert.ok(result.elapsedSeconds < 3);
+    assert.equal(statusRequests, 1);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("wmuxctl delegate records observer failure without replacing the agent outcome", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-observer-error-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "observer failure task");
+  const lifecycle: Array<Record<string, unknown>> = [];
+  let runId = "";
+  let upgradeCount = 0;
+  const workspace = {
+    id: "ws_observer_error",
+    machineId: "linux-box",
+    activeTabId: "tab_observer_error",
+    tabs: [{
+      id: "tab_observer_error",
+      activePaneId: "pane_observer_error",
+      panes: [{ id: "pane_observer_error", machineId: "linux-box" }],
+    }],
+  };
+  const jsonResponse = (response: http.ServerResponse, body: unknown, status = 200) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      jsonResponse(response, {
+        machines: [{ id: "linux-box", kind: "ssh", platform: "linux", reachable: true }],
+        workspaces: [workspace],
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_observer_error/title") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, {}));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/agent-events") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        lifecycle.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        jsonResponse(response, {}, 201);
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/panes/pane_observer_error/input") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (typeof body.data === "string" && body.data !== "wmux-agent-run" && body.data !== "\r" && body.data !== "\u0003") {
+          runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
+        }
+        jsonResponse(response, {});
+      });
+      return;
+    }
+    if (request.method === "GET" && request.url === `/api/delegations/${runId}`) {
+      jsonResponse(response, { error: "temporarily_unavailable" }, 503);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("upgrade", (request, socket) => {
+    upgradeCount += 1;
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    let replay = "operator@host /srv/project ❯ ";
+    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount >= 3) replay = "agent output without control markers\r\n";
+    socket.end(websocketFrame({ type: "ready", paneId: "pane_observer_error", replay }));
+  });
+
+  const url = await listen(server);
+  try {
+    await assert.rejects(
+      cli(url, [
+        "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
+        "--title", "Observer failure", "--timeout", "0.5",
+      ]),
+      (error: { stdout?: string }) => {
+        const result = JSON.parse(error.stdout ?? "{}");
+        assert.equal(result.state, "failed");
+        assert.equal(result.failureKind, "observer");
+        return true;
+      },
+    );
+    assert.deepEqual(lifecycle.map((event) => event.status), ["running", "observer_error"]);
+    assert.equal(lifecycle[1].runId, runId);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("wmuxctl delegate records failure and preserves the workspace when setup fails", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-fail-"));
   const promptPath = path.join(root, "prompt.md");

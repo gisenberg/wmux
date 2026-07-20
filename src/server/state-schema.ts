@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { machineSchema } from "./config.js";
-import type { LayoutNode, PersistedState } from "./types.js";
+import type { DelegationRecord, LayoutNode, PersistedState } from "./types.js";
 
 export const CURRENT_STATE_SCHEMA_VERSION = 3;
 
@@ -88,6 +88,34 @@ const agentEventSchema = z.object({
   createdAt: timestampSchema,
 }).strict();
 
+const delegationStateSchema = z.enum([
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "error",
+  "cancelled",
+  "stopped",
+  "timed_out",
+  "interrupted",
+]);
+
+const delegationSchema: z.ZodType<DelegationRecord> = z.object({
+  runId: delegationRunIdSchema,
+  state: delegationStateSchema,
+  runtime: z.string().max(500),
+  title: z.string().max(500),
+  summary: z.string().max(2000),
+  result: z.string().max(64_000),
+  error: z.string().max(64_000),
+  observerError: z.string().max(64_000).optional(),
+  workspaceId: idSchema,
+  tabId: idSchema,
+  paneId: idSchema,
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+}).strict();
+
 const runSchema = z.object({
   id: idSchema,
   workspaceId: idSchema,
@@ -108,6 +136,7 @@ const persistedStateSchema = z.object({
   activeWorkspaceId: z.string().max(120),
   notifications: z.array(notificationSchema).default([]),
   agentEvents: z.array(agentEventSchema).default([]),
+  delegations: z.array(delegationSchema).default([]),
   runs: z.array(runSchema).default([]),
 }).strict().superRefine((state, context) => {
   const workspaceIds = new Set<string>();
@@ -143,6 +172,17 @@ const persistedStateSchema = z.object({
   }
   if (state.workspaces.length === 0 && state.activeWorkspaceId) {
     context.addIssue({ code: "custom", path: ["activeWorkspaceId"], message: "active workspace must be empty" });
+  }
+  const delegationRunIds = new Set<string>();
+  for (const [delegationIndex, delegation] of state.delegations.entries()) {
+    if (delegationRunIds.has(delegation.runId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["delegations", delegationIndex, "runId"],
+        message: "duplicate delegation run id",
+      });
+    }
+    delegationRunIds.add(delegation.runId);
   }
 });
 

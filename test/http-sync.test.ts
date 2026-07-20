@@ -126,6 +126,14 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
     summary: "Codex delegation completed",
     message: "Review result",
   });
+  state.recordAgentEvent({
+    paneId,
+    runId: "run-http-interrupted",
+    agent: "codex",
+    status: "interrupted",
+    title: "Interrupted review",
+    summary: "Codex interrupted",
+  });
   const settings = new SettingsStore(path.join(dir, "settings.json"));
   const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
     auth: { enabled: true, token: "delegation-test-token", loginEnabled: false, sessionSecret: "test" },
@@ -143,6 +151,14 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
     assert.equal(response.status, 200);
     assert.equal(payload.delegation.state, "completed");
     assert.equal(payload.delegation.result, "Review result");
+
+    const interruptedResponse = await fetch(`http://127.0.0.1:${port}/api/delegations/run-http-interrupted`, {
+      headers: { authorization: "Bearer delegation-test-token" },
+    });
+    const interruptedPayload = await interruptedResponse.json() as { delegation: { state: string; error: string } };
+    assert.equal(interruptedResponse.status, 200);
+    assert.equal(interruptedPayload.delegation.state, "interrupted");
+    assert.equal(interruptedPayload.delegation.error, "Codex interrupted");
 
     const missing = await fetch(`http://127.0.0.1:${port}/api/delegations/missing`, {
       headers: { authorization: "Bearer delegation-test-token" },
