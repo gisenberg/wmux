@@ -12,6 +12,8 @@ scripts/wmux-agent-profile apply --profile ../wmux-agent-profile
 
 When a profile exists, each newly started pane stages `wmux-agent-profile` and applies the authenticated profile before entering the shell. Existing panes are not retroactively changed. Automatic runs append a summary to `~/.wmux/logs/agent-profile.log`; inspect ownership with `wmux-agent-profile status`.
 
+Dynamically registered hosts still receive no broad wmux API token. Their automatic startup quietly skips a profile when the endpoint returns `401`; a separately provisioned valid `~/.wmux/token` enables the normal apply path. Manual `wmux-agent-profile` commands continue to report authorization failures so a stale or missing credential remains diagnosable.
+
 Add a skill through the validated profile workflow rather than copying it by hand:
 
 ```bash

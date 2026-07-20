@@ -164,6 +164,18 @@ test("POSIX SSH staging includes the hook installer beside its event helper", { 
   assert.equal(wrapper.includes(extraEnv.WMUX_TOKEN), false, "credentials stay in the staged payload");
 });
 
+test("registered POSIX SSH panes make missing profile auth optional", { skip: process.platform === "win32" }, () => {
+  const spec = buildSpawnSpec({ ...machines[5].machine, source: "registered" }, 120, 40, {
+    ...extraEnv,
+    WMUX_TOKEN: "",
+  });
+  const wrapper = fs.readFileSync(spec.args[0], "utf8");
+  const payloadMatch = wrapper.match(/wmux_payload='([^']+)'/);
+  assert.ok(payloadMatch, "wrapper identifies its staged payload");
+  const command = fs.readFileSync(payloadMatch[1], "utf8");
+  assert.match(command, /wmux-agent-profile apply --quiet --optional-auth/);
+});
+
 test("PowerShell SSH panes create the same private per-pane control master", { skip: process.platform === "win32" }, () => {
   const spec = buildSpawnSpec(machines[8].machine, 120, 40, extraEnv);
   assert.ok(spec.args.some((arg) => arg.startsWith("ControlPath=") && arg.includes("/wmux/ssh-control/")));

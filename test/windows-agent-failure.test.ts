@@ -135,7 +135,7 @@ test("Windows agent detach preserves the remote session while kill deletes it", 
   await once(server, "close");
 });
 
-test("Windows agent session creation forwards the PowerShell profile preference", async () => {
+test("Windows agent session creation forwards profile preferences", async () => {
   let createBody: Record<string, unknown> | undefined;
   const server = http.createServer(async (request, response) => {
     const path = request.url ?? "";
@@ -175,6 +175,7 @@ test("Windows agent session creation forwards the PowerShell profile preference"
       sessionBackend: "agent",
       agentUrl: `http://127.0.0.1:${address.port}`,
       loadPowerShellProfile: true,
+      source: "registered",
     },
     80,
     24,
@@ -182,6 +183,7 @@ test("Windows agent session creation forwards the PowerShell profile preference"
 
   await waitUntil(() => createBody !== undefined);
   assert.equal(createBody?.loadPowerShellProfile, true);
+  assert.equal(createBody?.agentProfileOptionalAuth, true);
   await session.attachReady;
   assert.equal(session.isExited, false);
   session.detach();

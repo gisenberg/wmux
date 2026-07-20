@@ -816,9 +816,10 @@ __wmuxApplyConsoleTheme
 """
 
 
-def powershell_bootstrap(cwd: str, preserve_prompt: bool) -> str:
+def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile_auth: bool = False) -> str:
     escaped_cwd = cwd.replace("'", "''")
     preserve_prompt_literal = "$true" if preserve_prompt else "$false"
+    optional_auth_argument = " --optional-auth" if optional_agent_profile_auth else ""
     return (
         "\n$WmuxOriginalErrorActionPreference = $ErrorActionPreference\n$ErrorActionPreference = 'Continue'\n"
         + WINDOWS_CONSOLE_THEME_PS1
@@ -826,7 +827,7 @@ def powershell_bootstrap(cwd: str, preserve_prompt: bool) -> str:
         + f"""
 $AgentProfileHelper = if ($env:WMUX_HELPER_DIR) {{ Join-Path $env:WMUX_HELPER_DIR 'wmux-agent-profile.cmd' }} else {{ $null }}
 if ($AgentProfileHelper -and (Test-Path -LiteralPath $AgentProfileHelper -PathType Leaf)) {{
-  & $AgentProfileHelper apply --quiet
+  & $AgentProfileHelper apply --quiet{optional_auth_argument}
 }}
 if ('{escaped_cwd}') {{
   Set-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue
@@ -838,7 +839,12 @@ $ErrorActionPreference = $WmuxOriginalErrorActionPreference
     )
 
 
-def powershell_command(shell: str, cwd: str, load_profile: bool = False) -> list[str]:
+def powershell_command(
+    shell: str,
+    cwd: str,
+    load_profile: bool = False,
+    optional_agent_profile_auth: bool = False,
+) -> list[str]:
     executable = shell or "pwsh"
     command = [
         executable,
@@ -851,7 +857,7 @@ def powershell_command(shell: str, cwd: str, load_profile: bool = False) -> list
         "Bypass",
         "-NoExit",
         "-Command",
-        powershell_bootstrap(cwd, load_profile),
+        powershell_bootstrap(cwd, load_profile, optional_agent_profile_auth),
     ])
     return command
 
@@ -876,7 +882,12 @@ def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -
     shell = str(payload.get("shell") or config_string(config, "shell", "pwsh"))
     lower_shell = os.path.basename(shell).lower()
     if lower_shell in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
-        return powershell_command(shell, cwd, payload.get("loadPowerShellProfile") is True)
+        return powershell_command(
+            shell,
+            cwd,
+            payload.get("loadPowerShellProfile") is True,
+            payload.get("agentProfileOptionalAuth") is True,
+        )
     return shell
 
 

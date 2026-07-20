@@ -16,9 +16,11 @@ import runpy
 module = runpy.run_path("scripts/wmux-windows-agent")
 without_profile = module["powershell_command"]("pwsh", "C:/work", False)
 with_profile = module["powershell_command"]("pwsh", "C:/work", True)
+optional_profile_auth = module["powershell_command"]("pwsh", "C:/work", False, True)
 print(json.dumps({
     "withoutProfile": without_profile,
     "withProfile": with_profile,
+    "optionalProfileAuth": optional_profile_auth,
 }))
 `;
   const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
@@ -28,6 +30,7 @@ print(json.dumps({
   assert.equal(commands.withProfile.includes("-NoProfile"), false);
   assert.match(commands.withProfile.at(-1), /__wmuxInstallPrompt \$true/);
   assert.match(commands.withoutProfile.at(-1), /__wmuxInstallPrompt \$false/);
+  assert.match(commands.optionalProfileAuth.at(-1), /apply --quiet --optional-auth/);
 });
 
 test("Windows agent URLs bracket IPv6 callback addresses", () => {
