@@ -19,13 +19,34 @@ def _wmux_env(name):
     return os.environ.get(name, "").strip()
 
 
-def _wmux_token():
-    # Durable processes retain WMUX_TOKEN across restarts, while wmux refreshes
-    # this owner-only file on every reattach.
-    token = _wmux_file(os.environ.get("WMUX_TOKEN_PATH") or os.path.expanduser("~/.wmux/token"))
-    if token:
+def _wmux_scoped_token():
+    env_configured = "WMUX_HELPER_TOKEN" in os.environ
+    env_token = _wmux_env("WMUX_HELPER_TOKEN")
+    if env_configured and not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", env_token):
+        raise SystemExit("wmux-agent-event: configured helper token is empty or malformed")
+    path_configured = "WMUX_HELPER_TOKEN_PATH" in os.environ
+    path_value = os.environ.get("WMUX_HELPER_TOKEN_PATH", "").strip()
+    if path_configured and not path_value:
+        raise SystemExit("wmux-agent-event: configured helper token path is empty")
+    token_path = path_value if path_configured else os.path.expanduser("~/.wmux/helper-token")
+    if path_configured or os.path.exists(token_path):
+        token = _wmux_file(token_path)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token):
+            raise SystemExit("wmux-agent-event: configured helper token file is unreadable or malformed")
         return token
-    return _wmux_env("WMUX_TOKEN")
+    return env_token if env_configured else None
+
+
+def _wmux_token():
+    # Durable processes retain token environment across restarts, while wmux refreshes
+    # this owner-only file on every reattach.
+    token = _wmux_scoped_token()
+    if token is not None:
+        return token
+    if _wmux_env("WMUX_BROWSER_AUTH_MODE") == "login-only":
+        return ""
+    token = _wmux_file(os.environ.get("WMUX_TOKEN_PATH") or os.path.expanduser("~/.wmux/token"))
+    return token or _wmux_env("WMUX_TOKEN")
 
 
 def _wmux_url():

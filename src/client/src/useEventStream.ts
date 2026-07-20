@@ -17,6 +17,7 @@ interface UseEventStreamCallbacks {
   onResync: (payload: BootstrapPayload) => void;
   onHealth: (delta: Extract<EventServerMessage, { type: "health" }>) => void;
   onAuthRequired: () => void;
+  enabled?: boolean;
 }
 
   // Owns the /ws/events socket: connection lifecycle with reconnect, recovery
@@ -30,6 +31,10 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
   callbacksRef.current = callbacks;
 
   useEffect(() => {
+    if (callbacks.enabled === false) {
+      setServiceConnection("offline");
+      return;
+    }
     let closed = false;
     let reconnectTimer: number | undefined;
     let resyncTimer: number | undefined;
@@ -133,7 +138,7 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
       if (socketRef.current === socket) socketRef.current = null;
       socket?.close();
     };
-  }, []);
+  }, [callbacks.enabled]);
 
   const sendEventSocketMessage = useCallback((message: EventClientMessage): boolean => {
     const socket = socketRef.current;

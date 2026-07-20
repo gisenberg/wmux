@@ -26,3 +26,16 @@ test("user service passes through explicit bind-range overrides", () => {
   assert.match(installer, /Environment=WMUX_ALLOWED_BIND_RANGES=\$\{ALLOWED_BIND_RANGES\}/);
   assert.match(read("deploy/wmux.service.example"), /^Environment=WMUX_ALLOWED_BIND_RANGES=$/m);
 });
+
+test("service and Docker launchers pass scoped auth mode and token paths", () => {
+  const installer = read("scripts/install-user-service.sh");
+  const service = read("deploy/wmux.service.example");
+  const compose = read("deploy/docker/docker-compose.yml");
+  assert.match(installer, /BROWSER_AUTH_MODE="\$\{WMUX_BROWSER_AUTH_MODE:-shared-or-login\}"/);
+  assert.match(installer, /Environment=WMUX_AUTOMATION_TOKEN_PATH=\$\{AUTOMATION_TOKEN_PATH\}/);
+  assert.match(installer, /Environment=WMUX_HELPER_TOKEN_PATH=\$\{HELPER_TOKEN_PATH\}/);
+  assert.match(service, /^Environment=WMUX_BROWSER_AUTH_MODE=shared-or-login$/m);
+  assert.match(compose, /WMUX_AUTOMATION_TOKEN: "\$\{WMUX_AUTOMATION_TOKEN:-\}"/);
+  assert.match(compose, /WMUX_HELPER_TOKEN: "\$\{WMUX_HELPER_TOKEN:-\}"/);
+  assert.match(read("deploy/docker/Dockerfile"), /chmod 700 \/home\/node\/\.wmux/);
+});

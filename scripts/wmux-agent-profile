@@ -152,6 +152,27 @@ def wmux_url() -> str:
 
 
 def wmux_tokens() -> list[str]:
+    env_configured = "WMUX_HELPER_TOKEN" in os.environ
+    env_token = os.environ.get("WMUX_HELPER_TOKEN", "").strip()
+    if env_configured and not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", env_token):
+        raise ProfileError("configured helper token is empty or malformed")
+    path_configured = "WMUX_HELPER_TOKEN_PATH" in os.environ
+    path_value = os.environ.get("WMUX_HELPER_TOKEN_PATH", "").strip()
+    if path_configured and not path_value:
+        raise ProfileError("configured helper token path is empty")
+    token_path = Path(path_value if path_configured else Path.home() / ".wmux" / "helper-token").expanduser()
+    if path_configured or token_path.exists():
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            token = ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token):
+            raise ProfileError("configured helper token file is unreadable or malformed")
+        return list(dict.fromkeys(value for value in (token, env_token) if value))
+    if env_configured:
+        return [env_token]
+    if os.environ.get("WMUX_BROWSER_AUTH_MODE", "shared-or-login") == "login-only":
+        return []
     token_path = Path(os.environ.get("WMUX_TOKEN_PATH", Path.home() / ".wmux" / "token")).expanduser()
     try:
         persisted = token_path.read_text(encoding="utf-8").strip()

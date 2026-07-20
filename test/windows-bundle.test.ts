@@ -128,8 +128,10 @@ test("bootstrap stages, verifies, then swaps and records the bundle version", ()
 });
 
 test("bootstrap persists wmux auth fallback files for Windows helpers", () => {
-  const script = buildWindowsPowerShellBootstrap(machine, undefined, { WMUX_TOKEN: "fixed-token" });
+  const script = buildWindowsPowerShellBootstrap(machine, undefined, { WMUX_TOKEN: "fixed-token", WMUX_HELPER_TOKEN: "H".repeat(43) });
   assert.ok(script.includes("Join-Path $StateDir 'token'"), "bootstrap must write the token fallback file");
+  assert.ok(script.includes("Join-Path $StateDir 'helper-token'"), "bootstrap must write the scoped helper fallback file");
+  assert.match(script, /elseif \(\$env:WMUX_HELPER_TOKEN\)/);
   assert.ok(script.includes("Join-Path $StateDir 'url'"), "bootstrap must write the URL fallback file");
 });
 

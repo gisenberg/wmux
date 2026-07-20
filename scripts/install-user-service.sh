@@ -9,6 +9,9 @@ KEY_FILE="${WMUX_KEY_FILE:-}"
 PUBLIC_URL="${WMUX_PUBLIC_URL:-}"
 HELPER_URL="${WMUX_HELPER_URL:-}"
 ALLOWED_BIND_RANGES="${WMUX_ALLOWED_BIND_RANGES:-}"
+BROWSER_AUTH_MODE="${WMUX_BROWSER_AUTH_MODE:-shared-or-login}"
+AUTOMATION_TOKEN_PATH="${WMUX_AUTOMATION_TOKEN_PATH:-}"
+HELPER_TOKEN_PATH="${WMUX_HELPER_TOKEN_PATH:-}"
 HELPER_URL="${HELPER_URL#"${HELPER_URL%%[![:space:]]*}"}"
 HELPER_URL="${HELPER_URL%"${HELPER_URL##*[![:space:]]}"}"
 
@@ -94,6 +97,9 @@ sed \
   -e "s#Environment=WMUX_PUBLIC_URL=.*#Environment=WMUX_PUBLIC_URL=${PUBLIC_URL}#" \
   -e "s#Environment=WMUX_HELPER_URL=.*#Environment=WMUX_HELPER_URL=${HELPER_URL}#" \
   -e "s#Environment=WMUX_ALLOWED_BIND_RANGES=.*#Environment=WMUX_ALLOWED_BIND_RANGES=${ALLOWED_BIND_RANGES}#" \
+  -e "s#Environment=WMUX_BROWSER_AUTH_MODE=.*#Environment=WMUX_BROWSER_AUTH_MODE=${BROWSER_AUTH_MODE}#" \
+  -e "s#Environment=WMUX_AUTOMATION_TOKEN_PATH=.*#Environment=WMUX_AUTOMATION_TOKEN_PATH=${AUTOMATION_TOKEN_PATH}#" \
+  -e "s#Environment=WMUX_HELPER_TOKEN_PATH=.*#Environment=WMUX_HELPER_TOKEN_PATH=${HELPER_TOKEN_PATH}#" \
   "${ROOT_DIR}/deploy/wmux.service.example" > "${HOME}/.config/systemd/user/wmux.service"
 
 systemctl --user daemon-reload

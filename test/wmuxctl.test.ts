@@ -486,3 +486,42 @@ test("Windows wmux-title sends the bearer token used by authenticated APIs", () 
   assert.match(helper, /\$Headers\['Authorization'\] = "Bearer \$WmuxToken"/);
   assert.match(helper, /Invoke-RestMethod[^\n]+-Headers \$Headers/);
 });
+
+test("wmuxctl prefers automation auth and scoped preflight never falls back", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-scoped-"));
+  fs.mkdirSync(path.join(home, ".wmux"));
+  fs.writeFileSync(path.join(home, ".wmux", "automation-token"), `${"A".repeat(43)}\n`);
+  const authorizations: Array<string | undefined> = [];
+  const server = http.createServer((request, response) => {
+    authorizations.push(request.headers.authorization);
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end('{"error":"unauthorized"}');
+  });
+  const url = await listen(server);
+  try {
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--scoped-auth", "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+    }));
+    assert.deepEqual(authorizations, [`Bearer ${"A".repeat(43)}`], "a rejected scoped credential is never retried with legacy auth");
+    fs.unlinkSync(path.join(home, ".wmux", "automation-token"));
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--scoped-auth", "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+    }), /requires WMUX_AUTOMATION_TOKEN/);
+    assert.equal(authorizations.length, 1, "preflight failure makes no compatibility request");
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--automation-token-path", path.join(home, "missing"), "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+    }), /configured automation token file is empty or unreadable/);
+    assert.equal(authorizations.length, 1, "an explicitly configured scoped path never falls through to legacy auth");
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_AUTOMATION_TOKEN: "short", WMUX_TOKEN: "legacy-test-token" },
+    }), /configured automation token is empty or malformed/);
+    assert.equal(authorizations.length, 1, "an invalid scoped environment never falls through to legacy auth");
+  } finally {
+    await close(server);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

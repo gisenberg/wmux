@@ -100,6 +100,31 @@ test("every machine kind produces a runnable file + cwd", () => {
   }
 });
 
+test("pane spawn environments do not inherit server-scoped credentials", () => {
+  const keys = [
+    "WMUX_AUTOMATION_TOKEN",
+    "WMUX_AUTOMATION_TOKEN_PATH",
+    "WMUX_HELPER_TOKEN",
+    "WMUX_HELPER_TOKEN_PATH",
+    "WMUX_REGISTRATION_TOKEN",
+    "WMUX_REGISTRATION_TOKEN_PATH",
+  ];
+  const saved = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = `server-only-${key}`;
+    const spec = buildSpawnSpec(machines[1].machine, 120, 40, { WMUX_HELPER_TOKEN: "pane-helper" });
+    assert.equal(spec.env.WMUX_HELPER_TOKEN, "pane-helper");
+    for (const key of keys.filter((key) => key !== "WMUX_HELPER_TOKEN")) {
+      assert.equal(spec.env[key], undefined, key);
+    }
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("local durable credentials are staged outside observable process arguments", { skip: process.platform === "win32" }, () => {
   const spec = buildSpawnSpec(machines[0].machine, 120, 40, extraEnv);
   assert.equal(spec.args.join(" ").includes(extraEnv.WMUX_TOKEN), false);
@@ -176,6 +201,38 @@ test("registered POSIX SSH panes make missing profile auth optional", { skip: pr
   assert.match(command, /wmux-agent-profile apply --quiet --optional-auth/);
 });
 
+test("static POSIX and Windows panes stage helper auth without exposing it in argv", { skip: process.platform === "win32" }, () => {
+  const helperEnv = { ...extraEnv, WMUX_TOKEN: "", WMUX_HELPER_TOKEN: "H".repeat(43), WMUX_BROWSER_AUTH_MODE: "login-only" };
+  const posix = buildSpawnSpec(machines[5].machine, 120, 40, helperEnv);
+  const posixWrapper = fs.readFileSync(posix.args[0], "utf8");
+  const posixPayloadPath = posixWrapper.match(/wmux_payload='([^']+)'/)?.[1];
+  assert.ok(posixPayloadPath);
+  const posixPayload = fs.readFileSync(posixPayloadPath, "utf8");
+  assert.match(posixPayload, /\.wmux\/helper-token/);
+  assert.equal(posixWrapper.includes(helperEnv.WMUX_HELPER_TOKEN), false);
+  assert.equal(posix.args.join(" ").includes(helperEnv.WMUX_HELPER_TOKEN), false);
+
+  const windows = buildSpawnSpec(machines[8].machine, 120, 40, helperEnv);
+  const windowsWrapper = fs.readFileSync(windows.args[0], "utf8");
+  const windowsPayloadPath = windowsWrapper.match(/wmux_payload='([^']+)'/)?.[1];
+  assert.ok(windowsPayloadPath);
+  const windowsPayload = fs.readFileSync(windowsPayloadPath, "utf8");
+  assert.match(windowsPayload, /Authorization/);
+  assert.match(windowsPayload, /Invoke-RestMethod/);
+  const bootstrapUrl = windowsPayload.match(/-Uri '([^']+)'/)?.[1];
+  assert.ok(bootstrapUrl);
+  assert.equal(new URL(bootstrapUrl).searchParams.has("token"), false);
+  assert.equal(windowsWrapper.includes(helperEnv.WMUX_HELPER_TOKEN), false);
+  assert.equal(windows.args.join(" ").includes(helperEnv.WMUX_HELPER_TOKEN), false);
+});
+
+test("login-only Windows bootstrap fails closed without helper auth", () => {
+  assert.throws(
+    () => buildSpawnSpec(machines[8].machine, 120, 40, { ...extraEnv, WMUX_TOKEN: "", WMUX_BROWSER_AUTH_MODE: "login-only" }),
+    /requires a helper token/,
+  );
+});
+
 test("PowerShell SSH panes create the same private per-pane control master", { skip: process.platform === "win32" }, () => {
   const spec = buildSpawnSpec(machines[8].machine, 120, 40, extraEnv);
   assert.ok(spec.args.some((arg) => arg.startsWith("ControlPath=") && arg.includes("/wmux/ssh-control/")));
@@ -183,9 +240,9 @@ test("PowerShell SSH panes create the same private per-pane control master", { s
   assert.ok(spec.args.includes("ControlPersist=3600"));
 });
 
-test("PowerShell SSH bootstrap selects the correct static or registered credential", () => {
+test("PowerShell SSH bootstrap keeps static credentials out of argv and preserves registered capabilities", () => {
   const bootstrapUrl = (environment: Record<string, string>): URL => {
-    const spec = buildSpawnSpec(machines[8].machine, 120, 40, environment);
+    const spec = buildSpawnSpec({ ...machines[8].machine, source: "registered" }, 120, 40, environment);
     const encodedIndex = spec.args.indexOf("-EncodedCommand");
     assert.ok(encodedIndex >= 0);
     const command = Buffer.from(spec.args[encodedIndex + 1], "base64").toString("utf16le");
@@ -194,11 +251,22 @@ test("PowerShell SSH bootstrap selects the correct static or registered credenti
     return new URL(match[1]);
   };
 
-  const staticUrl = bootstrapUrl({
+  const staticSpec = buildSpawnSpec(machines[8].machine, 120, 40, {
     ...extraEnv,
+    WMUX_TOKEN: "",
+    WMUX_HELPER_TOKEN: "H".repeat(43),
+    WMUX_BROWSER_AUTH_MODE: "login-only",
     WMUX_BOOTSTRAP_TOKEN: "",
   });
-  assert.equal(staticUrl.searchParams.get("token"), extraEnv.WMUX_TOKEN);
+  const staticWrapper = fs.readFileSync(staticSpec.args[0], "utf8");
+  const payloadPath = staticWrapper.match(/wmux_payload='([^']+)'/)?.[1];
+  assert.ok(payloadPath);
+  const staticPayload = fs.readFileSync(payloadPath, "utf8");
+  assert.equal(staticSpec.args.join(" ").includes("H".repeat(43)), false);
+  assert.equal(staticWrapper.includes("H".repeat(43)), false);
+  assert.ok(staticPayload.includes("H".repeat(43)));
+  assert.match(staticPayload, /Authorization/);
+  assert.equal(staticPayload.includes("?token="), false);
 
   const registeredUrl = bootstrapUrl({
     ...extraEnv,

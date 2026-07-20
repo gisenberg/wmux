@@ -21,6 +21,34 @@ Usage: wmux-media [--url <url>] [--pane <id>] [--workspace <id>] [--tab <id>] [-
 EOF
 }
 
+load_wmux_token() {
+  local token="" token_file="" scoped=0 env_configured=0 env_token=""
+  if [[ "${WMUX_HELPER_TOKEN+x}" == x ]]; then
+    env_token="${WMUX_HELPER_TOKEN}"; env_configured=1
+    [[ "${env_token}" =~ ^[A-Za-z0-9_-]{32,256}$ ]] || { echo "wmux-media: configured helper token is empty or malformed" >&2; return 1; }
+  fi
+  if [[ "${WMUX_HELPER_TOKEN_PATH+x}" == x ]]; then token_file="${WMUX_HELPER_TOKEN_PATH}"; scoped=1
+  elif [[ -e "${HOME}/.wmux/helper-token" ]]; then token_file="${HOME}/.wmux/helper-token"; scoped=1
+  fi
+  if [[ -n "${token_file}" ]]; then
+    [[ -f "${token_file}" && -r "${token_file}" ]] || { echo "wmux-media: configured helper token file is unreadable" >&2; return 1; }
+    token="$(tr -d '[:space:]' < "${token_file}")"
+  fi
+  if [[ "${scoped}" -eq 1 ]]; then
+    [[ "${token}" =~ ^[A-Za-z0-9_-]{32,256}$ ]] || { echo "wmux-media: configured helper token is empty or malformed" >&2; return 1; }
+    printf '%s' "${token}"
+    return
+  fi
+  if [[ "${env_configured}" -eq 1 ]]; then printf '%s' "${env_token}"; return; fi
+  [[ "${WMUX_BROWSER_AUTH_MODE:-shared-or-login}" == "shared-or-login" ]] || return
+  token="${WMUX_TOKEN:-}"
+  if [[ -z "${token}" ]]; then
+    token_file="${WMUX_TOKEN_PATH:-${HOME}/.wmux/token}"
+    [[ -r "${token_file}" ]] && token="$(tr -d '[:space:]' < "${token_file}")"
+  fi
+  printf '%s' "${token}"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --url)
@@ -117,11 +145,7 @@ WMUX_MEDIA_MIME="${mime_type}" \
 WMUX_MEDIA_PANE="${pane_id}" \
 WMUX_MEDIA_WORKSPACE="${workspace_id}" \
 WMUX_MEDIA_TAB="${tab_id}" \
-wmux_token="${WMUX_TOKEN:-}"
-if [[ -z "${wmux_token}" ]]; then
-  token_file="${WMUX_TOKEN_PATH:-${HOME}/.wmux/token}"
-  [[ -r "${token_file}" ]] && wmux_token="$(tr -d '[:space:]' < "${token_file}")"
-fi
+wmux_token="$(load_wmux_token)"
 auth_header=()
 if [[ -n "${wmux_token}" ]]; then
   auth_header=(-H "Authorization: Bearer ${wmux_token}")

@@ -23,6 +23,7 @@
     "test": "node --import tsx --test test/*.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:chromium": "playwright test --project=chromium --project=mobile-chromium",
+    "test:e2e:auth": "playwright test --config=playwright.auth.config.ts",
     "docs:screenshots": "playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "check:scripts": "node scripts/check-scripts.mjs",

@@ -37,7 +37,12 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine windows-box --t
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "wmux-agent-event --agent codex --status completed --title Done --summary 'Remote step finished'"
 ```
 
-The helper reads `WMUX_URL`/`~/.wmux/url` and `WMUX_TOKEN`/`~/.wmux/token`; environment variables take precedence and it never prints the token. If the saved URL still points at the old HTTP service, update `~/.wmux/url` or pass the current HTTPS URL explicitly.
+The helper reads `WMUX_URL`/`~/.wmux/url` and prefers
+`WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH`; compatibility mode may
+use `WMUX_TOKEN`/`~/.wmux/token`. Scoped credentials are header-only, never
+printed or placed in query parameters, and are never retried with the legacy
+token after rejection. If the saved URL still points at the old HTTP service,
+update `~/.wmux/url` or pass the current HTTPS URL explicitly.
 
 ## Operating Rules
 
@@ -50,6 +55,7 @@ The helper reads `WMUX_URL`/`~/.wmux/url` and `WMUX_TOKEN`/`~/.wmux/token`; envi
 - Check `/api/bootstrap` for `reachable`, `reason`, and `backendDetail` before assuming a machine is ready. Windows status includes helper, stream, Python/FFmpeg, and agent health probes.
 - Use exact machine ids from `/api/bootstrap`; it merges static config with the dynamic heartbeat registry. Do not rely on stale docs if the live API differs.
 - Registered panes intentionally lack the broad `WMUX_TOKEN`. Before relying on `wmux-notify`, `wmux-run`, media, clipboard, or agent hooks there, verify that separate normal/scoped helper auth was provisioned; otherwise those helpers return `401`.
+- Helpers prefer `WMUX_HELPER_TOKEN`/`WMUX_HELPER_TOKEN_PATH`; POSIX and Windows staging follow the same rule. Never use automation auth as helper fallback.
 - Always give automated work a descriptive `--title`; `wmuxctl open`, `run`, and `ps` reuse an existing workspace with that exact title by default. Use `--new` only when a genuinely separate workspace is wanted.
 - Treat visibility as a contract. If the user asked for visible work, start substantive and long-lived processes in the wmux pane, not through direct SSH. Direct SSH remains appropriate for quick diagnostics only.
 - Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, or Claude task on a POSIX target. Pass the prompt through `--prompt-file` or stdin, never as a shell argument. The helper creates a fresh agent-owned workspace, waits for the staged runner, records lifecycle events, and returns the direct URL and bounded final result.

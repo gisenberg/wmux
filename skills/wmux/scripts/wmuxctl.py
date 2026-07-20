@@ -93,7 +93,35 @@ def default_url() -> str:
     return os.environ.get("WMUX_URL") or read_text("~/.wmux/url") or DEFAULT_URL
 
 
-def default_token(token_path: str | None) -> str:
+def default_token(token_path: str | None, automation_token_path: str | None, scoped_auth: bool) -> str:
+    env_configured = "WMUX_AUTOMATION_TOKEN" in os.environ
+    env_token = os.environ.get("WMUX_AUTOMATION_TOKEN", "").strip()
+    if env_configured:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", env_token):
+            raise SystemExit("wmuxctl: configured automation token is empty or malformed")
+    path_configured = automation_token_path is not None or "WMUX_AUTOMATION_TOKEN_PATH" in os.environ
+    configured_automation_path = automation_token_path if automation_token_path is not None else os.environ.get("WMUX_AUTOMATION_TOKEN_PATH")
+    if path_configured and not (configured_automation_path or "").strip():
+        raise SystemExit("wmuxctl: configured automation token path is empty")
+    automation_path = configured_automation_path or "~/.wmux/automation-token"
+    automation_token = read_text(automation_path) if path_configured or not env_configured else ""
+    if path_configured and automation_token:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", automation_token):
+            raise SystemExit("wmuxctl: configured automation token file is malformed")
+    if path_configured and not automation_token:
+        raise SystemExit("wmuxctl: configured automation token file is empty or unreadable")
+    if env_configured:
+        return env_token
+    if automation_token:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", automation_token):
+            raise SystemExit("wmuxctl: configured automation token file is malformed")
+        return automation_token
+    if Path(automation_path).expanduser().exists():
+        raise SystemExit("wmuxctl: configured automation token file is empty or unreadable")
+    if scoped_auth:
+        raise SystemExit("wmuxctl: scoped authentication requires WMUX_AUTOMATION_TOKEN or a readable automation token file")
+    if os.environ.get("WMUX_BROWSER_AUTH_MODE", "shared-or-login") == "login-only":
+        raise SystemExit("wmuxctl: login-only mode requires an automation token")
     if os.environ.get("WMUX_TOKEN"):
         return os.environ["WMUX_TOKEN"]
     path = token_path or os.environ.get("WMUX_TOKEN_PATH") or "~/.wmux/token"
@@ -117,7 +145,7 @@ class WmuxClient:
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
             if error.code == 401:
-                raise SystemExit("wmuxctl: unauthorized; set WMUX_TOKEN or ensure ~/.wmux/token is readable") from error
+                raise SystemExit("wmuxctl: unauthorized; verify the selected automation or compatibility credential") from error
             raise SystemExit(f"wmuxctl: HTTP {error.code} for {path}: {detail}") from error
         except urllib.error.URLError as error:
             raise SystemExit(f"wmuxctl: cannot reach {self.url}: {error.reason}") from error
@@ -877,6 +905,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interact with a wmux API.")
     parser.add_argument("--url", default=default_url(), help=f"wmux base URL (default: {DEFAULT_URL})")
     parser.add_argument("--token-path", default=None, help="token file path when WMUX_TOKEN is unset")
+    parser.add_argument("--automation-token-path", default=None, help="automation token file path")
+    parser.add_argument("--scoped-auth", action="store_true", help="require automation auth and disable compatibility fallback")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1034,7 +1064,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    client = WmuxClient(args.url, default_token(args.token_path))
+    client = WmuxClient(args.url, default_token(args.token_path, args.automation_token_path, args.scoped_auth))
     return args.func(client, args)
 
 

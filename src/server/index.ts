@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { ServerOptions as HttpsServerOptions } from "node:https";
 import os from "node:os";
 import path from "node:path";
-import { loadAuthConfig, loadRegistrationAuthConfig } from "./auth.js";
+import { loadAuthConfig, loadRegistrationAuthConfig, validateAuthCredentialSeparation } from "./auth.js";
 import { isAllowedBindHost } from "./bind.js";
 import { loadConfig } from "./config.js";
 import { HostRegistry } from "./host-registry.js";
@@ -62,7 +62,7 @@ const main = async (): Promise<void> => {
   const config = loadConfig();
   const auth = loadAuthConfig();
   const registrationAuth = loadRegistrationAuthConfig();
-  if (auth.enabled && auth.token === registrationAuth.token) {
+  if ((auth.browserAuthMode ?? "shared-or-login") === "shared-or-login" && !auth.automationToken && !auth.helperToken && auth.enabled && auth.token === registrationAuth.token) {
     throw new Error("WMUX_REGISTRATION_TOKEN must differ from the main wmux access token.");
   }
   const trustedProxies = parseTrustedProxyAddresses();
@@ -77,6 +77,17 @@ const main = async (): Promise<void> => {
     (machineId) => sessionManagerRef?.hasLiveSessionsForMachine(machineId) ?? false,
   );
   const currentMachines = (): typeof config.machines => hostRegistry.machines();
+  if ((auth.browserAuthMode ?? "shared-or-login") === "login-only" || auth.automationToken || auth.helperToken) {
+    validateAuthCredentialSeparation(
+      auth,
+      registrationAuth.token,
+      currentMachines().flatMap((machine) => [
+        { label: `agent token for machine ${machine.id}`, token: machine.agentToken },
+        { label: `stream gateway token for machine ${machine.id}`, token: machine.stream?.gatewayToken },
+        { label: `bootstrap token for machine ${machine.id}`, token: hostRegistry.bootstrapToken(machine.id) },
+      ]),
+    );
+  }
   const state = new StateStore(currentMachines());
   stateStore = state;
   hostRegistry.sweep();
@@ -90,6 +101,8 @@ const main = async (): Promise<void> => {
     () => hostRegistry.sweep(),
     undefined,
     () => terminalThemeEnvironment(settings.snapshot().colorScheme),
+    auth.helperToken ?? "",
+    auth.browserAuthMode ?? "shared-or-login",
   );
   sessionManagerRef = sessionManager;
   const server = await createHttpServer(host, state, currentMachines, sessionManager, settings, {
@@ -116,7 +129,9 @@ const main = async (): Promise<void> => {
   server.listen(port, host, () => {
     console.log(`wmux listening on ${protocol}://${host}:${port}${dev ? " (dev)" : ""}`);
     if (auth.enabled) {
-      if (auth.tokenGenerated) {
+      if ((auth.browserAuthMode ?? "shared-or-login") === "login-only") {
+        console.log("wmux: browser access requires password login; scoped automation and helper credentials are loaded but never printed.");
+      } else if (auth.tokenGenerated) {
         console.log(`wmux: access requires a token. Open ${publicUrl}/?token=${auth.token} once per browser.`);
       } else if (auth.tokenPath) {
         console.log(`wmux: access requires the token stored at ${auth.tokenPath}; existing tokens are not printed on restart.`);

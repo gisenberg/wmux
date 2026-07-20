@@ -11,6 +11,7 @@ import { durableSessionName } from "../src/server/machines.js";
 import {
   isAgentInterruptInput,
   isTerminalProtocolResponseInput,
+  paneAuthEnvironmentForMachine,
   parseClientMessage,
   resolveDisposalMachine,
   sessionAccessTokenForMachine,
@@ -29,6 +30,24 @@ test("registered sessions never receive the broad wmux API token", () => {
   };
   assert.equal(sessionAccessTokenForMachine(registered, "broad-token"), "");
   assert.equal(sessionAccessTokenForMachine({ ...registered, source: "config" }, "broad-token"), "broad-token");
+});
+
+test("pane auth staging prefers helper scope, preserves default fallback, and keeps registered panes empty", () => {
+  const configured: MachineConfig = { id: "static", name: "Static", kind: "ssh", source: "config" };
+  const registered: MachineConfig = { ...configured, id: "dynamic", source: "registered" };
+  assert.deepEqual(paneAuthEnvironmentForMachine(configured, "legacy", "helper", "login-only"), {
+    WMUX_HELPER_TOKEN: "helper",
+    WMUX_TOKEN: "",
+    WMUX_BROWSER_AUTH_MODE: "login-only",
+  });
+  assert.deepEqual(paneAuthEnvironmentForMachine(configured, "legacy", "", "shared-or-login"), {
+    WMUX_TOKEN: "legacy",
+    WMUX_BROWSER_AUTH_MODE: "shared-or-login",
+  });
+  assert.deepEqual(paneAuthEnvironmentForMachine(registered, "legacy", "helper", "login-only"), {
+    WMUX_TOKEN: "",
+    WMUX_BROWSER_AUTH_MODE: "login-only",
+  });
 });
 
 test("pane disposal prefers the live session's pre-heartbeat machine snapshot", () => {
