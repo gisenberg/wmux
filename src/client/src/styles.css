@@ -2660,6 +2660,15 @@ button.active-tool {
   visibility: hidden;
 }
 
+.terminal-pane:not(.terminal-ready) .terminal-host-shell::after {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  content: "";
+  background: var(--terminal-background);
+  pointer-events: auto;
+}
+
 .pane-toolbar {
   min-width: 0;
   border-bottom: 1px solid var(--line);
@@ -2780,7 +2789,7 @@ button.active-tool {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #101114;
+  background: var(--terminal-background);
 }
 
 .terminal-host {
@@ -2789,7 +2798,7 @@ button.active-tool {
   min-width: 0;
   min-height: 0;
   padding: 0;
-  background: #101114;
+  background: var(--terminal-background);
 }
 
 .terminal-host canvas {
@@ -4965,6 +4974,7 @@ button.active-tool {
   .terminal-host-shell {
     padding-right: var(--wmux-mobile-right-inset);
     padding-left: var(--wmux-mobile-left-inset);
+    touch-action: none;
   }
 
   .open-tui-pane-toolbar > .open-tui-canvas {

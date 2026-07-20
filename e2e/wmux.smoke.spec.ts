@@ -598,6 +598,38 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   const activePane = page.locator(".terminal-pane.active");
   await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
 
+  const touchBehavior = await activePane.locator(".terminal-host-shell").evaluate((element) => {
+    const shell = element as HTMLElement;
+    const rect = shell.getBoundingClientRect();
+    const dispatch = (type: string, pointerId: number, clientY: number) => {
+      const event = new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: rect.left + 20,
+        clientY,
+      });
+      shell.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+
+    dispatch("pointerdown", 41, rect.top + 100);
+    const swipePrevented = dispatch("pointermove", 41, rect.top + 40);
+    dispatch("pointerup", 41, rect.top + 40);
+
+    (document.activeElement as HTMLElement | null)?.blur();
+    dispatch("pointerdown", 42, rect.top + 80);
+    dispatch("pointerup", 42, rect.top + 80);
+    return {
+      swipePrevented,
+      tapFocusedTerminal: document.activeElement === shell.querySelector("textarea"),
+      touchAction: getComputedStyle(shell).touchAction,
+    };
+  });
+  expect(touchBehavior).toEqual({ swipePrevented: true, tapFocusedTerminal: true, touchAction: "none" });
+
   const appShell = page.locator("main.app-shell");
   await appShell.evaluate((element: HTMLElement) => {
     element.style.setProperty("--wmux-mobile-left-inset", "32px");

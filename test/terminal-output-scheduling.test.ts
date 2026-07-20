@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   TERMINAL_OUTPUT_BATCH_MS,
   createAlternateScreenState,
+  createTouchScrollGesture,
   createWheelScrollCoalescer,
   pushAlternateScreenState,
   resetAlternateScreenState,
@@ -87,4 +88,28 @@ test("wheel scrolling cancels opposite-direction pending deltas and disposes fra
   scheduler.runFrame();
   coalescer.push(3);
   assert.deepEqual(scrolls, []);
+});
+
+test("touch scrolling distinguishes taps and converts swipes into terminal lines", () => {
+  const gesture = createTouchScrollGesture();
+
+  gesture.start(1, 100);
+  assert.deepEqual(gesture.move(1, 95, 20), { handled: false, lines: 0 });
+  assert.deepEqual(gesture.end(1), { handled: true, tap: true });
+
+  gesture.start(2, 100);
+  assert.deepEqual(gesture.move(2, 60, 20), { handled: true, lines: 2 });
+  assert.deepEqual(gesture.move(2, 50, 20), { handled: true, lines: 0 });
+  assert.deepEqual(gesture.move(2, 40, 20), { handled: true, lines: 1 });
+  assert.deepEqual(gesture.end(2), { handled: true, tap: false });
+});
+
+test("touch scrolling ignores unrelated pointers and resets cancelled gestures", () => {
+  const gesture = createTouchScrollGesture();
+  gesture.start(3, 20);
+  assert.deepEqual(gesture.move(4, 60, 20), { handled: false, lines: 0 });
+  assert.deepEqual(gesture.end(4), { handled: false, tap: false });
+  assert.deepEqual(gesture.move(3, 60, 20), { handled: true, lines: -2 });
+  gesture.cancel();
+  assert.deepEqual(gesture.end(3), { handled: false, tap: false });
 });

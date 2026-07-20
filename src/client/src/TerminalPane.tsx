@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal } from "ghostty-web";
 import { X } from "lucide-react";
 import {
@@ -65,6 +65,7 @@ import {
   createLocalMediaId,
   wheelLines,
   createWheelScrollCoalescer,
+  createTouchScrollGesture,
   hasMouseTracking,
   mouseWheelSequence,
   mouseReleaseSequence,
@@ -77,6 +78,7 @@ import {
   waitForVisibleBox,
   createDurableRefreshRevealGate,
   shouldWaitForDurableRefresh,
+  shouldShieldTerminalBeforeResume,
   type DurableRefreshRevealGate,
 } from "./terminal-pane-runtime";
 import type {
@@ -139,6 +141,7 @@ export const TerminalPane = memo(function TerminalPane({
   const colorScheme = useColorScheme();
   const colorSchemeRef = useRef(colorScheme);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const terminalHostShellRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const rectangularSelectionRef = useRef<RectangularSelection | null>(null);
@@ -207,6 +210,12 @@ export const TerminalPane = memo(function TerminalPane({
     activeRef.current = active;
   }, [active]);
 
+  useLayoutEffect(() => {
+    if (shouldShieldTerminalBeforeResume(inactiveTabStreaming, tabVisible, suspendSocketRef.current)) {
+      setTerminalReady(false);
+    }
+  }, [inactiveTabStreaming, tabVisible]);
+
   useEffect(() => {
     const shouldSuspend = inactiveTabStreaming === "suspend" && !tabVisible;
     const wasSuspended = suspendSocketRef.current;
@@ -268,6 +277,12 @@ export const TerminalPane = memo(function TerminalPane({
     let revealGeneration = 0;
     let durableRefreshRevealGate: DurableRefreshRevealGate | undefined;
     let wheelScroll: ReturnType<typeof createWheelScrollCoalescer> | undefined;
+    const touchScroll = createTouchScrollGesture();
+    let touchPointerMoveListener: ((event: PointerEvent) => void) | undefined;
+    let touchPointerUpListener: ((event: PointerEvent) => void) | undefined;
+    let touchPointerCancelListener: ((event: PointerEvent) => void) | undefined;
+    let touchPointerDownListener: ((event: PointerEvent) => void) | undefined;
+    let terminalHostShell: HTMLDivElement | null = null;
     let terminalCanvas: HTMLCanvasElement | undefined;
     // The server preserves a pane whose process died abnormally instead of
     // deleting it, so a keypress here re-attaches (and re-spawns) on demand
@@ -822,6 +837,65 @@ export const TerminalPane = memo(function TerminalPane({
         requestFrame: (callback) => requestAnimationFrame(callback),
         cancelFrame: (frame) => cancelAnimationFrame(frame),
       });
+      const touchHostShell = terminalHostShellRef.current;
+      terminalHostShell = touchHostShell;
+      if (touchHostShell) {
+        touchPointerDownListener = (event) => {
+          if (event.pointerType !== "touch" || !event.isPrimary) return;
+          touchScroll.start(event.pointerId, event.clientY);
+          try {
+            touchHostShell.setPointerCapture(event.pointerId);
+          } catch {
+            // Some WebKit versions reject capture during synthesized pointer events.
+          }
+        };
+        touchPointerMoveListener = (event) => {
+          if (event.pointerType !== "touch" || !event.isPrimary) return;
+          const lineHeight = term.renderer?.getMetrics?.().height ?? 20;
+          const gesture = touchScroll.move(event.pointerId, event.clientY, lineHeight);
+          if (!gesture.handled) return;
+          event.preventDefault();
+          if (gesture.lines === 0) return;
+          if (hasMouseTracking(term)) {
+            const wheelEvent = {
+              deltaMode: WheelEvent.DOM_DELTA_LINE,
+              deltaY: gesture.lines,
+              clientX: event.clientX,
+              clientY: event.clientY,
+              shiftKey: false,
+              altKey: false,
+              ctrlKey: false,
+            } as WheelEvent;
+            const sequence = mouseWheelSequence(wheelEvent, term);
+            if (sequence) {
+              inputEpochRef.current += 1;
+              sendInput(socketRef.current, sequence);
+            }
+          } else if (terminalScrollModeRef.current === "immediate") {
+            term.scrollLines(gesture.lines);
+          } else {
+            wheelScroll?.push(gesture.lines);
+          }
+        };
+        touchPointerUpListener = (event) => {
+          if (event.pointerType !== "touch" || !event.isPrimary) return;
+          const gesture = touchScroll.end(event.pointerId);
+          if (!gesture.handled) return;
+          if (gesture.tap) term.focus();
+          try {
+            touchHostShell.releasePointerCapture(event.pointerId);
+          } catch {
+            // Capture may already have been released by the browser.
+          }
+        };
+        touchPointerCancelListener = (event) => {
+          if (event.pointerType === "touch" && event.isPrimary) touchScroll.cancel();
+        };
+        touchHostShell.addEventListener("pointerdown", touchPointerDownListener);
+        touchHostShell.addEventListener("pointermove", touchPointerMoveListener, { passive: false });
+        touchHostShell.addEventListener("pointerup", touchPointerUpListener);
+        touchHostShell.addEventListener("pointercancel", touchPointerCancelListener);
+      }
       term.open(containerRef.current);
       configureTerminalInput(term);
       terminalRef.current = term;
@@ -1138,6 +1212,7 @@ export const TerminalPane = memo(function TerminalPane({
       cancelled = true;
       cancelPendingReveal();
       wheelScroll?.dispose();
+      touchScroll.cancel();
       if (discardPendingOutputRef.current === resetPendingOutput) discardPendingOutputRef.current = null;
       rectangularSelection?.dispose();
       rectangularSelectionRef.current = null;
@@ -1171,6 +1246,10 @@ export const TerminalPane = memo(function TerminalPane({
       if (windowBlurListener) window.removeEventListener("blur", windowBlurListener);
       if (pageShowListener) window.removeEventListener("pageshow", pageShowListener);
       if (visibilityChangeListener) document.removeEventListener("visibilitychange", visibilityChangeListener);
+      if (terminalHostShell && touchPointerDownListener) terminalHostShell.removeEventListener("pointerdown", touchPointerDownListener);
+      if (terminalHostShell && touchPointerMoveListener) terminalHostShell.removeEventListener("pointermove", touchPointerMoveListener);
+      if (terminalHostShell && touchPointerUpListener) terminalHostShell.removeEventListener("pointerup", touchPointerUpListener);
+      if (terminalHostShell && touchPointerCancelListener) terminalHostShell.removeEventListener("pointercancel", touchPointerCancelListener);
       resetSynchronizedOutput(synchronizedOutputRef.current);
       fitAddon?.dispose();
       terminalRef.current?.dispose();
@@ -1272,10 +1351,11 @@ export const TerminalPane = memo(function TerminalPane({
         onRerunLastCommand={rerunLastCommand}
       />
       <div
+        ref={terminalHostShellRef}
         className="terminal-host-shell"
-        onPointerDown={() => {
+        onPointerDown={(event) => {
           onActivate();
-          terminalRef.current?.focus();
+          if (event.pointerType !== "touch") terminalRef.current?.focus();
         }}
       >
         <div ref={containerRef} className="terminal-host" />

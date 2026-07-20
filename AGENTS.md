@@ -121,6 +121,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Browser wake and network transitions can briefly fail `/api/bootstrap` after the event socket reconnects. Keep an already-loaded workspace mounted, retry bootstrap/resync with bounded backoff, and reserve the login surface for explicit authentication failures; do not promote a transient fetch failure to a permanent fatal overlay.
 - The mobile sidebar is a drawer and should default collapsed on narrow viewports.
 - On mobile, split panes collapse to the active pane instead of trying to show every split at once.
+- On mobile, touch swipes over the terminal scroll Ghostty scrollback and become wheel input while an application has terminal mouse tracking enabled; a tap still focuses the terminal and opens the keyboard.
 - Do not rely on iOS Safari letting a web app remove all keyboard/browser accessory UI. The hidden terminal textarea should keep `autocomplete="off"`, `autocorrect="off"`, `autocapitalize="none"`, `spellcheck="false"`, and related assist-disabling attributes.
 
 ## Terminal And Pane Behavior
@@ -133,6 +134,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Exiting the last pane in a tab closes the tab. Exiting the last tab in a workspace closes the workspace. If all workspaces are closed, wmux creates or shows the idle empty state.
 - Explicitly closing a pane/tab/workspace should kill the matching durable session.
 - When adding terminal protocol support, make sure replay, resize, scrollback, and multiplexer passthrough behavior are considered.
+- When a suspended pane resumes, keep its terminal-colored shield visible until reconnect replay has been applied; do not expose the intermediate terminal redraw or let stale pixels flash first.
 
 ## Helpers And Integrations
 

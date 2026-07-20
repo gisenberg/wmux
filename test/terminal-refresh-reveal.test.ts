@@ -5,6 +5,7 @@ import {
   DURABLE_REFRESH_FIRST_NUDGE_MS,
   DURABLE_REFRESH_QUIET_MS,
   createDurableRefreshRevealGate,
+  shouldShieldTerminalBeforeResume,
   shouldWaitForDurableRefresh,
 } from "../src/client/src/terminal-pane-runtime.js";
 
@@ -136,6 +137,13 @@ test("nonempty raw and checkpoint ready messages keep the existing fast path", (
   assert.equal(shouldWaitForDurableRefresh({ replay: "screen", replayKind: "checkpoint", waitForRefresh: true }), false);
   assert.equal(shouldWaitForDurableRefresh({ replay: "", replayKind: "raw" }), false);
   assert.equal(shouldWaitForDurableRefresh({ replay: "", replayKind: "raw", waitForRefresh: true }), true);
+});
+
+test("a suspended terminal is shielded before its visible tab resumes", () => {
+  assert.equal(shouldShieldTerminalBeforeResume("suspend", true, true), true);
+  assert.equal(shouldShieldTerminalBeforeResume("suspend", false, true), false);
+  assert.equal(shouldShieldTerminalBeforeResume("suspend", true, false), false);
+  assert.equal(shouldShieldTerminalBeforeResume("live", true, true), false);
 });
 
 test("cancel and a new begin prevent stale pause or reconnect timers from revealing", () => {

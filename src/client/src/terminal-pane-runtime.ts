@@ -52,6 +52,13 @@ export interface WheelScrollCoalescer {
   dispose: () => void;
 }
 
+export interface TouchScrollGesture {
+  start: (pointerId: number, y: number) => void;
+  move: (pointerId: number, y: number, lineHeight: number) => { handled: boolean; lines: number };
+  end: (pointerId: number) => { handled: boolean; tap: boolean };
+  cancel: () => void;
+}
+
 interface WheelScrollCoalescerOptions {
   scrollLines: (lines: number) => void;
   requestFrame: (callback: () => void) => number;
@@ -191,6 +198,56 @@ export const createWheelScrollCoalescer = ({
     },
   };
 };
+
+export const createTouchScrollGesture = (thresholdPx = 8): TouchScrollGesture => {
+  let activePointer: number | undefined;
+  let startY = 0;
+  let lastY = 0;
+  let pendingLines = 0;
+  let scrolling = false;
+
+  const cancel = () => {
+    activePointer = undefined;
+    pendingLines = 0;
+    scrolling = false;
+  };
+
+  return {
+    start: (pointerId, y) => {
+      activePointer = pointerId;
+      startY = y;
+      lastY = y;
+      pendingLines = 0;
+      scrolling = false;
+    },
+    move: (pointerId, y, lineHeight) => {
+      if (activePointer !== pointerId || !Number.isFinite(y)) return { handled: false, lines: 0 };
+      if (!scrolling && Math.abs(y - startY) < thresholdPx) {
+        return { handled: false, lines: 0 };
+      }
+      scrolling = true;
+      const height = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 20;
+      pendingLines += (lastY - y) / height;
+      lastY = y;
+      const lines = Math.trunc(pendingLines);
+      pendingLines -= lines;
+      return { handled: true, lines };
+    },
+    end: (pointerId) => {
+      if (activePointer !== pointerId) return { handled: false, tap: false };
+      const tap = !scrolling;
+      cancel();
+      return { handled: true, tap };
+    },
+    cancel,
+  };
+};
+
+export const shouldShieldTerminalBeforeResume = (
+  inactiveTabStreaming: "suspend" | "live",
+  tabVisible: boolean,
+  wasSuspended: boolean,
+): boolean => inactiveTabStreaming === "suspend" && tabVisible && wasSuspended;
 // Replay chunk size in UTF-16 code units; ~128 KiB keeps each drain step
 // well under a frame budget while a 2 MiB replay finishes in ~16 steps.
 export const REPLAY_CHUNK_CHARS = 128 * 1024;
