@@ -47,10 +47,14 @@ export interface TerminalLatencySnapshot {
     inputDispatch: TerminalLatencyDistribution;
     predictedPaint: TerminalLatencyDistribution;
     predictedBackspacePaint: TerminalLatencyDistribution;
+    normalPredictedPaint: TerminalLatencyDistribution;
+    normalPredictedBackspacePaint: TerminalLatencyDistribution;
     normalOutput: TerminalLatencyDistribution;
     normalRender: TerminalLatencyDistribution;
     normalBackspaceRender: TerminalLatencyDistribution;
     normalOutputToRender: TerminalLatencyDistribution;
+    alternatePredictedPaint: TerminalLatencyDistribution;
+    alternatePredictedBackspacePaint: TerminalLatencyDistribution;
     alternateOutput: TerminalLatencyDistribution;
     alternateRender: TerminalLatencyDistribution;
     alternateBackspaceRender: TerminalLatencyDistribution;
@@ -272,6 +276,10 @@ export class TerminalLatencyRecorder {
     const alternate = this.samples.filter((sample) => sample.screen === "alternate");
     const normalBackspace = normal.filter((sample) => sample.kind === "backspace");
     const alternateBackspace = alternate.filter((sample) => sample.kind === "backspace");
+    const predicted = (samples: readonly TerminalLatencySample[]): number[] => samples.flatMap((sample) =>
+      sample.predictionPaintMs === undefined ? [] : [sample.predictionPaintMs]);
+    const predictedBackspace = (samples: readonly TerminalLatencySample[]): number[] => samples.flatMap((sample) =>
+      sample.kind === "backspace" && sample.predictionPaintMs !== undefined ? [sample.predictionPaintMs] : []);
     return {
       sampleCount: this.samples.length,
       pendingCount: this.pending.size,
@@ -279,13 +287,16 @@ export class TerminalLatencyRecorder {
       updatedAt,
       metrics: {
         inputDispatch: distribution(this.samples.map((sample) => sample.inputDispatchMs)),
-        predictedPaint: distribution(this.samples.flatMap((sample) => sample.predictionPaintMs === undefined ? [] : [sample.predictionPaintMs])),
-        predictedBackspacePaint: distribution(this.samples.flatMap((sample) =>
-          sample.kind === "backspace" && sample.predictionPaintMs !== undefined ? [sample.predictionPaintMs] : [])),
+        predictedPaint: distribution(predicted(this.samples)),
+        predictedBackspacePaint: distribution(predictedBackspace(this.samples)),
+        normalPredictedPaint: distribution(predicted(normal)),
+        normalPredictedBackspacePaint: distribution(predictedBackspace(normal)),
         normalOutput: distribution(normal.map((sample) => sample.outputMs)),
         normalRender: distribution(normal.map((sample) => sample.authoritativeRenderMs)),
         normalBackspaceRender: distribution(normalBackspace.map((sample) => sample.authoritativeRenderMs)),
         normalOutputToRender: distribution(normal.map((sample) => sample.outputToRenderMs)),
+        alternatePredictedPaint: distribution(predicted(alternate)),
+        alternatePredictedBackspacePaint: distribution(predictedBackspace(alternate)),
         alternateOutput: distribution(alternate.map((sample) => sample.outputMs)),
         alternateRender: distribution(alternate.map((sample) => sample.authoritativeRenderMs)),
         alternateBackspaceRender: distribution(alternateBackspace.map((sample) => sample.authoritativeRenderMs)),

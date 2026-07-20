@@ -27,10 +27,14 @@ import { Osc52Parser } from "./terminal-osc52";
 import { OscColorQueryParser } from "./terminal-color-queries";
 import { RectangularSelection } from "./terminal-rectangular-selection";
 import {
-  isBoundedPredictionEcho,
+  createTerminalPredictionEchoProbe,
+  extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionEchoProbeMatches,
   type PredictedTerminalInput,
+  type TerminalPredictionEchoProbe,
+  type TerminalPredictionScreen,
 } from "./terminal-input-prediction";
 import {
   classifyTerminalLatencyInput,
@@ -297,8 +301,9 @@ export const TerminalPane = memo(function TerminalPane({
     let lastInteractiveInputAt = Number.NEGATIVE_INFINITY;
     let nextInputSequence = 0;
     let predictedInputs: PredictedTerminalInput[] = [];
-    let predictionArmed = false;
-    let predictionProbe: { sequence: number; text: string } | undefined;
+    let predictionArmedScreen: TerminalPredictionScreen | undefined;
+    let predictionProbe: TerminalPredictionEchoProbe | undefined;
+    let predictionProbeAcknowledgedSequence: number | undefined;
     let pendingLatencyKeyEvent: { eventAt: number; observedAt: number } | undefined;
     let replayChunks: string[] = [];
     let replayBufferedOutput: string[] = [];
@@ -356,26 +361,77 @@ export const TerminalPane = memo(function TerminalPane({
 
     const clearPredictionProbe = () => {
       predictionProbe = undefined;
+      predictionProbeAcknowledgedSequence = undefined;
       if (predictionProbeTimer !== undefined) window.clearTimeout(predictionProbeTimer);
       predictionProbeTimer = undefined;
     };
 
     const disarmPrediction = () => {
-      predictionArmed = false;
+      predictionArmedScreen = undefined;
       clearPredictionProbe();
       clearPredictions();
     };
 
-    const probePredictionEcho = (prediction: PredictedTerminalInput) => {
-      if (prediction.kind !== "insert" || predictionProbe) return;
-      predictionProbe = { sequence: prediction.sequence, text: prediction.text };
-      predictionProbeTimer = window.setTimeout(clearPredictionProbe, 500);
+    const predictionScreen = (term: Terminal): TerminalPredictionScreen =>
+      term.wasmTerm?.isAlternateScreen() ? "alternate" : "normal";
+
+    const terminalCodepoint = (term: Terminal, col: number, row: number): number | undefined =>
+      term.wasmTerm?.getLine(row)?.[col]?.codepoint;
+
+    const schedulePredictionProbeExpiry = () => {
+      if (predictionProbeTimer !== undefined) window.clearTimeout(predictionProbeTimer);
+      predictionProbeTimer = window.setTimeout(clearPredictionProbe, 1000);
     };
 
-    const observePredictionEcho = (sequence: number | undefined, data: string) => {
-      if (!predictionProbe || sequence === undefined || sequence < predictionProbe.sequence) return;
-      if (!isBoundedPredictionEcho(data, predictionProbe.text)) return;
-      predictionArmed = true;
+    const probePredictionEcho = (
+      prediction: PredictedTerminalInput,
+      term: Terminal,
+      screen: TerminalPredictionScreen,
+    ) => {
+      const cols = safeCols(term.cols);
+      const rows = safeRows(term.rows);
+      if (predictionProbe?.screen === screen) {
+        const extended = extendTerminalPredictionEchoProbe(predictionProbe, prediction, cols, rows);
+        if (extended) {
+          predictionProbe = extended;
+          schedulePredictionProbeExpiry();
+        }
+        return;
+      }
+      clearPredictionProbe();
+      const cursor = term.wasmTerm?.getCursor();
+      if (!cursor) return;
+      predictionProbe = createTerminalPredictionEchoProbe(
+        prediction,
+        cursor,
+        cols,
+        rows,
+        screen,
+        terminalCodepoint(term, cursor.x, cursor.y),
+      ) ?? undefined;
+      if (predictionProbe) schedulePredictionProbeExpiry();
+    };
+
+    const acknowledgePredictionProbe = (sequence: number | undefined) => {
+      if (!predictionProbe || sequence === undefined || sequence < predictionProbe.inputs[0]!.sequence) return;
+      predictionProbeAcknowledgedSequence = Math.max(predictionProbeAcknowledgedSequence ?? 0, sequence);
+    };
+
+    const verifyPredictionProbe = (term: Terminal) => {
+      const probe = predictionProbe;
+      const cursor = term.wasmTerm?.getCursor();
+      if (!probe || !cursor || predictionProbeAcknowledgedSequence === undefined) return;
+      const screen = predictionScreen(term);
+      if (!terminalPredictionEchoProbeMatches(
+        probe,
+        predictionProbeAcknowledgedSequence,
+        cursor,
+        safeCols(term.cols),
+        safeRows(term.rows),
+        screen,
+        (col, row) => terminalCodepoint(term, col, row),
+      )) return;
+      predictionArmedScreen = screen;
       clearPredictionProbe();
     };
 
@@ -392,7 +448,7 @@ export const TerminalPane = memo(function TerminalPane({
         !layer
         || !metrics
         || !cursor
-        || alternateScreenState.active
+        || predictionArmedScreen !== predictionScreen(term)
         || replayingTerminalOutput
         || term.getViewportY() > 0
       ) {
@@ -951,7 +1007,7 @@ export const TerminalPane = memo(function TerminalPane({
           }
           if (message.type === "output") {
             terminalLatency.recordOutput(pane.id, message.inputSequence, message.data.length, performance.now());
-            observePredictionEcho(message.inputSequence, message.data);
+            acknowledgePredictionProbe(message.inputSequence);
             acknowledgePredictions(message.inputSequence);
             if (replayDraining()) replayBufferedOutput.push(message.data);
             else handleOutput(term, message.data);
@@ -1071,6 +1127,7 @@ export const TerminalPane = memo(function TerminalPane({
       scrollDisposable = term.onScroll((position) => setViewportY(position));
       renderDisposable = term.onRender(() => {
         terminalLatency.recordRender(pane.id, performance.now());
+        verifyPredictionProbe(term);
         refreshMetrics(term);
         if (rectangularSelection?.overlay) setRectangleVersion((version) => version + 1);
       });
@@ -1304,14 +1361,14 @@ export const TerminalPane = memo(function TerminalPane({
           );
           lastInteractiveInputAt = Date.now();
           const prediction = predictedTerminalInput(sequence, data);
+          const screen = predictionScreen(term);
           const canPredict = connectedRef.current
             && activeRef.current
-            && !alternateScreenState.active
             && !replayingTerminalOutput
             && term.getViewportY() <= 0;
           if (
             prediction
-            && predictionArmed
+            && predictionArmedScreen === screen
             && canPredict
           ) {
             predictedInputs.push(prediction);
@@ -1321,7 +1378,10 @@ export const TerminalPane = memo(function TerminalPane({
             schedulePredictionExpiry();
           } else {
             clearPredictions();
-            if (prediction && canPredict) probePredictionEcho(prediction);
+            if (prediction && canPredict) {
+              if (predictionArmedScreen && predictionArmedScreen !== screen) disarmPrediction();
+              probePredictionEcho(prediction, term, screen);
+            }
             else disarmPrediction();
           }
         }

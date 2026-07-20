@@ -288,21 +288,23 @@ test("copies tmux default-selection OSC 52 requests to the browser clipboard", a
   await expect(page.getByRole("button", { name: "Copy terminal request" })).toBeHidden();
 });
 
-test("predicts bounded shell input locally and expires it without authoritative echo", async ({
+test("predicts bounded shell and alternate-screen input locally", async ({
   page,
   request,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop terminal prediction coverage");
   test.setTimeout(45_000);
 
+  let sawAlternateScreen = false;
   await page.routeWebSocket(/\/ws\/panes\//, (browserSocket) => {
     const serverSocket = browserSocket.connectToServer();
     browserSocket.onMessage((message) => serverSocket.send(message));
     serverSocket.onMessage((message) => {
       let delay = 0;
       try {
-        const parsed = JSON.parse(String(message)) as { type?: string };
+        const parsed = JSON.parse(String(message)) as { type?: string; data?: string };
         if (parsed.type === "output") delay = 250;
+        if (parsed.data?.includes("\x1b[?1049h")) sawAlternateScreen = true;
       } catch {
         // Forward non-JSON frames without delay.
       }
@@ -321,6 +323,7 @@ test("predicts bounded shell input locally and expires it without authoritative 
     await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     const textarea = activePane.locator(".terminal-host textarea");
     await textarea.evaluate((element: HTMLTextAreaElement) => element.focus());
+    await page.waitForTimeout(400);
     await page.keyboard.type("a");
     await page.waitForTimeout(350);
 
@@ -333,6 +336,29 @@ test("predicts bounded shell input locally and expires it without authoritative 
       .evaluate((element: HTMLElement) => element.style.left)).toBe(predictedXLeft);
     await expect(activePane.locator(".terminal-input-prediction-layer")).toBeEmpty({ timeout: 1_000 });
 
+    await page.keyboard.press("Backspace");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[HREADY\\r\\n'");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(600);
+    expect(sawAlternateScreen).toBe(true);
+    await page.keyboard.type("a");
+    await page.waitForTimeout(350);
+
+    await page.keyboard.type("z");
+    const predictedZ = activePane.locator(".terminal-input-prediction-cell", { hasText: "z" });
+    await expect(predictedZ).toBeVisible();
+    const predictedZLeft = await predictedZ.evaluate((element: HTMLElement) => element.style.left);
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => activePane.locator(".terminal-input-prediction-cursor")
+      .evaluate((element: HTMLElement) => element.style.left)).toBe(predictedZLeft);
+    await page.waitForTimeout(350);
+    await page.keyboard.press("Control+C");
+    await page.waitForTimeout(300);
+    await page.keyboard.type("printf '\\033[?1049l'");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(350);
+
     await page.keyboard.press("Control+K");
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").fill("Open diagnostics");
@@ -342,8 +368,9 @@ test("predicts bounded shell input locally and expires it without authoritative 
     await expect(diagnostics).toContainText("WMUX::SYSTEM_CONSOLE");
     await expect(diagnostics).toContainText("CLIENT::TERMINAL_LATENCY");
     await expect(diagnostics.getByRole("button", { name: /REFRESH/ })).toBeVisible();
-    await expect(diagnostics.locator(".latency-row", { hasText: /INPUT::PREDICTED PAINT/i }).locator("span").nth(1)).not.toHaveText("0");
+    await expect(diagnostics.locator(".latency-row", { hasText: /SHELL::PREDICTED/i }).locator("span").nth(1)).not.toHaveText("0");
     await expect(diagnostics.locator(".latency-row", { hasText: /SHELL::CANVAS/i }).locator("span").nth(1)).not.toHaveText("0");
+    await expect(diagnostics.locator(".latency-row", { hasText: /TUI::PREDICTED/i }).locator("span").nth(1)).not.toHaveText("0");
   } finally {
     const removed = await request.delete(`/api/workspaces/${payload.workspace.id}`);
     expect(removed.ok()).toBeTruthy();

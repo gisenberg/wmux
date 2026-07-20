@@ -16,6 +16,17 @@ export interface PredictedTerminalLayout {
   authoritativeCursor: { col: number; row: number };
 }
 
+export type TerminalPredictionScreen = "normal" | "alternate";
+
+export interface TerminalPredictionEchoProbe {
+  screen: TerminalPredictionScreen;
+  origin: { x: number; y: number; visible: true };
+  previousCodepoint: number;
+  inputs: PredictedTerminalInput[];
+}
+
+const MAX_ECHO_PROBE_INPUTS = 16;
+
 export const predictedTerminalInput = (sequence: number, data: string): PredictedTerminalInput | null => {
   if (data === "\b" || data === "\x7f") return { sequence, kind: "backspace", text: "" };
   if (data.length === 1 && data >= " " && data <= "~") {
@@ -23,9 +34,6 @@ export const predictedTerminalInput = (sequence: number, data: string): Predicte
   }
   return null;
 };
-
-export const isBoundedPredictionEcho = (data: string, expected: string): boolean =>
-  expected.length === 1 && data.startsWith(expected) && data.length <= 16;
 
 export const layoutPredictedTerminalInput = (
   cursor: { x: number; y: number; visible?: boolean },
@@ -62,4 +70,75 @@ export const layoutPredictedTerminalInput = (
     cursor: { col, row },
     authoritativeCursor: { col: cursor.x, row: cursor.y },
   };
+};
+
+export const createTerminalPredictionEchoProbe = (
+  prediction: PredictedTerminalInput,
+  cursor: { x: number; y: number; visible?: boolean },
+  cols: number,
+  rows: number,
+  screen: TerminalPredictionScreen,
+  previousCodepoint: number | undefined,
+): TerminalPredictionEchoProbe | null => {
+  if (
+    prediction.kind !== "insert"
+    || !cursor.visible
+    || previousCodepoint === undefined
+    || cursor.x < 0
+    || cursor.x >= cols - 1
+    || cursor.y < 0
+    || cursor.y >= rows
+  ) return null;
+  return {
+    screen,
+    origin: { x: cursor.x, y: cursor.y, visible: true },
+    previousCodepoint,
+    inputs: [prediction],
+  };
+};
+
+export const extendTerminalPredictionEchoProbe = (
+  probe: TerminalPredictionEchoProbe,
+  prediction: PredictedTerminalInput,
+  cols: number,
+  rows: number,
+): TerminalPredictionEchoProbe | null => {
+  if (
+    probe.inputs.length >= MAX_ECHO_PROBE_INPUTS
+    || prediction.sequence <= probe.inputs[probe.inputs.length - 1]!.sequence
+  ) return null;
+  const inputs = [...probe.inputs, prediction];
+  if (!layoutPredictedTerminalInput(probe.origin, cols, rows, inputs)) return null;
+  return { ...probe, inputs };
+};
+
+export const terminalPredictionEchoProbeMatches = (
+  probe: TerminalPredictionEchoProbe,
+  acknowledgedSequence: number | undefined,
+  cursor: { x: number; y: number; visible?: boolean },
+  cols: number,
+  rows: number,
+  screen: TerminalPredictionScreen,
+  readCodepoint: (col: number, row: number) => number | undefined,
+): boolean => {
+  if (acknowledgedSequence === undefined || screen !== probe.screen || !cursor.visible) return false;
+  const acknowledgedInputs = probe.inputs.filter((input) => input.sequence <= acknowledgedSequence);
+  const layout = layoutPredictedTerminalInput(probe.origin, cols, rows, acknowledgedInputs);
+  if (!layout || cursor.x !== layout.cursor.col || cursor.y !== layout.cursor.row) return false;
+
+  const originCell = layout.cells.find((cell) => cell.col === probe.origin.x && cell.row === probe.origin.y);
+  if (!originCell?.text) return false;
+  const expectedOriginCodepoint = originCell.text.codePointAt(0);
+  if (
+    expectedOriginCodepoint === undefined
+    || probe.previousCodepoint === expectedOriginCodepoint
+    || readCodepoint(originCell.col, originCell.row) !== expectedOriginCodepoint
+  ) return false;
+
+  return layout.cells.every((cell) => {
+    const codepoint = readCodepoint(cell.col, cell.row);
+    return cell.text
+      ? codepoint === cell.text.codePointAt(0)
+      : codepoint === 0 || codepoint === 32;
+  });
 };

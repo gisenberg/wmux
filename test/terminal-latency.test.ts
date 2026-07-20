@@ -34,6 +34,8 @@ test("terminal latency measures prediction, output, and authoritative render sta
   assert.equal(snapshot.pendingCount, 0);
   assert.deepEqual(snapshot.metrics.inputDispatch, { samples: 1, p50: 2, p95: 2, p99: 2 });
   assert.deepEqual(snapshot.metrics.predictedPaint, { samples: 1, p50: 16, p95: 16, p99: 16 });
+  assert.deepEqual(snapshot.metrics.normalPredictedPaint, { samples: 1, p50: 16, p95: 16, p99: 16 });
+  assert.equal(snapshot.metrics.alternatePredictedPaint.samples, 0);
   assert.deepEqual(snapshot.metrics.normalOutput, { samples: 1, p50: 30, p95: 30, p99: 30 });
   assert.deepEqual(snapshot.metrics.normalRender, { samples: 1, p50: 48, p95: 48, p99: 48 });
   assert.deepEqual(snapshot.metrics.normalOutputToRender, { samples: 1, p50: 18, p95: 18, p99: 18 });
@@ -45,6 +47,8 @@ test("terminal latency separates alternate-screen samples and acknowledges input
   const recorder = new TerminalLatencyRecorder();
   recorder.recordInput("pane-1", 1, "printable", "alternate", 10, 10);
   recorder.recordInput("pane-1", 2, "backspace", "alternate", 12, 12);
+  recorder.recordPredictionMutation("pane-1", 2, 13);
+  recorder.recordPredictionPaint("pane-1", 2, 17);
   recorder.recordOutput("pane-1", 2, 40, 30);
   recorder.recordWrite("pane-1", 31);
   recorder.recordRender("pane-1", 40);
@@ -54,6 +58,8 @@ test("terminal latency separates alternate-screen samples and acknowledges input
   assert.deepEqual(snapshot.metrics.alternateOutput, { samples: 2, p50: 18, p95: 20, p99: 20 });
   assert.deepEqual(snapshot.metrics.alternateRender, { samples: 2, p50: 28, p95: 30, p99: 30 });
   assert.deepEqual(snapshot.metrics.alternateBackspaceRender, { samples: 1, p50: 28, p95: 28, p99: 28 });
+  assert.deepEqual(snapshot.metrics.alternatePredictedPaint, { samples: 1, p50: 5, p95: 5, p99: 5 });
+  assert.deepEqual(snapshot.metrics.alternatePredictedBackspacePaint, { samples: 1, p50: 5, p95: 5, p99: 5 });
   assert.deepEqual(snapshot.metrics.alternateOutputChars, { samples: 2, p50: 40, p95: 40, p99: 40 });
   assert.equal(snapshot.metrics.normalOutput.samples, 0);
 });

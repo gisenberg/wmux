@@ -139,16 +139,16 @@ function LatencyDiagnostics({
       title: "DOM key event to Ghostty terminal input callback",
     },
     {
-      group: "INPUT",
-      label: "Predicted paint",
-      metric: snapshot.metrics.predictedPaint,
-      title: "DOM key event to the first animation frame after speculative overlay mutation",
+      group: "SHELL",
+      label: "Shell predicted",
+      metric: snapshot.metrics.normalPredictedPaint,
+      title: "Normal-screen key event to the first animation frame after speculative overlay mutation",
     },
     {
-      group: "INPUT",
-      label: "Predicted backspace",
-      metric: snapshot.metrics.predictedBackspacePaint,
-      title: "Backspace key event to the first animation frame after speculative overlay mutation",
+      group: "SHELL",
+      label: "Shell predicted backspace",
+      metric: snapshot.metrics.normalPredictedBackspacePaint,
+      title: "Normal-screen Backspace event to the first animation frame after speculative overlay mutation",
     },
     {
       group: "SHELL",
@@ -180,6 +180,18 @@ function LatencyDiagnostics({
       metric: snapshot.metrics.normalOutputChars,
       unit: "chars",
       title: "Characters received before the sampled normal-screen render",
+    },
+    {
+      group: "TUI",
+      label: "TUI predicted",
+      metric: snapshot.metrics.alternatePredictedPaint,
+      title: "Alternate-screen key event to the first animation frame after speculative overlay mutation",
+    },
+    {
+      group: "TUI",
+      label: "TUI predicted backspace",
+      metric: snapshot.metrics.alternatePredictedBackspacePaint,
+      title: "Alternate-screen Backspace event to the first animation frame after speculative overlay mutation",
     },
     {
       group: "TUI",

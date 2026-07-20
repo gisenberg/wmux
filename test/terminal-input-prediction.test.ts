@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  isBoundedPredictionEcho,
+  createTerminalPredictionEchoProbe,
+  extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionEchoProbeMatches,
 } from "../src/client/src/terminal-input-prediction.js";
 
 test("terminal prediction accepts bounded printable input and backspace only", () => {
@@ -14,11 +16,99 @@ test("terminal prediction accepts bounded printable input and backspace only", (
   assert.equal(predictedTerminalInput(5, "λ"), null);
 });
 
-test("terminal prediction arms only from a small matching echo prefix", () => {
-  assert.equal(isBoundedPredictionEcho("a", "a"), true);
-  assert.equal(isBoundedPredictionEcho("a\x1b[0m", "a"), true);
-  assert.equal(isBoundedPredictionEcho("prompt a", "a"), false);
-  assert.equal(isBoundedPredictionEcho(`a${"x".repeat(16)}`, "a"), false);
+test("terminal prediction verifies an acknowledged rendered-cell echo", () => {
+  const probe = createTerminalPredictionEchoProbe(
+    predictedTerminalInput(1, "a")!,
+    { x: 4, y: 2, visible: true },
+    10,
+    5,
+    "normal",
+    0,
+  );
+  assert.ok(probe);
+  const cells = new Map([[
+    "4:2",
+    "a".codePointAt(0)!,
+  ]]);
+  const matches = (sequence: number | undefined, screen: "normal" | "alternate", x = 5) =>
+    terminalPredictionEchoProbeMatches(
+      probe,
+      sequence,
+      { x, y: 2, visible: true },
+      10,
+      5,
+      screen,
+      (col, row) => cells.get(`${col}:${row}`),
+    );
+  assert.equal(matches(1, "normal"), true);
+  assert.equal(matches(undefined, "normal"), false);
+  assert.equal(matches(1, "alternate"), false);
+  assert.equal(matches(1, "normal", 4), false);
+});
+
+test("terminal prediction echo verification handles an acknowledged input burst", () => {
+  let probe = createTerminalPredictionEchoProbe(
+    predictedTerminalInput(3, "a")!,
+    { x: 2, y: 1, visible: true },
+    10,
+    5,
+    "alternate",
+    0,
+  );
+  assert.ok(probe);
+  probe = extendTerminalPredictionEchoProbe(probe, predictedTerminalInput(4, "b")!, 10, 5);
+  assert.ok(probe);
+  const cells = new Map([
+    ["2:1", "a".codePointAt(0)!],
+    ["3:1", "b".codePointAt(0)!],
+  ]);
+  assert.equal(terminalPredictionEchoProbeMatches(
+    probe,
+    4,
+    { x: 4, y: 1, visible: true },
+    10,
+    5,
+    "alternate",
+    (col, row) => cells.get(`${col}:${row}`),
+  ), true);
+  assert.equal(terminalPredictionEchoProbeMatches(
+    probe,
+    3,
+    { x: 4, y: 1, visible: true },
+    10,
+    5,
+    "alternate",
+    (col, row) => cells.get(`${col}:${row}`),
+  ), false);
+});
+
+test("terminal prediction echo verification rejects hidden and unchanged input", () => {
+  assert.equal(createTerminalPredictionEchoProbe(
+    predictedTerminalInput(1, "a")!,
+    { x: 4, y: 2, visible: false },
+    10,
+    5,
+    "normal",
+    0,
+  ), null);
+  const probe = createTerminalPredictionEchoProbe(
+    predictedTerminalInput(1, "a")!,
+    { x: 4, y: 2, visible: true },
+    10,
+    5,
+    "normal",
+    "a".codePointAt(0),
+  );
+  assert.ok(probe);
+  assert.equal(terminalPredictionEchoProbeMatches(
+    probe,
+    1,
+    { x: 5, y: 2, visible: true },
+    10,
+    5,
+    "normal",
+    () => "a".codePointAt(0),
+  ), false);
 });
 
 test("terminal prediction lays out inserts and erases without mutating terminal state", () => {
