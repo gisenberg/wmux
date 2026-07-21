@@ -2,13 +2,10 @@
 
 This runbook registers a Windows machine, such as `windows-box`, as a wmux node from a Linux server.
 
-Windows helper staging follows the same rules as POSIX staging: static panes
-receive only helper authorization, never controller credentials; registered
-panes retain bootstrap isolation and need separately provisioned helper auth.
-In login-only mode use `WMUX_HELPER_TOKEN` or its configured path and send it
-in an authorization header only. Do not place scoped credentials in URLs,
-query strings, PowerShell arguments, or logs. Registration and per-host
-bootstrap capabilities remain separate principals.
+Windows helper staging follows the same rules as POSIX staging: static panes receive only helper authorization, never controller credentials; registered panes retain bootstrap isolation and need separately provisioned helper auth.
+In login-only mode use `WMUX_HELPER_TOKEN` or its configured path and send it in an authorization header only.
+Do not place scoped credentials in URLs, query strings, PowerShell arguments, or logs.
+Registration and per-host bootstrap capabilities remain separate principals.
 
 wmux should use `kind: "powershell-ssh"` for Windows nodes reached from non-Windows servers. This transport starts local `ssh -tt` on the wmux server and launches `pwsh -NoLogo -NoProfile` on the Windows host by default. A static machine may opt into PowerShell's standard profile chain with `"loadPowerShellProfile": true`. Do not use the legacy `kind: "powershell"` WSMan transport from the wmux server.
 

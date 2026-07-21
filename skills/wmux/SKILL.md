@@ -37,12 +37,9 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine windows-box --t
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "wmux-agent-event --agent codex --status completed --title Done --summary 'Remote step finished'"
 ```
 
-The helper reads `WMUX_URL`/`~/.wmux/url` and prefers
-`WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH`; compatibility mode may
-use `WMUX_TOKEN`/`~/.wmux/token`. Scoped credentials are header-only, never
-printed or placed in query parameters, and are never retried with the legacy
-token after rejection. If the saved URL still points at the old HTTP service,
-update `~/.wmux/url` or pass the current HTTPS URL explicitly.
+The helper reads `WMUX_URL`/`~/.wmux/url` and prefers `WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH`; compatibility mode may use `WMUX_TOKEN`/`~/.wmux/token`.
+Scoped credentials are header-only, never printed or placed in query parameters, and are never retried with the legacy token after rejection.
+If the saved URL still points at the old HTTP service, update `~/.wmux/url` or pass the current HTTPS URL explicitly.
 
 ## Operating Rules
 
