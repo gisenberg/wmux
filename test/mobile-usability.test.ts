@@ -10,6 +10,7 @@ import {
   saveMobileSurfaceModes,
 } from "../src/client/src/mobile-surface-mode.ts";
 import {
+  canApplyMobileClipboardRead,
   mobileTerminalArrowSequence,
   mobileTerminalKeySequences,
   oneShotControlSequence,
@@ -64,4 +65,27 @@ test("mobile terminal keys use exact escape sequences and one-shot control bytes
   assert.equal(oneShotControlSequence("["), undefined);
   assert.equal(oneShotControlSequence("ab"), undefined);
   assert.equal(oneShotControlSequence("1"), undefined);
+});
+
+test("mobile clipboard reads apply only to the unchanged active pane", () => {
+  const captured = { paneId: "pane-1", inputEpoch: 4 };
+  const current = {
+    paneId: "pane-1",
+    inputEpoch: 4,
+    mounted: true,
+    active: true,
+    visible: true,
+    connected: true,
+  };
+  assert.equal(canApplyMobileClipboardRead(captured, current), true);
+  for (const stale of [
+    { ...current, paneId: "pane-2" },
+    { ...current, inputEpoch: 5 },
+    { ...current, mounted: false },
+    { ...current, active: false },
+    { ...current, visible: false },
+    { ...current, connected: false },
+  ]) {
+    assert.equal(canApplyMobileClipboardRead(captured, stale), false);
+  }
 });

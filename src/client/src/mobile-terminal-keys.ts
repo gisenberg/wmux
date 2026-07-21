@@ -24,3 +24,20 @@ export const oneShotControlSequence = (data: string): string | undefined => {
   if (code < 65 || code > 90) return undefined;
   return String.fromCharCode(code & 0x1f);
 };
+
+export const canApplyMobileClipboardRead = (
+  captured: { paneId: string; inputEpoch: number },
+  current: {
+    paneId: string;
+    inputEpoch: number;
+    mounted: boolean;
+    active: boolean;
+    visible: boolean;
+    connected: boolean;
+  },
+): boolean => captured.paneId === current.paneId
+  && captured.inputEpoch === current.inputEpoch
+  && current.mounted
+  && current.active
+  && current.visible
+  && current.connected;

@@ -19,6 +19,7 @@ import { ensureWmuxFonts, terminalFontFamilyStack } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
 import {
+  canApplyMobileClipboardRead,
   mobileTerminalArrowSequence,
   mobileTerminalKeySequences,
   oneShotControlSequence,
@@ -1688,13 +1689,25 @@ export const TerminalPane = memo(function TerminalPane({
       setMobilePasteFallback("Direct clipboard access is unavailable in this browser.");
       return;
     }
+    const term = terminalRef.current;
+    if (!term) return;
+    const captured = { paneId: pane.id, inputEpoch: ++inputEpochRef.current };
+    const targetIsCurrent = () => canApplyMobileClipboardRead(captured, {
+      paneId: pane.id,
+      inputEpoch: inputEpochRef.current,
+      mounted: terminalRef.current === term && Boolean(containerRef.current?.isConnected),
+      active: activeRef.current,
+      visible: document.visibilityState === "visible",
+      connected: connectedRef.current && socketRef.current?.readyState === WebSocket.OPEN,
+    });
     setMobilePasteReading(true);
     try {
       const text = await navigator.clipboard.readText();
+      if (!targetIsCurrent()) return;
       if (text) pasteMobileText(text);
       else setMobilePasteFallback("The browser returned an empty clipboard.");
     } catch {
-      setMobilePasteFallback("The browser blocked direct clipboard access.");
+      if (targetIsCurrent()) setMobilePasteFallback("The browser blocked direct clipboard access.");
     } finally {
       setMobilePasteReading(false);
     }
