@@ -352,17 +352,14 @@ wmux is not a hardened multi-user service.
 ## Workspaces and Interaction
 
 - Workspaces contain linked tabs and draggable split panes.
-- The sidebar presents workspaces as nested branches. Branches can be collapsed
-  or expanded, and their collapse state is synchronized by the server. Desktop,
-  keyboard, and mobile controls support moving a workspace before, after, into,
-  or out of another branch. Nesting is limited to four levels.
-- Host filtering retains the ancestor context needed to understand matching
-  workspaces; moves that would leave the active filter context are disabled.
-  Workspace-number shortcuts follow the saved tree order, and newly created
-  workspaces start at the top level.
-- Closing a parent workspace promotes its children rather than killing their
-  panes. Tree nesting is sidebar workspace metadata; tmux/screen durability
-  remains owned by each pane.
+- The sidebar presents workspaces as nested branches.
+  Branches can be collapsed or expanded, and their collapse state is synchronized by the server.
+  Desktop, keyboard, and mobile controls support moving a workspace before, after, into, or out of another branch.
+  Nesting is limited to four levels.
+- Host filtering retains the ancestor context needed to understand matching workspaces; moves that would leave the active filter context are disabled.
+  Workspace-number shortcuts follow the saved tree order, and newly created workspaces start at the top level.
+- Closing a parent workspace promotes its children rather than killing their panes.
+  Tree nesting is sidebar workspace metadata; tmux/screen durability remains owned by each pane.
 - Agents using the bundled skill can create or reuse visible workspaces. These
   persist like user-created workspaces, appear with an `AI` badge, and retain
   direct links for monitoring or handoff.
