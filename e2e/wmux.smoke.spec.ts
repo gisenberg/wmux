@@ -295,11 +295,7 @@ test("navigates, persists, filters, and moves nested workspaces", async ({ page,
     await expect(rootItem()).toHaveAttribute("aria-expanded", "false");
     await expect(childItem()).toHaveCount(0);
 
-    const expandRoot = page.getByRole("button", { name: `Expand ${root.name}` });
-    await expandRoot.focus();
-    await page.evaluate(() => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
-    await expect(expandRoot).toBeFocused();
-    await expandRoot.press("Enter");
+    await page.getByRole("button", { name: `Expand ${root.name}` }).press("Enter");
     await expect(childItem()).toHaveAttribute("aria-level", "2");
     await page.getByRole("button", { name: `Move ${child.name}` }).press("Enter");
     const moveDialog = page.getByRole("dialog", { name: `Move ${child.name}` });

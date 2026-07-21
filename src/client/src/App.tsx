@@ -212,8 +212,7 @@ export function App() {
     if (!mobileViewport.isMobile || wasCollapsed === sidebarCollapsed) return;
     const frame = window.requestAnimationFrame(() => {
       if (!sidebarCollapsed) {
-        const sidebar = mobileSidebarRef.current;
-        if (!sidebar?.contains(document.activeElement)) mobileSidebarCloseRef.current?.focus();
+        mobileSidebarCloseRef.current?.focus();
         return;
       }
       const triggers = Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-controls="wmux-sidebar"]'));
