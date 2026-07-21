@@ -5,6 +5,7 @@ import {
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionCellBackground,
   terminalPredictionEchoProbeMatches,
 } from "../src/client/src/terminal-input-prediction.js";
 
@@ -14,6 +15,31 @@ test("terminal prediction accepts bounded printable input and backspace only", (
   assert.equal(predictedTerminalInput(3, "\r"), null);
   assert.equal(predictedTerminalInput(4, "ab"), null);
   assert.equal(predictedTerminalInput(5, "λ"), null);
+});
+
+test("terminal prediction uses the cursor cell's effective background", () => {
+  const cell = {
+    fg_r: 210,
+    fg_g: 220,
+    fg_b: 230,
+    bg_r: 12,
+    bg_g: 34,
+    bg_b: 56,
+    fgIsDefault: false,
+    bgIsDefault: false,
+    flags: 0,
+  };
+  assert.equal(terminalPredictionCellBackground(cell), "rgb(12, 34, 56)");
+  assert.equal(terminalPredictionCellBackground({ ...cell, flags: 1 << 4 }), "rgb(210, 220, 230)");
+  assert.equal(
+    terminalPredictionCellBackground({ ...cell, flags: 1 << 4, fgIsDefault: true }),
+    "var(--terminal-foreground)",
+  );
+  assert.equal(
+    terminalPredictionCellBackground({ ...cell, bgIsDefault: true }),
+    "var(--terminal-background)",
+  );
+  assert.equal(terminalPredictionCellBackground(undefined), "var(--terminal-background)");
 });
 
 test("terminal prediction verifies an acknowledged rendered-cell echo", () => {

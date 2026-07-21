@@ -16,6 +16,18 @@ export interface PredictedTerminalLayout {
   authoritativeCursor: { col: number; row: number };
 }
 
+export interface TerminalPredictionStyledCell {
+  fg_r: number;
+  fg_g: number;
+  fg_b: number;
+  bg_r: number;
+  bg_g: number;
+  bg_b: number;
+  fgIsDefault: boolean;
+  bgIsDefault: boolean;
+  flags: number;
+}
+
 export type TerminalPredictionScreen = "normal" | "alternate";
 
 export interface TerminalPredictionEchoProbe {
@@ -26,6 +38,22 @@ export interface TerminalPredictionEchoProbe {
 }
 
 const MAX_ECHO_PROBE_INPUTS = 16;
+const INVERSE_CELL_FLAG = 1 << 4;
+
+export const terminalPredictionCellBackground = (
+  cell: TerminalPredictionStyledCell | null | undefined,
+): string => {
+  if (!cell) return "var(--terminal-background)";
+  const inverse = (cell.flags & INVERSE_CELL_FLAG) !== 0;
+  if (inverse) {
+    return cell.fgIsDefault
+      ? "var(--terminal-foreground)"
+      : `rgb(${cell.fg_r}, ${cell.fg_g}, ${cell.fg_b})`;
+  }
+  return cell.bgIsDefault
+    ? "var(--terminal-background)"
+    : `rgb(${cell.bg_r}, ${cell.bg_g}, ${cell.bg_b})`;
+};
 
 export const predictedTerminalInput = (sequence: number, data: string): PredictedTerminalInput | null => {
   if (data === "\b" || data === "\x7f") return { sequence, kind: "backspace", text: "" };

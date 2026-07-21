@@ -37,6 +37,7 @@ import {
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionCellBackground,
   terminalPredictionEchoProbeMatches,
   type PredictedTerminalInput,
   type TerminalPredictionEchoProbe,
@@ -324,6 +325,10 @@ export const TerminalPane = memo(function TerminalPane({
     let nextInputSequence = 0;
     let predictedInputs: PredictedTerminalInput[] = [];
     let predictionArmedScreen: TerminalPredictionScreen | undefined;
+    // A full-screen application may repaint and leave the real cursor in a
+    // footer or status row. Prediction remains safe only at the exact cursor
+    // position whose echo was verified.
+    let predictionArmedCursor: { x: number; y: number } | undefined;
     let predictionProbe: TerminalPredictionEchoProbe | undefined;
     let predictionProbeAcknowledgedSequence: number | undefined;
     let pendingLatencyKeyEvent: { eventAt: number; observedAt: number } | undefined;
@@ -390,6 +395,7 @@ export const TerminalPane = memo(function TerminalPane({
 
     const disarmPrediction = () => {
       predictionArmedScreen = undefined;
+      predictionArmedCursor = undefined;
       clearPredictionProbe();
       clearPredictions();
     };
@@ -454,6 +460,7 @@ export const TerminalPane = memo(function TerminalPane({
         (col, row) => terminalCodepoint(term, col, row),
       )) return;
       predictionArmedScreen = screen;
+      predictionArmedCursor = { x: cursor.x, y: cursor.y };
       clearPredictionProbe();
     };
 
@@ -466,10 +473,15 @@ export const TerminalPane = memo(function TerminalPane({
       const layer = predictionLayerRef.current;
       const metrics = readCellMetrics(term);
       const cursor = term.wasmTerm?.getCursor();
+      const anchor = predictionArmedCursor;
       if (
         !layer
         || !metrics
         || !cursor
+        || !anchor
+        || cursor.x !== anchor.x
+        || cursor.y !== anchor.y
+        || !cursor.visible
         || predictionArmedScreen !== predictionScreen(term)
         || replayingTerminalOutput
         || term.getViewportY() > 0
@@ -477,7 +489,12 @@ export const TerminalPane = memo(function TerminalPane({
         disarmPrediction();
         return;
       }
-      const layout = layoutPredictedTerminalInput(cursor, safeCols(term.cols), safeRows(term.rows), predictedInputs);
+      const layout = layoutPredictedTerminalInput(
+        { ...anchor, visible: true },
+        safeCols(term.cols),
+        safeRows(term.rows),
+        predictedInputs,
+      );
       if (!layout) {
         disarmPrediction();
         return;
@@ -485,6 +502,7 @@ export const TerminalPane = memo(function TerminalPane({
 
       const fragment = document.createDocumentFragment();
       layer.style.fontSize = `${terminalFontSizeRef.current}px`;
+      const background = terminalPredictionCellBackground(term.wasmTerm?.getLine(anchor.y)?.[anchor.x]);
       const addCell = (col: number, row: number, text: string, className: string) => {
         const cell = document.createElement("span");
         cell.className = className;
@@ -494,6 +512,7 @@ export const TerminalPane = memo(function TerminalPane({
         cell.style.width = `${metrics.width}px`;
         cell.style.height = `${metrics.height}px`;
         cell.style.lineHeight = `${metrics.height}px`;
+        if (className === "terminal-input-prediction-cell") cell.style.background = background;
         fragment.append(cell);
       };
       addCell(
@@ -509,8 +528,25 @@ export const TerminalPane = memo(function TerminalPane({
       layer.replaceChildren(fragment);
     };
 
-    const acknowledgePredictions = (sequence: number | undefined) => {
+    const acknowledgePredictions = (term: Terminal, sequence: number | undefined) => {
       if (sequence === undefined || predictedInputs.length === 0) return;
+      const acknowledged = predictedInputs.filter((prediction) => prediction.sequence <= sequence);
+      if (acknowledged.length > 0 && predictionArmedCursor) {
+        const acknowledgedLayout = layoutPredictedTerminalInput(
+          { ...predictionArmedCursor, visible: true },
+          safeCols(term.cols),
+          safeRows(term.rows),
+          acknowledged,
+        );
+        if (!acknowledgedLayout) {
+          disarmPrediction();
+          return;
+        }
+        predictionArmedCursor = {
+          x: acknowledgedLayout.cursor.col,
+          y: acknowledgedLayout.cursor.row,
+        };
+      }
       predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > sequence);
       if (predictedInputs.length === 0) {
         clearPredictions();
@@ -1030,7 +1066,7 @@ export const TerminalPane = memo(function TerminalPane({
           if (message.type === "output") {
             terminalLatency.recordOutput(pane.id, message.inputSequence, message.data.length, performance.now());
             acknowledgePredictionProbe(message.inputSequence);
-            acknowledgePredictions(message.inputSequence);
+            acknowledgePredictions(term, message.inputSequence);
             if (replayDraining()) replayBufferedOutput.push(message.data);
             else handleOutput(term, message.data);
             durableRefreshRevealGate?.noteOutput();
@@ -1411,6 +1447,13 @@ export const TerminalPane = memo(function TerminalPane({
           lastInteractiveInputAt = Date.now();
           const prediction = predictedTerminalInput(sequence, data);
           const screen = predictionScreen(term);
+          const cursor = term.wasmTerm?.getCursor();
+          const predictionAnchorMatches = Boolean(
+            cursor?.visible
+            && predictionArmedCursor
+            && cursor.x === predictionArmedCursor.x
+            && cursor.y === predictionArmedCursor.y,
+          );
           const canPredict = connectedRef.current
             && activeRef.current
             && !replayingTerminalOutput
@@ -1418,6 +1461,7 @@ export const TerminalPane = memo(function TerminalPane({
           if (
             prediction
             && predictionArmedScreen === screen
+            && predictionAnchorMatches
             && canPredict
           ) {
             predictedInputs.push(prediction);
@@ -1428,7 +1472,7 @@ export const TerminalPane = memo(function TerminalPane({
           } else {
             clearPredictions();
             if (prediction && canPredict) {
-              if (predictionArmedScreen && predictionArmedScreen !== screen) disarmPrediction();
+              if (predictionArmedScreen) disarmPrediction();
               probePredictionEcho(prediction, term, screen);
             }
             else disarmPrediction();

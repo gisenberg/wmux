@@ -604,6 +604,25 @@ test("predicts bounded shell and alternate-screen input locally", async ({
 
     await page.keyboard.press("Backspace");
     await page.waitForTimeout(350);
+    await page.keyboard.type("printf '\\033[48;2;12;34;56m   \\b\\b\\b'; bash -c 'IFS= read -r -n 3 value'; printf '\\033[0m'");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("a");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("x");
+    const coloredPrediction = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
+    await expect(coloredPrediction).toHaveCSS("background-color", "rgb(12, 34, 56)");
+    await page.keyboard.type("y");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("(sleep 1; printf '\\rBACKGROUND') &");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("a");
+    await page.waitForTimeout(1_100);
+    await page.keyboard.type("x");
+    await expect(activePane.locator(".terminal-input-prediction-layer")).toBeEmpty();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(700);
     await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[HREADY\\r\\n'");
     await page.keyboard.press("Enter");
     await page.waitForTimeout(600);
