@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import http from "node:http";
 import test from "node:test";
-import { probeWindowsAgent, WindowsAgentSession } from "../src/server/windows-agent.js";
+import {
+  buildWindowsAgentUpdateSshInvocation,
+  parseWindowsAgentUpdateAcknowledgement,
+  probeWindowsAgent,
+  WindowsAgentSession,
+} from "../src/server/windows-agent.js";
 import {
   expectedWindowsAgentProtocolVersion,
   expectedWindowsAgentReleaseVersion,
@@ -18,6 +23,38 @@ const waitUntil = async (predicate: () => boolean, timeoutMs = 1000) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 };
+
+test("Windows agent updates use a bounded encoded SSH command with an explicit acknowledgement", () => {
+  const invocation = buildWindowsAgentUpdateSshInvocation({
+    id: "windows",
+    name: "Windows",
+    kind: "powershell-ssh",
+    host: "192.168.1.20",
+    user: "runner",
+    sessionBackend: "agent",
+  }, 3482);
+  const encodedIndex = invocation.args.indexOf("-EncodedCommand");
+  assert.ok(encodedIndex > 0);
+  assert.equal(invocation.args.includes("-Command"), false);
+  const script = Buffer.from(invocation.args[encodedIndex + 1], "base64").toString("utf16le");
+  assert.match(script, /wmux-windows-agent-service\.ps1/);
+  assert.match(script, /rollout-update --port 3482/);
+  assert.match(script, /wmuxUpdateActivation = \$true/);
+  assert.equal(invocation.acknowledgementAction, "rollout-update");
+
+  assert.equal(
+    parseWindowsAgentUpdateAcknowledgement(
+      '{"port":3482}\n{"wmuxUpdateActivation":true,"action":"rollout-update","port":3482}',
+      "rollout-update",
+      3482,
+    ),
+    3482,
+  );
+  assert.throws(
+    () => parseWindowsAgentUpdateAcknowledgement("Update staged", "activate-update"),
+    /missing activate-update acknowledgement/,
+  );
+});
 
 test("Windows agent control failures are contained", async () => {
   const pane: PaneState = {
@@ -301,6 +338,77 @@ test("a new Windows pane stages and safely activates an outdated agent", async (
   assert.match(session.replayOutput, new RegExp(`updated to ${expectedRelease}/protocol ${expectedProtocol}`));
   assert.doesNotMatch(session.replayOutput, /new generation/);
   session.detach();
+  server.close();
+  await once(server, "close");
+});
+
+test("an acknowledged Windows agent update cannot leave pane startup waiting forever", async () => {
+  let helperBundleVersion = "stale";
+  const server = http.createServer((request, response) => {
+    const path = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && path === "/health") {
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedWindowsAgentReleaseVersion(),
+        protocolVersion: Math.max(1, expectedWindowsAgentProtocolVersion() - 1),
+        helperBundleVersion,
+        activeSessions: 0,
+        draining: false,
+      }));
+      return;
+    }
+    if (request.method === "GET" && path === "/sessions") {
+      response.end(JSON.stringify({ sessions: [] }));
+      return;
+    }
+    if (request.method === "POST" && path.startsWith("/sessions/__wmux_update_")) {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          helperBundle?: { bundleVersion?: string };
+        };
+        helperBundleVersion = body.helperBundle?.bundleVersion ?? helperBundleVersion;
+        response.end(JSON.stringify({ id: path.split("/")[2], status: "running" }));
+      });
+      return;
+    }
+    if (request.method === "DELETE" && path.startsWith("/sessions/__wmux_update_")) {
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_update_timeout",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+    },
+    80,
+    24,
+    {},
+    async () => undefined,
+    40,
+  );
+  await session.attachReady;
+  assert.equal(session.isExited, true);
+  assert.match(session.replayOutput, /did not become current within 1 seconds/);
   server.close();
   await once(server, "close");
 });
