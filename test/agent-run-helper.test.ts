@@ -255,6 +255,9 @@ posixTest("wmux-agent-run tui rejects mismatched ids, forbidden or unknown field
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
   try {
+    const python = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" });
+    assert.equal(python.status, 0, python.stderr);
+    fs.symlinkSync(python.stdout.trim(), path.join(bin, "python3"));
     const cases = [
       [{ runId: "other", runtime: "codex", directory: dir }, "runId does not match"],
       [{ runId: "tui-invalid", runtime: "codex", directory: dir, prompt: "secret" }, "must not contain prompt"],
@@ -272,7 +275,7 @@ posixTest("wmux-agent-run tui rejects mismatched ids, forbidden or unknown field
     for (const [request, message] of cases) {
       const completed = spawnSync(helper, ["tui", "tui-invalid"], {
         input: `${Buffer.from(JSON.stringify(request)).toString("base64")}\n`, encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: { ...process.env, PATH: bin },
       });
       assert.notEqual(completed.status, 0);
       assert.match(String(decodeResult(completed.stdout).error), new RegExp(message));

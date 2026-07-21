@@ -533,19 +533,13 @@ The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions 
 Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require manual recovery.
 Restart OpenCode after installing or updating the plugin so it loads the generated tools.
 
-`wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane,
-with its working directory set by the staged helper. It leaves every workspace
-open and intentionally creates no manual lifecycle event (installed hooks own
-interactive turns). Prompts are read only from a UTF-8 file or stdin; they never
-appear in argv or the launch JSON. Prompt text may contain ordinary Unicode,
-tabs, and LF newlines; CRLF is normalized to LF, while other C0/C1 controls,
-including ESC, bare CR, and DEL, are rejected before workspace creation. The
-helper resolves the runtime executable
-before changing directory, emits a unique launch marker, and waits for an exact
-controller ACK before starting the terminal-attached child. The controller then
-requires fresh child output and continuously observes startup for safety gates
-for five seconds by default before sending one bracketed paste and a separate
-Enter. Copy-paste examples:
+`wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane, with its working directory set by the staged helper.
+It leaves every workspace open and intentionally creates no manual lifecycle event (installed hooks own interactive turns).
+Prompts are read only from a UTF-8 file or stdin; they never appear in argv or the launch JSON.
+Prompt text may contain ordinary Unicode, tabs, and LF newlines; CRLF is normalized to LF, while other C0/C1 controls, including ESC, bare CR, and DEL, are rejected before workspace creation.
+The helper resolves the runtime executable before changing directory, emits a unique launch marker, and waits for an exact controller ACK before starting the terminal-attached child.
+The controller then requires fresh child output and continuously observes startup for safety gates for five seconds by default before sending one bracketed paste and a separate Enter.
+Copy-paste examples:
 
 ```bash
 wmuxctl tui opencode linux-box --directory /srv/project --no-prompt
@@ -557,37 +551,24 @@ wmuxctl tui codex linux-box --directory /srv/project --no-prompt --gate-timeout 
 wmuxctl --public-url https://wmux.example.internal tui codex linux-box --directory /srv/project --no-prompt
 ```
 
-Repository-trust/first-run gates fail closed by default while leaving the pane
-open. After reviewing the exact prompt, `--accept-trust` answers only a
-recognized repository-trust screen that offers numbered choice `1` as
-yes/trust/continue; it sends `1` and Enter in separate input requests. Other
-trust layouts, generic onboarding, login, and credential prompts are never
-answered. Detection is intentionally conservative and may leave a new or
-changed runtime's first-run screen open for manual handling. `--gate-timeout`
-is the positive finite startup-observation interval: increasing it adds equal
-startup latency but catches later gates. No upstream CLI exposes a common
-deterministic readiness signal, so an unrecognized gate that appears only after
-this bounded interval, or uses an entirely novel layout outside the conservative
-classifiers, remains a bounded residual risk; the default reduces but cannot
-eliminate that upstream-readiness race.
+Repository-trust/first-run gates fail closed by default while leaving the pane open.
+After reviewing the exact prompt, `--accept-trust` answers only a recognized repository-trust screen that offers numbered choice `1` as yes/trust/continue; it sends `1` and Enter in separate input requests.
+Other trust layouts, generic onboarding, login, and credential prompts are never answered.
+Detection is intentionally conservative and may leave a new or changed runtime's first-run screen open for manual handling.
+`--gate-timeout` is the positive finite startup-observation interval: increasing it adds equal startup latency but catches later gates.
+No upstream CLI exposes a common deterministic readiness signal, so an unrecognized gate that appears only after this bounded interval, or uses an entirely novel layout outside the conservative classifiers, remains a bounded residual risk; the default reduces but cannot eliminate that upstream-readiness race.
 
-`wmux-agent-run tui` remains the foreground supervisor after launch. If the
-runtime exits, it emits `WMUX_AGENT_TUI_EXIT <runId> <code>` and discards input
-instead of returning it to the shell, preventing a racing task prompt from
-becoming a shell command. Press Ctrl-C in that pane to return to the shell after
-an early runtime exit; the exact administrative release line is
-`WMUX_AGENT_TUI_RELEASE <runId>`. JSON includes local and configured public
-handoff URLs.
-Set `WMUX_PUBLIC_URL` (or `--public-url`) to an absolute credential-free
-`http://` or `https://` base URL without a query or fragment; otherwise the API
-URL is used for both. An intentional path prefix is preserved.
-`localUrl` is derived from the API base URL actually used by the caller; it is
-not a fabricated loopback address. `url` prefers `publicUrl`, which falls back
-to `localUrl` when no public base is configured.
+`wmux-agent-run tui` remains the foreground supervisor after launch.
+If the runtime exits, it emits `WMUX_AGENT_TUI_EXIT <runId> <code>` and discards input instead of returning it to the shell, preventing a racing task prompt from becoming a shell command.
+Press Ctrl-C in that pane to return to the shell after an early runtime exit; the exact administrative release line is `WMUX_AGENT_TUI_RELEASE <runId>`.
+JSON includes local and configured public handoff URLs.
+Set `WMUX_PUBLIC_URL` (or `--public-url`) to an absolute credential-free `http://` or `https://` base URL without a query or fragment; otherwise the API URL is used for both.
+An intentional path prefix is preserved.
+`localUrl` is derived from the API base URL actually used by the caller; it is not a fabricated loopback address.
+`url` prefers `publicUrl`, which falls back to `localUrl` when no public base is configured.
 
-The older `wmux-opencode-run` helper remains staged for compatibility with
-existing integrations. New POSIX callers should use `wmux-agent-run` through
-`wmuxctl delegate`.
+The older `wmux-opencode-run` helper remains staged for compatibility with existing integrations.
+New POSIX callers should use `wmux-agent-run` through `wmuxctl delegate`.
 
 On Windows, run `wmux-windows-setup install-hooks`, then review and trust the command with `/hooks` in a new Codex session.
 Dynamically registered hosts do not receive broad wmux API credentials; lifecycle hooks on those hosts require separately provisioned API authentication or event posts fail with `401`.
