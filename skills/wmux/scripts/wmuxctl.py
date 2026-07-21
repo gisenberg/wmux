@@ -1399,7 +1399,7 @@ def session_workspace(
     workspace_id: str,
     machine_id: str,
     runtime: str,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     if not re.fullmatch(r"ws_[A-Za-z0-9]+", workspace_id):
         raise SystemExit("wmuxctl: invalid session workspace ID")
     workspace = next(
@@ -1407,7 +1407,7 @@ def session_workspace(
         None,
     )
     if workspace is None:
-        return None
+        raise SystemExit("wmuxctl: session workspace does not exist")
     if workspace.get("machineId") != machine_id or workspace.get("createdBy") != "agent":
         raise SystemExit("wmuxctl: session workspace does not belong to the requested agent target")
     info = describe_workspace("", workspace, require_explicit_multi_tab=True)
@@ -1471,7 +1471,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     reused = False
     if args.session_workspace:
         workspace = session_workspace(bootstrap, args.session_workspace, args.machine, args.runtime)
-        reused = workspace is not None
+        reused = True
     elif is_windows and args.title and not args.session:
         candidates = [
             candidate

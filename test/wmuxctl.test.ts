@@ -733,6 +733,52 @@ test("wmuxctl durable Codex sessions launch once and correlate plain multi-turn 
   }
 });
 
+test("wmuxctl refuses to replace a missing durable session with a new workspace", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-missing-session-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "continue the prior conversation");
+  let createRequests = 0;
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        machines: [{
+          id: "linux-box",
+          kind: "ssh",
+          platform: "linux",
+          reachable: true,
+          endpoint: "10.0.0.2:22",
+        }],
+        workspaces: [],
+        delegations: [],
+      }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      createRequests += 1;
+    }
+    response.writeHead(404).end();
+  });
+
+  const url = await listen(server);
+  try {
+    await assert.rejects(
+      cli(url, [
+        "delegate", "codex", "linux-box", "--directory", "/srv/project",
+        "--prompt-file", promptPath, "--session", "--session-workspace", "ws_missing",
+      ]),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /session workspace does not exist/);
+        return true;
+      },
+    );
+    assert.equal(createRequests, 0);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and structured outcome", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-windows-delegate-"));
   const promptPath = path.join(root, "prompt.md");
