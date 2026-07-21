@@ -15,7 +15,6 @@ const withServer = async (
   initialMachines: MachineConfig[],
   run: (baseUrl: string) => Promise<void>,
   machineSource: MachineSource = initialMachines,
-  sessions: SessionManager = {} as SessionManager,
 ): Promise<void> => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-target-"));
   const state = new StateStore(initialMachines, path.join(directory, "state.json"));
@@ -24,7 +23,7 @@ const withServer = async (
     "127.0.0.1",
     state,
     machineSource,
-    sessions,
+    {} as SessionManager,
     settings,
     { auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" } },
   );
@@ -157,49 +156,6 @@ test("workspace creation reports when no machine target exists", async () => {
     assert.equal(response.status, 409);
     assert.deepEqual(await response.json(), { error: "no_machine_available" });
   });
-});
-
-test("pane input batches write each chunk in order and enforce aggregate bounds", async () => {
-  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
-  const writes: Array<{ paneId: string; data: string; cols: number | undefined; rows: number | undefined }> = [];
-  const sessions = {
-    writePane: (paneId: string, data: string, cols?: number, rows?: number) => {
-      writes.push({ paneId, data, cols, rows });
-      return true;
-    },
-  } as SessionManager;
-
-  await withServer(machines, async (baseUrl) => {
-    const bootstrap = await fetch(`${baseUrl}/api/bootstrap`).then((response) => response.json()) as {
-      workspaces: Array<{ tabs: Array<{ panes: Array<{ id: string }> }> }>;
-    };
-    const paneId = bootstrap.workspaces[0].tabs[0].panes[0].id;
-    const postInput = (data: unknown) => fetch(`${baseUrl}/api/panes/${paneId}/input`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ data, cols: 100, rows: 30 }),
-    });
-
-    const response = await postInput(["hello agent", "\r"]);
-    assert.equal(response.status, 200);
-    assert.deepEqual(writes, [
-      { paneId, data: "hello agent", cols: 100, rows: 30 },
-      { paneId, data: "\r", cols: 100, rows: 30 },
-    ]);
-
-    const scalar = await postInput("legacy input");
-    assert.equal(scalar.status, 200);
-    assert.deepEqual(writes[2], { paneId, data: "legacy input", cols: 100, rows: 30 });
-
-    const empty = await postInput([]);
-    assert.equal(empty.status, 400);
-    assert.deepEqual(await empty.json(), { error: "invalid_input" });
-
-    const oversized = await postInput(["a".repeat(256 * 1024), "b"]);
-    assert.equal(oversized.status, 413);
-    assert.deepEqual(await oversized.json(), { error: "input_too_large" });
-    assert.equal(writes.length, 3);
-  }, machines, sessions);
 });
 
 test("workspace target validation follows a live dynamic machine source", async () => {

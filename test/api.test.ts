@@ -30,23 +30,6 @@ test("create requests carry browser-local source pane context", async () => {
   ]);
 });
 
-test("pane input batches preserve ordered terminal writes in one request", async () => {
-  const originalFetch = globalThis.fetch;
-  let body: unknown;
-  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-    body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-
-  try {
-    await api.sendPaneInput("pane-1", ["hello agent", "\r"], 100, 30);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  assert.deepEqual(body, { data: ["hello agent", "\r"], cols: 100, rows: 30 });
-});
-
 test("workspace tree mutations carry revisions, optional outdent targets, and collapse settings", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ path: string; body: unknown }> = [];

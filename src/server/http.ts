@@ -1108,35 +1108,23 @@ export const createHttpServer = (
       const paneInput = url.pathname.match(/^\/api\/panes\/([^/]+)\/input$/);
       if (paneInput && request.method === "POST") {
         const body = (await readBody(request)) as { data?: unknown; cols?: unknown; rows?: unknown };
-        const inputs: string[] | undefined = typeof body.data === "string"
-          ? [body.data]
-          : Array.isArray(body.data)
-              && body.data.length > 0
-              && body.data.length <= 32
-              && body.data.every((input): input is string => typeof input === "string")
-            ? body.data
-            : undefined;
-        if (!inputs) {
+        if (typeof body.data !== "string") {
           sendJson(response, 400, { error: "invalid_input" });
           return;
         }
-        if (inputs.reduce((length, input) => length + input.length, 0) > 256 * 1024) {
+        if (body.data.length > 256 * 1024) {
           sendJson(response, 413, { error: "input_too_large" });
           return;
         }
-        const paneId = decodeURIComponent(paneInput[1]);
-        // Keep paste and Enter as distinct PTY writes while sharing one browser round trip.
-        for (const input of inputs) {
-          const written = sessions.writePane(
-            paneId,
-            input,
-            typeof body.cols === "number" ? body.cols : undefined,
-            typeof body.rows === "number" ? body.rows : undefined,
-          );
-          if (!written) {
-            sendJson(response, 404, { error: "pane_not_found" });
-            return;
-          }
+        const written = sessions.writePane(
+          decodeURIComponent(paneInput[1]),
+          body.data,
+          typeof body.cols === "number" ? body.cols : undefined,
+          typeof body.rows === "number" ? body.rows : undefined,
+        );
+        if (!written) {
+          sendJson(response, 404, { error: "pane_not_found" });
+          return;
         }
         sendJson(response, 200, currentPayload());
         return;
