@@ -717,22 +717,18 @@ for Moonlight/Sunshine setup and security notes.
 
 ## Mobile
 
-Phone-sized and short touch viewports use dedicated controls for navigation,
-Chat, Term, and commands. The workspace drawer includes tabs and split panes;
-only the active split is shown in the terminal area. Mobile overlays use
-scrollable semantic controls, safe-area insets, and 44px touch targets. Chrome
-collapses while the software keyboard is open without destroying the active
-terminal session. A pane opens in Chat when it has recent agent context and in
-Term otherwise; an explicit choice is remembered for that pane in the current
-browser tab. While the terminal keyboard is open, a compact Esc/Tab/Ctrl/arrow
-row supplies keys that phone keyboards commonly omit. Explicit pane, tab, and
-workspace closes require confirmation before their backing sessions are killed.
+Phone-sized and short touch viewports use dedicated controls for navigation, Chat, Term, and commands.
+The workspace drawer includes tabs and split panes; only the active split is shown in the terminal area.
+Mobile overlays use scrollable semantic controls, safe-area insets, and 44px touch targets.
+Chrome collapses while the software keyboard is open without destroying the active terminal session.
+A pane opens in Chat when it has recent agent context and in Term otherwise; an explicit choice is remembered for that pane in the current browser tab.
+While the terminal keyboard is open, a compact Esc/Tab/Ctrl/arrow row supplies keys that phone keyboards commonly omit.
+Explicit pane, tab, and workspace closes require confirmation before their backing sessions are killed.
 
-The web app manifest and owned home-screen icons support standalone installation
-without changing the private-network deployment boundary.
+The web app manifest and owned home-screen icons support standalone installation without changing the private-network deployment boundary.
 
-The Chat surface displays trusted structured agent events, not parsed PTY
-output. Live terminal progress remains in Term view.
+The Chat surface displays trusted structured agent events, not parsed PTY output.
+Live terminal progress remains in Term view.
 
 ## Development
 
