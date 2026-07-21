@@ -617,6 +617,13 @@ def submit_line(client: WmuxClient, pane_id: str, line: str, enter: bool, cols: 
     return len(text.encode("utf-8")) + (1 if enter else 0)
 
 
+def submit_windows_request(client: WmuxClient, pane_id: str, encoded: str, cols: int, rows: int) -> int:
+    for offset in range(0, len(encoded), 256):
+        client.send_input(pane_id, encoded[offset:offset + 256], cols, rows)
+    client.send_input(pane_id, "\r", cols, rows)
+    return len(encoded.encode("utf-8")) + 1
+
+
 def cmd_send(client: WmuxClient, args: argparse.Namespace) -> int:
     sent_bytes = submit_line(client, args.pane, args.line, args.enter, args.cols, args.rows)
     info = {"paneId": args.pane, "sentBytes": sent_bytes}
@@ -811,7 +818,10 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         if args.runtime == "opencode" and args.opencode_agent:
             request["agent"] = args.opencode_agent
         encoded = base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode()
-        submit_line(client, info["paneId"], encoded, True, args.cols, args.rows)
+        if is_windows:
+            submit_windows_request(client, info["paneId"], encoded, args.cols, args.rows)
+        else:
+            submit_line(client, info["paneId"], encoded, True, args.cols, args.rows)
         ok, detail_source, exit_code, recovered, elapsed, outcome = wait_for_delegation_result(
             client,
             info["paneId"],

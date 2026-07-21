@@ -406,7 +406,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
 test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and structured outcome", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-windows-delegate-"));
   const promptPath = path.join(root, "prompt.md");
-  const prompt = "import the requested catalog";
+  const prompt = `import the requested catalog ${"carefully ".repeat(80)}`;
   fs.writeFileSync(promptPath, prompt);
   const inputs: Array<Record<string, unknown>> = [];
   const lifecycle: Array<Record<string, unknown>> = [];
@@ -457,8 +457,9 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
       request.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         inputs.push(body);
-        if (inputs.length === 3) {
-          const delegated = JSON.parse(Buffer.from(body.data, "base64").toString("utf8"));
+        if (body.data === "\r" && inputs.length > 2) {
+          const encoded = inputs.slice(2, -1).map((input) => input.data).join("");
+          const delegated = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
           runId = delegated.runId;
           assert.deepEqual(delegated, {
             runId,
@@ -519,6 +520,8 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
     assert.equal(result.outcome, "completed");
     assert.equal(result.result, "catalog imported");
     assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), ["wmux-agent-run", "\r"]);
+    assert.ok(inputs.slice(2, -1).length > 1);
+    assert.ok(inputs.slice(2, -1).every((body) => String(body.data).length <= 256));
     assert.deepEqual(lifecycle.map((event) => event.status), ["running", "completed"]);
   } finally {
     await close(server);
