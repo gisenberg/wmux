@@ -180,8 +180,11 @@ test("Windows agent session creation forwards profile preferences", async () => 
     80,
     24,
   );
+  const phases: string[] = [];
+  session.on("phase", (phase) => phases.push(phase));
 
   await waitUntil(() => createBody !== undefined);
+  assert.deepEqual(phases.slice(0, 2), ["checking-agent", "creating-session"]);
   assert.equal(createBody?.loadPowerShellProfile, true);
   assert.equal(createBody?.agentProfileOptionalAuth, true);
   await session.attachReady;

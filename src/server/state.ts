@@ -60,6 +60,28 @@ interface PaneContext {
   pane: PaneState;
 }
 
+export interface WorkspaceCreationIds {
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+}
+
+export interface TabCreationIds {
+  tabId: string;
+  paneId: string;
+}
+
+export interface SplitCreationIds {
+  paneId: string;
+}
+
+export class StateIdConflictError extends Error {
+  constructor(readonly id: string) {
+    super(`state id is already in use: ${id}`);
+    this.name = "StateIdConflictError";
+  }
+}
+
 interface TargetInput {
   workspaceId?: string;
   tabId?: string;
@@ -195,10 +217,26 @@ export class StateStore extends EventEmitter {
     }
   }
 
-  createWorkspace(machineId: string, cwd?: string, createdBy: "user" | "agent" = "user"): Workspace {
-    const pane = this.createPane(machineId, cwd);
+  createWorkspace(
+    machineId: string,
+    cwd?: string,
+    createdBy: "user" | "agent" = "user",
+    ids?: WorkspaceCreationIds,
+  ): Workspace {
+    if (ids) {
+      const existing = this.state.workspaces.find((workspace) => workspace.id === ids.workspaceId);
+      if (existing) {
+        const tab = existing.tabs.find((candidate) => candidate.id === ids.tabId);
+        const pane = tab?.panes.find((candidate) => candidate.id === ids.paneId);
+        if (existing.machineId === machineId && pane?.machineId === machineId) return existing;
+        throw new StateIdConflictError(ids.workspaceId);
+      }
+      this.assertTabIdAvailable(ids.tabId);
+      this.assertPaneIdAvailable(ids.paneId);
+    }
+    const pane = this.createPane(machineId, cwd, ids?.paneId);
     const tab: SurfaceTab = {
-      id: createId("tab"),
+      id: ids?.tabId ?? createId("tab"),
       title: "Shell",
       titleSource: "default",
       activePaneId: pane.id,
@@ -207,7 +245,7 @@ export class StateStore extends EventEmitter {
       createdAt: now(),
     };
     const workspace: Workspace = {
-      id: createId("ws"),
+      id: ids?.workspaceId ?? createId("ws"),
       name: this.nextWorkspaceName(machineId),
       ...(createdBy === "agent" ? { createdBy } : {}),
       nameSource: "default",
@@ -243,11 +281,22 @@ export class StateStore extends EventEmitter {
     return true;
   }
 
-  createTab(workspaceId: string, machineId?: string, cwd?: string): SurfaceTab {
+  createTab(workspaceId: string, machineId?: string, cwd?: string, ids?: TabCreationIds): SurfaceTab {
     const workspace = this.requireWorkspace(workspaceId);
-    const pane = this.createPane(machineId ?? workspace.machineId, cwd);
+    const targetMachineId = machineId ?? workspace.machineId;
+    if (ids) {
+      const existing = workspace.tabs.find((tab) => tab.id === ids.tabId);
+      if (existing) {
+        const pane = existing.panes.find((candidate) => candidate.id === ids.paneId);
+        if (pane?.machineId === targetMachineId) return existing;
+        throw new StateIdConflictError(ids.tabId);
+      }
+      this.assertTabIdAvailable(ids.tabId);
+      this.assertPaneIdAvailable(ids.paneId);
+    }
+    const pane = this.createPane(targetMachineId, cwd, ids?.paneId);
     const tab: SurfaceTab = {
-      id: createId("tab"),
+      id: ids?.tabId ?? createId("tab"),
       title: "Shell",
       titleSource: "default",
       activePaneId: pane.id,
@@ -262,10 +311,30 @@ export class StateStore extends EventEmitter {
     return tab;
   }
 
-  splitPane(tabId: string, paneId: string, direction: "horizontal" | "vertical", machineId?: string, cwd?: string): SurfaceTab {
+  splitPane(
+    tabId: string,
+    paneId: string,
+    direction: "horizontal" | "vertical",
+    machineId?: string,
+    cwd?: string,
+    ids?: SplitCreationIds,
+  ): SurfaceTab {
     const { workspace, tab } = this.requireTab(tabId);
     const sourcePane = tab.panes.find((pane) => pane.id === paneId);
-    const pane = this.createPane(machineId ?? sourcePane?.machineId ?? workspace.machineId, cwd);
+    if (!sourcePane) throw new Error("pane not found");
+    const targetMachineId = machineId ?? sourcePane.machineId;
+    if (ids) {
+      const existing = tab.panes.find((pane) => pane.id === ids.paneId);
+      if (existing) {
+        if (
+          existing.machineId === targetMachineId
+          && hasDirectSplit(tab.layout, paneId, ids.paneId, direction)
+        ) return tab;
+        throw new StateIdConflictError(ids.paneId);
+      }
+      this.assertPaneIdAvailable(ids.paneId);
+    }
+    const pane = this.createPane(targetMachineId, cwd, ids?.paneId);
     tab.panes.push(pane);
     tab.layout = replacePane(tab.layout, paneId, {
       type: "split",
@@ -865,9 +934,9 @@ export class StateStore extends EventEmitter {
     return `${this.filePath}.bak`;
   }
 
-  private createPane(machineId: string, cwd?: string): PaneState {
+  private createPane(machineId: string, cwd?: string, paneId = createId("pane")): PaneState {
     return {
-      id: createId("pane"),
+      id: paneId,
       machineId,
       title: "Shell",
       cwd,
@@ -890,6 +959,16 @@ export class StateStore extends EventEmitter {
     const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace) throw new Error("workspace not found");
     return workspace;
+  }
+
+  private assertTabIdAvailable(tabId: string): void {
+    if (this.state.workspaces.some((workspace) => workspace.tabs.some((tab) => tab.id === tabId))) {
+      throw new StateIdConflictError(tabId);
+    }
+  }
+
+  private assertPaneIdAvailable(paneId: string): void {
+    if (this.findPaneContext(paneId)) throw new StateIdConflictError(paneId);
   }
 
   private requireTab(tabId: string): { workspace: Workspace; tab: SurfaceTab } {
@@ -973,6 +1052,24 @@ const replacePane = (node: LayoutNode, paneId: string, replacement: LayoutNode):
     first: replacePane(node.first, paneId, replacement),
     second: replacePane(node.second, paneId, replacement),
   };
+};
+
+const hasDirectSplit = (
+  node: LayoutNode,
+  sourcePaneId: string,
+  createdPaneId: string,
+  direction: "horizontal" | "vertical",
+): boolean => {
+  if (node.type === "pane") return false;
+  if (
+    node.direction === direction
+    && node.first.type === "pane"
+    && node.first.paneId === sourcePaneId
+    && node.second.type === "pane"
+    && node.second.paneId === createdPaneId
+  ) return true;
+  return hasDirectSplit(node.first, sourcePaneId, createdPaneId, direction)
+    || hasDirectSplit(node.second, sourcePaneId, createdPaneId, direction);
 };
 
 const removePaneFromLayout = (node: LayoutNode, paneId: string): LayoutNode | null => {

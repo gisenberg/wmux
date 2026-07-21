@@ -278,13 +278,21 @@ export interface DoctorReport {
 }
 
 export type PaneClientMessage =
-  | { type: "input"; data: string; terminalResponse?: boolean }
+  | { type: "input"; data: string; terminalResponse?: boolean; sequence?: number }
   | { type: "resize"; cols: number; rows: number; foreground?: boolean }
   | { type: "activate"; cols: number; rows: number; foreground?: boolean };
 
 export type PaneReplayKind = "raw" | "checkpoint";
+export type PaneStartupPhase =
+  | "connecting"
+  | "checking-agent"
+  | "staging-helpers"
+  | "starting-generation"
+  | "creating-session"
+  | "replaying";
 
 export type PaneServerMessage =
+  | { type: "starting"; paneId: string; phase: PaneStartupPhase; label: string }
   | {
       type: "ready";
       paneId: string;
@@ -297,7 +305,7 @@ export type PaneServerMessage =
       outputOnly?: boolean;
       waitForRefresh?: true;
     }
-  | { type: "output"; paneId: string; data: string }
+  | { type: "output"; paneId: string; data: string; inputSequence?: number }
   | { type: "title"; paneId: string; title: string }
   | { type: "exit"; paneId: string; code: number | null }
   | { type: "removed"; paneId: string };

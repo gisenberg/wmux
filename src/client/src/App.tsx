@@ -46,6 +46,16 @@ import { summarizeWorkspaceVersion } from "./workspace-version";
 import { useMobileViewportState } from "./mobile-viewport";
 import { loadMachineTargetId, persistMachineTargetId, resolveMachineTargetId } from "./machine-target";
 import { workspacePresentationDescriptor, workspacePresentationMachineId } from "./workspace-presentation";
+import {
+  applyOptimisticCreations,
+  createClientSplitIds,
+  createClientTabIds,
+  createClientWorkspaceIds,
+  optimisticSplitCreation,
+  optimisticTabCreation,
+  optimisticWorkspaceCreation,
+  type OptimisticCreation,
+} from "./optimistic-creation";
 import type {
   AgentActivity,
   BootstrapPayload,
@@ -124,6 +134,8 @@ export function App() {
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
+  const [pendingPaneLabels, setPendingPaneLabels] = useState<Map<string, string>>(() => new Map());
+  const optimisticCreations = useRef(new Map<string, OptimisticCreation>());
   const pendingActionKeys = useRef(new Set<string>());
   const draggedWorkspaceId = useRef<string | null>(null);
   const workspaceDropPreviewRef = useRef<WorkspaceDropPreview | null>(null);
@@ -137,6 +149,25 @@ export function App() {
   const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const previousMobileSidebarCollapsed = useRef(sidebarCollapsed);
   const finishBoot = useCallback(() => setBootComplete(true), []);
+
+  const rebaseIncomingState = useCallback((payload: BootstrapPayload): BootstrapPayload =>
+    applyOptimisticCreations(payload, optimisticCreations.current.values()), []);
+
+  const beginOptimisticCreation = useCallback((creation: OptimisticCreation, label: string) => {
+    optimisticCreations.current.set(creation.key, creation);
+    setPendingPaneLabels((current) => new Map(current).set(creation.paneId, label));
+    store.update((current) => current ? applyOptimisticCreations(current, [creation]) : current);
+  }, [store]);
+
+  const finishOptimisticCreation = useCallback((creation: OptimisticCreation) => {
+    optimisticCreations.current.delete(creation.key);
+    setPendingPaneLabels((current) => {
+      if (!current.has(creation.paneId)) return current;
+      const next = new Map(current);
+      next.delete(creation.paneId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(mobileSurfaceModeStorageKey, mobileSurfaceMode);
@@ -211,7 +242,7 @@ export function App() {
     bootstrapRetryTimer.current = undefined;
     try {
       const payload = await api.bootstrap();
-      const routed = activateRouteTarget(payload);
+      const routed = rebaseIncomingState(activateRouteTarget(payload));
       if (requestId !== bootstrapRequestId.current) return;
       if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, routed)) {
         void loadBootstrapRef.current();
@@ -238,7 +269,7 @@ export function App() {
       const delay = Math.min(15_000, 500 * (2 ** Math.min(bootstrapRetryAttempt.current, 5)));
       bootstrapRetryTimer.current = window.setTimeout(() => void loadBootstrapRef.current(), delay);
     }
-  }, [store]);
+  }, [rebaseIncomingState, store]);
   loadBootstrapRef.current = loadBootstrap;
 
   useEffect(() => {
@@ -501,6 +532,7 @@ export function App() {
     isMobile: mobileViewport.isMobile,
     clearBellPanes,
     requestTerminalFocus,
+    rebaseIncomingState,
   });
 
   const activeWorkspaceUnreadCount = activeWorkspace ? unreadByWorkspaceId.get(activeWorkspace.id) ?? 0 : 0;
@@ -607,11 +639,48 @@ export function App() {
     activatePane(tabId, paneId);
   }, [activatePane, clearBellPanes]);
 
+  const optimisticSplitPaneRequest = useCallback(async (
+    tabId: string,
+    paneId: string,
+    direction: SplitDirection,
+    machineId?: string,
+  ): ReturnType<typeof api.splitPane> => {
+    const snapshot = store.get();
+    const sourcePane = snapshot?.workspaces
+      .flatMap((workspace) => workspace.tabs)
+      .flatMap((tab) => tab.panes)
+      .find((pane) => pane.id === paneId);
+    if (!snapshot || !sourcePane) return api.splitPane(tabId, paneId, direction, machineId);
+    const targetMachineId = machineId ?? sourcePane.machineId;
+    const ids = createClientSplitIds();
+    const creation = optimisticSplitCreation(
+      snapshot,
+      tabId,
+      paneId,
+      direction,
+      targetMachineId,
+      ids,
+      targetMachineId === sourcePane.machineId ? sourcePane.cwd : undefined,
+    );
+    if (!creation) return api.splitPane(tabId, paneId, direction, machineId, ids);
+    beginOptimisticCreation(creation, `Creating shell on ${targetMachineId}…`);
+    try {
+      const response = await api.splitPane(tabId, paneId, direction, machineId, ids);
+      finishOptimisticCreation(creation);
+      return response;
+    } catch (error) {
+      finishOptimisticCreation(creation);
+      await refresh().catch(() => undefined);
+      throw error;
+    }
+  }, [beginOptimisticCreation, finishOptimisticCreation, refresh, store]);
+
   const { splitPaneInTab, resizeSplitInTab, closePaneInTab, splitPane, resizeSplit, closePane } = usePaneActions({
     activeTabId: activeTab?.id,
     refresh,
     activatePane,
     runPending,
+    splitPaneRequest: optimisticSplitPaneRequest,
   });
 
   const recordPaneBell = useCallback((paneId: string) => {
@@ -641,10 +710,27 @@ export function App() {
 
   const createWorkspace = guard((machineId: string) => `machine:${machineId}:create-workspace`, "Creating workspace...", async (machineId: string) => {
     if (!machineId) return;
-    const response = await api.createWorkspace(machineId, activePane?.id);
-    await refresh(response.state);
-    activateWorkspaceTab(response.workspace.id, response.workspace.activeTabId, { replaceHistory: false });
-    if (mobileViewport.isMobile) collapseSidebar();
+    const snapshot = store.get();
+    if (!snapshot) return;
+    const ids = createClientWorkspaceIds();
+    const creation = optimisticWorkspaceCreation(
+      snapshot,
+      machineId,
+      ids,
+      activePane?.machineId === machineId ? activePane.cwd : undefined,
+    );
+    beginOptimisticCreation(creation, `Creating shell on ${machineId}…`);
+    try {
+      const response = await api.createWorkspace(machineId, activePane?.id, ids);
+      finishOptimisticCreation(creation);
+      await refresh(response.state);
+      activateWorkspaceTab(response.workspace.id, response.workspace.activeTabId, { replaceHistory: false });
+      if (mobileViewport.isMobile) collapseSidebar();
+    } catch (error) {
+      finishOptimisticCreation(creation);
+      await refresh().catch(() => undefined);
+      throw error;
+    }
   });
 
   const activateWorkspaceLink = (
@@ -679,10 +765,29 @@ export function App() {
 
   const createTab = guard((machineId: string) => `machine:${machineId}:create-tab`, "Creating tab...", async (machineId: string) => {
     if (!activeWorkspace || !machineId) return;
-    const response = await api.createTab(activeWorkspace.id, machineId, activePane?.id);
-    await refresh(response.state);
-    activateWorkspaceTab(activeWorkspace.id, response.tab.id, { replaceHistory: false });
-    if (mobileViewport.isMobile) collapseSidebar();
+    const snapshot = store.get();
+    if (!snapshot) return;
+    const ids = createClientTabIds();
+    const creation = optimisticTabCreation(
+      snapshot,
+      activeWorkspace.id,
+      machineId,
+      ids,
+      activePane?.machineId === machineId ? activePane.cwd : undefined,
+    );
+    if (!creation) return;
+    beginOptimisticCreation(creation, `Creating shell on ${machineId}…`);
+    try {
+      const response = await api.createTab(activeWorkspace.id, machineId, activePane?.id, ids);
+      finishOptimisticCreation(creation);
+      await refresh(response.state);
+      activateWorkspaceTab(activeWorkspace.id, response.tab.id, { replaceHistory: false });
+      if (mobileViewport.isMobile) collapseSidebar();
+    } catch (error) {
+      finishOptimisticCreation(creation);
+      await refresh().catch(() => undefined);
+      throw error;
+    }
   });
 
   const closeActiveTab = guard(() => `tab:${activeTab?.id ?? "unknown"}:close`, "Closing tab...", async () => {
@@ -1756,6 +1861,7 @@ export function App() {
                     onClosePane={closePaneInTab}
                     onDismissMedia={dismissMedia}
                     runsByPaneId={latestRunByPaneId}
+                    pendingPaneLabels={pendingPaneLabels}
                   />
                 </div>
               );

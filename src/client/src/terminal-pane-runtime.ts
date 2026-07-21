@@ -77,8 +77,13 @@ export const sendPaneMessage = (ws: WebSocket | null, message: PaneClientMessage
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
 };
 
-export const sendInput = (ws: WebSocket | null, data: string, terminalResponse = false): void => {
-  sendPaneMessage(ws, { type: "input", data, terminalResponse });
+export const sendInput = (
+  ws: WebSocket | null,
+  data: string,
+  terminalResponse = false,
+  sequence?: number,
+): void => {
+  sendPaneMessage(ws, { type: "input", data, terminalResponse, ...(sequence === undefined ? {} : { sequence }) });
 };
 
 export const createTerminalFitter = (term: Terminal, element: HTMLElement): TerminalFitter => {
@@ -139,6 +144,7 @@ export const SYNCHRONIZED_OUTPUT_SEQUENCES = [SYNCHRONIZED_OUTPUT_START, SYNCHRO
 export const MAX_SYNCHRONIZED_OUTPUT_BUFFER_CHARS = 512 * 1024;
 export const MAX_SYNCHRONIZED_OUTPUT_HOLD_MS = 500;
 export const TERMINAL_OUTPUT_BATCH_MS = 16;
+export const INTERACTIVE_OUTPUT_FAST_PATH_MS = 250;
 export const createAlternateScreenState = (): AlternateScreenState => ({ active: false, carry: "" });
 export const resetAlternateScreenState = (state: AlternateScreenState): void => {
   state.active = false;
@@ -158,7 +164,9 @@ export const terminalOutputDelay = (
   tuiFrameRate: 15 | 30 | 60,
   lastOutputAt: number,
   now: number,
+  lastInteractiveInputAt = Number.NEGATIVE_INFINITY,
 ): number => {
+  if (now - lastInteractiveInputAt <= INTERACTIVE_OUTPUT_FAST_PATH_MS) return 0;
   if (!alternateScreen) return TERMINAL_OUTPUT_BATCH_MS;
   return now - lastOutputAt > 180 ? 0 : Math.round(1000 / tuiFrameRate);
 };

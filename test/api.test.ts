@@ -30,6 +30,32 @@ test("create requests carry browser-local source pane context", async () => {
   ]);
 });
 
+test("create requests carry stable client-generated ids", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: unknown[] = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requests.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const workspaceIds = { workspaceId: `ws_${"a".repeat(32)}`, tabId: `tab_${"b".repeat(32)}`, paneId: `pane_${"c".repeat(32)}` };
+  const tabIds = { tabId: `tab_${"d".repeat(32)}`, paneId: `pane_${"e".repeat(32)}` };
+  const splitIds = { paneId: `pane_${"f".repeat(32)}` };
+
+  try {
+    await api.createWorkspace("local", "pane_source", workspaceIds);
+    await api.createTab("ws_target", "local", "pane_source", tabIds);
+    await api.splitPane("tab_target", "pane_source", "vertical", "local", splitIds);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requests, [
+    { machineId: "local", sourcePaneId: "pane_source", clientIds: workspaceIds },
+    { machineId: "local", sourcePaneId: "pane_source", clientIds: tabIds },
+    { paneId: "pane_source", direction: "vertical", machineId: "local", clientIds: splitIds },
+  ]);
+});
+
 test("pane image staging sends authenticated raw bytes without a client path", async () => {
   const originalFetch = globalThis.fetch;
   const image = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });

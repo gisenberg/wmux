@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { StateStore } from "../src/server/state.js";
+import { StateIdConflictError, StateStore } from "../src/server/state.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "../src/server/state-schema.js";
 import type { MachineConfig } from "../src/server/types.js";
 
@@ -184,6 +184,45 @@ test("mutations round-trip through flush and reload", () => {
     const found = reloaded.snapshot().workspaces.find((w) => w.id === workspace.id);
     assert.equal(found?.name, "Renamed");
     assert.equal(reloaded.snapshot().revision, store.snapshot().revision);
+  });
+});
+
+test("client-generated creation ids are idempotent and collision-safe", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspaceIds = {
+      workspaceId: `ws_${"a".repeat(32)}`,
+      tabId: `tab_${"b".repeat(32)}`,
+      paneId: `pane_${"c".repeat(32)}`,
+    };
+    const workspace = store.createWorkspace("local", "/tmp", "user", workspaceIds);
+    const workspaceRevision = store.snapshot().revision;
+    assert.equal(store.createWorkspace("local", "/tmp", "user", workspaceIds).id, workspace.id);
+    assert.equal(store.snapshot().revision, workspaceRevision);
+
+    const tabIds = { tabId: `tab_${"d".repeat(32)}`, paneId: `pane_${"e".repeat(32)}` };
+    const tab = store.createTab(workspace.id, "local", "/tmp", tabIds);
+    const tabRevision = store.snapshot().revision;
+    assert.equal(store.createTab(workspace.id, "local", "/tmp", tabIds).id, tab.id);
+    assert.equal(store.snapshot().revision, tabRevision);
+
+    const splitIds = { paneId: `pane_${"f".repeat(32)}` };
+    store.splitPane(tab.id, tabIds.paneId, "vertical", "local", "/tmp", splitIds);
+    const splitRevision = store.snapshot().revision;
+    const repeated = store.splitPane(tab.id, tabIds.paneId, "vertical", "local", "/tmp", splitIds);
+    assert.equal(repeated.panes.filter((pane) => pane.id === splitIds.paneId).length, 1);
+    assert.equal(store.snapshot().revision, splitRevision);
+
+    assert.throws(
+      () => store.splitPane(tab.id, "pane_missing", "vertical", "local", "/tmp"),
+      /pane not found/,
+    );
+    assert.equal(store.snapshot().revision, splitRevision);
+
+    assert.throws(
+      () => store.createWorkspace("local", undefined, "user", { ...workspaceIds, tabId: `tab_${"1".repeat(32)}` }),
+      StateIdConflictError,
+    );
   });
 });
 

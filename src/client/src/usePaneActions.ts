@@ -11,9 +11,15 @@ interface UsePaneActionsOptions {
     label: string,
     action: () => Promise<void>,
   ) => Promise<void | undefined>;
+  splitPaneRequest?: (
+    tabId: string,
+    paneId: string,
+    direction: SplitDirection,
+    machineId?: string,
+  ) => ReturnType<typeof api.splitPane>;
 }
 
-export const usePaneActions = ({ activeTabId, refresh, activatePane, runPending }: UsePaneActionsOptions) => {
+export const usePaneActions = ({ activeTabId, refresh, activatePane, runPending, splitPaneRequest = api.splitPane }: UsePaneActionsOptions) => {
   const splitPaneInTab = useCallback(async (
     tabId: string,
     paneId: string,
@@ -21,11 +27,11 @@ export const usePaneActions = ({ activeTabId, refresh, activatePane, runPending 
     machineId?: string,
   ) => {
     await runPending(`pane:${paneId}:split`, "Splitting pane...", async () => {
-      const response = await api.splitPane(tabId, paneId, direction, machineId);
+      const response = await splitPaneRequest(tabId, paneId, direction, machineId);
       await refresh(response.state);
       await activatePane(response.tab.id, response.tab.activePaneId);
     });
-  }, [activatePane, refresh, runPending]);
+  }, [activatePane, refresh, runPending, splitPaneRequest]);
 
   const resizeSplitInTab = useCallback(async (tabId: string, path: string, ratio: number) => {
     await runPending(`tab:${tabId}:resize:${path}`, "Saving pane layout...", async () => {

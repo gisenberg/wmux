@@ -42,6 +42,8 @@ test("alternate-screen tracking handles split DEC sequences without changing byt
 
 test("output delay keeps normal output low latency and follows mutable alternate-screen frame rates", () => {
   assert.equal(terminalOutputDelay(false, 15, 0, 1), TERMINAL_OUTPUT_BATCH_MS);
+  assert.equal(terminalOutputDelay(false, 15, 100, 120, 110), 0);
+  assert.equal(terminalOutputDelay(true, 15, 100, 120, 110), 0);
   assert.equal(terminalOutputDelay(true, 15, 0, 300), 0);
   assert.equal(terminalOutputDelay(true, 15, 100, 120), 67);
   assert.equal(terminalOutputDelay(true, 30, 100, 120), 33);

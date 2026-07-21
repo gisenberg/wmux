@@ -19,6 +19,7 @@ interface SocketState {
   paneId: string;
   cols: number;
   rows: number;
+  inputSequence?: number;
 }
 
 // A session that exits cleanly (code 0) after running at least this long is
@@ -174,12 +175,15 @@ export class SessionManager {
       socket.close(1011, error instanceof Error ? error.message : "session start failed");
       return;
     }
+    this.send(socket, { type: "starting", paneId, phase: "connecting", label: "Opening terminal…" });
     const resizeOwner = this.ensureResizeOwner(paneId, socket, session, initialSize);
 
     socket.on("message", (raw) => {
       const message = this.parse(raw.toString());
       if (!message) return;
       if (message.type === "input") {
+        const socketState = this.socketState.get(socket);
+        if (socketState && message.sequence !== undefined) socketState.inputSequence = message.sequence;
         this.promoteResizeOwner(paneId, socket, session);
         if (isAgentInterruptInput(message.data)) this.state.interruptAgentForPane(paneId);
         const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
@@ -191,7 +195,7 @@ export class SessionManager {
       }
       if (message.type === "resize") {
         const size = normalizeSize(message.cols, message.rows);
-        this.socketState.set(socket, { paneId, ...size });
+        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size });
         if (message.foreground === false) {
           this.releaseResizeOwner(paneId, socket);
           return;
@@ -200,7 +204,7 @@ export class SessionManager {
       }
       if (message.type === "activate") {
         const size = normalizeSize(message.cols, message.rows);
-        this.socketState.set(socket, { paneId, ...size });
+        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size });
         if (message.foreground === false) {
           this.releaseResizeOwner(paneId, socket);
           return;
@@ -373,7 +377,7 @@ export class SessionManager {
     this.schedulePaneCwdRefresh(pane, machine, session);
 
     session.on("output", (data) => {
-      this.broadcast(pane.id, { type: "output", paneId: pane.id, data });
+      this.broadcastOutput(pane.id, data);
       this.applyBackpressure(pane.id, session);
     });
     session.on("title", (title) => {
@@ -388,6 +392,9 @@ export class SessionManager {
       machine.agentUrl = undefined;
       this.sessionMachines.set(pane.id, structuredClone(machine));
       this.state.updatePane(pane.id, { agentPort });
+    });
+    session.on("phase", (phase, label) => {
+      this.broadcast(pane.id, { type: "starting", paneId: pane.id, phase, label });
     });
     session.on("exit", (code) => {
       if (this.ignoredSessionExits.has(session)) return;
@@ -467,6 +474,21 @@ export class SessionManager {
     }
     for (const socket of this.outputWatchers.get(paneId) ?? []) {
       this.send(socket, payload);
+    }
+  }
+
+  private broadcastOutput(paneId: string, data: string): void {
+    for (const socket of this.sockets.get(paneId) ?? []) {
+      const inputSequence = this.socketState.get(socket)?.inputSequence;
+      this.send(socket, {
+        type: "output",
+        paneId,
+        data,
+        ...(inputSequence === undefined ? {} : { inputSequence }),
+      });
+    }
+    for (const socket of this.outputWatchers.get(paneId) ?? []) {
+      this.send(socket, { type: "output", paneId, data });
     }
   }
 
@@ -683,10 +705,13 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.type === "input" && typeof parsed.data === "string") {
+      const sequence = parsed.sequence;
+      if (sequence !== undefined && (!Number.isSafeInteger(sequence) || Number(sequence) < 1)) return null;
       return {
         type: "input",
         data: parsed.data,
         ...(parsed.terminalResponse === true ? { terminalResponse: true } : {}),
+        ...(sequence === undefined ? {} : { sequence: Number(sequence) }),
       };
     }
     if (

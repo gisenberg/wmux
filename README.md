@@ -373,6 +373,10 @@ token. wmux is not a hardened multi-user service.
 
 Open the command palette with `Cmd/Ctrl+K` for navigation, host-scoped session
 creation, splits, settings, diagnostics, activity, and session audit actions.
+Diagnostics includes browser-local terminal latency percentiles for input
+dispatch, predicted paint, sequence-acknowledged output, and Ghostty canvas
+rendering. It separates normal-shell and alternate-screen/TUI samples, retains
+no input text, and can copy or clear its bounded in-memory measurements.
 
 ### Keyboard shortcuts
 
