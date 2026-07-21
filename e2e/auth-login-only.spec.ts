@@ -85,3 +85,35 @@ test("login-only clears an invalid stored browser session", async ({ page }) => 
   await expect(page.getByRole("textbox", { name: "Username" })).toBeVisible();
   expect(await page.evaluate(() => window.localStorage.getItem("wmux.token") === null)).toBe(true);
 });
+
+test("login-only retries transient auth discovery and session validation", async ({ page }) => {
+  let authInfoAttempts = 0;
+  let sessionAttempts = 0;
+  await page.route("**/api/auth-info", async (route) => {
+    authInfoAttempts += 1;
+    if (authInfoAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "temporary" }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route("**/api/auth/session", async (route) => {
+    sessionAttempts += 1;
+    if (sessionAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "temporary" }) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("textbox", { name: "Username" })).toBeVisible();
+  expect(authInfoAttempts).toBe(2);
+
+  await page.getByRole("textbox", { name: "Username" }).fill(runtime.username);
+  await page.getByLabel("Password").fill(runtime.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  expect(sessionAttempts).toBe(2);
+  expect(await page.evaluate(() => window.localStorage.getItem("wmux.token")?.startsWith("wsess."))).toBe(true);
+});

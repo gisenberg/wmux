@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { StateStore, WorkspaceDepthError } from "../src/server/state.js";
+import { StateIdConflictError, StateStore, WorkspaceDepthError } from "../src/server/state.js";
 import { CURRENT_STATE_SCHEMA_VERSION, parsePersistedState } from "../src/server/state-schema.js";
 import type { MachineConfig } from "../src/server/types.js";
 
@@ -163,6 +163,30 @@ test("legacy terminal pane kinds are removed during migration", () => {
   });
 });
 
+test("version 2 state migrates to delegation-aware schema", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-version-2",
+      agent: "codex",
+      status: "completed",
+      summary: "Legacy result",
+      message: "Recovered while migrating",
+    });
+    const previous = store.snapshot() as unknown as Record<string, unknown>;
+    previous.schemaVersion = 2;
+    delete previous.delegations;
+    fs.writeFileSync(filePath, JSON.stringify(previous));
+
+    const migrated = new StateStore(machines, filePath);
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+    assert.equal(migrated.delegationForRun("run-version-2")?.result, "Recovered while migrating");
+    assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+  });
+});
+
 test("state recovers from the last validated backup", () => {
   withTempState((filePath, dir) => {
     const store = new StateStore(machines, filePath);
@@ -259,6 +283,45 @@ test("mutations round-trip through flush and reload", () => {
     const found = reloaded.snapshot().workspaces.find((w) => w.id === workspace.id);
     assert.equal(found?.name, "Renamed");
     assert.equal(reloaded.snapshot().revision, store.snapshot().revision);
+  });
+});
+
+test("client-generated creation ids are idempotent and collision-safe", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspaceIds = {
+      workspaceId: `ws_${"a".repeat(32)}`,
+      tabId: `tab_${"b".repeat(32)}`,
+      paneId: `pane_${"c".repeat(32)}`,
+    };
+    const workspace = store.createWorkspace("local", "/tmp", "user", undefined, workspaceIds);
+    const workspaceRevision = store.snapshot().revision;
+    assert.equal(store.createWorkspace("local", "/tmp", "user", undefined, workspaceIds).id, workspace.id);
+    assert.equal(store.snapshot().revision, workspaceRevision);
+
+    const tabIds = { tabId: `tab_${"d".repeat(32)}`, paneId: `pane_${"e".repeat(32)}` };
+    const tab = store.createTab(workspace.id, "local", "/tmp", tabIds);
+    const tabRevision = store.snapshot().revision;
+    assert.equal(store.createTab(workspace.id, "local", "/tmp", tabIds).id, tab.id);
+    assert.equal(store.snapshot().revision, tabRevision);
+
+    const splitIds = { paneId: `pane_${"f".repeat(32)}` };
+    store.splitPane(tab.id, tabIds.paneId, "vertical", "local", "/tmp", splitIds);
+    const splitRevision = store.snapshot().revision;
+    const repeated = store.splitPane(tab.id, tabIds.paneId, "vertical", "local", "/tmp", splitIds);
+    assert.equal(repeated.panes.filter((pane) => pane.id === splitIds.paneId).length, 1);
+    assert.equal(store.snapshot().revision, splitRevision);
+
+    assert.throws(
+      () => store.splitPane(tab.id, "pane_missing", "vertical", "local", "/tmp"),
+      /pane not found/,
+    );
+    assert.equal(store.snapshot().revision, splitRevision);
+
+    assert.throws(
+      () => store.createWorkspace("local", undefined, "user", undefined, { ...workspaceIds, tabId: `tab_${"1".repeat(32)}` }),
+      StateIdConflictError,
+    );
   });
 });
 
@@ -417,6 +480,168 @@ test("agent messages are sanitized and persist across restart", () => {
 
     const reloaded = new StateStore(machines, filePath);
     assert.equal(reloaded.snapshot().agentEvents[0].message, "First line.\n\nSecond line.");
+  });
+});
+
+test("delegation results retain more detail than browser activity", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    const message = "result ".repeat(3_000);
+    const result = store.recordAgentEvent({
+      paneId,
+      runId: "run-long-result",
+      agent: "codex",
+      status: "completed",
+      summary: "Long result",
+      message,
+    });
+
+    assert.equal(result.agentEvent.message?.length, 12_000);
+    assert.equal(store.delegationForRun("run-long-result")?.result, message.trim());
+  });
+});
+
+test("delegation lifecycle records remain queryable by run id after restart", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-durable-1",
+      agent: "codex",
+      status: "completed",
+      title: "Durable review",
+      summary: "Codex delegation completed",
+      message: "Review complete.",
+    });
+    store.flush();
+
+    const reloaded = new StateStore(machines, filePath);
+    const delegation = reloaded.delegationForRun("run-durable-1");
+    assert.equal(delegation?.state, "completed");
+    assert.equal(delegation?.result, "Review complete.");
+    assert.equal(reloaded.delegationForRun("missing"), undefined);
+  });
+});
+
+test("delegation records survive workspace removal", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspace = store.createWorkspace("local");
+    const paneId = workspace.tabs[0].panes[0].id;
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-closed-workspace",
+      agent: "codex",
+      status: "completed",
+      summary: "Closed workspace result",
+      message: "Still queryable",
+    });
+
+    assert.ok(store.removeWorkspace(workspace.id).length > 0);
+    assert.equal(store.snapshot().agentEvents.some((event) => event.runId === "run-closed-workspace"), false);
+    assert.equal(store.delegationForRun("run-closed-workspace")?.result, "Still queryable");
+    store.flush();
+    assert.equal(new StateStore(machines, filePath).delegationForRun("run-closed-workspace")?.result, "Still queryable");
+  });
+});
+
+test("delegation records distinguish observer errors from agent outcomes", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, runId: "run-observer", agent: "codex", status: "completed", summary: "Done", message: "Agent result" });
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-observer",
+      agent: "codex",
+      status: "observer_error",
+      summary: "Controller lost contact",
+      message: "Replay unavailable",
+    });
+
+    const delegation = store.delegationForRun("run-observer");
+    assert.equal(delegation?.state, "completed");
+    assert.equal(delegation?.result, "Agent result");
+    assert.equal(delegation?.observerError, "Replay unavailable");
+
+    store.recordAgentEvent({ paneId, runId: "run-late-result", agent: "codex", status: "running", summary: "Working" });
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-late-result",
+      agent: "codex",
+      status: "observer_error",
+      summary: "Controller lost contact",
+      message: "Status endpoint unavailable",
+    });
+    store.recordAgentEvent({ paneId, runId: "run-late-result", agent: "codex", status: "completed", summary: "Done", message: "Late result" });
+    const lateResult = store.delegationForRun("run-late-result");
+    assert.equal(lateResult?.state, "completed");
+    assert.equal(lateResult?.result, "Late result");
+    assert.equal(lateResult?.observerError, "Status endpoint unavailable");
+  });
+});
+
+test("late active events cannot regress a terminal delegation", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "completed", summary: "Done", message: "Final result" });
+    store.recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "running", summary: "Late start hook" });
+    store.recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "updated", summary: "Late notification" });
+
+    const delegation = store.delegationForRun("run-terminal");
+    assert.equal(delegation?.state, "completed");
+    assert.equal(delegation?.result, "Final result");
+  });
+});
+
+test("a new run interrupts the previous delegation without interrupting duplicate events for the same run", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, runId: "run-first", agent: "codex", status: "running", summary: "Starting" });
+    store.recordAgentEvent({ paneId, runId: "run-first", agent: "codex", status: "running", summary: "Still running" });
+    assert.equal(store.delegationForRun("run-first")?.state, "running");
+
+    store.recordAgentEvent({ paneId, runId: "run-second", agent: "codex", status: "running", summary: "New work" });
+    assert.equal(store.delegationForRun("run-first")?.state, "interrupted");
+    assert.equal(store.delegationForRun("run-second")?.state, "running");
+  });
+});
+
+test("runless active hooks inherit the current delegation without interrupting it", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, runId: "run-durable", agent: "codex", status: "running", summary: "Starting" });
+    const hook = store.recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Prompt submitted" });
+
+    assert.equal(hook.agentEvent.runId, "run-durable");
+    assert.equal(store.delegationForRun("run-durable")?.state, "running");
+    assert.equal(store.interruptAgentForPane(paneId), true);
+    assert.equal(store.delegationForRun("run-durable")?.state, "interrupted");
+  });
+});
+
+test("expired terminal delegations are pruned while active delegations remain", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, runId: "run-expired", agent: "codex", status: "completed", summary: "Old" });
+    store.recordAgentEvent({ paneId, runId: "run-active", agent: "codex", status: "running", summary: "Active" });
+    store.flush();
+
+    const persisted = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+      delegations: Array<{ runId: string; updatedAt: string }>;
+    };
+    for (const delegation of persisted.delegations) delegation.updatedAt = "2000-01-01T00:00:00.000Z";
+    fs.writeFileSync(filePath, JSON.stringify(persisted));
+
+    const reloaded = new StateStore(machines, filePath);
+    assert.equal(reloaded.delegationForRun("run-expired"), undefined);
+    assert.equal(reloaded.delegationForRun("run-active")?.state, "running");
   });
 });
 

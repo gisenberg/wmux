@@ -34,6 +34,7 @@ test("service and Docker launchers pass scoped auth mode and token paths", () =>
   assert.match(installer, /BROWSER_AUTH_MODE="\$\{WMUX_BROWSER_AUTH_MODE:-shared-or-login\}"/);
   assert.match(installer, /Environment=WMUX_AUTOMATION_TOKEN_PATH=\$\{AUTOMATION_TOKEN_PATH\}/);
   assert.match(installer, /Environment=WMUX_HELPER_TOKEN_PATH=\$\{HELPER_TOKEN_PATH\}/);
+  assert.match(installer, /chmod 700 "\$\{HOME\}\/\.wmux"/);
   assert.match(service, /^Environment=WMUX_BROWSER_AUTH_MODE=shared-or-login$/m);
   assert.match(compose, /WMUX_AUTOMATION_TOKEN: "\$\{WMUX_AUTOMATION_TOKEN:-\}"/);
   assert.match(compose, /WMUX_HELPER_TOKEN: "\$\{WMUX_HELPER_TOKEN:-\}"/);

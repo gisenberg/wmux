@@ -414,6 +414,40 @@ test("terminal-generated response metadata survives client message parsing", () 
     type: "input",
     data: "text",
   });
+  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 42 })), {
+    type: "input",
+    data: "x",
+    sequence: 42,
+  });
+  assert.equal(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 0 })), null);
+  assert.equal(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 1.5 })), null);
+});
+
+test("pane output acknowledges each browser's latest input sequence without tagging output watchers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-input-ack-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const manager = new SessionManager(state, [machine]);
+  const client = socket();
+  const watcher = socket();
+  const internals = manager as unknown as {
+    sockets: Map<string, Set<WebSocket>>;
+    outputWatchers: Map<string, Set<WebSocket>>;
+    socketState: Map<WebSocket, { paneId: string; cols: number; rows: number; inputSequence?: number }>;
+    broadcastOutput: (paneId: string, data: string) => void;
+  };
+  try {
+    internals.sockets.set(pane.id, new Set([client]));
+    internals.outputWatchers.set(pane.id, new Set([watcher]));
+    internals.socketState.set(client, { paneId: pane.id, cols: 80, rows: 24, inputSequence: 7 });
+    internals.broadcastOutput(pane.id, "echo");
+    assert.deepEqual(fake(client).sent.at(-1), { type: "output", paneId: pane.id, data: "echo", inputSequence: 7 });
+    assert.deepEqual(fake(watcher).sent.at(-1), { type: "output", paneId: pane.id, data: "echo" });
+  } finally {
+    manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("server recognizes terminal replies from stale browser clients", () => {

@@ -42,6 +42,7 @@ fi
 mkdir -p "${HOME}/.config/systemd/user"
 mkdir -p "${HOME}/.local/bin"
 mkdir -p "${HOME}/.wmux"
+chmod 700 "${HOME}/.wmux"
 
 for helper in "${ROOT_DIR}"/scripts/wmux-* "${ROOT_DIR}"/scripts/wclip "${ROOT_DIR}"/scripts/wmclip; do
   [[ -f "${helper}" && -x "${helper}" ]] || continue

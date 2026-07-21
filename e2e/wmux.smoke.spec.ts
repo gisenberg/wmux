@@ -1,12 +1,43 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
     Math.random = () => 0;
   });
   await page.goto("/");
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
 });
+
+const routeTerminalFontFamily = async (page: Page, terminalFontFamily: string): Promise<void> => {
+  await page.route("**/api/bootstrap", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    await route.fulfill({ response, json: { ...payload, terminalFontFamily } });
+  });
+  await page.routeWebSocket("**/ws/events", (webSocket) => {
+    const server = webSocket.connectToServer();
+    server.onMessage((message) => {
+      if (typeof message !== "string") {
+        webSocket.send(message);
+        return;
+      }
+      try {
+        const payload = JSON.parse(message) as { type?: string; state?: Record<string, unknown> };
+        if (payload.type === "snapshot" && payload.state) {
+          webSocket.send(JSON.stringify({
+            ...payload,
+            state: { ...payload.state, terminalFontFamily },
+          }));
+          return;
+        }
+      } catch {
+        // Forward non-JSON event messages unchanged.
+      }
+      webSocket.send(message);
+    });
+  });
+};
 
 test("publishes standalone app metadata for direct workspace routes", async ({ page, request }) => {
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#101114");
@@ -60,16 +91,75 @@ test("uses a configured shortcut while preserving defaults for omitted actions",
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
 });
 
-test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }) => {
+test("registers and loads the bundled Meslo terminal font", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop Chromium font coverage");
+  await routeTerminalFontFamily(page, '"MesloLGM Nerd Font"');
+  await page.reload();
+  await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+
+  const result = await page.evaluate(() => {
+    const faces = [...document.fonts]
+      .filter((face) => face.family === "MesloLGM Nerd Font")
+      .map((face) => ({ style: face.style, weight: face.weight, status: face.status }));
+    const terminalFontFamily = getComputedStyle(document.querySelector(".terminal-host") as HTMLElement).fontFamily;
+    const predictionFontFamily = getComputedStyle(
+      document.querySelector(".terminal-input-prediction-layer") as HTMLElement,
+    ).fontFamily;
+    return { faces, predictionFontFamily, terminalFontFamily };
+  });
+
+  expect(result.faces).toEqual(expect.arrayContaining([
+    { style: "normal", weight: "400", status: "loaded" },
+    { style: "normal", weight: "700", status: "loaded" },
+    { style: "italic", weight: "400", status: "loaded" },
+    { style: "italic", weight: "700", status: "loaded" },
+  ]));
+  expect(result.faces).toHaveLength(4);
+  expect(result.terminalFontFamily).toContain("MesloLGM Nerd Font");
+  expect(result.predictionFontFamily).toBe(result.terminalFontFamily);
+});
+
+test("does not block terminal startup on slow bundled fonts", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop Chromium font coverage");
+  await page.route("**/fonts/meslo-v3.4.0/**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await route.continue();
+  });
+  await routeTerminalFontFamily(page, '"MesloLGM Nerd Font"');
+
+  await page.reload();
+  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  const startedAt = Date.now();
+  await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 3_500 });
+  expect(Date.now() - startedAt).toBeLessThan(3_500);
+});
+
+test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }, testInfo) => {
+  if (testInfo.project.name.startsWith("mobile-")) {
+    await page.getByRole("banner", { name: "Mobile session controls" })
+      .getByRole("button", { name: "Open terminal" })
+      .click();
+  }
   const before = await request.get("/api/bootstrap");
   expect(before.ok()).toBeTruthy();
   const beforePayload = await before.json() as { workspaces: unknown[] };
+  let releaseCreation = () => undefined;
+  const creationGate = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  await page.route("**/api/workspaces", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await creationGate;
+    await route.continue();
+  });
 
   await page.keyboard.press("Control+K");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await expect(palette).toBeVisible();
   await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").fill("New workspace on Local");
   await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").press("Enter");
+  await expect(page.locator(".terminal-startup-status", { hasText: "Creating shell on local" })).toBeVisible();
+  releaseCreation();
 
   await expect.poll(async () => {
     const response = await request.get("/api/bootstrap");
@@ -84,6 +174,7 @@ test("creates a workspace through the command palette and preserves its direct l
   };
   const workspace = payload.workspaces.find((candidate) => candidate.id === payload.activeWorkspaceId);
   expect(workspace).toBeTruthy();
+  expect(workspace?.id).toMatch(/^ws_[0-9a-f]{32}$/);
   const directPath = `/workspaces/${workspace?.id}/tabs/${workspace?.activeTabId}`;
   await expect(page).toHaveURL(new RegExp(`${directPath.replaceAll("/", "\\/")}$`));
   await page.reload();
@@ -259,6 +350,7 @@ test("copies tmux default-selection OSC 52 requests to the browser clipboard", a
   const activePane = page.locator(".terminal-pane.active");
   await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
   await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
+  await page.keyboard.press("Enter");
 
   const copiedText = "wmux Codex copy ✓";
   const encoded = Buffer.from(copiedText).toString("base64");
@@ -268,6 +360,95 @@ test("copies tmux default-selection OSC 52 requests to the browser clipboard", a
 
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copiedText);
   await expect(page.getByRole("button", { name: "Copy terminal request" })).toBeHidden();
+});
+
+test("predicts bounded shell and alternate-screen input locally", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop terminal prediction coverage");
+  test.setTimeout(45_000);
+
+  let sawAlternateScreen = false;
+  await page.routeWebSocket(/\/ws\/panes\//, (browserSocket) => {
+    const serverSocket = browserSocket.connectToServer();
+    browserSocket.onMessage((message) => serverSocket.send(message));
+    serverSocket.onMessage((message) => {
+      let delay = 0;
+      try {
+        const parsed = JSON.parse(String(message)) as { type?: string; data?: string };
+        if (parsed.type === "output") delay = 250;
+        if (parsed.data?.includes("\x1b[?1049h")) sawAlternateScreen = true;
+      } catch {
+        // Forward non-JSON frames without delay.
+      }
+      setTimeout(() => browserSocket.send(message), delay);
+    });
+  });
+
+  const created = await request.post("/api/workspaces", { data: { machineId: "local" } });
+  expect(created.ok()).toBeTruthy();
+  const payload = await created.json() as {
+    workspace: { id: string; activeTabId: string };
+  };
+  try {
+    await page.goto(`/workspaces/${payload.workspace.id}/tabs/${payload.workspace.activeTabId}`);
+    const activePane = page.locator(".terminal-pane.active");
+    await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+    const textarea = activePane.locator(".terminal-host textarea");
+    await textarea.evaluate((element: HTMLTextAreaElement) => element.focus());
+    await page.waitForTimeout(400);
+    await page.keyboard.type("a");
+    await page.waitForTimeout(350);
+
+    await page.keyboard.type("x");
+    const predictedX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
+    await expect(predictedX).toBeVisible();
+    const predictedXLeft = await predictedX.evaluate((element: HTMLElement) => element.style.left);
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => activePane.locator(".terminal-input-prediction-cursor")
+      .evaluate((element: HTMLElement) => element.style.left)).toBe(predictedXLeft);
+    await expect(activePane.locator(".terminal-input-prediction-layer")).toBeEmpty({ timeout: 1_000 });
+
+    await page.keyboard.press("Backspace");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[HREADY\\r\\n'");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(600);
+    expect(sawAlternateScreen).toBe(true);
+    await page.keyboard.type("a");
+    await page.waitForTimeout(350);
+
+    await page.keyboard.type("z");
+    const predictedZ = activePane.locator(".terminal-input-prediction-cell", { hasText: "z" });
+    await expect(predictedZ).toBeVisible();
+    const predictedZLeft = await predictedZ.evaluate((element: HTMLElement) => element.style.left);
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => activePane.locator(".terminal-input-prediction-cursor")
+      .evaluate((element: HTMLElement) => element.style.left)).toBe(predictedZLeft);
+    await page.waitForTimeout(350);
+    await page.keyboard.press("Control+C");
+    await page.waitForTimeout(300);
+    await page.keyboard.type("printf '\\033[?1049l'");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(350);
+
+    await page.keyboard.press("Control+K");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").fill("Open diagnostics");
+    await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").press("Enter");
+    const diagnostics = page.getByRole("dialog", { name: "wmux diagnostics" });
+    await expect(diagnostics).toBeVisible();
+    await expect(diagnostics).toContainText("WMUX::SYSTEM_CONSOLE");
+    await expect(diagnostics).toContainText("CLIENT::TERMINAL_LATENCY");
+    await expect(diagnostics.getByRole("button", { name: /REFRESH/ })).toBeVisible();
+    await expect(diagnostics.locator(".latency-row", { hasText: /SHELL::PREDICTED/i }).locator("span").nth(1)).not.toHaveText("0");
+    await expect(diagnostics.locator(".latency-row", { hasText: /SHELL::CANVAS/i }).locator("span").nth(1)).not.toHaveText("0");
+    await expect(diagnostics.locator(".latency-row", { hasText: /TUI::PREDICTED/i }).locator("span").nth(1)).not.toHaveText("0");
+  } finally {
+    const removed = await request.delete(`/api/workspaces/${payload.workspace.id}`);
+    expect(removed.ok()).toBeTruthy();
+  }
 });
 
 test("sends Shift+Enter as one Ctrl+J newline while preserving plain Enter", async ({
@@ -388,6 +569,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
 
 test("idle Life field stays bounded and pauses when it leaves the viewport", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop WebGL lifecycle coverage");
+  test.setTimeout(60_000);
 
   const response = await request.get("/api/bootstrap");
   expect(response.ok()).toBeTruthy();
@@ -639,6 +821,14 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
     const style = window.getComputedStyle(element);
     return { left: style.paddingLeft, right: style.paddingRight };
   })).toEqual({ left: "32px", right: "48px" });
+  await expect.poll(() => activePane.locator(".terminal-input-prediction-layer").evaluate((element) => {
+    const hostRect = element.parentElement!.getBoundingClientRect();
+    const layerRect = element.getBoundingClientRect();
+    return {
+      left: Math.round(layerRect.left - hostRect.left),
+      right: Math.round(hostRect.right - layerRect.right),
+    };
+  })).toEqual({ left: 32, right: 48 });
   const chromeInsets = await page.locator(".open-tui-mobile-chrome-canvas").evaluate((canvas) => {
     const chromeRect = canvas.parentElement!.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();

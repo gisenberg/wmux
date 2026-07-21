@@ -14,20 +14,24 @@ const fail = (message) => {
   throw new Error(`wmux scoped-auth provisioning refused: ${message}`);
 };
 
-const assertOwnerOnlyDirectory = (directory, create = false) => {
+const assertOwnerOnlyDirectory = (directory, create = false, harden = false) => {
   if (!fs.existsSync(directory)) {
     if (!create) fail("token parent directory does not exist");
     fs.mkdirSync(directory, { mode: 0o700 });
   }
-  const stat = fs.lstatSync(directory);
+  let stat = fs.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== path.resolve(directory)) {
     fail("token parent must be a real directory without symlinks");
   }
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) fail("token parent has the wrong owner");
+  if ((stat.mode & 0o077) !== 0 && harden) {
+    fs.chmodSync(directory, 0o700);
+    stat = fs.lstatSync(directory);
+  }
   if ((stat.mode & 0o077) !== 0) fail("token parent must be owner-only");
 };
 
-assertOwnerOnlyDirectory(wmuxHome, true);
+assertOwnerOnlyDirectory(wmuxHome, true, true);
 for (const target of [automationPath, helperPath]) {
   assertOwnerOnlyDirectory(path.dirname(target), path.dirname(target) === wmuxHome);
 }

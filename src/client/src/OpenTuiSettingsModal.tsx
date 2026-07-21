@@ -25,6 +25,7 @@ import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { terminalColorSchemes } from "./color-schemes";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 import { compileKeybindings, eventMatchesAction } from "../../shared/keybindings";
+import { MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE } from "./types";
 import type { DurableSessionAudit, KeybindingMap, MachineStatus, WmuxSettings } from "./types";
 
 interface OpenTuiSettingsModalProps {
@@ -147,8 +148,8 @@ interface HitZone {
   action: "focus" | "edit" | "decrement" | "increment" | "activate";
 }
 
-const fontMin = 10;
-const fontMax = 24;
+const fontMin = MIN_TERMINAL_FONT_SIZE;
+const fontMax = MAX_TERMINAL_FONT_SIZE;
 const scrollbackMin = 1_000;
 const scrollbackMax = 200_000;
 

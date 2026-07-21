@@ -37,12 +37,9 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine windows-box --t
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "wmux-agent-event --agent codex --status completed --title Done --summary 'Remote step finished'"
 ```
 
-The helper reads `WMUX_URL`/`~/.wmux/url` and prefers
-`WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH`; compatibility mode may
-use `WMUX_TOKEN`/`~/.wmux/token`. Scoped credentials are header-only, never
-printed or placed in query parameters, and are never retried with the legacy
-token after rejection. If the saved URL still points at the old HTTP service,
-update `~/.wmux/url` or pass the current HTTPS URL explicitly.
+The helper reads `WMUX_URL`/`~/.wmux/url` and prefers `WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH`; compatibility mode may use `WMUX_TOKEN`/`~/.wmux/token`.
+Scoped credentials are header-only, never printed or placed in query parameters, and are never retried with the legacy token after rejection.
+If the saved URL still points at the old HTTP service, update `~/.wmux/url` or pass the current HTTPS URL explicitly.
 
 ## Operating Rules
 
@@ -59,6 +56,7 @@ update `~/.wmux/url` or pass the current HTTPS URL explicitly.
 - Always give automated work a descriptive `--title`; `wmuxctl open`, `run`, and `ps` reuse an existing workspace with that exact title by default. Use `--new` only when a genuinely separate workspace is wanted.
 - Treat visibility as a contract. If the user asked for visible work, start substantive and long-lived processes in the wmux pane, not through direct SSH. Direct SSH remains appropriate for quick diagnostics only.
 - Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, or Claude task on a POSIX target. Pass the prompt through `--prompt-file` or stdin, never as a shell argument. The helper creates a fresh agent-owned workspace, waits for the staged runner, records lifecycle events, and returns the direct URL and bounded final result.
+- Delegation completion races terminal replay against the durable lifecycle ledger. Treat `failureKind: observer` as loss of controller visibility rather than proof that the delegated agent failed, and inspect the retained workspace or `GET /api/delegations/:runId` before retrying destructive work.
 - Keep write access and unattended approval separate. Omit `--write-access` for Codex read-only or Claude plan mode; add it only when repository edits are intended. OpenCode has no enforceable read-only adapter and therefore requires explicit `--write-access`. Add `--unattended` only when the user authorized bypassing approval prompts.
 - Delegations stay open by default. Use `--close-on-success` only for disposable successful work. Failed, stopped, timed-out, and close-failed workspaces must remain available for inspection.
 - A successful input POST, `sentBytes`, process existence, or a `running` event proves neither that a command was submitted nor that an agent is still working. Confirm pane output with `wmuxctl output`/`wait` and distinguish the latest agent turn from a persistent idle TUI process.

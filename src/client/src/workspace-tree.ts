@@ -252,5 +252,22 @@ export const workspacePointerMovePosition = (relativeY: number): Exclude<Workspa
 export const sameWorkspaceIds = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((id, index) => id === right[index]);
 
+export const rebaseCollapsedWorkspaceIds = <T extends { settings: { collapsedWorkspaceIds: string[] } }>(
+  state: T,
+  desiredCollapsedWorkspaceIds: readonly string[] | null,
+): T => {
+  if (
+    desiredCollapsedWorkspaceIds === null
+    || sameWorkspaceIds(state.settings.collapsedWorkspaceIds, desiredCollapsedWorkspaceIds)
+  ) return state;
+  return {
+    ...state,
+    settings: {
+      ...state.settings,
+      collapsedWorkspaceIds: [...desiredCollapsedWorkspaceIds],
+    },
+  };
+};
+
 export const remainingWorkspaceRowCount = (total: number, scrollOffset: number, visibleCount: number): number =>
   Math.max(0, total - scrollOffset - visibleCount);

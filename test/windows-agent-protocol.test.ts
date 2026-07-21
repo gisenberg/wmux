@@ -151,15 +151,26 @@ print(json.dumps({"ok": ok, "snapshot": snapshot}))
   assert.equal(payload.snapshot.consecutiveFailures, 0);
 });
 
-test("Windows agent recognizes fixed terminal queries across output chunks", () => {
+test("Windows agent answers terminal queries locally and suppresses delayed browser duplicates", () => {
   const source = String.raw`
 import json
 import runpy
 
 module = runpy.run_path("scripts/wmux-windows-agent")
-responder = module["TerminalQueryResponder"]()
+environment = {
+    "WMUX_TERMINAL_FOREGROUND": "#c0caf5",
+    "WMUX_TERMINAL_BACKGROUND": "#1a1b26",
+}
+responses = module["local_terminal_query_responses"](environment)
+responder = module["TerminalQueryResponder"](responses)
 replies = []
-for chunk in (b"prefix\x1b[", b"csuffix\x1b[5", b"n\x1b[0", b"c"):
+for chunk in (
+    b"prefix\x1b[",
+    b"csuffix\x1b[5",
+    b"n\x1b[0",
+    b"c\x1b]10;?\x1b",
+    b"\\\x1b]11;?\x07",
+):
     replies.extend(responder.feed(chunk))
 
 class FakeProcess:
@@ -172,11 +183,13 @@ backend = object.__new__(module["ConptyBackend"])
 backend.process = FakeProcess()
 backend.lock = __import__("threading").Lock()
 backend.closed = False
-backend.query_responder = module["TerminalQueryResponder"]()
+backend.query_responder = module["TerminalQueryResponder"](responses)
 backend.locally_answered = set()
-backend._answer_terminal_queries(b"\x1b[c")
+backend._answer_terminal_queries(b"\x1b[c\x1b]10;?\x1b\\\x1b]11;?\x07")
 backend.write_terminal_response(b"\x1b[?62;22c")
 backend.write_terminal_response(b"\x1b[?62;22c")
+backend.write_terminal_response(b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\")
+backend.write_terminal_response(b"\x1b]11;rgb:0000/0000/0000\x1b\\")
 __import__("time").sleep(0.01)
 backend.write_terminal_response(b"\x1b[?62;22c")
 backend.write_terminal_response(b"user-input")
@@ -188,9 +201,37 @@ print(json.dumps({
 `;
   const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
+  const foreground = "\x1b]10;rgb:c0c0/caca/f5f5\x1b\\";
+  const background = "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\";
   assert.deepEqual(JSON.parse(result.stdout), {
-    replies: ["\x1b[?62;22c", "\x1b[0n", "\x1b[?62;22c"],
-    writes: ["\x1b[?62;22c", "user-input"],
+    replies: ["\x1b[?62;22c", "\x1b[0n", "\x1b[?62;22c", foreground, background],
+    writes: ["\x1b[?62;22c", foreground, background, "user-input"],
+  });
+});
+
+test("Windows agent enables local color replies only for valid pane theme metadata", () => {
+  const source = String.raw`
+import json
+import runpy
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+build = module["local_terminal_query_responses"]
+responder = module["TerminalQueryResponder"](build({
+    "WMUX_TERMINAL_FOREGROUND": "not-a-color",
+    "WMUX_TERMINAL_BACKGROUND": "#1a1b26",
+}))
+print(json.dumps({
+    "replies": [value.decode("ascii") for value in responder.feed(b"\x1b]10;?\x1b\\\x1b]11;?\x07")],
+    "ownsForegroundResponse": responder.owns_response(b"\x1b]10;rgb:c0c0/caca/f5f5\x1b\\"),
+    "ownsBackgroundResponse": responder.owns_response(b"\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"),
+}))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    replies: ["\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"],
+    ownsForegroundResponse: false,
+    ownsBackgroundResponse: true,
   });
 });
 

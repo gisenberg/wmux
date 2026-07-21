@@ -27,6 +27,13 @@ WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 DURABLE_REFRESH_QUIET_SECONDS = 0.08
 DURABLE_REFRESH_FALLBACK_SECONDS = 0.7
 MAX_PANE_REPLAY_BYTES = 2 * 1024 * 1024
+TERMINAL_DELEGATION_STATES = frozenset(
+    {"completed", "failed", "error", "cancelled", "stopped", "timed_out", "interrupted"}
+)
+
+
+class DelegationObservationError(RuntimeError):
+    """The controller could not determine an agent's terminal outcome."""
 
 
 def _append_bounded_utf8(buffer: bytearray, value: str) -> None:
@@ -227,6 +234,7 @@ class WmuxClient:
         title: str,
         summary: str,
         message: str = "",
+        run_id: str = "",
     ) -> None:
         body = {
             "workspaceId": workspace_id,
@@ -239,11 +247,25 @@ class WmuxClient:
         }
         if message:
             body["message"] = message
+        if run_id:
+            body["runId"] = run_id
         self.request(
             "POST",
             "/api/agent-events",
             body,
         )
+
+    def delegation_status(self, run_id: str) -> dict[str, Any] | None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
+            raise SystemExit("wmuxctl: invalid delegation run ID")
+        try:
+            result = self.request("GET", f"/api/delegations/{urllib.parse.quote(run_id, safe='')}")
+        except SystemExit as error:
+            if "HTTP 404" in str(error):
+                return None
+            raise
+        delegation = result.get("delegation") if isinstance(result, dict) else None
+        return delegation if isinstance(delegation, dict) else None
 
     def send_input(self, pane_id: str, data: str, cols: int, rows: int) -> dict[str, Any]:
         return self.request(
@@ -798,6 +820,61 @@ def redact_delegate_text(value: Any, secrets: list[str], limit: int = 64_000) ->
     return text.strip()
 
 
+def wait_for_delegation_result(
+    client: WmuxClient,
+    pane_id: str,
+    run_id: str,
+    timeout: float,
+    cols: int,
+    rows: int,
+) -> tuple[bool, Any, int, bool, float]:
+    started = time.monotonic()
+    done_pattern = re.compile(rf"(?m)^WMUX_AGENT_DONE {re.escape(run_id)} -?\d+$")
+    last_replay_error = ""
+    last_status_error = ""
+    while True:
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            detail = last_status_error or last_replay_error or "no terminal result was observed"
+            raise DelegationObservationError(
+                f"wmuxctl: timed out after {timeout:g}s waiting for delegated result: {detail}"
+            )
+
+        try:
+            replay = str(
+                client.read_pane_output(pane_id, cols, rows, timeout=min(1, max(remaining, 0.1))).get("replay")
+                or ""
+            )
+            output = clean_terminal_text(replay)
+            if done_pattern.search(output):
+                try:
+                    payload, exit_code = decode_agent_result(output, run_id)
+                except SystemExit as error:
+                    last_replay_error = str(error)
+                else:
+                    ok = exit_code == 0 and payload.get("ok") is True
+                    detail = payload.get("result") if ok else payload.get("error") or payload.get("result")
+                    return ok, detail, exit_code, False, time.monotonic() - started
+        except SystemExit as error:
+            last_replay_error = str(error)
+
+        try:
+            durable = client.delegation_status(run_id)
+        except SystemExit as error:
+            last_status_error = str(error)
+        else:
+            last_status_error = ""
+            durable_state = durable.get("state") if durable else None
+            if durable_state in TERMINAL_DELEGATION_STATES:
+                ok = durable_state == "completed"
+                detail = durable.get("result") if ok else durable.get("error") or durable.get("summary")
+                return ok, detail, 0 if ok else 1, True, time.monotonic() - started
+
+        remaining = timeout - (time.monotonic() - started)
+        if remaining > 0:
+            time.sleep(min(0.5, remaining))
+
+
 def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     prompt = read_delegate_prompt(args)
     if not posixpath.isabs(args.directory) or "\x00" in args.directory:
@@ -824,6 +901,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         client.record_agent_event(
             info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "running", title,
             f"{args.runtime.capitalize()} delegation running",
+            run_id=run_id,
         )
         info["shellReadySeconds"] = round(
             wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows), 3
@@ -845,24 +923,23 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             request["agent"] = args.opencode_agent
         encoded = base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode()
         submit_line(client, info["paneId"], encoded, True, args.cols, args.rows)
-        _match, output, elapsed = wait_for_output(
+        ok, detail_source, exit_code, recovered, elapsed = wait_for_delegation_result(
             client,
             info["paneId"],
-            rf"(?m)^WMUX_AGENT_DONE {re.escape(run_id)} -?\d+$",
+            run_id,
             args.timeout,
             args.cols,
             args.rows,
         )
-        payload, exit_code = decode_agent_result(output, run_id)
-        ok = exit_code == 0 and payload.get("ok") is True
-        detail = redact_delegate_text(payload.get("result") if ok else payload.get("error") or payload.get("result"), secrets)
+        detail = redact_delegate_text(detail_source, secrets)
         if not detail:
             detail = "Delegated task completed without text output." if ok else f"Delegated task failed with exit code {exit_code}."
         status = "completed" if ok else "failed"
-        client.record_agent_event(
-            info["workspaceId"], info["tabId"], info["paneId"], args.runtime, status, title,
-            f"{args.runtime.capitalize()} delegation {status}", detail,
-        )
+        if not recovered:
+            client.record_agent_event(
+                info["workspaceId"], info["tabId"], info["paneId"], args.runtime, status, title,
+                f"{args.runtime.capitalize()} delegation {status}", message=detail, run_id=run_id,
+            )
         info.update({
             "runId": run_id,
             "runtime": args.runtime,
@@ -885,12 +962,36 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             client.record_agent_event(
                 info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "stopped", title,
                 f"{args.runtime.capitalize()} delegation stopped",
+                run_id=run_id,
             )
         except SystemExit:
             pass
         info.update({"runId": run_id, "runtime": args.runtime, "state": "stopped", "closed": False})
         print_json(info)
         return 130
+    except DelegationObservationError as error:
+        try:
+            client.send_input(info["paneId"], "\x03", args.cols, args.rows)
+        except SystemExit:
+            pass
+        detail = redact_delegate_text(str(error), secrets)
+        try:
+            client.record_agent_event(
+                info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "observer_error", title,
+                f"Lost contact with {args.runtime} delegation", message=detail, run_id=run_id,
+            )
+        except SystemExit:
+            pass
+        info.update({
+            "runId": run_id,
+            "runtime": args.runtime,
+            "state": "failed",
+            "failureKind": "observer",
+            "error": detail,
+            "closed": False,
+        })
+        print_json(info)
+        return 1
     except SystemExit as error:
         try:
             client.send_input(info["paneId"], "\x03", args.cols, args.rows)
@@ -900,7 +1001,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         try:
             client.record_agent_event(
                 info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "failed", title,
-                f"{args.runtime.capitalize()} delegation failed", detail,
+                f"{args.runtime.capitalize()} delegation failed", message=detail, run_id=run_id,
             )
         except SystemExit:
             pass

@@ -15,7 +15,7 @@ import {
   type KittyMaterializedImage,
   type KittyPlaceholderStripState,
 } from "./kitty-graphics";
-import { ensureWmuxFonts, WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { ensureWmuxFonts, terminalFontFamilyStack } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
 import { isTerminalProtocolResponse } from "../../shared/terminal-protocol";
@@ -26,6 +26,21 @@ import { canApplyStagedPasteImage, imagesFromClipboard, quoteStagedImagePath } f
 import { Osc52Parser } from "./terminal-osc52";
 import { OscColorQueryParser } from "./terminal-color-queries";
 import { RectangularSelection } from "./terminal-rectangular-selection";
+import {
+  createTerminalPredictionEchoProbe,
+  extendTerminalPredictionEchoProbe,
+  layoutPredictedTerminalInput,
+  predictedTerminalInput,
+  terminalPredictionEchoProbeMatches,
+  type PredictedTerminalInput,
+  type TerminalPredictionEchoProbe,
+  type TerminalPredictionScreen,
+} from "./terminal-input-prediction";
+import {
+  classifyTerminalLatencyInput,
+  normalizeDomEventTimestamp,
+  terminalLatency,
+} from "./terminal-latency";
 import { useColorScheme } from "./color-scheme-context";
 import { PaneSocketController } from "./pane-socket";
 import { compileKeybindings, eventMatchesAction, type CompiledKeybindingMap } from "../../shared/keybindings";
@@ -102,10 +117,12 @@ interface Props {
   appleKeybindings: boolean;
   unreadCount: number;
   machines: MachineStatus[];
+  terminalFontFamily: string;
   terminalFontSize: number;
   terminalScrollbackRows: number;
   mediaItems: TerminalMedia[];
   lastRun?: TerminalRun;
+  pendingLabel?: string;
   focusSignal?: number;
   onActivate: () => void;
   onSplit: (direction: SplitDirection, machineId?: string) => void;
@@ -127,10 +144,12 @@ export const TerminalPane = memo(function TerminalPane({
   appleKeybindings,
   unreadCount,
   machines,
+  terminalFontFamily,
   terminalFontSize,
   terminalScrollbackRows,
   mediaItems,
   lastRun,
+  pendingLabel,
   focusSignal = 0,
   onActivate,
   onSplit,
@@ -142,6 +161,7 @@ export const TerminalPane = memo(function TerminalPane({
   const colorSchemeRef = useRef(colorScheme);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalHostShellRef = useRef<HTMLDivElement | null>(null);
+  const predictionLayerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const rectangularSelectionRef = useRef<RectangularSelection | null>(null);
@@ -151,6 +171,7 @@ export const TerminalPane = memo(function TerminalPane({
   const suspendSocketRef = useRef(inactiveTabStreaming === "suspend" && !tabVisible);
   const discardPendingOutputRef = useRef<(() => void) | null>(null);
   const tuiFrameRateRef = useRef(tuiFrameRate);
+  const terminalFontSizeRef = useRef(terminalFontSize);
   const terminalScrollModeRef = useRef(terminalScrollMode);
   const keybindingsRef = useRef<CompiledKeybindingMap>(compileKeybindings(keybindings));
   const appleKeybindingsRef = useRef(appleKeybindings);
@@ -175,6 +196,7 @@ export const TerminalPane = memo(function TerminalPane({
   const inputEpochRef = useRef(0);
   const [connected, setConnected] = useState(false);
   const [connectionIssue, setConnectionIssue] = useState("");
+  const [startupLabel, setStartupLabel] = useState("Connecting to terminal…");
   const [kittyMediaItems, setKittyMediaItems] = useState<TerminalMedia[]>([]);
   const [kittyInlineItems, setKittyInlineItems] = useState<KittyInlineImage[]>([]);
   const [terminalMetrics, setTerminalMetrics] = useState<CellMetrics>({ width: 8, height: 16 });
@@ -238,6 +260,12 @@ export const TerminalPane = memo(function TerminalPane({
     let socketController: PaneSocketController | undefined;
     let scrollDisposable: { dispose: () => void } | undefined;
     let renderDisposable: { dispose: () => void } | undefined;
+    if (pendingLabel) {
+      setTerminalReady(false);
+      setConnected(false);
+      return;
+    }
+    setStartupLabel("Connecting to terminal…");
     let bufferDisposable: { dispose: () => void } | undefined;
     let mouseDownListener: ((event: MouseEvent) => void) | undefined;
     let mouseUpListener: ((event: MouseEvent) => void) | undefined;
@@ -248,12 +276,14 @@ export const TerminalPane = memo(function TerminalPane({
     let mouseGestureEndListener: (() => void) | undefined;
     let contextMenuListener: ((event: MouseEvent) => void) | undefined;
     let copyListener: ((event: ClipboardEvent) => void) | undefined;
+    let latencyKeyDownListener: ((event: KeyboardEvent) => void) | undefined;
     let pasteKeyListener: ((event: KeyboardEvent) => void) | undefined;
     let pasteListener: ((event: ClipboardEvent) => void) | undefined;
     let windowFocusListener: (() => void) | undefined;
     let windowBlurListener: (() => void) | undefined;
     let pageShowListener: (() => void) | undefined;
     let visibilityChangeListener: (() => void) | undefined;
+    let fontLoadingDoneListener: (() => void) | undefined;
     let rectangularSelection: RectangularSelection | undefined;
     let contextMenuSelection = "";
     let pendingCursorPlacement: { sequence: string; x: number; y: number } | null = null;
@@ -263,12 +293,21 @@ export const TerminalPane = memo(function TerminalPane({
     let selectionRestoreTimer: number | undefined;
     let removeContextCopyBridgeDismissListeners: (() => void) | undefined;
     let terminalOutputTimer: number | undefined;
+    let predictionExpiryTimer: number | undefined;
+    let predictionProbeTimer: number | undefined;
     let osc52PendingTimer: number | undefined;
     let viewportFitFrame: number | undefined;
     let viewportFitTimer: number | undefined;
     let queuedTerminalOutput = "";
     const alternateScreenState = createAlternateScreenState();
     let lastTerminalOutputAt = 0;
+    let lastInteractiveInputAt = Number.NEGATIVE_INFINITY;
+    let nextInputSequence = 0;
+    let predictedInputs: PredictedTerminalInput[] = [];
+    let predictionArmedScreen: TerminalPredictionScreen | undefined;
+    let predictionProbe: TerminalPredictionEchoProbe | undefined;
+    let predictionProbeAcknowledgedSequence: number | undefined;
+    let pendingLatencyKeyEvent: { eventAt: number; observedAt: number } | undefined;
     let replayChunks: string[] = [];
     let replayBufferedOutput: string[] = [];
     let replayDrainTimer: number | undefined;
@@ -310,6 +349,155 @@ export const TerminalPane = memo(function TerminalPane({
       setTerminalMetrics((previous) =>
         previous.width === metrics.width && previous.height === metrics.height ? previous : metrics,
       );
+    };
+
+    const clearPredictionLayer = () => {
+      predictionLayerRef.current?.replaceChildren();
+    };
+
+    const clearPredictions = () => {
+      predictedInputs = [];
+      if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
+      predictionExpiryTimer = undefined;
+      clearPredictionLayer();
+    };
+
+    const clearPredictionProbe = () => {
+      predictionProbe = undefined;
+      predictionProbeAcknowledgedSequence = undefined;
+      if (predictionProbeTimer !== undefined) window.clearTimeout(predictionProbeTimer);
+      predictionProbeTimer = undefined;
+    };
+
+    const disarmPrediction = () => {
+      predictionArmedScreen = undefined;
+      clearPredictionProbe();
+      clearPredictions();
+    };
+
+    const predictionScreen = (term: Terminal): TerminalPredictionScreen =>
+      term.wasmTerm?.isAlternateScreen() ? "alternate" : "normal";
+
+    const terminalCodepoint = (term: Terminal, col: number, row: number): number | undefined =>
+      term.wasmTerm?.getLine(row)?.[col]?.codepoint;
+
+    const schedulePredictionProbeExpiry = () => {
+      if (predictionProbeTimer !== undefined) window.clearTimeout(predictionProbeTimer);
+      predictionProbeTimer = window.setTimeout(clearPredictionProbe, 1000);
+    };
+
+    const probePredictionEcho = (
+      prediction: PredictedTerminalInput,
+      term: Terminal,
+      screen: TerminalPredictionScreen,
+    ) => {
+      const cols = safeCols(term.cols);
+      const rows = safeRows(term.rows);
+      if (predictionProbe?.screen === screen) {
+        const extended = extendTerminalPredictionEchoProbe(predictionProbe, prediction, cols, rows);
+        if (extended) {
+          predictionProbe = extended;
+          schedulePredictionProbeExpiry();
+        }
+        return;
+      }
+      clearPredictionProbe();
+      const cursor = term.wasmTerm?.getCursor();
+      if (!cursor) return;
+      predictionProbe = createTerminalPredictionEchoProbe(
+        prediction,
+        cursor,
+        cols,
+        rows,
+        screen,
+        terminalCodepoint(term, cursor.x, cursor.y),
+      ) ?? undefined;
+      if (predictionProbe) schedulePredictionProbeExpiry();
+    };
+
+    const acknowledgePredictionProbe = (sequence: number | undefined) => {
+      if (!predictionProbe || sequence === undefined || sequence < predictionProbe.inputs[0]!.sequence) return;
+      predictionProbeAcknowledgedSequence = Math.max(predictionProbeAcknowledgedSequence ?? 0, sequence);
+    };
+
+    const verifyPredictionProbe = (term: Terminal) => {
+      const probe = predictionProbe;
+      const cursor = term.wasmTerm?.getCursor();
+      if (!probe || !cursor || predictionProbeAcknowledgedSequence === undefined) return;
+      const screen = predictionScreen(term);
+      if (!terminalPredictionEchoProbeMatches(
+        probe,
+        predictionProbeAcknowledgedSequence,
+        cursor,
+        safeCols(term.cols),
+        safeRows(term.rows),
+        screen,
+        (col, row) => terminalCodepoint(term, col, row),
+      )) return;
+      predictionArmedScreen = screen;
+      clearPredictionProbe();
+    };
+
+    const schedulePredictionExpiry = () => {
+      if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
+      predictionExpiryTimer = window.setTimeout(clearPredictions, 1000);
+    };
+
+    const renderPredictions = (term: Terminal) => {
+      const layer = predictionLayerRef.current;
+      const metrics = readCellMetrics(term);
+      const cursor = term.wasmTerm?.getCursor();
+      if (
+        !layer
+        || !metrics
+        || !cursor
+        || predictionArmedScreen !== predictionScreen(term)
+        || replayingTerminalOutput
+        || term.getViewportY() > 0
+      ) {
+        disarmPrediction();
+        return;
+      }
+      const layout = layoutPredictedTerminalInput(cursor, safeCols(term.cols), safeRows(term.rows), predictedInputs);
+      if (!layout) {
+        disarmPrediction();
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      layer.style.fontSize = `${terminalFontSizeRef.current}px`;
+      const addCell = (col: number, row: number, text: string, className: string) => {
+        const cell = document.createElement("span");
+        cell.className = className;
+        cell.textContent = text;
+        cell.style.left = `${col * metrics.width}px`;
+        cell.style.top = `${row * metrics.height}px`;
+        cell.style.width = `${metrics.width}px`;
+        cell.style.height = `${metrics.height}px`;
+        cell.style.lineHeight = `${metrics.height}px`;
+        fragment.append(cell);
+      };
+      addCell(
+        layout.authoritativeCursor.col,
+        layout.authoritativeCursor.row,
+        "",
+        "terminal-input-prediction-cell",
+      );
+      for (const cell of layout.cells) {
+        addCell(cell.col, cell.row, cell.text, "terminal-input-prediction-cell");
+      }
+      addCell(layout.cursor.col, layout.cursor.row, "", "terminal-input-prediction-cursor");
+      layer.replaceChildren(fragment);
+    };
+
+    const acknowledgePredictions = (sequence: number | undefined) => {
+      if (sequence === undefined || predictedInputs.length === 0) return;
+      predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > sequence);
+      if (predictedInputs.length === 0) {
+        clearPredictions();
+      } else {
+        schedulePredictionExpiry();
+      }
     };
 
     const copyRectangularSelection = (term: Terminal, selection: string): void => {
@@ -494,6 +682,8 @@ export const TerminalPane = memo(function TerminalPane({
 
     const writeTerminalTextNow = (term: Terminal, text: string) => {
       if (!text) return;
+      terminalLatency.recordWrite(pane.id, performance.now());
+      clearPredictionLayer();
       const placeholderCells: KittyPlaceholderCell[] = [];
       writeTerminalOutput(
         term,
@@ -511,6 +701,7 @@ export const TerminalPane = memo(function TerminalPane({
         },
       );
       recordKittyPlaceholderCells(placeholderCells);
+      if (predictedInputs.length > 0) renderPredictions(term);
     };
 
     const flushQueuedTerminalText = (term: Terminal) => {
@@ -530,8 +721,18 @@ export const TerminalPane = memo(function TerminalPane({
       // Let the first full-screen frame after an idle prompt appear promptly;
       // sustained redraw remains capped at the configured cadence.
       const now = Date.now();
-      const delay = terminalOutputDelay(alternateScreenState.active, tuiFrameRateRef.current, lastTerminalOutputAt, now);
+      const delay = terminalOutputDelay(
+        alternateScreenState.active,
+        tuiFrameRateRef.current,
+        lastTerminalOutputAt,
+        now,
+        lastInteractiveInputAt,
+      );
       lastTerminalOutputAt = now;
+      if (delay === 0) {
+        flushQueuedTerminalText(term);
+        return;
+      }
       terminalOutputTimer = window.setTimeout(() => flushQueuedTerminalText(term), delay);
     };
 
@@ -663,6 +864,8 @@ export const TerminalPane = memo(function TerminalPane({
       queuedTerminalOutput = "";
       resetAlternateScreenState(alternateScreenState);
       lastTerminalOutputAt = 0;
+      lastInteractiveInputAt = Number.NEGATIVE_INFINITY;
+      disarmPrediction();
       resetReplayDrain();
       resetSynchronizedOutput(synchronizedOutputRef.current);
       outputCarryRef.current = "";
@@ -779,56 +982,67 @@ export const TerminalPane = memo(function TerminalPane({
           connectedRef.current = nextConnected;
           setConnected(nextConnected);
           setConnectionIssue(issue);
+          if (!nextConnected) {
+            disarmPrediction();
+            setStartupLabel(issue || "Connecting to terminal…");
+          }
         },
         onOpen: (socket) => {
           sendResizeMessage(socket, activeRef.current ? "activate" : "resize", term, foreground());
         },
         onMessage: (message) => {
           if (cancelled) return;
-        if (message.type === "ready") {
-          setTerminalReady(false);
-          resetPendingOutput();
-          pendingOsc52Ref.current = undefined;
-          if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
-          setHasPendingOsc52(false);
-          term.clear();
-          setKittyInlineItems([]);
-          if (message.replay) startReplayDrain(term, message.replay);
-          else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
-          else revealTerminal();
-        }
-        if (message.type === "output") {
-          if (replayDraining()) replayBufferedOutput.push(message.data);
-          else handleOutput(term, message.data);
-          durableRefreshRevealGate?.noteOutput();
-        }
-        if (message.type === "exit") {
-          cancelPendingReveal();
-          finishReplayDrainNow(term, false);
-          flushQueuedTerminalText(term);
-          term.write(`\r\n[wmux] process exited with code ${message.code}. Press any key to restart.\r\n`);
-          revealTerminal();
-          setConnectionIssue(`Process exited with code ${message.code}`);
-          awaitingRestart = true;
-        }
-        if (message.type === "removed") {
-          cancelPendingReveal();
-          finishReplayDrainNow(term, false);
-          flushQueuedTerminalText(term);
-          removed = true;
-          socketController?.markRemoved();
-        }
+          if (message.type === "starting") {
+            setStartupLabel(message.label);
+          }
+          if (message.type === "ready") {
+            setStartupLabel(message.replay ? "Restoring terminal state…" : "Preparing terminal…");
+            setTerminalReady(false);
+            resetPendingOutput();
+            pendingOsc52Ref.current = undefined;
+            if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
+            setHasPendingOsc52(false);
+            term.clear();
+            setKittyInlineItems([]);
+            if (message.replay) startReplayDrain(term, message.replay);
+            else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
+            else revealTerminal();
+          }
+          if (message.type === "output") {
+            terminalLatency.recordOutput(pane.id, message.inputSequence, message.data.length, performance.now());
+            acknowledgePredictionProbe(message.inputSequence);
+            acknowledgePredictions(message.inputSequence);
+            if (replayDraining()) replayBufferedOutput.push(message.data);
+            else handleOutput(term, message.data);
+            durableRefreshRevealGate?.noteOutput();
+          }
+          if (message.type === "exit") {
+            cancelPendingReveal();
+            finishReplayDrainNow(term, false);
+            flushQueuedTerminalText(term);
+            term.write(`\r\n[wmux] process exited with code ${message.code}. Press any key to restart.\r\n`);
+            revealTerminal();
+            setConnectionIssue(`Process exited with code ${message.code}`);
+            awaitingRestart = true;
+          }
+          if (message.type === "removed") {
+            cancelPendingReveal();
+            finishReplayDrainNow(term, false);
+            flushQueuedTerminalText(term);
+            removed = true;
+            socketController?.markRemoved();
+          }
         },
       });
     };
 
     const start = async () => {
-      await Promise.all([ensureGhostty(), ensureWmuxFonts()]);
+      await Promise.all([ensureGhostty(), ensureWmuxFonts(terminalFontFamily, terminalFontSize)]);
       if (cancelled || !containerRef.current) return;
       const term = new Terminal({
         cursorBlink: true,
         fontSize: terminalFontSize,
-        fontFamily: WMUX_MONO_FONT_FAMILY,
+        fontFamily: terminalFontFamilyStack(terminalFontFamily),
         scrollback: terminalScrollbackRows,
         theme: colorScheme.terminal,
       });
@@ -913,8 +1127,25 @@ export const TerminalPane = memo(function TerminalPane({
       fitAddonRef.current = fitAddon;
       fitAddon.fit();
       refreshMetrics(term);
+      if ("fonts" in document) {
+        fontLoadingDoneListener = () => {
+          if (cancelled || terminalRef.current !== term || !term.renderer) return;
+          const family = term.options.fontFamily;
+          // FontFaceSet completion does not invalidate an existing canvas.
+          // A whitespace-only option transition forces Ghostty to remeasure
+          // and redraw synchronously without changing the CSS family stack.
+          term.options.fontFamily = `${family} `;
+          term.options.fontFamily = family;
+          fitAddon?.fit();
+          refreshMetrics(term);
+        };
+        document.fonts.addEventListener("loadingdone", fontLoadingDoneListener);
+        void document.fonts.ready.then(() => fontLoadingDoneListener?.());
+      }
       scrollDisposable = term.onScroll((position) => setViewportY(position));
       renderDisposable = term.onRender(() => {
+        terminalLatency.recordRender(pane.id, performance.now());
+        verifyPredictionProbe(term);
         refreshMetrics(term);
         if (rectangularSelection?.overlay) setRectangleVersion((version) => version + 1);
       });
@@ -1130,10 +1361,55 @@ export const TerminalPane = memo(function TerminalPane({
           socketController?.reconnect("Restarting pane");
           return;
         }
-        if (inputMayLeaveShellPrompt(data)) shellCursorPlacementRef.current = false;
+        let sequence: number | undefined;
+        if (!terminalResponse) {
+          sequence = ++nextInputSequence;
+          const handledAt = performance.now();
+          const inputAt = pendingLatencyKeyEvent && handledAt - pendingLatencyKeyEvent.observedAt <= 250
+            ? pendingLatencyKeyEvent.eventAt
+            : handledAt;
+          pendingLatencyKeyEvent = undefined;
+          terminalLatency.recordInput(
+            pane.id,
+            sequence,
+            classifyTerminalLatencyInput(data),
+            alternateScreenState.active ? "alternate" : "normal",
+            inputAt,
+            handledAt,
+          );
+          lastInteractiveInputAt = Date.now();
+          const prediction = predictedTerminalInput(sequence, data);
+          const screen = predictionScreen(term);
+          const canPredict = connectedRef.current
+            && activeRef.current
+            && !replayingTerminalOutput
+            && term.getViewportY() <= 0;
+          if (
+            prediction
+            && predictionArmedScreen === screen
+            && canPredict
+          ) {
+            predictedInputs.push(prediction);
+            renderPredictions(term);
+            terminalLatency.recordPredictionMutation(pane.id, sequence, performance.now());
+            requestAnimationFrame((timestamp) => terminalLatency.recordPredictionPaint(pane.id, sequence!, timestamp));
+            schedulePredictionExpiry();
+          } else {
+            clearPredictions();
+            if (prediction && canPredict) {
+              if (predictionArmedScreen && predictionArmedScreen !== screen) disarmPrediction();
+              probePredictionEcho(prediction, term, screen);
+            }
+            else disarmPrediction();
+          }
+        }
+        if (inputMayLeaveShellPrompt(data)) {
+          shellCursorPlacementRef.current = false;
+          disarmPrediction();
+        }
         if (term.getViewportY() > 0) term.scrollToBottom();
         if (terminalResponse && replayingTerminalOutput) return;
-        sendInput(socketRef.current, data, terminalResponse);
+        sendInput(socketRef.current, data, terminalResponse, sequence);
       };
 
       term.attachCustomKeyEventHandler((event) => {
@@ -1159,14 +1435,12 @@ export const TerminalPane = memo(function TerminalPane({
         }
         if (eventMatchesAction(event, keybindingsRef.current, "terminal.wordPrevious", appleKeybindingsRef.current)) {
           rectangularSelection?.clear();
-          inputEpochRef.current += 1;
-          sendInput(socketRef.current, "\x1bb");
+          forwardTerminalData("\x1bb");
           return true;
         }
         if (eventMatchesAction(event, keybindingsRef.current, "terminal.wordNext", appleKeybindingsRef.current)) {
           rectangularSelection?.clear();
-          inputEpochRef.current += 1;
-          sendInput(socketRef.current, "\x1bf");
+          forwardTerminalData("\x1bf");
           return true;
         }
         return false;
@@ -1190,8 +1464,17 @@ export const TerminalPane = memo(function TerminalPane({
       });
 
       term.onData(forwardTerminalData);
+      latencyKeyDownListener = (event) => {
+        const observedAt = performance.now();
+        pendingLatencyKeyEvent = {
+          eventAt: normalizeDomEventTimestamp(event.timeStamp, observedAt, performance.timeOrigin),
+          observedAt,
+        };
+      };
+      term.element?.addEventListener("keydown", latencyKeyDownListener, { capture: true });
       term.onResize(() => {
         rectangularSelection?.clear();
+        clearPredictions();
         const ws = socketRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
           sendResizeMessage(ws, "resize", term, foreground());
@@ -1223,6 +1506,9 @@ export const TerminalPane = memo(function TerminalPane({
       renderDisposable?.dispose();
       bufferDisposable?.dispose();
       if (terminalOutputTimer !== undefined) window.clearTimeout(terminalOutputTimer);
+      if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
+      if (predictionProbeTimer !== undefined) window.clearTimeout(predictionProbeTimer);
+      clearPredictionLayer();
       if (osc52PendingTimer !== undefined) window.clearTimeout(osc52PendingTimer);
       if (viewportFitFrame !== undefined) window.cancelAnimationFrame(viewportFitFrame);
       if (viewportFitTimer !== undefined) window.clearTimeout(viewportFitTimer);
@@ -1240,17 +1526,22 @@ export const TerminalPane = memo(function TerminalPane({
       if (mouseGestureEndListener) document.removeEventListener("mouseup", mouseGestureEndListener);
       if (contextMenuListener) terminalRef.current?.element?.removeEventListener("contextmenu", contextMenuListener, { capture: true });
       if (copyListener) terminalRef.current?.element?.removeEventListener("copy", copyListener, { capture: true });
+      if (latencyKeyDownListener) terminalRef.current?.element?.removeEventListener("keydown", latencyKeyDownListener, { capture: true });
       if (pasteKeyListener) terminalRef.current?.element?.removeEventListener("keydown", pasteKeyListener, { capture: true });
       if (pasteListener) terminalRef.current?.element?.removeEventListener("paste", pasteListener, { capture: true });
       if (windowFocusListener) window.removeEventListener("focus", windowFocusListener);
       if (windowBlurListener) window.removeEventListener("blur", windowBlurListener);
       if (pageShowListener) window.removeEventListener("pageshow", pageShowListener);
       if (visibilityChangeListener) document.removeEventListener("visibilitychange", visibilityChangeListener);
+      if (fontLoadingDoneListener && "fonts" in document) {
+        document.fonts.removeEventListener("loadingdone", fontLoadingDoneListener);
+      }
       if (terminalHostShell && touchPointerDownListener) terminalHostShell.removeEventListener("pointerdown", touchPointerDownListener);
       if (terminalHostShell && touchPointerMoveListener) terminalHostShell.removeEventListener("pointermove", touchPointerMoveListener);
       if (terminalHostShell && touchPointerUpListener) terminalHostShell.removeEventListener("pointerup", touchPointerUpListener);
       if (terminalHostShell && touchPointerCancelListener) terminalHostShell.removeEventListener("pointercancel", touchPointerCancelListener);
       resetSynchronizedOutput(synchronizedOutputRef.current);
+      terminalLatency.abandonPane(pane.id, performance.now());
       fitAddon?.dispose();
       terminalRef.current?.dispose();
       socketRef.current = null;
@@ -1260,7 +1551,7 @@ export const TerminalPane = memo(function TerminalPane({
       reconnectRef.current = null;
       pendingOsc52Ref.current = undefined;
     };
-  }, [pane.id]);
+  }, [pane.id, pendingLabel]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -1274,14 +1565,23 @@ export const TerminalPane = memo(function TerminalPane({
 
   useEffect(() => {
     const term = terminalRef.current;
+    terminalFontSizeRef.current = terminalFontSize;
     if (!term?.renderer) return;
-    term.renderer.setFontSize(terminalFontSize);
-    requestAnimationFrame(() => {
-      fitAddonRef.current?.fit();
-      const metrics = readCellMetrics(term);
-      if (metrics) setTerminalMetrics(metrics);
+    let cancelled = false;
+    void ensureWmuxFonts(terminalFontFamily, terminalFontSize).then(() => {
+      if (cancelled || !term.renderer) return;
+      term.options.fontSize = terminalFontSize;
+      term.options.fontFamily = terminalFontFamilyStack(terminalFontFamily);
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+        const metrics = readCellMetrics(term);
+        if (metrics) setTerminalMetrics(metrics);
+      });
     });
-  }, [terminalFontSize]);
+    return () => {
+      cancelled = true;
+    };
+  }, [terminalFontFamily, terminalFontSize]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -1322,6 +1622,7 @@ export const TerminalPane = memo(function TerminalPane({
         title: runTitle(lastRun),
       }
     : undefined;
+  const resolvedTerminalFontFamily = terminalFontFamilyStack(terminalFontFamily);
 
   return (
     <section
@@ -1358,7 +1659,23 @@ export const TerminalPane = memo(function TerminalPane({
           if (event.pointerType !== "touch") terminalRef.current?.focus();
         }}
       >
-        <div ref={containerRef} className="terminal-host" />
+        <div
+          ref={containerRef}
+          className="terminal-host"
+          style={{ fontFamily: resolvedTerminalFontFamily }}
+        />
+        <div
+          ref={predictionLayerRef}
+          className="terminal-input-prediction-layer"
+          style={{ fontFamily: resolvedTerminalFontFamily }}
+          aria-hidden="true"
+        />
+        {!terminalReady ? (
+          <div className="terminal-startup-status" role="status" aria-live="polite">
+            <span className="terminal-startup-spinner" aria-hidden="true" />
+            <span>{pendingLabel ?? startupLabel}</span>
+          </div>
+        ) : null}
         {(() => {
           void rectangleVersion;
           const range = rectangularSelectionRef.current?.visibleOverlay;

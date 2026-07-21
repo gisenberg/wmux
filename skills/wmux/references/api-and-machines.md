@@ -6,14 +6,11 @@
 - Dynamic machines: the heartbeat registry exposed through `/api/bootstrap`
 - User service: `wmux.service`
 - Token sources: `WMUX_TOKEN`, `WMUX_TOKEN_PATH`, or `~/.wmux/token`
-- Browser mode: `WMUX_BROWSER_AUTH_MODE` (`shared-or-login` by default, or
-  opt-in `login-only`). Login-only requires password credentials, persistent
-  session material, and distinct automation/helper credentials.
-- Scoped sources: `WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH` and
-  `WMUX_HELPER_TOKEN`/`WMUX_HELPER_TOKEN_PATH`. Provision with
-  `node scripts/wmux-provision-scoped-auth.mjs`; values are never printed.
-  Scoped credentials are header-only, query parameters are rejected, and
-  failed scoped auth is never retried with a fallback token.
+- Browser mode: `WMUX_BROWSER_AUTH_MODE` (`shared-or-login` by default, or opt-in `login-only`).
+  Login-only requires password credentials, persistent session material, and distinct automation/helper credentials.
+- Scoped sources: `WMUX_AUTOMATION_TOKEN`/`WMUX_AUTOMATION_TOKEN_PATH` and `WMUX_HELPER_TOKEN`/`WMUX_HELPER_TOKEN_PATH`.
+  Provision with `node scripts/wmux-provision-scoped-auth.mjs`; values are never printed.
+  Scoped credentials are header-only, query parameters are rejected, and failed scoped auth is never retried with a fallback token.
 - URL sources: `WMUX_URL`, `~/.wmux/url`, then `http://127.0.0.1:3478`
 
 The static config also owns the browser `keybindings` map. Omitted actions use
@@ -77,17 +74,13 @@ the same files and run `wmux-windows-setup install-agent`; the base agent owns
 the heartbeat and retires the legacy standalone task. Registration token
 transfer is always a separate manual provisioning step.
 
-Registered panes stage helper commands but do not receive the broad
-`WMUX_TOKEN` and do not overwrite a remote `~/.wmux/token`. Dynamic Windows
-bootstrap uses a per-machine capability for a redacted inline bundle. Helpers
-that post to wmux require separately provisioned normal/scoped auth and
-  otherwise return `401`.
+Registered panes stage helper commands but do not receive the broad `WMUX_TOKEN` and do not overwrite a remote `~/.wmux/token`.
+Dynamic Windows bootstrap uses a per-machine capability for a redacted inline bundle.
+Helpers that post to wmux require separately provisioned normal/scoped auth and otherwise return `401`.
 
-In login-only mode, automation is limited to reviewed controller operations and
-pane-output WebSocket access; helper auth is limited to helper event/title,
-notification, media, clipboard, stream, and profile operations. Browser
-sessions retain the first-party UI only after password login. Registration and
-registered-host bootstrap remain isolated credential classes.
+In login-only mode, automation is limited to reviewed controller operations and pane-output WebSocket access; helper auth is limited to helper event/title, notification, media, clipboard, stream, and profile operations.
+Browser sessions retain the first-party UI only after password login.
+Registration and registered-host bootstrap remain isolated credential classes.
 
 ## Common Checks
 

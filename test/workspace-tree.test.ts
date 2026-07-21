@@ -5,6 +5,7 @@ import {
   deriveWorkspaceTree,
   expandWorkspaceAncestors,
   pruneCollapsedWorkspaceIds,
+  rebaseCollapsedWorkspaceIds,
   remainingWorkspaceRowCount,
   workspaceMoveIntents,
   workspacePointerMovePosition,
@@ -77,4 +78,13 @@ test("move intents exclude cycles, enforce four levels, and expose outdent", () 
 test("canvas remaining-row count excludes rows above its scroll offset", () => {
   assert.equal(remainingWorkspaceRowCount(10, 4, 3), 3);
   assert.equal(remainingWorkspaceRowCount(3, 2, 2), 0);
+});
+
+test("pending collapse intent rebases stale incoming settings", () => {
+  const state = { revision: 4, settings: { collapsedWorkspaceIds: ["old"] } };
+  const rebased = rebaseCollapsedWorkspaceIds(state, ["root", "child"]);
+  assert.deepEqual(rebased.settings.collapsedWorkspaceIds, ["root", "child"]);
+  assert.notEqual(rebased, state);
+  assert.equal(rebaseCollapsedWorkspaceIds(rebased, null), rebased);
+  assert.equal(rebaseCollapsedWorkspaceIds(rebased, ["root", "child"]), rebased);
 });

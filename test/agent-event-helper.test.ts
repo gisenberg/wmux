@@ -159,8 +159,10 @@ test("agent event helper sends the full assistant response as structured JSON", 
         WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
         WMUX_HELPER_URL: "http://127.0.0.1:1",
         WMUX_URL: "http://127.0.0.1:1",
+        WMUX_DELEGATION_RUN_ID: "run-durable-1",
     }));
 
+    assert.equal(captured?.runId, "run-durable-1");
     assert.equal(captured?.title, "fix mobile chat");
     assert.equal(captured?.summary, "First line of the response.");
     assert.equal(captured?.message, "First line of the response.\n\nSecond detailed line.");

@@ -4,7 +4,15 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { z } from "zod";
 import type { WmuxSettings } from "./types.js";
-import { TERMINAL_COLOR_SCHEME_IDS, type InactiveTabStreaming, type TerminalColorSchemeId, type TerminalScrollMode, type TuiFrameRate } from "../shared/protocol.js";
+import {
+  MAX_TERMINAL_FONT_SIZE,
+  MIN_TERMINAL_FONT_SIZE,
+  TERMINAL_COLOR_SCHEME_IDS,
+  type InactiveTabStreaming,
+  type TerminalColorSchemeId,
+  type TerminalScrollMode,
+  type TuiFrameRate,
+} from "../shared/protocol.js";
 
 const defaultPath = (): string => path.join(os.homedir(), ".wmux", "settings.json");
 export const CURRENT_SETTINGS_SCHEMA_VERSION = 6;
@@ -34,15 +42,27 @@ export const defaultSettings: WmuxSettings = {
 
 export class SettingsStore extends EventEmitter {
   private settings: WmuxSettings;
+  private readonly defaults: WmuxSettings;
 
-  constructor(private readonly filePath: string = process.env.WMUX_SETTINGS_PATH ?? defaultPath()) {
+  constructor(
+    private readonly filePath: string = process.env.WMUX_SETTINGS_PATH ?? defaultPath(),
+    configuredDefaults: Partial<Pick<WmuxSettings, "terminalFontSize">> = {},
+  ) {
     super();
+    this.defaults = {
+      ...defaultSettings,
+      terminalFontSize: clampFontSize(configuredDefaults.terminalFontSize),
+    };
     this.settings = this.load();
     this.save(false);
   }
 
   snapshot(): WmuxSettings {
     return structuredClone(this.settings);
+  }
+
+  defaultsSnapshot(): WmuxSettings {
+    return structuredClone(this.defaults);
   }
 
   update(input: Partial<WmuxSettings>): WmuxSettings {
@@ -55,7 +75,7 @@ export class SettingsStore extends EventEmitter {
       terminalScrollMode: input.terminalScrollMode ?? this.settings.terminalScrollMode,
       machineAliases: input.machineAliases ?? this.settings.machineAliases,
       collapsedWorkspaceIds: input.collapsedWorkspaceIds ?? this.settings.collapsedWorkspaceIds,
-    });
+    }, this.defaults.terminalFontSize);
     this.save(true);
     return this.snapshot();
   }
@@ -98,7 +118,7 @@ export class SettingsStore extends EventEmitter {
       }
       this.quarantine(this.backupPath());
     }
-    return defaultSettings;
+    return this.defaults;
   }
 
   private tryLoad(filePath: string): WmuxSettings | null {
@@ -116,7 +136,7 @@ export class SettingsStore extends EventEmitter {
         ? { ...record, schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION, colorScheme: record.colorScheme ?? defaultSettings.colorScheme }
         : record;
       const parsed = persistedSettingsSchema.parse(candidate);
-      return normalizeSettings(parsed);
+      return normalizeSettings(parsed, this.defaults.terminalFontSize);
     } catch (error) {
       if (error instanceof Error && error.message.includes("newer than this wmux build supports")) throw error;
       return null;
@@ -148,8 +168,8 @@ const normalizeSettings = (input: {
   terminalScrollMode?: unknown;
   machineAliases?: unknown;
   collapsedWorkspaceIds?: unknown;
-}): WmuxSettings => ({
-  terminalFontSize: clampFontSize(input.terminalFontSize),
+}, terminalFontSizeFallback = defaultSettings.terminalFontSize): WmuxSettings => ({
+  terminalFontSize: clampFontSize(input.terminalFontSize, terminalFontSizeFallback),
   terminalScrollbackRows: clampScrollbackRows(input.terminalScrollbackRows),
   colorScheme: cleanColorScheme(input.colorScheme),
   inactiveTabStreaming: cleanInactiveTabStreaming(input.inactiveTabStreaming),
@@ -175,9 +195,9 @@ const cleanTuiFrameRate = (value: unknown): TuiFrameRate =>
 const cleanTerminalScrollMode = (value: unknown): TerminalScrollMode =>
   value === "batched" || value === "immediate" ? value : defaultSettings.terminalScrollMode;
 
-const clampFontSize = (value: unknown): number => {
-  const numeric = typeof value === "number" && Number.isFinite(value) ? value : defaultSettings.terminalFontSize;
-  return Math.min(24, Math.max(10, Math.round(numeric)));
+const clampFontSize = (value: unknown, fallback = defaultSettings.terminalFontSize): number => {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, Math.round(numeric)));
 };
 
 const clampScrollbackRows = (value: unknown): number => {

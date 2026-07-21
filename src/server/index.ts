@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { ServerOptions as HttpsServerOptions } from "node:https";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { loadAuthConfig, loadRegistrationAuthConfig, validateAuthCredentialSeparation } from "./auth.js";
 import { isAllowedBindHost } from "./bind.js";
 import { loadConfig } from "./config.js";
@@ -92,7 +93,9 @@ const main = async (): Promise<void> => {
   stateStore = state;
   hostRegistry.sweep();
   state.updateMachines(currentMachines());
-  const settings = new SettingsStore();
+  const settings = new SettingsStore(undefined, {
+    terminalFontSize: config.terminalFontSize,
+  });
   const sessionManager = new SessionManager(
     state,
     currentMachines,
@@ -113,6 +116,7 @@ const main = async (): Promise<void> => {
     registrationToken: registrationAuth.token,
     trustedProxies,
     keybindings: config.keybindings,
+    terminalFontFamily: config.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
   });
   // Persist the helper callback URL next to ~/.wmux/token: helpers and agent hooks
   // in existing durable panes read this before their stale inherited env.
