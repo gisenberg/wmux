@@ -277,6 +277,7 @@ def main():
         run_id, runtime, prompt, directory = validate(request)
         env = os.environ.copy()
         env["WMUX_DELEGATED_RUN"] = "1"
+        env["WMUX_DELEGATION_RUN_ID"] = run_id
         argv, cwd = command_for(request, runtime, directory, env)
     except FileNotFoundError as error:
         return fail(run_id, str(error), 127)
