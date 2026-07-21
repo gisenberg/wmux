@@ -180,7 +180,7 @@ def tui_command_for(request, runtime):
     argv = [executable]
     if runtime == "codex" and any(key in request for key in ("sandboxMode", "writeAccess", "unattended")):
         sandbox_mode = request.get("sandboxMode") or ("workspace-write" if request.get("writeAccess") is True else "read-only")
-        argv.extend(["--sandbox", sandbox_mode])
+        argv.extend(["--config", "check_for_update_on_startup=false", "--sandbox", sandbox_mode])
         if request.get("unattended") is True:
             argv.extend(["--ask-for-approval", "never"])
     if runtime == "opencode" and request.get("agent"):

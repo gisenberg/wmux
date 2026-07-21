@@ -309,7 +309,11 @@ print('interactive ready')
     assert.match(completed.stdout, /WMUX_AGENT_TUI_LAUNCH tui-1/);
     assert.match(completed.stdout, /WMUX_AGENT_TUI_EXIT tui-1 0/);
     assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), {
-      argv: ["--sandbox", "danger-full-access", "--model", "model-x"],
+      argv: [
+        "--config", "check_for_update_on_startup=false",
+        "--sandbox", "danger-full-access",
+        "--model", "model-x",
+      ],
       cwd: dir,
       interactive: "1",
     });
