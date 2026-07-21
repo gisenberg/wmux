@@ -82,7 +82,18 @@ test("publishes standalone app metadata for direct workspace routes", async ({ p
     start_url: "/",
     scope: "/",
     display: "standalone",
+    icons: expect.arrayContaining([
+      expect.objectContaining({ src: "/icons/wmux-192.png", sizes: "192x192" }),
+      expect.objectContaining({ src: "/icons/wmux-512.png", sizes: "512x512" }),
+      expect.objectContaining({ src: "/icons/wmux-maskable-512.png", purpose: "maskable" }),
+    ]),
   });
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/icons/wmux-apple-touch-180.png");
+  for (const icon of ["wmux-apple-touch-180.png", "wmux-192.png", "wmux-512.png", "wmux-maskable-512.png"]) {
+    const iconResponse = await request.get(`/icons/${icon}`);
+    expect(iconResponse.ok()).toBeTruthy();
+    expect(iconResponse.headers()["content-type"]).toContain("image/png");
+  }
 });
 
 test("uses a configured shortcut while preserving defaults for omitted actions", async ({ page }, testInfo) => {
@@ -936,12 +947,27 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only smoke coverage");
   test.setTimeout(60_000);
 
+  await page.addInitScript(() => {
+    const sent: string[] = [];
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (typeof data === "string") sent.push(data);
+      return originalSend.call(this, data);
+    };
+    (window as unknown as { __wmuxMobileSocketMessages: string[] }).__wmuxMobileSocketMessages = sent;
+  });
+  await page.reload();
+
   const chrome = page.getByRole("banner", { name: "Mobile session controls" });
   await expect(chrome).toBeVisible();
   await expect.poll(() => chrome.evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBe(96);
-  await expect(chrome.getByRole("button", { name: "Open chat" })).toHaveAttribute("aria-pressed", "true");
-  await chrome.getByRole("button", { name: "Open terminal" }).click();
   await expect(chrome.getByRole("button", { name: "Open terminal" })).toHaveAttribute("aria-pressed", "true");
+  await chrome.getByRole("button", { name: "Open chat" }).click();
+  await expect(page.getByText("No agent detected", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Agent message" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Interrupt agent" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start Codex" })).toBeVisible();
+  await chrome.getByRole("button", { name: "Open terminal" }).click();
   const activePane = page.locator(".terminal-pane.active");
   await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
 
@@ -976,6 +1002,54 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
     };
   });
   expect(touchBehavior).toEqual({ swipePrevented: true, tapFocusedTerminal: true, touchAction: "none" });
+
+  const fullViewport = page.viewportSize();
+  expect(fullViewport).toBeTruthy();
+  await page.setViewportSize({ width: fullViewport!.width, height: Math.min(520, fullViewport!.height - 120) });
+  await expect(page.locator("main.app-shell")).toHaveClass(/mobile-keyboard-open/);
+  const terminalKeys = page.getByRole("toolbar", { name: "Terminal keys" });
+  await expect(terminalKeys).toBeVisible();
+  const keySizes = await terminalKeys.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+    const rect = button.getBoundingClientRect();
+    return { width: Math.round(rect.width), height: Math.round(rect.height) };
+  }));
+  expect(keySizes.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+  await terminalKeys.getByRole("button", { name: "Esc" }).click();
+  await terminalKeys.getByRole("button", { name: "Ctrl" }).click();
+  await expect(terminalKeys.getByRole("button", { name: "Ctrl" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.type("c");
+  await expect(terminalKeys.getByRole("button", { name: "Ctrl" })).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __wmuxMobileSocketMessages: string[] }).__wmuxMobileSocketMessages
+      .flatMap((message) => {
+        try {
+          const parsed = JSON.parse(message) as { type?: string; data?: string };
+          return parsed.type === "input" ? [parsed.data] : [];
+        } catch {
+          return [];
+        }
+      }),
+  )).toEqual(expect.arrayContaining(["\x1b", "\x03"]));
+  await page.setViewportSize(fullViewport!);
+  await expect(page.locator("main.app-shell")).not.toHaveClass(/mobile-keyboard-open/);
+
+  await activePane.getByRole("button", { name: "Close pane" }).click();
+  const closeDialog = page.getByRole("dialog", { name: "Close pane?" });
+  await expect(closeDialog).toBeVisible();
+  await expect(closeDialog).toContainText("kill 1 backing session");
+  await expect(closeDialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  const closeActionSizes = await closeDialog.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+    const rect = button.getBoundingClientRect();
+    return { width: Math.round(rect.width), height: Math.round(rect.height) };
+  }));
+  expect(closeActionSizes.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+  await page.keyboard.press("Shift+Tab");
+  await expect(closeDialog.getByRole("button", { name: "Close pane" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeDialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await closeDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(closeDialog).toBeHidden();
+  await expect(activePane).toBeVisible();
 
   const appShell = page.locator("main.app-shell");
   await appShell.evaluate((element: HTMLElement) => {
@@ -1012,11 +1086,35 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   const navigation = page.getByRole("complementary", { name: "Workspace navigation" });
   await expect(navigation).toBeVisible();
   await expect(navigation.locator(".workspace-version-badge")).toHaveCount(0);
+  const moveTarget = navigation.getByRole("button", { name: /^Move / }).first();
+  await expect.poll(() => moveTarget.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { width: Math.round(rect.width), height: Math.round(rect.height) };
+  })).toEqual({ width: 44, height: 44 });
+  const hostSummary = navigation.getByRole("button", { name: /Host status/i });
+  await expect(hostSummary).toHaveAttribute("aria-expanded", "false");
+  await expect(navigation.locator(".machine-list")).toBeHidden();
+  await hostSummary.click();
+  await expect(navigation.locator(".machine-list")).toBeVisible();
   await page.locator("button.mobile-sidebar-close").click();
   await expect(navigation).toBeHidden();
 
   await chrome.getByRole("button", { name: "Open actions" }).click();
-  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+  const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(commandPalette).toBeVisible();
+  await expect(page.locator(".command-item").first()).toContainText("Split right");
+  await commandPalette.locator("input").fill("Close current tab");
+  await page.keyboard.press("Enter");
+  const closeTabDialog = page.getByRole("dialog", { name: "Close tab?" });
+  await expect(closeTabDialog).toBeVisible();
+  await closeTabDialog.getByRole("button", { name: "Cancel" }).click();
+
+  await chrome.getByRole("button", { name: "Open actions" }).click();
+  await commandPalette.locator("input").fill("Close current workspace");
+  await page.keyboard.press("Enter");
+  const closeWorkspaceDialog = page.getByRole("dialog", { name: "Close workspace?" });
+  await expect(closeWorkspaceDialog).toBeVisible();
+  await closeWorkspaceDialog.getByRole("button", { name: "Cancel" }).click();
 });
 
 test("mobile boot profiles cannot tint browser safe-area chrome", async ({ page }, testInfo) => {
@@ -1118,9 +1216,10 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   });
   expect(agentEvent.ok()).toBeTruthy();
 
+  await page.evaluate(() => window.sessionStorage.removeItem("wmux.mobileSurfaceModes"));
   await page.reload();
   const chrome = page.getByRole("banner", { name: "Mobile session controls" });
-  await chrome.getByRole("button", { name: "Open chat" }).click();
+  await expect(chrome.getByRole("button", { name: "Open chat" })).toHaveAttribute("aria-pressed", "true");
   const thread = page.locator(".mobile-agent-thread");
   await expect(thread).toBeVisible();
   const messageStyle = await page.locator(".mobile-agent-message").first().evaluate((element) => {

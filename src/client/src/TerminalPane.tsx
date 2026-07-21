@@ -18,6 +18,7 @@ import {
 import { ensureWmuxFonts, terminalFontFamilyStack } from "./fonts";
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
+import { mobileTerminalKeySequences, oneShotControlSequence } from "./mobile-terminal-keys";
 import { isTerminalProtocolResponse } from "../../shared/terminal-protocol";
 import { OpenTuiPaneToolbar } from "./OpenTuiPaneToolbar";
 import { writeBrowserClipboard } from "./clipboard";
@@ -194,6 +195,8 @@ export const TerminalPane = memo(function TerminalPane({
   const focusSignalRef = useRef(focusSignal);
   const connectedRef = useRef(false);
   const inputEpochRef = useRef(0);
+  const terminalInputRef = useRef<(data: string) => void>(() => undefined);
+  const mobileControlArmedRef = useRef(false);
   const [connected, setConnected] = useState(false);
   const [connectionIssue, setConnectionIssue] = useState("");
   const [startupLabel, setStartupLabel] = useState("Connecting to terminal…");
@@ -203,6 +206,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [viewportY, setViewportY] = useState(0);
   const [terminalReady, setTerminalReady] = useState(false);
   const [rectangleVersion, setRectangleVersion] = useState(0);
+  const [mobileControlArmed, setMobileControlArmed] = useState(false);
   const visibleMediaItems = [...kittyMediaItems, ...mediaItems];
   const visibleInlineItems = viewportY < 1 ? kittyInlineItems.filter((item) => item.data) : [];
 
@@ -230,7 +234,16 @@ export const TerminalPane = memo(function TerminalPane({
   useEffect(() => {
     if (activeRef.current !== active) inputEpochRef.current += 1;
     activeRef.current = active;
+    if (!active) {
+      mobileControlArmedRef.current = false;
+      setMobileControlArmed(false);
+    }
   }, [active]);
+
+  useEffect(() => {
+    mobileControlArmedRef.current = false;
+    setMobileControlArmed(false);
+  }, [pane.id]);
 
   useLayoutEffect(() => {
     if (shouldShieldTerminalBeforeResume(inactiveTabStreaming, tabVisible, suspendSocketRef.current)) {
@@ -277,6 +290,7 @@ export const TerminalPane = memo(function TerminalPane({
     let contextMenuListener: ((event: MouseEvent) => void) | undefined;
     let copyListener: ((event: ClipboardEvent) => void) | undefined;
     let latencyKeyDownListener: ((event: KeyboardEvent) => void) | undefined;
+    let terminalBlurListener: (() => void) | undefined;
     let pasteKeyListener: ((event: KeyboardEvent) => void) | undefined;
     let pasteListener: ((event: ClipboardEvent) => void) | undefined;
     let windowFocusListener: (() => void) | undefined;
@@ -1112,6 +1126,11 @@ export const TerminalPane = memo(function TerminalPane({
       }
       term.open(containerRef.current);
       configureTerminalInput(term);
+      terminalBlurListener = () => {
+        mobileControlArmedRef.current = false;
+        setMobileControlArmed(false);
+      };
+      term.textarea?.addEventListener("blur", terminalBlurListener);
       terminalRef.current = term;
       rectangularSelection = new RectangularSelection(
         term,
@@ -1351,7 +1370,16 @@ export const TerminalPane = memo(function TerminalPane({
       window.addEventListener("pageshow", pageShowListener);
       document.addEventListener("visibilitychange", visibilityChangeListener);
 
-      const forwardTerminalData = (data: string) => {
+      const forwardTerminalData = (rawData: string) => {
+        let data = rawData;
+        if (mobileControlArmedRef.current) {
+          const control = oneShotControlSequence(data);
+          if (control !== undefined) {
+            data = control;
+            mobileControlArmedRef.current = false;
+            setMobileControlArmed(false);
+          }
+        }
         const terminalResponse = isTerminalProtocolResponse(data);
         if (!terminalResponse) inputEpochRef.current += 1;
         if (!terminalResponse) rectangularSelection?.clear();
@@ -1411,6 +1439,7 @@ export const TerminalPane = memo(function TerminalPane({
         if (terminalResponse && replayingTerminalOutput) return;
         sendInput(socketRef.current, data, terminalResponse, sequence);
       };
+      terminalInputRef.current = forwardTerminalData;
 
       term.attachCustomKeyEventHandler((event) => {
         if (eventMatchesAction(
@@ -1527,6 +1556,7 @@ export const TerminalPane = memo(function TerminalPane({
       if (contextMenuListener) terminalRef.current?.element?.removeEventListener("contextmenu", contextMenuListener, { capture: true });
       if (copyListener) terminalRef.current?.element?.removeEventListener("copy", copyListener, { capture: true });
       if (latencyKeyDownListener) terminalRef.current?.element?.removeEventListener("keydown", latencyKeyDownListener, { capture: true });
+      if (terminalBlurListener) terminalRef.current?.textarea?.removeEventListener("blur", terminalBlurListener);
       if (pasteKeyListener) terminalRef.current?.element?.removeEventListener("keydown", pasteKeyListener, { capture: true });
       if (pasteListener) terminalRef.current?.element?.removeEventListener("paste", pasteListener, { capture: true });
       if (windowFocusListener) window.removeEventListener("focus", windowFocusListener);
@@ -1545,6 +1575,7 @@ export const TerminalPane = memo(function TerminalPane({
       fitAddon?.dispose();
       terminalRef.current?.dispose();
       socketRef.current = null;
+      terminalInputRef.current = () => undefined;
       terminalRef.current = null;
       connectedRef.current = false;
       fitAddonRef.current = null;
@@ -1623,6 +1654,12 @@ export const TerminalPane = memo(function TerminalPane({
       }
     : undefined;
   const resolvedTerminalFontFamily = terminalFontFamilyStack(terminalFontFamily);
+  const sendMobileTerminalKey = (data: string) => {
+    mobileControlArmedRef.current = false;
+    setMobileControlArmed(false);
+    terminalInputRef.current(data);
+    terminalRef.current?.focus();
+  };
 
   return (
     <section
@@ -1711,6 +1748,28 @@ export const TerminalPane = memo(function TerminalPane({
             ))}
           </div>
         ) : null}
+      </div>
+      <div className="mobile-terminal-keys" role="toolbar" aria-label="Terminal keys">
+        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => sendMobileTerminalKey(mobileTerminalKeySequences.escape)}>Esc</button>
+        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => sendMobileTerminalKey(mobileTerminalKeySequences.tab)}>Tab</button>
+        <button
+          type="button"
+          className={mobileControlArmed ? "active" : ""}
+          aria-pressed={mobileControlArmed}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => {
+            const next = !mobileControlArmedRef.current;
+            mobileControlArmedRef.current = next;
+            setMobileControlArmed(next);
+            terminalRef.current?.focus();
+          }}
+        >
+          Ctrl
+        </button>
+        <button type="button" aria-label="Arrow left" onPointerDown={(event) => event.preventDefault()} onClick={() => sendMobileTerminalKey(mobileTerminalKeySequences.arrowLeft)}>←</button>
+        <button type="button" aria-label="Arrow down" onPointerDown={(event) => event.preventDefault()} onClick={() => sendMobileTerminalKey(mobileTerminalKeySequences.arrowDown)}>↓</button>
+        <button type="button" aria-label="Arrow up" onPointerDown={(event) => event.preventDefault()} onClick={() => sendMobileTerminalKey(mobileTerminalKeySequences.arrowUp)}>↑</button>
+        <button type="button" aria-label="Arrow right" onPointerDown={(event) => event.preventDefault()} onClick={() => sendMobileTerminalKey(mobileTerminalKeySequences.arrowRight)}>→</button>
       </div>
       {visibleMediaItems.length > 0 ? (
         <div className="media-shelf">

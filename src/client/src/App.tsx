@@ -15,6 +15,7 @@ import { createAppStore, useAppState } from "./app-store";
 import { RetroBootScreen } from "./RetroBootScreen";
 import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
 import { MobileAgentSurface } from "./MobileAgentSurface";
+import { MobileCloseDialog, type MobileCloseRequest } from "./MobileCloseDialog";
 import { OpenTuiActivityPanel } from "./OpenTuiActivityPanel";
 import { OpenTuiMobileChrome } from "./OpenTuiMobileChrome";
 import type { OpenTuiActivityRow } from "./OpenTuiActivityPanel";
@@ -48,6 +49,16 @@ import { useMobileViewportState } from "./mobile-viewport";
 import { loadMachineTargetId, persistMachineTargetId, resolveMachineTargetId } from "./machine-target";
 import { workspacePresentationDescriptor, workspacePresentationMachineId } from "./workspace-presentation";
 import { WorkspaceMoveDialog } from "./WorkspaceMoveDialog";
+import {
+  contextMobileSurfaceMode,
+  legacyMobileSurfaceModeStorageKey,
+  loadLegacyMobileSurfaceMode,
+  loadMobileSurfaceModes,
+  pruneMobileSurfaceModes,
+  sameMobileSurfaceModes,
+  saveMobileSurfaceModes,
+  type MobileSurfaceMode,
+} from "./mobile-surface-mode";
 import {
   deriveWorkspaceTree,
   expandWorkspaceAncestors,
@@ -85,9 +96,7 @@ import type {
   WmuxSettings,
 } from "./types";
 
-type MobileSurfaceMode = "agent" | "terminal";
 const maxMountedTabViews = 6;
-const mobileSurfaceModeStorageKey = "wmux.mobileSurfaceMode";
 
 interface MountedTabView {
   key: string;
@@ -143,7 +152,14 @@ export function App() {
   const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
   const [doctorError, setDoctorError] = useState("");
-  const [mobileSurfaceMode, setMobileSurfaceMode] = useState<MobileSurfaceMode>(loadMobileSurfaceMode);
+  const [mobileSurfaceModes, setMobileSurfaceModes] = useState<Record<string, MobileSurfaceMode>>(() =>
+    loadMobileSurfaceModes(window.sessionStorage),
+  );
+  const [legacyMobileSurfaceMode, setLegacyMobileSurfaceMode] = useState<MobileSurfaceMode | undefined>(() =>
+    loadLegacyMobileSurfaceMode(window.localStorage),
+  );
+  const [pendingMobileClose, setPendingMobileClose] = useState<MobileCloseRequest | null>(null);
+  const [mobileHostsExpanded, setMobileHostsExpanded] = useState(false);
   const [bellPaneIds, setBellPaneIds] = useState<Set<string>>(() => new Set());
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
@@ -166,6 +182,7 @@ export function App() {
   const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const previousMobileSidebarCollapsed = useRef(sidebarCollapsed);
   const finishBoot = useCallback(() => setBootComplete(true), []);
+  const dismissMobileClose = useCallback(() => setPendingMobileClose(null), []);
 
   const rebaseIncomingState = useCallback((payload: BootstrapPayload): BootstrapPayload =>
     rebaseCollapsedWorkspaceIds(
@@ -188,10 +205,6 @@ export function App() {
       return next;
     });
   }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(mobileSurfaceModeStorageKey, mobileSurfaceMode);
-  }, [mobileSurfaceMode]);
 
   useEffect(() => {
     if (!mobileViewport.isMobile || sidebarCollapsed) return;
@@ -369,6 +382,7 @@ export function App() {
   const settingsDefaults = state?.settingsDefaults ?? defaultSettings;
   const settings = previewSettings ?? persistedSettings;
   const displayMachines = useMemo(() => machines.map((machine) => withMachineAlias(machine, settings)), [machines, settings]);
+  const reachableMachineCount = displayMachines.filter((machine) => machine.reachable).length;
   const notifications = state?.notifications ?? [];
   const unreadNotifications = notifications.filter((notification) => !notification.read);
   const unreadByPaneId = useMemo(() => countUnreadBy(notifications, "paneId"), [notifications]);
@@ -383,6 +397,46 @@ export function App() {
   const latestAgentByWorkspaceId = useMemo(() => latestAgentByWorkspace(agentEvents), [agentEvents]);
   const latestAgentByPaneId = useMemo(() => latestAgentByPane(agentEvents), [agentEvents]);
   const latestRunByPaneId = useMemo(() => latestRunByPane(runs), [runs]);
+  const activePaneHasAgentContext = paneHasAgentContext(
+    activePane,
+    activePane ? latestAgentByPaneId.get(activePane.id) : undefined,
+  );
+  const mobileSurfaceMode = activePane
+    ? mobileSurfaceModes[activePane.id] ?? legacyMobileSurfaceMode ?? contextMobileSurfaceMode(activePaneHasAgentContext)
+    : "terminal";
+  const setMobileSurfaceMode = useCallback((mode: MobileSurfaceMode) => {
+    if (!activePane) return;
+    setMobileSurfaceModes((current) => current[activePane.id] === mode ? current : { ...current, [activePane.id]: mode });
+  }, [activePane]);
+
+  useEffect(() => {
+    if (!mobileViewport.isMobile || !activePane || mobileSurfaceModes[activePane.id]) return;
+    const initial = legacyMobileSurfaceMode ?? contextMobileSurfaceMode(activePaneHasAgentContext);
+    setMobileSurfaceModes((current) => current[activePane.id] ? current : { ...current, [activePane.id]: initial });
+    if (legacyMobileSurfaceMode) {
+      window.localStorage.removeItem(legacyMobileSurfaceModeStorageKey);
+      setLegacyMobileSurfaceMode(undefined);
+    }
+  }, [activePane, activePaneHasAgentContext, legacyMobileSurfaceMode, mobileSurfaceModes, mobileViewport.isMobile]);
+
+  useEffect(() => {
+    if (!state) return;
+    const paneIds = (state?.workspaces ?? []).flatMap((workspace) =>
+      workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id)),
+    );
+    setMobileSurfaceModes((current) => {
+      const next = pruneMobileSurfaceModes(current, paneIds);
+      return sameMobileSurfaceModes(current, next) ? current : next;
+    });
+  }, [state?.workspaces]);
+
+  useEffect(() => {
+    saveMobileSurfaceModes(window.sessionStorage, mobileSurfaceModes);
+  }, [mobileSurfaceModes]);
+
+  useEffect(() => {
+    if (!mobileViewport.isMobile) setPendingMobileClose(null);
+  }, [mobileViewport.isMobile]);
 
   useEffect(() => {
     setMountedTabKeys((current) => {
@@ -759,13 +813,30 @@ export function App() {
     }
   }, [beginOptimisticCreation, finishOptimisticCreation, refresh, store]);
 
-  const { splitPaneInTab, resizeSplitInTab, closePaneInTab, splitPane, resizeSplit, closePane } = usePaneActions({
+  const { splitPaneInTab, resizeSplitInTab, closePaneInTab, splitPane } = usePaneActions({
     activeTabId: activeTab?.id,
     refresh,
     activatePane,
     runPending,
     splitPaneRequest: optimisticSplitPaneRequest,
   });
+  const requestClosePaneInTab = useCallback((tabId: string, paneId: string) => {
+    if (!mobileViewport.isMobile) {
+      void closePaneInTab(tabId, paneId);
+      return;
+    }
+    const snapshot = store.get();
+    const pane = snapshot?.workspaces
+      .flatMap((workspace) => workspace.tabs)
+      .find((tab) => tab.id === tabId)
+      ?.panes.find((candidate) => candidate.id === paneId);
+    setPendingMobileClose({
+      kind: "pane",
+      title: pane?.title ?? "this pane",
+      sessionCount: 1,
+      run: () => closePaneInTab(tabId, paneId),
+    });
+  }, [closePaneInTab, mobileViewport.isMobile, store]);
 
   const recordPaneBell = useCallback((paneId: string) => {
     const snapshot = store.get();
@@ -874,17 +945,45 @@ export function App() {
     }
   });
 
-  const closeActiveTab = guard(() => `tab:${activeTab?.id ?? "unknown"}:close`, "Closing tab...", async () => {
-    if (!activeWorkspace || !activeTab) return;
-    const response = await api.closeTab(activeWorkspace.id, activeTab.id);
+  const closeTabById = guard((workspaceId: string, tabId: string) => `tab:${tabId}:close`, "Closing tab...", async (workspaceId: string, tabId: string) => {
+    const response = await api.closeTab(workspaceId, tabId);
     await refresh(response.state);
   });
 
-  const closeActiveWorkspace = guard(() => `workspace:${activeWorkspace?.id ?? "unknown"}:close`, "Closing workspace...", async () => {
-    if (!state || !activeWorkspace) return;
-    const response = await api.closeWorkspace(activeWorkspace.id);
+  const closeWorkspaceById = guard((workspaceId: string) => `workspace:${workspaceId}:close`, "Closing workspace...", async (workspaceId: string) => {
+    const response = await api.closeWorkspace(workspaceId);
     await refresh(response.state);
   });
+
+  const closeActiveTab = () => {
+    if (!activeWorkspace || !activeTab) return;
+    const run = () => closeTabById(activeWorkspace.id, activeTab.id);
+    if (!mobileViewport.isMobile) {
+      void run();
+      return;
+    }
+    setPendingMobileClose({
+      kind: "tab",
+      title: activeTab.title,
+      sessionCount: activeTab.panes.length,
+      run,
+    });
+  };
+
+  const closeActiveWorkspace = () => {
+    if (!activeWorkspace) return;
+    const run = () => closeWorkspaceById(activeWorkspace.id);
+    if (!mobileViewport.isMobile) {
+      void run();
+      return;
+    }
+    setPendingMobileClose({
+      kind: "workspace",
+      title: activeWorkspace.name,
+      sessionCount: activeWorkspace.tabs.reduce((count, tab) => count + tab.panes.length, 0),
+      run,
+    });
+  };
 
   const reorderWorkspace = guard(
     (workspaceId: string, _targetWorkspaceId: string | undefined, _position: WorkspaceReorderPosition) => `workspace:${workspaceId}:reorder`,
@@ -1302,7 +1401,10 @@ export function App() {
         return [...workspaceCommand, ...tabCommands];
       }) ?? [];
 
-    return [...base, ...hostCommands, ...workspaceCommands];
+    const orderedBase = mobileViewport.isMobile
+      ? [...base].sort((first, second) => mobileCommandSectionPriority(first.section) - mobileCommandSectionPriority(second.section))
+      : base;
+    return [...orderedBase, ...hostCommands, ...workspaceCommands];
   }, [
     activeTab,
     activeWorkspace,
@@ -1323,6 +1425,7 @@ export function App() {
     unreadByWorkspaceId,
     unreadNotifications.length,
     shortcutFor,
+    mobileViewport.isMobile,
   ]);
 
   if (!state && loadError && !authRequired) {
@@ -1686,8 +1789,22 @@ export function App() {
               </div>
             ) : null}
         </nav>
-        <div className="sidebar-label host-label">Host status</div>
-        <div className="machine-list">
+        {mobileViewport.isMobile ? (
+          <button
+            type="button"
+            className="sidebar-label host-label mobile-host-summary"
+            aria-expanded={mobileHostsExpanded}
+            aria-controls="wmux-mobile-host-list"
+            onClick={() => setMobileHostsExpanded((current) => !current)}
+          >
+            <span>Host status</span>
+            <span>{reachableMachineCount}/{displayMachines.length} on {mobileHostsExpanded ? "−" : "+"}</span>
+          </button>
+        ) : <div className="sidebar-label host-label">Host status</div>}
+        <div
+          id={mobileViewport.isMobile ? "wmux-mobile-host-list" : undefined}
+          className={`machine-list ${mobileViewport.isMobile && !mobileHostsExpanded ? "mobile-collapsed" : ""}`}
+        >
           {displayMachines.map((machine) => (
             <div
               key={machine.id}
@@ -2015,7 +2132,7 @@ export function App() {
                     onBell={recordPaneBell}
                     onSplit={splitPaneInTab}
                     onResizeSplit={resizeSplitInTab}
-                    onClosePane={closePaneInTab}
+                    onClosePane={requestClosePaneInTab}
                     onDismissMedia={dismissMedia}
                     runsByPaneId={latestRunByPaneId}
                     pendingPaneLabels={pendingPaneLabels}
@@ -2042,6 +2159,9 @@ export function App() {
             onClose={() => setActivityOpen(false)}
           />
         )
+      ) : null}
+      {mobileViewport.isMobile && pendingMobileClose ? (
+        <MobileCloseDialog request={pendingMobileClose} onCancel={dismissMobileClose} />
       ) : null}
       {streamOpen ? (
         <ScreenStreamViewer
@@ -2109,8 +2229,22 @@ const settleMobileViewportAfterNavigation = (): void => {
   window.setTimeout(sync, 320);
 };
 
-const loadMobileSurfaceMode = (): MobileSurfaceMode =>
-  window.localStorage.getItem(mobileSurfaceModeStorageKey) === "terminal" ? "terminal" : "agent";
+const paneHasAgentContext = (pane: { title?: string } | undefined, event: AgentActivity | undefined): boolean => {
+  if (/\b(codex|claude)\b/i.test(pane?.title ?? "")) return true;
+  if (!event) return false;
+  const ageMs = Date.now() - Date.parse(event.createdAt);
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 12 * 60 * 60 * 1000;
+};
+
+const mobileCommandSectionPriority = (section: string): number => ({
+  Pane: 0,
+  Create: 1,
+  Actions: 2,
+  Navigate: 3,
+  View: 4,
+  System: 5,
+  Close: 6,
+}[section] ?? 5);
 
 const machineFor = (machines: MachineStatus[], machineId: string): MachineStatus | undefined =>
   machines.find((machine) => machine.id === machineId);
