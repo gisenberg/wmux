@@ -20,21 +20,24 @@ const windowsBootstrapEnvKeys = new Set([
   "WMUX_TERMINAL_ANSI_PALETTE",
   "KITTY_WINDOW_ID",
 ]);
+const windowsPowerShellHelperBaseNames = [
+  "wmux-agent-event",
+  "wmux-console-theme",
+  "wmux-copy",
+  "wmux-heartbeat",
+  "wmux-hooks",
+  "wmux-media",
+  "wmux-notify",
+  "wmux-run",
+  "wmux-stream-agent-service",
+  "wmux-title",
+  "wmux-windows-agent-service",
+  "wmux-windows-setup",
+];
 const windowsRequiredHelperFiles = [
-  "wmux-agent-event.ps1",
+  ...windowsPowerShellHelperBaseNames.map((name) => `${name}.ps1`),
   "wmux-agent-run.cmd",
   "wmux-agent-run.py",
-  "wmux-console-theme.ps1",
-  "wmux-copy.ps1",
-  "wmux-heartbeat.ps1",
-  "wmux-hooks.ps1",
-  "wmux-media.ps1",
-  "wmux-notify.ps1",
-  "wmux-run.ps1",
-  "wmux-stream-agent-service.ps1",
-  "wmux-title.ps1",
-  "wmux-windows-agent-service.ps1",
-  "wmux-windows-setup.ps1",
 ];
 const windowsClipboardAliasNames = ["wmux-clip", "wclip", "wmclip"];
 const WINDOWS_AGENT_RELEASE_PLACEHOLDER = "__WMUX_WINDOWS_AGENT_RELEASE_VERSION__";
@@ -375,7 +378,10 @@ try {
 } | ConvertTo-Json -Depth 8 -Compress
 `;
 
-const windowsPowerShellHelperNames = (): string[] => [...windowsRequiredHelperNames, ...windowsClipboardAliasNames];
+const windowsPowerShellHelperNames = (): string[] => [
+  ...windowsPowerShellHelperBaseNames,
+  ...windowsClipboardAliasNames,
+];
 const windowsPowerShellSourceName = (name: string): string =>
   windowsClipboardAliasNames.includes(name) ? "wmux-copy.ps1" : `${name}.ps1`;
 
