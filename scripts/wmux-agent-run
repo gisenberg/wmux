@@ -62,21 +62,24 @@ def request_from_stdin():
         import msvcrt
 
         print("WMUX_AGENT_READY", flush=True)
-        characters = []
         while True:
-            character = msvcrt.getwch()
-            if character in {"\r", "\n"}:
+            characters = []
+            while True:
+                character = msvcrt.getwch()
+                if character in {"\r", "\n"}:
+                    break
+                if character == "\x03":
+                    raise KeyboardInterrupt
+                if character in {"\x00", "\xe0"}:
+                    msvcrt.getwch()
+                    continue
+                characters.append(character)
+                if len("".join(characters).encode("utf-8")) > MAX_LINE:
+                    raise ValueError("request is too large")
+            if characters:
                 print(flush=True)
+                line = "".join(characters).encode("utf-8")
                 break
-            if character == "\x03":
-                raise KeyboardInterrupt
-            if character in {"\x00", "\xe0"}:
-                msvcrt.getwch()
-                continue
-            characters.append(character)
-            if len("".join(characters).encode("utf-8")) > MAX_LINE:
-                raise ValueError("request is too large")
-        line = "".join(characters).encode("utf-8")
     elif sys.stdin.isatty():
         import termios
 

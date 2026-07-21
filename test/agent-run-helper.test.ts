@@ -16,6 +16,38 @@ const decodeResult = (stdout: string) => {
   return JSON.parse(Buffer.from(line.slice("WMUX_AGENT_RESULT ".length), "base64").toString("utf8"));
 };
 
+posixTest("wmux-agent-run ignores the command-submit newline before a Windows request", () => {
+  const probe = `
+import base64
+import importlib.machinery
+import importlib.util
+import json
+import sys
+import types
+
+loader = importlib.machinery.SourceFileLoader("wmux_agent_run", sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+request = {"runId": "windows-input", "runtime": "codex", "prompt": "inspect", "directory": "C:\\\\repo"}
+encoded = base64.b64encode(json.dumps(request).encode()).decode()
+characters = iter("\\r\\n" + encoded + "\\r")
+sys.modules["msvcrt"] = types.SimpleNamespace(getwch=lambda: next(characters))
+
+class TtyInput:
+    def isatty(self):
+        return True
+
+module.os.name = "nt"
+sys.stdin = TtyInput()
+print(json.dumps(module.request_from_stdin(), sort_keys=True))
+`;
+  const completed = spawnSync("python3", ["-c", probe, helper], { encoding: "utf8" });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /WMUX_AGENT_READY/);
+  assert.match(completed.stdout, /"runId": "windows-input"/);
+});
+
 posixTest("wmux-agent-run adapts OpenCode, Codex, and Claude without putting prompts in argv", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-run-"));
   const bin = path.join(dir, "bin");
