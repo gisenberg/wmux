@@ -1,4 +1,6 @@
 {
+  "terminalFontFamily": "\"MesloLGM Nerd Font\"",
+  "terminalFontSize": 15,
   "keybindings": {
     "commandPalette.open": ["Meta+KeyK", "Ctrl+KeyK"],
     "settings.open": [],

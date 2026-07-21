@@ -32,6 +32,7 @@ export const HTTP_ROUTE_POLICIES: readonly HttpRoutePolicy[] = [
   route("login", "POST", "/api/login", "public"),
   route("auth-session", "GET", "/api/auth/session", "normal", undefined, true),
   route("bootstrap", "GET", "/api/bootstrap", "normal", ["automation"]),
+  route("delegation-status", "GET", /^\/api\/delegations\/[^/]+$/, "normal", ["automation"]),
   route("registry-list", "GET", "/api/registry/hosts"),
   route("registry-register", "POST", "/api/registry/hosts", "registration"),
   route("registry-delete", "DELETE", /^\/api\/registry\/hosts\/[^/]+$/),

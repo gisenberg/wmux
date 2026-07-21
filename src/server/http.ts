@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { resolveKeybindings } from "../shared/keybindings.js";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { readAgentProfileBundle } from "./agent-profile.js";
 import {
   authenticateRequest,
@@ -50,7 +51,13 @@ import type {
   WmuxSettings,
 } from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
-import type { StateStore } from "./state.js";
+import {
+  StateIdConflictError,
+  type SplitCreationIds,
+  type StateStore,
+  type TabCreationIds,
+  type WorkspaceCreationIds,
+} from "./state.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsStore } from "./settings.js";
 import {
@@ -148,6 +155,15 @@ const clientRoot = (): string => {
   return path.resolve(here, "../client");
 };
 
+const bundledMesloFontFiles = {
+  regular: "meslo-lgm-nerd-font-mono-regular.woff2",
+  bold: "meslo-lgm-nerd-font-mono-bold.woff2",
+  italic: "meslo-lgm-nerd-font-mono-italic.woff2",
+  "bold-italic": "meslo-lgm-nerd-font-mono-bold-italic.woff2",
+} as const;
+
+type BundledMesloFontFace = keyof typeof bundledMesloFontFiles;
+
 type WmuxHttpServer = http.Server | https.Server;
 
 export const createHttpServer = (
@@ -163,6 +179,7 @@ export const createHttpServer = (
     hostRegistry?: HostRegistry;
     registrationToken?: string;
     trustedProxies?: ReadonlySet<string>;
+    terminalFontFamily?: string;
     healthRefreshIntervals?: { machines?: number; streams?: number };
     healthResolvers?: {
       machines?: typeof resolveMachineStatuses;
@@ -256,8 +273,10 @@ export const createHttpServer = (
       notifications: snapshot.notifications,
       agentEvents: snapshot.agentEvents,
       runs: snapshot.runs,
+      terminalFontFamily: options.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
       settings: settings.snapshot(),
       keybindings: options.keybindings ?? resolveKeybindings(),
+      settingsDefaults: settings.defaultsSnapshot(),
       streams: streamStatuses,
     };
   };
@@ -355,6 +374,10 @@ export const createHttpServer = (
     const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? bindHost}`);
     const machines = currentMachines();
 
+    const bundledMesloFont = request.method === "GET" || request.method === "HEAD"
+      ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
+      : null;
+
     // Every API method/path is classified before authentication so new routes
     // cannot silently inherit a broad credential's authority.
     const routePolicy = classifyHttpRoute(request.method, url.pathname);
@@ -394,6 +417,14 @@ export const createHttpServer = (
     }
 
     try {
+      if (bundledMesloFont) {
+        const face = bundledMesloFont[1] as BundledMesloFontFace;
+        if (!serveBundledMesloFont(root, face, request.method === "HEAD", response)) {
+          sendJson(response, 404, { error: "font_not_found" });
+        }
+        return;
+      }
+
       if (url.pathname === "/api/health" && request.method === "GET") {
         sendJson(response, 200, { ok: true });
         return;
@@ -651,13 +682,20 @@ export const createHttpServer = (
           machineId?: string;
           sourcePaneId?: string;
           createdBy?: "user" | "agent";
+          clientIds?: unknown;
         };
         const machineId = resolveMachineId(machines, body.machineId);
+        const clientIds = parseClientCreationIds(body.clientIds, {
+          workspaceId: "ws",
+          tabId: "tab",
+          paneId: "pane",
+        }) as WorkspaceCreationIds | undefined;
         const sourcePane = body.sourcePaneId ? state.findPane(body.sourcePaneId) ?? undefined : undefined;
         const workspace = state.createWorkspace(
           machineId,
           await cwdForSourcePane(state, machines, sourcePane, machineId),
           body.createdBy === "agent" ? "agent" : "user",
+          clientIds,
         );
         sendJson(response, 201, { workspace, state: currentPayload() });
         return;
@@ -713,6 +751,7 @@ export const createHttpServer = (
 
       if (url.pathname === "/api/agent-events" && request.method === "POST") {
         const body = (await readBody(request)) as {
+          runId?: string;
           workspaceId?: string;
           tabId?: string;
           paneId?: string;
@@ -724,6 +763,7 @@ export const createHttpServer = (
           body?: string;
         };
         const result = state.recordAgentEvent({
+          runId: body.runId,
           workspaceId: body.workspaceId,
           tabId: body.tabId,
           paneId: body.paneId,
@@ -735,6 +775,18 @@ export const createHttpServer = (
           body: body.body,
         });
         sendJson(response, 201, { ...result, state: currentPayload() });
+        return;
+      }
+
+      const delegationStatusMatch = url.pathname.match(/^\/api\/delegations\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/);
+      if (delegationStatusMatch && request.method === "GET") {
+        const runId = delegationStatusMatch[1];
+        const delegation = state.delegationForRun(runId);
+        if (!delegation) {
+          sendJson(response, 404, { error: "delegation_not_found" });
+          return;
+        }
+        sendJson(response, 200, { delegation });
         return;
       }
 
@@ -946,14 +998,20 @@ export const createHttpServer = (
 
       const tabs = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs$/);
       if (tabs && request.method === "POST") {
-        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string };
+        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string; clientIds?: unknown };
         const snapshot = state.snapshot();
         const workspace = snapshot.workspaces.find((candidate) => candidate.id === tabs[1]);
         const sourcePane = body.sourcePaneId
           ? workspace?.tabs.flatMap((tab) => tab.panes).find((pane) => pane.id === body.sourcePaneId)
           : undefined;
         const machineId = resolveMachineId(machines, body.machineId, workspace?.machineId);
-        const tab = state.createTab(tabs[1], machineId, await cwdForSourcePane(state, machines, sourcePane, machineId));
+        const clientIds = parseClientCreationIds(body.clientIds, { tabId: "tab", paneId: "pane" }) as TabCreationIds | undefined;
+        const tab = state.createTab(
+          tabs[1],
+          machineId,
+          await cwdForSourcePane(state, machines, sourcePane, machineId),
+          clientIds,
+        );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
       }
@@ -979,23 +1037,28 @@ export const createHttpServer = (
           paneId?: string;
           direction?: "horizontal" | "vertical";
           machineId?: string;
+          clientIds?: unknown;
         };
         if (!body.paneId || (body.direction !== "horizontal" && body.direction !== "vertical")) {
           sendJson(response, 400, { error: "invalid_split" });
           return;
         }
         const snapshot = state.snapshot();
-        const sourcePane = snapshot.workspaces
+        const targetTab = snapshot.workspaces
           .flatMap((workspace) => workspace.tabs)
-          .flatMap((tab) => tab.panes)
-          .find((pane) => pane.id === body.paneId);
-        const machineId = resolveMachineId(machines, body.machineId, sourcePane?.machineId);
+          .find((tab) => tab.id === split[1]);
+        if (!targetTab) throw new HttpError(404, "tab_not_found");
+        const sourcePane = targetTab.panes.find((pane) => pane.id === body.paneId);
+        if (!sourcePane) throw new HttpError(404, "pane_not_found");
+        const machineId = resolveMachineId(machines, body.machineId, sourcePane.machineId);
+        const clientIds = parseClientCreationIds(body.clientIds, { paneId: "pane" }) as SplitCreationIds | undefined;
         const tab = state.splitPane(
           split[1],
           body.paneId,
           body.direction,
           machineId,
           await cwdForSourcePane(state, machines, sourcePane, machineId),
+          clientIds,
         );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
@@ -1087,6 +1150,10 @@ export const createHttpServer = (
     } catch (error) {
       if (error instanceof HttpError || error instanceof HostRegistryError || error instanceof PasteImageStageError) {
         sendJson(response, error.status, { error: error.code });
+        return;
+      }
+      if (error instanceof StateIdConflictError) {
+        sendJson(response, 409, { error: "client_id_conflict" });
         return;
       }
       // Log full detail server-side but never leak internal messages/paths to
@@ -1328,6 +1395,30 @@ const cwdForSourcePane = async (
   return cwd ?? sourcePane.cwd;
 };
 
+const clientIdPattern = (prefix: string): RegExp => new RegExp(`^${prefix}_[0-9a-f]{16,64}$`);
+
+const parseClientCreationIds = (
+  value: unknown,
+  fields: Record<string, string>,
+): Record<string, string> | undefined => {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "invalid_client_ids");
+  }
+  const record = value as Record<string, unknown>;
+  const expectedKeys = Object.keys(fields);
+  if (Object.keys(record).length !== expectedKeys.length) throw new HttpError(400, "invalid_client_ids");
+  const result: Record<string, string> = {};
+  for (const key of expectedKeys) {
+    const id = record[key];
+    if (typeof id !== "string" || !clientIdPattern(fields[key]).test(id)) {
+      throw new HttpError(400, "invalid_client_ids");
+    }
+    result[key] = id;
+  }
+  return result;
+};
+
 const maxAttachmentBytes = 8 * 1024 * 1024;
 
 const attachmentExtensions: Record<string, string> = {
@@ -1448,6 +1539,31 @@ const staticHeaders = (filePath: string): Record<string, string> => {
     headers["cache-control"] = "public, max-age=31536000, immutable";
   }
   return headers;
+};
+
+const serveBundledMesloFont = (
+  root: string,
+  face: BundledMesloFontFace,
+  headOnly: boolean,
+  response: http.ServerResponse,
+): boolean => {
+  const fileName = bundledMesloFontFiles[face];
+  const candidates = [
+    path.join(root, "fonts", "meslo", fileName),
+    path.join(root, "public", "fonts", "meslo", fileName),
+  ];
+  const filePath = candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!filePath) return false;
+  const stat = fs.statSync(filePath);
+  response.writeHead(200, {
+    "content-type": "font/woff2",
+    "content-length": String(stat.size),
+    "cache-control": "public, max-age=31536000, immutable",
+    "x-content-type-options": "nosniff",
+  });
+  if (headOnly) response.end();
+  else fs.createReadStream(filePath).pipe(response);
+  return true;
 };
 
 const machineExists = (machines: MachineConfig[], machineId: string): boolean =>

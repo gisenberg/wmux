@@ -42,7 +42,10 @@ test("the application mounts behind the mode/session gate", () => {
   const main = fs.readFileSync(path.join(repoRoot, "src/client/src/main.tsx"), "utf8");
   const gate = fs.readFileSync(path.join(repoRoot, "src/client/src/BrowserAuthGate.tsx"), "utf8");
   assert.match(main, /render\(<BrowserAuthGate \/>\)/);
-  assert.match(gate, /await api\.authSession\(\)/);
-  assert.ok(gate.indexOf("api.authInfo()") < gate.indexOf("return <App />"));
+  assert.match(gate, /retryTransient\(api\.authSession\)/);
+  const authInfoGate = gate.indexOf("retryTransient(api.authInfo)");
+  assert.ok(authInfoGate >= 0 && authInfoGate < gate.indexOf("return <App />"));
   assert.match(gate, /clearNonSessionToken\(\)/);
+  assert.match(gate, /error instanceof UnauthorizedError/);
+  assert.match(gate, /250, 750, 1_500/);
 });

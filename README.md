@@ -46,7 +46,7 @@ The desktop view and both mobile surfaces show the same live Codex workspace.
 | Session manager | One live client per pane, pinned backend snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and backend lifecycle |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Local PTYs, SSH with `tmux`/`screen` and per-pane control sockets, PowerShell over SSH, and the experimental Windows agent, which owns pane processes, replay, and dynamic-registration heartbeat |
-| Persistent state | Workspace layout, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
+| Persistent state | Workspace layout, delegation outcomes, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
 | Optional streaming | Machine-local MediaMTX capture or a Moonlight/Sunshine gateway, requested by the browser |
 
 The server owns canonical workspace state and one live session client per
@@ -156,6 +156,8 @@ cp wmux.config.example.json wmux.config.json
 
 ```json
 {
+  "terminalFontFamily": "\"MesloLGM Nerd Font\"",
+  "terminalFontSize": 15,
   "machines": [
     {
       "id": "linux-box",
@@ -179,6 +181,12 @@ cp wmux.config.example.json wmux.config.json
 ```
 
 - `WMUX_CONFIG_PATH` selects one explicit file and disables fallback.
+- `terminalFontFamily` accepts a browser CSS font-family stack and `terminalFontSize` accepts an integer from 10 through 24.
+  These values are startup-loaded defaults; restart wmux after changing them.
+  wmux bundles `"MesloLGM Nerd Font"` (the terminal-safe Mono variant) and Fira Code.
+  Other preferred fonts must be installed on each browser device, and wmux appends its bundled Fira Code/monospace fallback stack.
+- `terminalFontFamily` is config-only.
+  Settings saved in `~/.wmux/settings.json` can override `terminalFontSize`; use **Settings → Reset → Save** to adopt a changed size default.
 - wmux adds the local machine unless `"localMachine": false` is set.
 - `kind: "local"` always executes on the current wmux server. Its display
   name does not make it a remote target, and its `cwd` must exist on that
@@ -310,9 +318,7 @@ need separately provisioned authorization.
 > nodes is WireGuard-encrypted even when the application URL uses HTTP, but a
 > subnet-routed leg may be plaintext after it leaves the Tailscale endpoint.
 
-Within the private Host/Origin/bind boundary, only `/api/health`, auth metadata,
-password login, and the static login shell are public; all other application APIs
-and wmux WebSockets remain credential-gated.
+Within the private Host/Origin/bind boundary, only `/api/health`, auth metadata, password login, and the static login shell are public; all other application APIs and wmux WebSockets remain credential-gated.
 
 - On first start, wmux creates `~/.wmux/token` and prints a one-time browser URL
   containing that token. Set `WMUX_TOKEN` or `WMUX_TOKEN_PATH` to supply one.
@@ -323,36 +329,25 @@ and wmux WebSockets remain credential-gated.
   helper prints this reminder after updating the credential file.
 - `WMUX_DISABLE_AUTH=1` disables token checks only for deliberately isolated
   environments; it does not make public deployment supported.
-- `WMUX_BROWSER_AUTH_MODE` defaults to `shared-or-login`, preserving existing
-  shared-token URLs, `wmuxctl`, helpers, registration, and WebSockets. Upgrades
-  create no scoped-token files and add no startup requirement. Set
-  `WMUX_BROWSER_AUTH_MODE=login-only` only after provisioning valid password
-  login credentials, a persistent session secret, and distinct automation and
-  helper credentials; missing, malformed, unsafe, or duplicate credentials
-  fail startup rather than downgrading.
-- Provision scoped credentials without displaying them with
-  `node scripts/wmux-provision-scoped-auth.mjs`. Provide
-  `WMUX_AUTOMATION_TOKEN` / `WMUX_AUTOMATION_TOKEN_PATH` and
-  `WMUX_HELPER_TOKEN` / `WMUX_HELPER_TOKEN_PATH` (file form preferred). Use
-  owner-only token files at the configured paths and never put credentials in
-  arguments, logs, documentation, or URLs.
-- Automation and helper credentials are distinct typed principals. Automation
-  is limited to reviewed controller actions and pane-output WebSocket access;
-  helper is limited to reviewed event, title, notification, media, clipboard,
-  stream, and profile operations. Both use authorization headers only; scoped
-  credentials are forbidden in query parameters and never fall back or retry
-  across scopes. Registration remains separate.
-- The browser must pass the password-session gate before bootstrap or browser
-  WebSockets. The MVP still retains browser session material in localStorage
-  and browser WebSocket query transport; cookie sessions, CSRF protection,
-  revocation, and finer capabilities remain deferred. wmux is not a
-  public-Internet deployment.
+- `WMUX_BROWSER_AUTH_MODE` defaults to `shared-or-login`, preserving existing shared-token URLs, `wmuxctl`, helpers, registration, and WebSockets.
+  Upgrades create no scoped-token files and add no startup requirement.
+  Set `WMUX_BROWSER_AUTH_MODE=login-only` only after provisioning valid password login credentials, a persistent session secret, and distinct automation and helper credentials; missing, malformed, unsafe, or duplicate credentials fail startup rather than downgrading.
+- Provision scoped credentials without displaying them with `node scripts/wmux-provision-scoped-auth.mjs`.
+  Provide `WMUX_AUTOMATION_TOKEN` / `WMUX_AUTOMATION_TOKEN_PATH` and `WMUX_HELPER_TOKEN` / `WMUX_HELPER_TOKEN_PATH` (file form preferred).
+  Use owner-only token files at the configured paths and never put credentials in arguments, logs, documentation, or URLs.
+- Automation and helper credentials are distinct typed principals.
+  Automation is limited to reviewed controller actions and pane-output WebSocket access; helper is limited to reviewed event, title, notification, media, clipboard, stream, and profile operations.
+  Both use authorization headers only; scoped credentials are forbidden in query parameters and never fall back or retry across scopes.
+  Registration remains separate.
+- The browser must pass the password-session gate before bootstrap or browser WebSockets.
+  The MVP still retains browser session material in localStorage and browser WebSocket query transport; cookie sessions, CSRF protection, revocation, and finer capabilities remain deferred.
+  wmux is not a public-Internet deployment.
 - Use HTTPS away from loopback and treat every token as a password.
 - Keep helper, clipboard, media, agent, and streaming endpoints behind the same
   private boundary. The Windows agent and Moonlight gateway use separate tokens.
 
-Browser session tokens currently live in `localStorage` and WebSocket auth uses
-a query parameter. wmux is not a hardened multi-user service.
+Browser session tokens currently live in `localStorage` and WebSocket auth uses a query parameter.
+wmux is not a hardened multi-user service.
 
 ## Workspaces and Interaction
 
@@ -371,12 +366,9 @@ a query parameter. wmux is not a hardened multi-user service.
 - Host labels show the wmux release and platform consistently. Update
   indicators stay hidden unless an underlying runtime or helper update is
   needed.
-- Settings persist in `~/.wmux/settings.json` and include an app-wide color
-  scheme shared by terminal, canvas and DOM chrome, dialogs, and browser chrome;
-  terminal size, scrollback, user-facing host aliases,
-  inactive-tab streaming, and terminal scroll mode. Hidden cached tabs suspend
-  terminal sockets by default while preserving their mounted terminal views;
-  choose live streaming to retain the previous behavior.
+- Settings persist in `~/.wmux/settings.json` and include an app-wide color scheme shared by terminal, canvas and DOM chrome, dialogs, and browser chrome; terminal font size, scrollback, user-facing host aliases, inactive-tab streaming, and terminal scroll mode.
+  Hidden cached tabs suspend terminal sockets by default while preserving their mounted terminal views; choose live streaming to retain the previous behavior.
+  The terminal font family remains config-owned.
 - New local, SSH, and Windows panes receive the selected scheme as
   `WMUX_COLOR_SCHEME` plus `WMUX_COLOR_MODE=dark|light`. Browser terminals
   answer OSC 4/10/11 palette queries from the live scheme, including after a
@@ -397,6 +389,10 @@ a query parameter. wmux is not a hardened multi-user service.
 
 Open the command palette with `Cmd/Ctrl+K` for navigation, host-scoped session
 creation, splits, settings, diagnostics, activity, and session audit actions.
+Diagnostics includes browser-local terminal latency percentiles for input
+dispatch, predicted paint, sequence-acknowledged output, and Ghostty canvas
+rendering. It separates normal-shell and alternate-screen/TUI samples, retains
+no input text, and can copy or clear its bounded in-memory measurements.
 
 ### Keyboard shortcuts
 
@@ -492,7 +488,12 @@ parity is not included.
 OpenCode, Codex, and Claude on POSIX local/SSH targets. It accepts the prompt
 from a file or stdin, creates a fresh durable agent workspace, starts the staged
 `wmux-agent-run` transport, records lifecycle events, and returns a bounded
-result plus the direct workspace URL. For example:
+result plus the direct workspace URL.
+Delegated agent hooks attach the generated run ID to persisted lifecycle events.
+wmux maintains a dedicated delegation ledger separately from workspace activity, so an outcome remains queryable after its pane or workspace closes.
+`wmuxctl` races terminal replay against the authenticated delegation-status endpoint, allowing either completion signal to finish the request without waiting for the other to time out.
+Controller observation failures are recorded separately and never replace an agent's terminal outcome.
+For example:
 
 ```bash
 wmuxctl delegate codex linux-box --directory /srv/project \
@@ -630,6 +631,8 @@ before removing the generation's Scheduled Task, process, config, and wrapper.
 
 wmux stores workspace layout in `~/.wmux/state.json` using versioned, atomic,
 owner-only writes with a rolling validated backup.
+The same state file retains the newest 1,000 delegation records, expires terminal outcomes after 30 days, and keeps active outcomes until they become terminal or fall outside the count bound.
+Delegation records are independent of pane and workspace cleanup.
 
 | Backend | Survives browser refresh | Survives wmux restart |
 | --- | --- | --- |

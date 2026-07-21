@@ -1,4 +1,5 @@
 import { authHeaders } from "./token";
+import type { ClientSplitIds, ClientTabIds, ClientWorkspaceIds } from "./optimistic-creation";
 import type { BootstrapPayload, DoctorReport, DurableSessionAudit, SplitDirection, WorkspaceReorderPosition, WmuxSettings } from "./types";
 
 export class UnauthorizedError extends Error {
@@ -93,10 +94,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(settings),
     }),
-  createWorkspace: (machineId: string, sourcePaneId?: string) =>
+  createWorkspace: (machineId: string, sourcePaneId?: string, clientIds?: ClientWorkspaceIds) =>
     json<{ workspace: BootstrapPayload["workspaces"][number]; state: BootstrapPayload }>("/api/workspaces", {
       method: "POST",
-      body: JSON.stringify({ machineId, sourcePaneId }),
+      body: JSON.stringify({ machineId, sourcePaneId, ...(clientIds ? { clientIds } : {}) }),
     }),
   closeWorkspace: (workspaceId: string) =>
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}`, { method: "DELETE" }),
@@ -115,10 +116,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title, descriptor, tabId, tabOnlyIfMultiple: true }),
     }),
-  createTab: (workspaceId: string, machineId: string, sourcePaneId?: string) =>
+  createTab: (workspaceId: string, machineId: string, sourcePaneId?: string, clientIds?: ClientTabIds) =>
     json<{ tab: BootstrapPayload["workspaces"][number]["tabs"][number]; state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/tabs`, {
       method: "POST",
-      body: JSON.stringify({ machineId, sourcePaneId }),
+      body: JSON.stringify({ machineId, sourcePaneId, ...(clientIds ? { clientIds } : {}) }),
     }),
   closeTab: (workspaceId: string, tabId: string) =>
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/tabs/${tabId}`, {
@@ -129,10 +130,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
-  splitPane: (tabId: string, paneId: string, direction: SplitDirection, machineId?: string) =>
+  splitPane: (
+    tabId: string,
+    paneId: string,
+    direction: SplitDirection,
+    machineId?: string,
+    clientIds?: ClientSplitIds,
+  ) =>
     json<{ tab: BootstrapPayload["workspaces"][number]["tabs"][number]; state: BootstrapPayload }>(`/api/tabs/${tabId}/split`, {
       method: "POST",
-      body: JSON.stringify({ paneId, direction, ...(machineId ? { machineId } : {}) }),
+      body: JSON.stringify({ paneId, direction, ...(machineId ? { machineId } : {}), ...(clientIds ? { clientIds } : {}) }),
     }),
   updateSplitRatio: (tabId: string, path: string, ratio: number) =>
     json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/split-ratio`, {

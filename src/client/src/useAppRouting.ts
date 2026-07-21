@@ -33,6 +33,7 @@ interface UseAppRoutingOptions {
   isMobile: boolean;
   clearBellPanes: (paneIds: string[]) => void;
   requestTerminalFocus: (workspaceId: string, tabId: string) => void;
+  rebaseIncomingState?: (payload: BootstrapPayload) => BootstrapPayload;
 }
 
 // Owns browser-local workspace/tab/pane selection. Durable server state keeps
@@ -55,8 +56,9 @@ export function useAppRouting(options: UseAppRoutingOptions) {
   const refresh = useCallback(
     async (nextState?: BootstrapPayload) => {
       const incoming = nextState ?? (await api.bootstrap());
+      const rebased = optionsRef.current.rebaseIncomingState?.(incoming) ?? incoming;
       const routed = applyClientViewToState(
-        incoming,
+        rebased,
         parseRouteTarget(window.location.pathname),
         activeTabSelections.current,
         activePaneSelections.current,

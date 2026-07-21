@@ -38,15 +38,38 @@ test("scoped auth provisioning is atomic, owner-only, distinct, and secret-silen
   }
 });
 
-test("scoped auth provisioning rejects unsafe parents, symlinks, and duplicate secrets", async () => {
+test("scoped auth provisioning hardens the standard state directory but rejects unsafe custom parents", async () => {
   const unsafeHome = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-provision-unsafe-"));
   try {
     fs.mkdirSync(path.join(unsafeHome, ".wmux"), { mode: 0o755 });
-    await assert.rejects(execFileAsync(process.execPath, [provisioner], { cwd: repoRoot, env: { ...process.env, HOME: unsafeHome, WMUX_CONFIG_PATH: "" } }), /owner-only/);
+    await execFileAsync(process.execPath, [provisioner], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: unsafeHome, WMUX_CONFIG_PATH: "" },
+    });
+    assert.equal(fs.statSync(path.join(unsafeHome, ".wmux")).mode & 0o777, 0o700);
   } finally {
     fs.rmSync(unsafeHome, { recursive: true, force: true });
   }
 
+  const customHome = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-provision-custom-"));
+  try {
+    const customParent = path.join(customHome, "tokens");
+    fs.mkdirSync(customParent, { mode: 0o755 });
+    await assert.rejects(execFileAsync(process.execPath, [provisioner], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: customHome,
+        WMUX_AUTOMATION_TOKEN_PATH: path.join(customParent, "automation-token"),
+        WMUX_CONFIG_PATH: "",
+      },
+    }), /owner-only/);
+  } finally {
+    fs.rmSync(customHome, { recursive: true, force: true });
+  }
+});
+
+test("scoped auth provisioning rejects symlinks and duplicate or malformed secrets", async () => {
   const linkedHome = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-provision-link-"));
   try {
     const state = path.join(linkedHome, ".wmux");

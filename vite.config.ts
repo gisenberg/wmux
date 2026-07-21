@@ -19,6 +19,9 @@ export default defineConfig({
     // terminal engine; it loads lazily, so its size doesn't gate first paint.
     chunkSizeWarningLimit: 700,
     rollupOptions: {
+      // wmux serves these extensionless paths at runtime so reverse proxies do
+      // not need to expose Vite source-asset URLs.
+      external: (id) => /^\/fonts\/meslo-v3\.4\.0\/(?:regular|bold|italic|bold-italic)$/.test(id),
       output: {
         manualChunks: (id) =>
           /node_modules\/(react|react-dom|scheduler|lucide-react)\//.test(id) ? "vendor" : undefined,
