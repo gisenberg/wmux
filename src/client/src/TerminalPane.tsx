@@ -1664,7 +1664,12 @@ export const TerminalPane = memo(function TerminalPane({
           className="terminal-host"
           style={{ fontFamily: resolvedTerminalFontFamily }}
         />
-        <div ref={predictionLayerRef} className="terminal-input-prediction-layer" aria-hidden="true" />
+        <div
+          ref={predictionLayerRef}
+          className="terminal-input-prediction-layer"
+          style={{ fontFamily: resolvedTerminalFontFamily }}
+          aria-hidden="true"
+        />
         {!terminalReady ? (
           <div className="terminal-startup-status" role="status" aria-live="polite">
             <span className="terminal-startup-spinner" aria-hidden="true" />

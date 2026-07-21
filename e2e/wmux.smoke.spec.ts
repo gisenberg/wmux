@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -8,6 +8,36 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
 });
+
+const routeTerminalFontFamily = async (page: Page, terminalFontFamily: string): Promise<void> => {
+  await page.route("**/api/bootstrap", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    await route.fulfill({ response, json: { ...payload, terminalFontFamily } });
+  });
+  await page.routeWebSocket("**/ws/events", (webSocket) => {
+    const server = webSocket.connectToServer();
+    server.onMessage((message) => {
+      if (typeof message !== "string") {
+        webSocket.send(message);
+        return;
+      }
+      try {
+        const payload = JSON.parse(message) as { type?: string; state?: Record<string, unknown> };
+        if (payload.type === "snapshot" && payload.state) {
+          webSocket.send(JSON.stringify({
+            ...payload,
+            state: { ...payload.state, terminalFontFamily },
+          }));
+          return;
+        }
+      } catch {
+        // Forward non-JSON event messages unchanged.
+      }
+      webSocket.send(message);
+    });
+  });
+};
 
 test("publishes standalone app metadata for direct workspace routes", async ({ page, request }) => {
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#101114");
@@ -63,11 +93,7 @@ test("uses a configured shortcut while preserving defaults for omitted actions",
 
 test("registers and loads the bundled Meslo terminal font", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop Chromium font coverage");
-  await page.route("**/api/bootstrap", async (route) => {
-    const response = await route.fetch();
-    const payload = await response.json();
-    await route.fulfill({ response, json: { ...payload, terminalFontFamily: '"MesloLGM Nerd Font"' } });
-  });
+  await routeTerminalFontFamily(page, '"MesloLGM Nerd Font"');
   await page.reload();
   await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
 
@@ -75,7 +101,11 @@ test("registers and loads the bundled Meslo terminal font", async ({ page }, tes
     const faces = [...document.fonts]
       .filter((face) => face.family === "MesloLGM Nerd Font")
       .map((face) => ({ style: face.style, weight: face.weight, status: face.status }));
-    return { faces };
+    const terminalFontFamily = getComputedStyle(document.querySelector(".terminal-host") as HTMLElement).fontFamily;
+    const predictionFontFamily = getComputedStyle(
+      document.querySelector(".terminal-input-prediction-layer") as HTMLElement,
+    ).fontFamily;
+    return { faces, predictionFontFamily, terminalFontFamily };
   });
 
   expect(result.faces).toEqual(expect.arrayContaining([
@@ -85,6 +115,8 @@ test("registers and loads the bundled Meslo terminal font", async ({ page }, tes
     { style: "italic", weight: "700", status: "loaded" },
   ]));
   expect(result.faces).toHaveLength(4);
+  expect(result.terminalFontFamily).toContain("MesloLGM Nerd Font");
+  expect(result.predictionFontFamily).toBe(result.terminalFontFamily);
 });
 
 test("does not block terminal startup on slow bundled fonts", async ({ page }, testInfo) => {
@@ -93,11 +125,7 @@ test("does not block terminal startup on slow bundled fonts", async ({ page }, t
     await new Promise((resolve) => setTimeout(resolve, 4_000));
     await route.continue();
   });
-  await page.route("**/api/bootstrap", async (route) => {
-    const response = await route.fetch();
-    const payload = await response.json();
-    await route.fulfill({ response, json: { ...payload, terminalFontFamily: '"MesloLGM Nerd Font"' } });
-  });
+  await routeTerminalFontFamily(page, '"MesloLGM Nerd Font"');
 
   await page.reload();
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
