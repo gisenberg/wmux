@@ -9,8 +9,22 @@ const defaultTokenPath = (): string => path.join(wmuxHome(), "token");
 const defaultAuthPath = (): string => path.join(wmuxHome(), "auth.json");
 const defaultSessionSecretPath = (): string => path.join(wmuxHome(), "session-secret");
 const defaultRegistrationTokenPath = (): string => path.join(wmuxHome(), "registration-token");
+const defaultAutomationTokenPath = (): string => path.join(wmuxHome(), "automation-token");
+const defaultHelperTokenPath = (): string => path.join(wmuxHome(), "helper-token");
 
 const SCRYPT_KEYLEN = 32;
+const SCOPED_SECRET_PATTERN = /^[A-Za-z0-9_-]{32,256}$/;
+
+export type BrowserAuthMode = "shared-or-login" | "login-only";
+
+export type AuthPrincipal =
+  | { kind: "anonymous" }
+  | { kind: "legacy-shared" }
+  | { kind: "browser-session"; expiresAt: number }
+  | { kind: "automation" }
+  | { kind: "helper" }
+  | { kind: "registration" }
+  | { kind: "registered-host"; machineId: string };
 
 export interface AuthCredentials {
   username: string;
@@ -31,22 +45,37 @@ export interface AuthConfig {
   credentials?: AuthCredentials;
   /** HMAC key for signing stateless session tokens; survives restarts. */
   sessionSecret: string;
+  browserAuthMode?: BrowserAuthMode;
+  automationToken?: string;
+  automationTokenPath?: string;
+  helperToken?: string;
+  helperTokenPath?: string;
 }
 
 /**
- * Resolve the auth configuration. The shared token gates machine traffic; the
- * optional credentials in ~/.wmux/auth.json let a browser log in and mint a
- * stateless session token instead of pasting the shared token.
+ * Resolve compatibility and scoped credentials. Compatibility mode retains the
+ * shared token, while login-only requires persistent browser, automation, and
+ * helper credentials without generating any missing scoped secret.
  */
 export const loadAuthConfig = (): AuthConfig => {
+  const browserAuthMode = loadBrowserAuthMode();
   if (process.env.WMUX_DISABLE_AUTH === "1") {
-    return { enabled: false, token: "", loginEnabled: false, sessionSecret: "" };
+    if (browserAuthMode === "login-only") {
+      throw new Error("WMUX_DISABLE_AUTH cannot be used with WMUX_BROWSER_AUTH_MODE=login-only");
+    }
+    return { enabled: false, token: "", loginEnabled: false, sessionSecret: "", browserAuthMode };
   }
 
-  const sharedToken = resolveSharedToken();
+  const sharedToken = browserAuthMode === "login-only" ? resolveExistingSharedToken() : resolveSharedToken();
   const credentials = loadCredentials();
-  const sessionSecret = loadOrCreateSessionSecret();
-  return {
+  const sessionSecret = browserAuthMode === "login-only" ? loadRequiredSessionSecret() : loadOrCreateSessionSecret();
+  const automation = resolveOptionalScopedToken(
+    "WMUX_AUTOMATION_TOKEN",
+    "WMUX_AUTOMATION_TOKEN_PATH",
+    defaultAutomationTokenPath(),
+  );
+  const helper = resolveOptionalScopedToken("WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", defaultHelperTokenPath());
+  const auth: AuthConfig = {
     enabled: true,
     token: sharedToken.token,
     tokenPath: sharedToken.tokenPath,
@@ -54,7 +83,25 @@ export const loadAuthConfig = (): AuthConfig => {
     loginEnabled: Boolean(credentials),
     credentials: credentials ?? undefined,
     sessionSecret,
+    browserAuthMode,
+    automationToken: automation?.token,
+    automationTokenPath: automation?.tokenPath,
+    helperToken: helper?.token,
+    helperTokenPath: helper?.tokenPath,
   };
+  if (browserAuthMode === "login-only") {
+    if (!credentials) throw new Error("login-only browser authentication requires valid password login credentials");
+    if (!automation) throw new Error("login-only browser authentication requires WMUX_AUTOMATION_TOKEN or a valid token file");
+    if (!helper) throw new Error("login-only browser authentication requires WMUX_HELPER_TOKEN or a valid token file");
+  }
+  if (browserAuthMode === "login-only" || automation || helper) validateDistinctSecrets(authSecretEntries(auth));
+  return auth;
+};
+
+const loadBrowserAuthMode = (): BrowserAuthMode => {
+  const value = process.env.WMUX_BROWSER_AUTH_MODE?.trim() || "shared-or-login";
+  if (value === "shared-or-login" || value === "login-only") return value;
+  throw new Error("WMUX_BROWSER_AUTH_MODE must be shared-or-login or login-only");
 };
 
 export interface RegistrationAuthConfig {
@@ -94,6 +141,16 @@ interface SharedTokenResolution {
   generated: boolean;
 }
 
+const resolveExistingSharedToken = (): SharedTokenResolution => {
+  const fromEnv = process.env.WMUX_TOKEN?.trim();
+  if (fromEnv) return { token: fromEnv, generated: false };
+  const tokenPath = process.env.WMUX_TOKEN_PATH ?? defaultTokenPath();
+  const existing = readTrimmedFile(tokenPath);
+  return existing
+    ? { token: existing, tokenPath, generated: false }
+    : { token: "", generated: false };
+};
+
 const resolveSharedToken = (): SharedTokenResolution => {
   const fromEnv = process.env.WMUX_TOKEN?.trim();
   if (fromEnv) return { token: fromEnv, generated: false };
@@ -111,7 +168,10 @@ const loadCredentials = (): AuthCredentials | null => {
   const authPath = process.env.WMUX_AUTH_PATH ?? defaultAuthPath();
   try {
     const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Partial<AuthCredentials>;
-    if (typeof parsed.username === "string" && parsed.username && typeof parsed.passwordHash === "string" && parsed.passwordHash) {
+    if (
+      typeof parsed.username === "string" && parsed.username &&
+      typeof parsed.passwordHash === "string" && parsePasswordHash(parsed.passwordHash)
+    ) {
       const credentials = { username: parsed.username, passwordHash: parsed.passwordHash };
       if (credentials.username === "wmux" && verifyPasswordHash("wmux", credentials.passwordHash)) {
         if (process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN === "1") {
@@ -136,6 +196,65 @@ const loadOrCreateSessionSecret = (): string => {
   const generated = crypto.randomBytes(32).toString("base64url");
   persistSecretFile(secretPath, `${generated}\n`);
   return generated;
+};
+
+const loadRequiredSessionSecret = (): string => {
+  const secretPath = process.env.WMUX_SESSION_SECRET_PATH ?? defaultSessionSecretPath();
+  return readValidatedSecretFile(secretPath, "browser session secret");
+};
+
+interface ScopedTokenResolution {
+  token: string;
+  tokenPath?: string;
+}
+
+const validateScopedSecret = (value: string, source: string): string => {
+  const token = value.trim();
+  if (!SCOPED_SECRET_PATTERN.test(token)) {
+    throw new Error(`${source} must be 32-256 base64url characters`);
+  }
+  return token;
+};
+
+const resolveOptionalScopedToken = (
+  valueName: string,
+  pathName: string,
+  recommendedPath: string,
+): ScopedTokenResolution | undefined => {
+  const fromEnv = process.env[valueName]?.trim();
+  if (fromEnv) return { token: validateScopedSecret(fromEnv, valueName) };
+  const configuredPath = process.env[pathName]?.trim();
+  const tokenPath = configuredPath || recommendedPath;
+  if (!configuredPath && !fs.existsSync(tokenPath)) return undefined;
+  return { token: readValidatedSecretFile(tokenPath, valueName), tokenPath };
+};
+
+const readValidatedSecretFile = (filePath: string, label: string): string => {
+  const resolvedPath = path.resolve(filePath);
+  const parentPath = path.dirname(resolvedPath);
+  let parent: fs.Stats;
+  let file: fs.Stats;
+  try {
+    parent = fs.lstatSync(parentPath);
+    file = fs.lstatSync(resolvedPath);
+  } catch {
+    throw new Error(`${label} file is missing or unreadable at ${resolvedPath}`);
+  }
+  if (!parent.isDirectory() || parent.isSymbolicLink() || fs.realpathSync(parentPath) !== parentPath) {
+    throw new Error(`${label} parent directory must not use symlinks`);
+  }
+  if (typeof process.getuid === "function" && parent.uid !== process.getuid()) {
+    throw new Error(`${label} parent directory must be owned by the wmux user`);
+  }
+  if ((parent.mode & 0o077) !== 0) throw new Error(`${label} parent directory must be owner-only`);
+  if (!file.isFile() || file.isSymbolicLink() || fs.realpathSync(resolvedPath) !== resolvedPath) {
+    throw new Error(`${label} file must be a regular non-symlink file`);
+  }
+  if (typeof process.getuid === "function" && file.uid !== process.getuid()) {
+    throw new Error(`${label} file must be owned by the wmux user`);
+  }
+  if ((file.mode & 0o777) !== 0o600) throw new Error(`${label} file permissions must be 0600`);
+  return validateScopedSecret(fs.readFileSync(resolvedPath, "utf8"), label);
 };
 
 const readTrimmedFile = (filePath: string): string | null => {
@@ -222,16 +341,16 @@ export const issueSessionToken = (secret: string, ttlMs: number, nowMs: number):
   return `${body}.${signBody(secret, body)}`;
 };
 
-const verifySessionToken = (secret: string, token: string, nowMs: number): boolean => {
+const verifySessionToken = (secret: string, token: string, nowMs: number): number | null => {
   const parts = token.split(".");
-  if (parts.length !== 3 || parts[0] !== SESSION_PREFIX) return false;
+  if (parts.length !== 3 || parts[0] !== SESSION_PREFIX) return null;
   const body = `${parts[0]}.${parts[1]}`;
-  if (!timingSafeStringEqual(signBody(secret, body), parts[2])) return false;
+  if (!timingSafeStringEqual(signBody(secret, body), parts[2])) return null;
   try {
     const decoded = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { exp?: number };
-    return typeof decoded.exp === "number" && decoded.exp > nowMs;
+    return typeof decoded.exp === "number" && decoded.exp > nowMs ? decoded.exp : null;
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -267,17 +386,67 @@ const timingSafeStringEqual = (expected: string, presented: string): boolean => 
 
 /** Back-compat helper: does a presented value equal the shared token? */
 export const tokensMatch = (expected: string, presented: string | null): boolean =>
-  presented !== null && timingSafeStringEqual(expected, presented);
+  Boolean(expected) && presented !== null && timingSafeStringEqual(expected, presented);
 
-export const isAuthorized = (
+export const authenticateRequest = (
   auth: AuthConfig,
   request: http.IncomingMessage,
   url: URL,
   nowMs: number = Date.now(),
-): boolean => {
-  if (!auth.enabled) return true;
-  const presented = requestToken(request, url);
-  if (presented === null) return false;
-  if (tokensMatch(auth.token, presented)) return true;
-  return Boolean(auth.sessionSecret) && verifySessionToken(auth.sessionSecret, presented, nowMs);
+): AuthPrincipal => {
+  if (!auth.enabled) return { kind: "anonymous" };
+  const bearer = requestBearerToken(request);
+  if (bearer) {
+    if (auth.automationToken && tokensMatch(auth.automationToken, bearer)) return { kind: "automation" };
+    if (auth.helperToken && tokensMatch(auth.helperToken, bearer)) return { kind: "helper" };
+    if ((auth.browserAuthMode ?? "shared-or-login") === "shared-or-login" && tokensMatch(auth.token, bearer)) return { kind: "legacy-shared" };
+    const expiresAt = auth.sessionSecret ? verifySessionToken(auth.sessionSecret, bearer, nowMs) : null;
+    if (expiresAt !== null) return { kind: "browser-session", expiresAt };
+    return { kind: "anonymous" };
+  }
+  const queryToken = url.searchParams.get("token")?.trim() || null;
+  if ((auth.browserAuthMode ?? "shared-or-login") === "shared-or-login" && tokensMatch(auth.token, queryToken)) {
+    return { kind: "legacy-shared" };
+  }
+  const expiresAt = queryToken && auth.sessionSecret
+    ? verifySessionToken(auth.sessionSecret, queryToken, nowMs)
+    : null;
+  return expiresAt === null ? { kind: "anonymous" } : { kind: "browser-session", expiresAt };
+};
+
+export const registrationPrincipal = (expected: string | undefined, presented: string | null): AuthPrincipal =>
+  expected && tokensMatch(expected, presented) ? { kind: "registration" } : { kind: "anonymous" };
+
+export const registeredHostPrincipal = (
+  machineId: string,
+  accepted: boolean,
+): AuthPrincipal => accepted ? { kind: "registered-host", machineId } : { kind: "anonymous" };
+
+const authSecretEntries = (auth: AuthConfig): Array<[string, string | undefined]> => [
+  ["legacy shared token", auth.token],
+  ["browser session secret", auth.sessionSecret],
+  ["automation token", auth.automationToken],
+  ["helper token", auth.helperToken],
+];
+
+const validateDistinctSecrets = (entries: Array<[string, string | undefined]>): void => {
+  const seen = new Map<string, string>();
+  for (const [label, value] of entries) {
+    if (!value) continue;
+    const previous = seen.get(value);
+    if (previous) throw new Error(`${label} must differ from ${previous}`);
+    seen.set(value, label);
+  }
+};
+
+export const validateAuthCredentialSeparation = (
+  auth: AuthConfig,
+  registrationToken: string,
+  agentTokens: ReadonlyArray<{ label: string; token: string | undefined }>,
+): void => {
+  validateDistinctSecrets([
+    ...authSecretEntries(auth),
+    ["host registration token", registrationToken],
+    ...agentTokens.map(({ label, token }): [string, string | undefined] => [label, token]),
+  ]);
 };

@@ -86,7 +86,7 @@ test("workspace reorder API moves existing workspaces and validates targets", as
     const response = await fetch(`http://127.0.0.1:${port}/api/workspaces/reorder`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workspaceId: third.id, targetWorkspaceId: first.id, position: "after" }),
+      body: JSON.stringify({ workspaceId: third.id, targetWorkspaceId: first.id, position: "after", workspaceTreeRevision: state.snapshot().workspaceTreeRevision }),
     });
     const payload = await response.json() as { state: BootstrapPayload };
     assert.equal(response.status, 200);
@@ -102,11 +102,85 @@ test("workspace reorder API moves existing workspaces and validates targets", as
     const missing = await fetch(`http://127.0.0.1:${port}/api/workspaces/reorder`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workspaceId: "missing", targetWorkspaceId: first.id, position: "before" }),
+      body: JSON.stringify({ workspaceId: "missing", targetWorkspaceId: first.id, position: "before", workspaceTreeRevision: state.snapshot().workspaceTreeRevision }),
     });
     assert.equal(missing.status, 404);
+
+    const rootOutdent = await fetch(`http://127.0.0.1:${port}/api/workspaces/reorder`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId: third.id, position: "out-of", workspaceTreeRevision: state.snapshot().workspaceTreeRevision }),
+    });
+    assert.equal(rootOutdent.status, 422);
   } finally {
     state.flush();
+    await close(server);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("agent workspace creation reports workspace_depth without changing the tree", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-workspace-depth-"));
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  const state = new StateStore(machines, path.join(dir, "state.json"));
+  const root = state.snapshot().workspaces[0];
+  const level1 = state.createWorkspace("local", undefined, "agent", root.id);
+  const level2 = state.createWorkspace("local", undefined, "agent", level1.id);
+  const level3 = state.createWorkspace("local", undefined, "agent", level2.id);
+  const settings = new SettingsStore(path.join(dir, "settings.json"));
+  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+    auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" },
+  });
+  const port = await listen(server);
+  try {
+    const before = state.snapshot();
+    const response = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ machineId: "local", createdBy: "agent", parentPaneId: level3.tabs[0].panes[0].id }),
+    });
+    assert.equal(response.status, 422);
+    assert.deepEqual(await response.json(), { error: "workspace_depth" });
+    assert.deepEqual(state.snapshot().workspaces, before.workspaces);
+    assert.equal(state.snapshot().workspaceTreeRevision, before.workspaceTreeRevision);
+    assert.equal(state.snapshot().revision, before.revision);
+  } finally {
+    state.flush();
+    await close(server);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bundled browser fonts remain available without API credentials", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-font-"));
+  const machines: MachineConfig[] = [];
+  const state = new StateStore(machines, path.join(dir, "state.json"));
+  const settings = new SettingsStore(path.join(dir, "settings.json"));
+  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+    auth: { enabled: true, token: "test-token", loginEnabled: false, sessionSecret: "test" },
+  });
+  const port = await listen(server);
+
+  try {
+    const fontBaseUrl = `http://127.0.0.1:${port}/fonts/meslo-v3.4.0`;
+    for (const face of ["regular", "bold", "italic", "bold-italic"]) {
+      const headResponse = await fetch(`${fontBaseUrl}/${face}`, { method: "HEAD" });
+      assert.equal(headResponse.status, 200);
+      assert.equal(headResponse.headers.get("content-type"), "font/woff2");
+      assert.ok(Number(headResponse.headers.get("content-length")) > 0);
+      assert.equal((await headResponse.arrayBuffer()).byteLength, 0);
+    }
+
+    const response = await fetch(`${fontBaseUrl}/regular`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "font/woff2");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    assert.deepEqual(Array.from(bytes.subarray(0, 4)), [0x77, 0x4f, 0x46, 0x32]);
+
+    const protectedResponse = await fetch(`http://127.0.0.1:${port}/api/bootstrap`);
+    assert.equal(protectedResponse.status, 401);
+  } finally {
     await close(server);
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -190,10 +264,13 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     },
   ];
   const state = new StateStore(machines, path.join(dir, "state.json"));
-  const settings = new SettingsStore(path.join(dir, "settings.json"));
+  const settings = new SettingsStore(path.join(dir, "settings.json"), {
+    terminalFontSize: 16,
+  });
   const sessions = {} as SessionManager;
   const server = await createHttpServer("127.0.0.1", state, machines, sessions, settings, {
     auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" },
+    terminalFontFamily: '"JetBrains Mono"',
   });
   const port = await listen(server);
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -210,6 +287,18 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     assert.ok(Number.isSafeInteger(bootstrap.healthEpoch));
     assert.ok(bootstrapMs >= healthDelayMs * 0.75, `expected slow health bootstrap, got ${bootstrapMs.toFixed(1)}ms`);
     assert.ok(bootstrap.streams[0].checkedAt);
+    assert.equal(bootstrap.terminalFontFamily, '"JetBrains Mono"');
+    assert.equal(bootstrap.settingsDefaults.terminalFontSize, 16);
+
+    const settingsResponse = await fetch(`${baseUrl}/api/settings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...bootstrap.settings, terminalFontFamily: '"Ignored API Font"', terminalFontSize: 18 }),
+    });
+    const updatedSettings = (await settingsResponse.json()) as { settings: BootstrapPayload["settings"] };
+    assert.equal(settingsResponse.status, 200);
+    assert.equal(updatedSettings.settings.terminalFontSize, 18);
+    assert.equal("terminalFontFamily" in updatedSettings.settings, false);
 
     ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
     secondWs = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);

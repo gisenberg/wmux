@@ -31,13 +31,16 @@ const writeRuntimePackages = (configHome: string) => {
   );
 };
 
-type CapturedRequest = { method: string; pathname: string; body?: Record<string, unknown> };
+type CapturedRequest = { method: string; pathname: string; authorization?: string; body?: Record<string, unknown> };
 type FixtureWorkspace = { id: string; createdBy?: "agent" | "user"; tabs?: Array<Record<string, unknown>> };
 type ApiOptions = {
   failTitle?: boolean;
   failDelete?: boolean;
   holdFirstAgentEvent?: boolean;
+  parentPaneId?: string;
   workspaces?: FixtureWorkspace[];
+  expectedToken?: string;
+  rejectUnauthorized?: boolean;
 };
 
 const startApi = async (options: ApiOptions = {}) => {
@@ -45,16 +48,24 @@ const startApi = async (options: ApiOptions = {}) => {
   const workspaces = structuredClone(options.workspaces ?? []);
   let authenticated = true;
   let heldAgentEvent = false;
+  let paneInputHandler: ((data: string) => void) | undefined;
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", () => {
-      authenticated &&= request.headers.authorization === "Bearer test-token-private";
+      const authorization = request.headers.authorization;
+      const requestAuthenticated = authorization === `Bearer ${options.expectedToken ?? "test-token-private"}`;
+      authenticated &&= requestAuthenticated;
       const raw = Buffer.concat(chunks).toString("utf8");
       const body = raw ? JSON.parse(raw) as Record<string, unknown> : undefined;
       const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-      requests.push({ method: request.method ?? "GET", pathname, body });
+      requests.push({ method: request.method ?? "GET", pathname, authorization, body });
       response.setHeader("content-type", "application/json");
+      if (options.rejectUnauthorized && !requestAuthenticated) {
+        response.statusCode = 401;
+        response.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
       if (pathname === "/api/bootstrap") {
         response.end(JSON.stringify({
           machines: [{ id: "posix-1", reachable: true, platform: "linux", kind: "ssh" }],
@@ -102,6 +113,11 @@ const startApi = async (options: ApiOptions = {}) => {
         response.end("{}");
         return;
       }
+      if (pathname === "/api/panes/pane-1/input" && request.method === "POST" && typeof body?.data === "string") {
+        paneInputHandler?.(body.data);
+        response.end(JSON.stringify({ written: true }));
+        return;
+      }
       response.statusCode = 404;
       response.end("{}");
     });
@@ -114,6 +130,7 @@ const startApi = async (options: ApiOptions = {}) => {
     requests,
     workspaces,
     authenticated: () => authenticated,
+    setPaneInputHandler: (handler: (data: string) => void) => { paneInputHandler = handler; },
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 };
@@ -137,8 +154,13 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
     private pending = "";
     private listeners = new Map<string, Set<() => void>>();
 
-    constructor(endpoint: URL) {
-      this.authorized = endpoint.searchParams.has("token");
+    endpoint: URL;
+    authorization: string;
+
+    constructor(endpointValue: URL | string, options?: { headers?: Record<string, string> }) {
+      this.endpoint = new URL(endpointValue);
+      this.authorization = options?.headers?.Authorization ?? "";
+      this.authorized = this.authorization.startsWith("Bearer ") && !this.endpoint.searchParams.has("token");
       instances.push(this);
       queueMicrotask(() => {
         this.readyState = 1;
@@ -162,14 +184,16 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
       this.listeners.get(type)?.delete(listener);
     }
 
-    send(raw: string) {
-      const message = JSON.parse(raw) as { type: string; data: string };
-      assert.equal(message.type, "input");
+    send() {
+      assert.fail("pane-output WebSocket must not carry controller input");
+    }
+
+    input(data: string) {
       if (!this.promptEmitted) this.inputBeforePrompt = true;
-      this.sent.push({ data: message.data, at: Date.now() });
-      if (message.data === "\u0003") return;
-      if (message.data !== "\r") {
-        this.pending = message.data;
+      this.sent.push({ data, at: Date.now() });
+      if (data === "\u0003") return;
+      if (data !== "\r") {
+        this.pending = data;
         return;
       }
       const line = this.pending;
@@ -209,19 +233,38 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
       this.onmessage?.({ data: JSON.stringify(message) });
     }
   }
-  return { WebSocket: FakeWebSocket, instances };
+  return {
+    WebSocket: FakeWebSocket,
+    instances,
+    input: (data: string) => {
+      const socket = instances.at(-1);
+      assert.ok(socket, "pane input arrived before output WebSocket opened");
+      socket.input(data);
+    },
+  };
 };
 
 const withGeneratedTool = async (
   run: (input: { plugin: any; tool: any; closeTool: any; api: Awaited<ReturnType<typeof startApi>>; home: string }) => Promise<void>,
   apiOptions: ApiOptions = {},
+  authEnv: Record<string, string> = { WMUX_TOKEN: "test-token-private" },
 ) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-delegation-plugin-"));
   const configHome = path.join(home, "config");
   const api = await startApi(apiOptions);
-  const saved = { HOME: process.env.HOME, WMUX_URL: process.env.WMUX_URL, WMUX_TOKEN: process.env.WMUX_TOKEN };
+  const authKeys = [
+    "WMUX_AUTOMATION_TOKEN",
+    "WMUX_AUTOMATION_TOKEN_PATH",
+    "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_TOKEN",
+    "WMUX_TOKEN_PATH",
+  ];
+  const saved = new Map(["HOME", "WMUX_URL", "WMUX_PANE_ID", ...authKeys].map((key) => [key, process.env[key]]));
   try {
-    Object.assign(process.env, { HOME: home, WMUX_URL: api.url, WMUX_TOKEN: "test-token-private" });
+    for (const key of authKeys) delete process.env[key];
+    Object.assign(process.env, { HOME: home, WMUX_URL: api.url, ...authEnv });
+    if (apiOptions.parentPaneId === undefined) delete process.env.WMUX_PANE_ID;
+    else process.env.WMUX_PANE_ID = apiOptions.parentPaneId;
     await execFileAsync(hooksScript, ["install", "opencode"], { env: { ...process.env, XDG_CONFIG_HOME: configHome } });
     writeRuntimePackages(configHome);
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
@@ -230,7 +273,7 @@ const withGeneratedTool = async (
     const plugin = await module.default({ client: {}, directory: repoRoot });
     await run({ plugin, tool: plugin.tool.wmux_delegate, closeTool: plugin.tool.wmux_close, api, home });
   } finally {
-    for (const [key, value] of Object.entries(saved)) {
+    for (const [key, value] of saved) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
@@ -257,6 +300,127 @@ posixTest("generated OpenCode plugin defaults wmux tools to ask without overridi
   });
 });
 
+posixTest("generated OpenCode controller prefers scoped automation env, explicit path, and recommended path", async () => {
+  const cases = [
+    {
+      name: "environment",
+      token: "A".repeat(43),
+      authEnv: {
+        WMUX_AUTOMATION_TOKEN: "A".repeat(43),
+        WMUX_AUTOMATION_TOKEN_PATH: "~/.wmux/missing-ignored",
+        WMUX_BROWSER_AUTH_MODE: "login-only",
+        WMUX_TOKEN: "legacy-decoy",
+      },
+      prepare: (_home: string) => undefined,
+    },
+    {
+      name: "explicit path",
+      token: "B".repeat(43),
+      authEnv: {
+        WMUX_AUTOMATION_TOKEN_PATH: "~/.wmux/explicit-automation-token",
+        WMUX_BROWSER_AUTH_MODE: "login-only",
+        WMUX_TOKEN: "legacy-decoy",
+      },
+      prepare: (home: string) => {
+        fs.mkdirSync(path.join(home, ".wmux"), { recursive: true });
+        fs.writeFileSync(path.join(home, ".wmux", "explicit-automation-token"), `${"B".repeat(43)}\n`);
+      },
+    },
+    {
+      name: "recommended path",
+      token: "C".repeat(43),
+      authEnv: { WMUX_BROWSER_AUTH_MODE: "login-only", WMUX_TOKEN: "legacy-decoy" },
+      prepare: (home: string) => {
+        fs.mkdirSync(path.join(home, ".wmux"), { recursive: true });
+        fs.writeFileSync(path.join(home, ".wmux", "automation-token"), `${"C".repeat(43)}\n`);
+      },
+    },
+  ];
+  for (const fixture of cases) {
+    await withGeneratedTool(async ({ closeTool, api, home }) => {
+      fixture.prepare(home);
+      const output = await closeTool.execute(
+        { workspace_id: `missing-${fixture.name.replaceAll(" ", "-")}` },
+        { abort: new AbortController().signal, ask: () => () => undefined },
+      );
+      assert.match(output, /State: not_found/, fixture.name);
+      assert.equal(api.authenticated(), true, fixture.name);
+      assert.deepEqual(api.requests.map((request) => request.pathname), ["/api/bootstrap"], fixture.name);
+      assert.deepEqual(api.requests.map((request) => request.authorization), [`Bearer ${fixture.token}`], fixture.name);
+    }, { expectedToken: fixture.token }, fixture.authEnv);
+  }
+});
+
+posixTest("generated OpenCode controller never retries a rejected scoped credential with legacy auth", async () => {
+  const scopedToken = "S".repeat(43);
+  await withGeneratedTool(async ({ closeTool, api }) => {
+    await assert.rejects(
+      closeTool.execute(
+        { workspace_id: "workspace-agent" },
+        { abort: new AbortController().signal, ask: () => () => undefined },
+      ),
+      /HTTP 401/,
+    );
+    assert.equal(api.requests.length, 1);
+    assert.equal(api.requests[0].authorization, `Bearer ${scopedToken}`);
+  }, { expectedToken: "D".repeat(43), rejectUnauthorized: true }, {
+    WMUX_AUTOMATION_TOKEN: scopedToken,
+    WMUX_TOKEN: "legacy-decoy",
+  });
+});
+
+posixTest("generated OpenCode controller rejects configured scoped sources without legacy fallback", async () => {
+  const cases = [
+    {
+      name: "empty environment",
+      authEnv: { WMUX_AUTOMATION_TOKEN: "", WMUX_TOKEN: "legacy-decoy" },
+      prepare: (home: string) => {
+        fs.mkdirSync(path.join(home, ".wmux"), { recursive: true });
+        fs.writeFileSync(path.join(home, ".wmux", "automation-token"), `${"R".repeat(43)}\n`);
+      },
+      error: /automation token is empty or malformed/,
+    },
+    {
+      name: "missing explicit path",
+      authEnv: { WMUX_AUTOMATION_TOKEN_PATH: "~/.wmux/missing", WMUX_TOKEN: "legacy-decoy" },
+      prepare: (home: string) => {
+        fs.mkdirSync(path.join(home, ".wmux"), { recursive: true });
+        fs.writeFileSync(path.join(home, ".wmux", "automation-token"), `${"R".repeat(43)}\n`);
+      },
+      error: /automation token file is empty or unreadable/,
+    },
+    {
+      name: "malformed explicit path",
+      authEnv: { WMUX_AUTOMATION_TOKEN_PATH: "~/.wmux/malformed", WMUX_TOKEN: "legacy-decoy" },
+      prepare: (home: string) => {
+        fs.mkdirSync(path.join(home, ".wmux"), { recursive: true });
+        fs.writeFileSync(path.join(home, ".wmux", "malformed"), "short\n");
+      },
+      error: /automation token file is malformed/,
+    },
+    {
+      name: "login-only legacy rejection",
+      authEnv: { WMUX_BROWSER_AUTH_MODE: "login-only", WMUX_TOKEN: "legacy-decoy" },
+      prepare: (_home: string) => undefined,
+      error: /login-only mode requires an automation token/,
+    },
+  ];
+  for (const fixture of cases) {
+    await withGeneratedTool(async ({ closeTool, api, home }) => {
+      fixture.prepare(home);
+      await assert.rejects(
+        closeTool.execute(
+          { workspace_id: "workspace-agent" },
+          { abort: new AbortController().signal, ask: () => () => undefined },
+        ),
+        fixture.error,
+        fixture.name,
+      );
+      assert.equal(api.requests.length, 0, fixture.name);
+    }, {}, fixture.authEnv);
+  }
+});
+
 posixTest("generated OpenCode delegation aborts a stalled running lifecycle request", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const abort = new AbortController();
@@ -279,12 +443,17 @@ posixTest("generated OpenCode delegation aborts a stalled running lifecycle requ
       api.requests.filter((request) => request.pathname === "/api/agent-events").map((request) => request.body?.status),
       ["running", "stopped"],
     );
+    assert.deepEqual(
+      api.requests.find((request) => request.pathname === "/api/workspaces")?.body,
+      { machineId: "posix-1", createdBy: "agent" },
+    );
   }, { holdFirstAgentEvent: true });
 });
 
 posixTest("generated OpenCode delegation tool runs permission, pane protocol, result parsing, and lifecycle", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const fake = fakeWebSocket("complete");
+    api.setPaneInputHandler(fake.input);
     const originalWebSocket = globalThis.WebSocket;
     (globalThis as any).WebSocket = fake.WebSocket;
     const abort = new AbortController();
@@ -315,6 +484,9 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
       assert.equal(fake.instances.length, 1);
       const socket = fake.instances[0];
       assert.equal(socket.authorized, true);
+      assert.equal(socket.authorization, "Bearer test-token-private");
+      assert.equal(socket.endpoint.pathname, "/ws/panes/pane-1/output");
+      assert.equal(socket.endpoint.searchParams.has("token"), false);
       assert.equal(socket.closed, true);
       assert.equal(socket.inputBeforePrompt, false);
       assert.deepEqual(socket.sent.slice(0, 4).map((item) => item.data), ["wmux-agent-run", "\r", socket.sent[2].data, "\r"]);
@@ -349,7 +521,11 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
       assert.equal(output.includes("test-token-private"), false);
 
       const workspaceRequest = api.requests.find((request) => request.pathname === "/api/workspaces");
-      assert.deepEqual(workspaceRequest?.body, { machineId: "posix-1", createdBy: "agent" });
+      assert.deepEqual(workspaceRequest?.body, {
+        machineId: "posix-1",
+        createdBy: "agent",
+        parentPaneId: "pane-parent",
+      });
       assert.deepEqual(
         api.requests.filter((request) => request.pathname === "/api/workspaces/workspace-1/title").map((request) => request.body),
         [{ title: "Delegated build" }],
@@ -365,7 +541,7 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;
     }
-  });
+  }, { parentPaneId: "pane-parent" });
 });
 
 posixTest("generated wmux_close permission-gates ownership, closes agent workspaces, and is idempotent", async () => {
@@ -419,6 +595,7 @@ posixTest("generated wmux_close permission-gates ownership, closes agent workspa
 posixTest("close_on_success closes only after completed lifecycle and reports the URL unavailable", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const fake = fakeWebSocket("complete");
+    api.setPaneInputHandler(fake.input);
     const originalWebSocket = globalThis.WebSocket;
     (globalThis as any).WebSocket = fake.WebSocket;
     const asks: Record<string, unknown>[] = [];
@@ -463,6 +640,7 @@ posixTest("close_on_success closes only after completed lifecycle and reports th
 posixTest("close_on_success preserves successful output and workspace when close fails", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const fake = fakeWebSocket("complete");
+    api.setPaneInputHandler(fake.input);
     const originalWebSocket = globalThis.WebSocket;
     (globalThis as any).WebSocket = fake.WebSocket;
     const prompt = "close-failure private prompt";
@@ -487,6 +665,7 @@ posixTest("close_on_success preserves successful output and workspace when close
 posixTest("close_on_success does not close failed delegations", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const fake = fakeWebSocket("failure");
+    api.setPaneInputHandler(fake.input);
     const originalWebSocket = globalThis.WebSocket;
     (globalThis as any).WebSocket = fake.WebSocket;
     try {
@@ -510,6 +689,7 @@ posixTest("generated OpenCode delegation aborts promptly, interrupts, posts stop
   await withGeneratedTool(async ({ tool, api }) => {
     const abort = new AbortController();
     const fake = fakeWebSocket("abort", () => setTimeout(() => abort.abort(), 10));
+    api.setPaneInputHandler(fake.input);
     const originalWebSocket = globalThis.WebSocket;
     (globalThis as any).WebSocket = fake.WebSocket;
     try {
@@ -540,6 +720,7 @@ posixTest("generated OpenCode delegation aborts promptly, interrupts, posts stop
 posixTest("generated OpenCode delegation posts failed when title setup fails after workspace creation", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const fake = fakeWebSocket("complete");
+    api.setPaneInputHandler(fake.input);
     const originalWebSocket = globalThis.WebSocket;
     (globalThis as any).WebSocket = fake.WebSocket;
     try {

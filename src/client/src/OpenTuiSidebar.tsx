@@ -15,9 +15,12 @@ import {
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { loadMachineTargetPickerExpanded, persistMachineTargetPickerExpanded } from "./machine-target";
 import { compactMiddlePath } from "./path-display";
+import { workspaceTabPath } from "./route-state";
 import { formatSessionReference } from "./session-reference";
-import type { MachineVersionStatus, WorkspaceReorderPosition } from "./types";
+import type { MachineVersionStatus, Workspace, WorkspaceReorderPosition } from "./types";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
+import { WorkspaceMoveDialog } from "./WorkspaceMoveDialog";
+import { remainingWorkspaceRowCount, workspacePointerMovePosition, type WorkspaceAgentStatus, type WorkspaceMoveIntent } from "./workspace-tree";
 
 export interface OpenTuiSidebarWorkspace {
   id: string;
@@ -37,6 +40,13 @@ export interface OpenTuiSidebarWorkspace {
   versionLabel?: string;
   versionDetail?: string;
   bell?: boolean;
+  depth: number;
+  hasChildren: boolean;
+  expanded: boolean;
+  hiddenUnreadCount: number;
+  hiddenBell: boolean;
+  hiddenAgentStatus?: WorkspaceAgentStatus;
+  canOutdent: boolean;
 }
 
 export interface OpenTuiSidebarMachine {
@@ -58,16 +68,24 @@ interface OpenTuiSidebarProps {
   onActivateWorkspace: (workspaceId: string, tabId: string) => void;
   onReorderWorkspace: (
     workspaceId: string,
-    targetWorkspaceId: string,
+    targetWorkspaceId: string | undefined,
     position: WorkspaceReorderPosition,
   ) => void | Promise<void>;
+  onToggleWorkspace: (workspaceId: string) => void | Promise<void>;
+  movesDisabled: boolean;
+  allWorkspaces: Workspace[];
+  hostFilter: string;
+  onHostFilterChange: (machineId: string) => void;
 }
 
 type HitAction =
   | { type: "create-workspace" }
   | { type: "toggle-host-picker" }
   | { type: "target-machine"; machineId: string }
-  | { type: "workspace"; workspaceId: string; tabId: string };
+  | { type: "workspace"; workspaceId: string; tabId: string }
+  | { type: "toggle-workspace"; workspaceId: string }
+  | { type: "outdent-workspace"; workspaceId: string }
+  | { type: "cycle-host-filter" };
 
 interface HitZone {
   row: number;
@@ -89,6 +107,9 @@ interface SidebarRenderModel {
   workspaces: OpenTuiSidebarWorkspace[];
   machines: OpenTuiSidebarMachine[];
   workspaceDropPreview: WorkspaceDropPreview | null;
+  workspaceScrollOffset: number;
+  hostFilter: string;
+  movesDisabled: boolean;
 }
 
 interface WorkspaceDropPreview {
@@ -107,6 +128,12 @@ interface WorkspacePointerDrag {
   position?: WorkspaceReorderPosition;
 }
 
+interface SemanticWorkspaceRow {
+  workspace: OpenTuiSidebarWorkspace;
+  row: number;
+  rowCount: number;
+}
+
 export function OpenTuiSidebar({
   targetMachineId,
   targetMachineName,
@@ -117,11 +144,19 @@ export function OpenTuiSidebar({
   onCreateWorkspace,
   onActivateWorkspace,
   onReorderWorkspace,
+  onToggleWorkspace,
+  movesDisabled,
+  allWorkspaces,
+  hostFilter,
+  onHostFilterChange,
 }: OpenTuiSidebarProps) {
   const theme = useOpenTuiTheme();
   const [hostPickerOpen, setHostPickerOpen] = useState(() => loadMachineTargetPickerExpanded(window.localStorage));
   const [animationTick, setAnimationTick] = useState(0);
   const [workspaceDropPreview, setWorkspaceDropPreview] = useState<WorkspaceDropPreview | null>(null);
+  const [workspaceScrollOffset, setWorkspaceScrollOffset] = useState(0);
+  const [moveWorkspace, setMoveWorkspace] = useState<{ workspaceId: string; returnFocus: HTMLElement | null } | null>(null);
+  const [semanticRows, setSemanticRows] = useState<SemanticWorkspaceRow[]>([]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
@@ -129,6 +164,10 @@ export function OpenTuiSidebar({
   const workspaceDragRef = useRef<WorkspacePointerDrag | null>(null);
   const suppressClickRef = useRef(false);
   const hasRunningWorkspace = workspaces.some((workspace) => workspace.agentStatus === "running");
+
+  useEffect(() => {
+    setWorkspaceScrollOffset((value) => Math.min(value, Math.max(0, workspaces.length - 1)));
+  }, [workspaces.length]);
 
   useEffect(() => {
     persistMachineTargetPickerExpanded(window.localStorage, hostPickerOpen);
@@ -150,8 +189,11 @@ export function OpenTuiSidebar({
       workspaces,
       machines,
       workspaceDropPreview,
+      workspaceScrollOffset,
+      hostFilter,
+      movesDisabled,
     }),
-    [animationTick, hostPickerOpen, machines, targetMachineId, targetMachineName, targetMachineReachable, workspaceDropPreview, workspaces],
+    [animationTick, hostFilter, hostPickerOpen, machines, movesDisabled, targetMachineId, targetMachineName, targetMachineReachable, workspaceDropPreview, workspaceScrollOffset, workspaces],
   );
   const renderModelRef = useRef(renderModel);
 
@@ -174,7 +216,9 @@ export function OpenTuiSidebar({
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
-      painter.paint(drawSidebarGrid(metricsRef.current, renderModelRef.current, hitsRef, theme));
+      const result = drawSidebarGrid(metricsRef.current, renderModelRef.current, hitsRef, theme);
+      painter.paint(result.grid);
+      setSemanticRows((current) => sameSemanticRows(current, result.semanticRows) ? current : result.semanticRows);
     };
 
     paintRef.current = () => paint();
@@ -210,10 +254,17 @@ export function OpenTuiSidebar({
       setHostPickerOpen(false);
     }
     if (hit.action.type === "workspace") onActivateWorkspace(hit.action.workspaceId, hit.action.tabId);
+    if (hit.action.type === "toggle-workspace") void onToggleWorkspace(hit.action.workspaceId);
+    if (hit.action.type === "outdent-workspace" && !movesDisabled) void onReorderWorkspace(hit.action.workspaceId, undefined, "out-of");
+    if (hit.action.type === "cycle-host-filter") {
+      const choices = ["all", ...machines.map((machine) => machine.id)];
+      onHostFilterChange(choices[(choices.indexOf(hostFilter) + 1) % choices.length]);
+      setWorkspaceScrollOffset(0);
+    }
   };
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || movesDisabled) return;
     const hit = hitAt(event.clientX, event.clientY);
     if (hit?.action.type !== "workspace") return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -243,8 +294,10 @@ export function OpenTuiSidebar({
           const targetRows = hitsRef.current
             .filter((candidate) => candidate.action.type === "workspace" && candidate.action.workspaceId === targetWorkspaceId)
             .map((candidate) => candidate.row);
-          const midpoint = (Math.min(...targetRows) + Math.max(...targetRows) + 1) / 2;
-          const position: WorkspaceReorderPosition = hit.row < midpoint ? "before" : "after";
+          const firstRow = Math.min(...targetRows);
+          const lastRow = Math.max(...targetRows);
+          const relativeRow = (hit.row - firstRow + 0.5) / Math.max(1, lastRow - firstRow + 1);
+          const position = workspacePointerMovePosition(relativeRow);
           drag.targetWorkspaceId = targetWorkspaceId;
           drag.position = position;
           const nextPreview = {
@@ -300,7 +353,60 @@ export function OpenTuiSidebar({
         onPointerMove={onPointerMove}
         onPointerUp={finishWorkspaceDrag}
         onPointerCancel={(event) => finishWorkspaceDrag(event, true)}
+        onWheel={(event) => {
+          if (event.deltaY === 0 || workspaces.length === 0) return;
+          event.preventDefault();
+          setWorkspaceScrollOffset((value) => Math.max(0, Math.min(workspaces.length - 1, value + (event.deltaY > 0 ? 1 : -1))));
+        }}
       />
+      <div className="open-tui-sidebar-semantics">
+        <button
+          type="button"
+          className="open-tui-filter-semantic"
+          aria-label={`Workspace host filter: ${hostFilter === "all" ? "all hosts" : machines.find((machine) => machine.id === hostFilter)?.name ?? hostFilter}. Activate for next filter.`}
+          onClick={() => {
+            const choices = ["all", ...machines.map((machine) => machine.id)];
+            onHostFilterChange(choices[(choices.indexOf(hostFilter) + 1) % choices.length]);
+            setWorkspaceScrollOffset(0);
+          }}
+        />
+        <div role="tree" aria-label="Workspace tree">
+        {semanticRows.map(({ workspace, row, rowCount }) => (
+          <div
+            key={workspace.id}
+            className="open-tui-semantic-row"
+            style={{ top: row * metricsRef.current.height, height: rowCount * metricsRef.current.height }}
+          >
+            <a
+              href={workspaceTabPath(workspace.id, workspace.tabId)}
+              role="treeitem"
+              aria-level={workspace.depth + 1}
+              aria-current={workspace.active ? "page" : undefined}
+              aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
+              aria-label={`${workspace.title}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
+              onClick={(event) => {
+                if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                onActivateWorkspace(workspace.id, workspace.tabId);
+              }}
+            />
+            {workspace.hasChildren ? (
+              <button className="semantic-disclosure" type="button" aria-label={`${workspace.expanded ? "Collapse" : "Expand"} ${workspace.title}`} onClick={() => void onToggleWorkspace(workspace.id)} />
+            ) : null}
+            {!movesDisabled ? <button className="semantic-move" type="button" aria-label={`Move ${workspace.title}`} onClick={(event) => setMoveWorkspace({ workspaceId: workspace.id, returnFocus: event.currentTarget })} /> : null}
+          </div>
+        ))}
+        </div>
+      </div>
+      {moveWorkspace ? (
+        <WorkspaceMoveDialog
+          workspaceId={moveWorkspace.workspaceId}
+          workspaces={allWorkspaces}
+          returnFocus={moveWorkspace.returnFocus}
+          onClose={() => setMoveWorkspace(null)}
+          onMove={(intent: WorkspaceMoveIntent) => onReorderWorkspace(intent.workspaceId, intent.targetWorkspaceId, intent.position)}
+        />
+      ) : null}
     </aside>
   );
 }
@@ -310,7 +416,7 @@ const drawSidebarGrid = (
   model: SidebarRenderModel,
   hitsRef: MutableRefObject<HitZone[]>,
   theme: OpenTuiTheme,
-): CellGrid => {
+): { grid: CellGrid; semanticRows: SemanticWorkspaceRow[] } => {
   const { rgba } = theme;
   const agentStatusColors = {
     completed: rgba.green,
@@ -330,6 +436,7 @@ const drawSidebarGrid = (
   const { cols, rows } = metrics;
   const grid = createGrid(cols, rows, rgba.black, rgba.text);
   const hits: HitZone[] = [];
+  const semanticRows: SemanticWorkspaceRow[] = [];
   hitsRef.current = hits;
 
   const fillRow = (row: number, color: RGBA) => {
@@ -413,13 +520,19 @@ const drawSidebarGrid = (
 
   section(row, "workspaces");
   row++;
+  const filterName = model.hostFilter === "all"
+    ? "all hosts"
+    : model.machines.find((machine) => machine.id === model.hostFilter)?.name ?? model.hostFilter;
+  write(row, 3, `filter: ${filterName}`, model.hostFilter === "all" ? rgba.faint : rgba.goldDim, 700);
+  actionCells(row, 0, cols, `Workspace filter: ${filterName}; click for next`, { type: "cycle-host-filter" });
+  row += 2;
   const workspaceEndRow = rows - 1;
   let visibleWorkspaceCount = 0;
   if (model.workspaces.length === 0) {
     write(row, 3, "NO WORKSPACES", rgba.faint, 700);
     row += 2;
   } else {
-    for (const workspace of model.workspaces) {
+    for (const workspace of model.workspaces.slice(model.workspaceScrollOffset)) {
       const meta = workspace.descriptor;
       const hostContext = workspace.agentName ? `${workspace.host} / ${workspace.agentName}` : workspace.host;
       const descriptionLines = wrapText(meta, Math.max(8, cols - 7), 3);
@@ -442,14 +555,21 @@ const drawSidebarGrid = (
         fillRow(row + offset, workspace.active ? (offset === 0 ? rgba.active : rgba.activeSoft) : inactiveBackground);
       }
       fillRow(row, workspace.active ? rgba.active : inactiveBackground);
+      const indent = Math.min(workspace.depth, 3) * 2;
       write(row, 1, workspace.active ? ">" : " ", workspace.active ? rgba.gold : rgba.faint, 700);
-      write(row, 3, statusMarker, statusColor, 700);
-      const titleCol = workspace.agentCreated ? 8 : 5;
-      if (workspace.agentCreated) write(row, 5, "AI", rgba.agent, 700);
-      const unreadText = workspace.unreadCount > 0 ? `(${workspace.unreadCount})` : "";
+      if (workspace.hasChildren) {
+        write(row, 3 + indent, workspace.expanded ? "v" : ">", rgba.goldDim, 700);
+        actionCells(row, 3 + indent, 1, workspace.expanded ? `Collapse ${workspace.title}` : `Expand ${workspace.title}`, { type: "toggle-workspace", workspaceId: workspace.id });
+      }
+      write(row, 5 + indent, statusMarker, statusColor, 700);
+      const titleCol = workspace.agentCreated ? 10 + indent : 7 + indent;
+      if (workspace.agentCreated) write(row, 7 + indent, "AI", rgba.agent, 700);
+      const aggregateUnread = workspace.unreadCount + workspace.hiddenUnreadCount;
+      const unreadText = aggregateUnread > 0 ? `(${aggregateUnread}${workspace.hiddenUnreadCount ? "*" : ""})` : "";
       const versionText = workspace.versionStatus === "outdated" && workspace.versionLabel
         ? `[${workspace.versionLabel}]`
         : "";
+      const hiddenStatusText = workspace.hiddenAgentStatus ? `↳${agentStatusAbbreviation[workspace.hiddenAgentStatus]}` : "";
       let suffixCol = cols - 1;
       if (unreadText) {
         suffixCol -= unreadText.length;
@@ -465,6 +585,11 @@ const drawSidebarGrid = (
             : rgba.muted;
         write(row, suffixCol, versionText, versionColor, 700);
       }
+      if (hiddenStatusText) {
+        if (unreadText || versionText) suffixCol--;
+        suffixCol -= hiddenStatusText.length;
+        write(row, suffixCol, hiddenStatusText, agentStatusColors[workspace.hiddenAgentStatus!], 700);
+      }
       writeWithin(
         row,
         titleCol,
@@ -473,16 +598,20 @@ const drawSidebarGrid = (
         workspace.reachable ? rgba.text : rgba.muted,
         700,
       );
+      if (workspace.canOutdent && !model.movesDisabled) {
+        write(row, Math.max(titleCol, suffixCol - 2), "<", rgba.goldDim, 700);
+        actionCells(row, Math.max(titleCol, suffixCol - 2), 1, `Move ${workspace.title} out one level`, { type: "outdent-workspace", workspaceId: workspace.id });
+      }
       row++;
       for (const line of descriptionLines) {
-        if (workspace.bell && row === itemStart + 1) write(row, 3, "!", rgba.gold, 700);
-        write(row, 5, line, rgba.muted);
+        if ((workspace.bell || workspace.hiddenBell) && row === itemStart + 1) write(row, 5 + indent, workspace.hiddenBell ? "!*" : "!", rgba.gold, 700);
+        write(row, 7 + indent, line, rgba.muted);
         row++;
       }
-      write(row, 5, `host ${hostContext}`, rgba.faint);
+      write(row, 7 + indent, `host ${hostContext}`, rgba.faint);
       row++;
       if (cwd) {
-        writeCompactPath(row, 5, cwd);
+        writeCompactPath(row, 7 + indent, cwd);
         row++;
       }
       actionRows(
@@ -495,21 +624,38 @@ const drawSidebarGrid = (
         ].filter(Boolean).join(" / "),
         { type: "workspace", workspaceId: workspace.id, tabId: workspace.tabId },
       );
+      semanticRows.push({ workspace, row: itemStart, rowCount: itemRows });
       if (model.workspaceDropPreview?.targetWorkspaceId === workspace.id) {
-        const indicatorRow = model.workspaceDropPreview.position === "before" ? itemStart : row - 1;
-        write(indicatorRow, Math.max(0, cols - 3), model.workspaceDropPreview.position === "before" ? "^^" : "vv", rgba.gold, 700);
+        const previewPosition = model.workspaceDropPreview.position;
+        const indicatorRow = previewPosition === "before" ? itemStart : previewPosition === "into" ? itemStart + Math.floor(itemRows / 2) : row - 1;
+        write(indicatorRow, Math.max(0, cols - 4), previewPosition === "before" ? "^^" : previewPosition === "into" ? "[+]" : "vv", rgba.gold, 700);
       }
       visibleWorkspaceCount++;
     }
   }
 
-  if (model.workspaces.length > visibleWorkspaceCount) {
-    write(row, 3, `+${model.workspaces.length - visibleWorkspaceCount} more`, rgba.faint);
+  const remainingWorkspaceCount = remainingWorkspaceRowCount(model.workspaces.length, model.workspaceScrollOffset, visibleWorkspaceCount);
+  if (remainingWorkspaceCount > 0) {
+    write(row, 3, `+${remainingWorkspaceCount} more`, rgba.faint);
     row += 2;
   }
 
-  return grid;
+  return { grid, semanticRows };
 };
+
+const agentStatusAbbreviation: Record<WorkspaceAgentStatus, string> = {
+  running: "R",
+  waiting: "W",
+  completed: "C",
+  failed: "F",
+  updated: "U",
+};
+
+const sameSemanticRows = (left: SemanticWorkspaceRow[], right: SemanticWorkspaceRow[]): boolean =>
+  left.length === right.length && left.every((row, index) => {
+    const candidate = right[index];
+    return candidate && row.workspace === candidate.workspace && row.row === candidate.row && row.rowCount === candidate.rowCount;
+  });
 
 const wrapText = (text: string, maxCells: number, maxLines: number): string[] => {
   if (maxCells <= 0 || maxLines <= 0) return [];

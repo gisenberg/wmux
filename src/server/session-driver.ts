@@ -1,4 +1,4 @@
-import type { MachineConfig, PaneState } from "./types.js";
+import type { MachineConfig, PaneStartupPhase, PaneState } from "./types.js";
 import { PtySession } from "./pty-session.js";
 import {
   canRefreshDurableSessionClient,
@@ -25,6 +25,7 @@ export interface ManagedSession {
   resume(): void;
   on(event: "output" | "title" | "cwd", listener: (data: string) => void): this;
   on(event: "agentPort", listener: (port: number) => void): this;
+  on(event: "phase", listener: (phase: PaneStartupPhase, label: string) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;
 }
 

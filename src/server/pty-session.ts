@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type IPty } from "node-pty";
-import type { MachineConfig, PaneState } from "./types.js";
+import type { MachineConfig, PaneStartupPhase, PaneState } from "./types.js";
 import { buildSpawnSpec } from "./machines.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
 import { captureOsc7 } from "./osc7.js";
@@ -13,6 +13,7 @@ interface PtyEvents {
   title: [string];
   cwd: [string];
   agentPort: [number];
+  phase: [PaneStartupPhase, string];
   exit: [number | null];
 }
 

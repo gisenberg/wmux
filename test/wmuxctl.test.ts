@@ -36,9 +36,9 @@ const websocketFrame = (value: unknown) => {
   return Buffer.concat([header, payload]);
 };
 
-const cli = (url: string, args: string[]) => execFileAsync("python3", [wmuxctl, "--url", url, ...args], {
+const cli = (url: string, args: string[], env: NodeJS.ProcessEnv = {}) => execFileAsync("python3", [wmuxctl, "--url", url, ...args], {
   cwd: repoRoot,
-  env: { ...process.env, WMUX_TOKEN: "test-token" },
+  env: { ...process.env, WMUX_TOKEN: "test-token", ...env },
 });
 
 test("wmuxctl output and wait read authenticated pane replay", async () => {
@@ -58,7 +58,16 @@ test("wmuxctl output and wait read authenticated pane replay", async () => {
       "",
       "",
     ].join("\r\n"));
-    socket.end(websocketFrame({ type: "ready", paneId: "pane_agent", replay, outputOnly: true }));
+    socket.write(websocketFrame({
+      type: "ready",
+      paneId: "pane_agent",
+      replay: "",
+      replayKind: "raw",
+      outputOnly: true,
+      waitForRefresh: true,
+    }));
+    setTimeout(() => socket.write(websocketFrame({ type: "output", paneId: "pane_agent", data: replay })), 10);
+    setTimeout(() => socket.end(), 250);
   });
 
   const url = await listen(server);
@@ -108,6 +117,98 @@ test("wmuxctl wait strips terminal character-set escapes around a shell prompt",
     const result = JSON.parse(waited.stdout);
     assert.equal(result.matched, "wmux@host:~ $");
   } finally {
+    await close(server);
+  }
+});
+
+test("wmuxctl bounds noisy durable refresh replay to the newest 2 MiB of valid UTF-8", async () => {
+  const server = http.createServer();
+  const newest = "newest-é-🦜\n";
+  server.on("upgrade", (request, socket) => {
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    socket.write(websocketFrame({
+      type: "ready",
+      paneId: "pane_noisy",
+      replay: "oldest-must-be-trimmed\n",
+      replayKind: "raw",
+      outputOnly: true,
+      waitForRefresh: true,
+    }));
+    for (let index = 0; index < 40; index += 1) {
+      socket.write(websocketFrame({ type: "output", paneId: "pane_noisy", data: "é".repeat(30_000) }));
+    }
+    socket.write(websocketFrame({ type: "output", paneId: "pane_noisy", data: newest }));
+    setTimeout(() => socket.end(), 300);
+  });
+
+  const url = await listen(server);
+  try {
+    const result = await execFileAsync(
+      "python3",
+      [wmuxctl, "--url", url, "output", "pane_noisy", "--raw", "--tail-chars", "0"],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, WMUX_TOKEN: "test-token" },
+        maxBuffer: 3 * 1024 * 1024,
+      },
+    );
+    const replayBytes = Buffer.byteLength(result.stdout, "utf8");
+    assert.ok(replayBytes <= 2 * 1024 * 1024);
+    assert.ok(replayBytes >= 2 * 1024 * 1024 - 3, "only a split leading UTF-8 code point may be discarded");
+    assert.equal(result.stdout.endsWith(newest), true);
+    assert.doesNotMatch(result.stdout, /oldest-must-be-trimmed/);
+  } finally {
+    await close(server);
+  }
+});
+
+test("wmuxctl caps durable refresh waiting at the caller's overall timeout", async () => {
+  const server = http.createServer();
+  let upgradedSocket: import("node:stream").Duplex | undefined;
+  server.on("upgrade", (request, socket) => {
+    upgradedSocket = socket;
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    socket.write(websocketFrame({
+      type: "ready",
+      paneId: "pane_silent",
+      replay: "",
+      replayKind: "raw",
+      outputOnly: true,
+      waitForRefresh: true,
+    }));
+  });
+
+  const url = await listen(server);
+  try {
+    await assert.rejects(
+      cli(url, ["output", "pane_silent", "--timeout", "0.2"]),
+      (error: { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /timed out waiting for pane output refresh after 0\.2s/);
+        return true;
+      },
+    );
+  } finally {
+    upgradedSocket?.destroy();
     await close(server);
   }
 });
@@ -266,7 +367,7 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
 
   const url = await listen(server);
   try {
-    const sent = await cli(url, ["run", "windows-runner", "--title", "Fresh", "--new", "--line", "Get-Date"]);
+    const sent = await cli(url, ["run", "windows-runner", "--title", "Fresh", "--new", "--line", "Get-Date"], { WMUX_PANE_ID: "" });
     const result = JSON.parse(sent.stdout);
     assert.equal(result.paneId, "pane_new");
     assert.equal(typeof result.shellReadySeconds, "number");
@@ -284,6 +385,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
   fs.writeFileSync(promptPath, prompt);
   const inputs: Array<Record<string, unknown>> = [];
   const lifecycle: Array<Record<string, unknown>> = [];
+  const workspaceRequests: Array<Record<string, unknown>> = [];
   let runId = "";
   let upgradeCount = 0;
   let deleted = false;
@@ -308,8 +410,12 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
       return;
     }
     if (request.method === "POST" && request.url === "/api/workspaces") {
-      request.resume();
-      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        jsonResponse(response, { workspace, state: {} }, 201);
+      });
       return;
     }
     if (request.method === "POST" && request.url === "/api/workspaces/ws_delegate/title") {
@@ -384,7 +490,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     const delegated = await cli(url, [
       "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
       "--title", "Parity review", "--model", "gpt-test", "--write-access", "--unattended", "--close-on-success",
-    ]);
+    ], { WMUX_PANE_ID: "pane_parent" });
     const result = JSON.parse(delegated.stdout);
     assert.equal(result.state, "completed");
     assert.equal(result.result, "review complete");
@@ -392,6 +498,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
     assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), ["wmux-agent-run", "\r"]);
     assert.equal(inputs.some((body) => String(body.data).includes(prompt)), false);
+    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
     assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message, runId: event.runId })), [
       { agent: "codex", status: "running", message: undefined, runId },
       { agent: "codex", status: "completed", message: "review complete", runId },
@@ -737,6 +844,7 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
   const promptPath = path.join(root, "prompt.md");
   fs.writeFileSync(promptPath, "setup failure prompt");
   const lifecycle: Array<Record<string, unknown>> = [];
+  const workspaceRequests: Array<Record<string, unknown>> = [];
   let interrupted = false;
   const workspace = {
     id: "ws_failed",
@@ -751,8 +859,10 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
       return;
     }
     if (request.method === "POST" && request.url === "/api/workspaces") {
-      request.resume();
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
         response.writeHead(201, { "content-type": "application/json" });
         response.end(JSON.stringify({ workspace, state: {} }));
       });
@@ -791,7 +901,7 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
   const url = await listen(server);
   try {
     await assert.rejects(
-      cli(url, ["delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath]),
+      cli(url, ["delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath], { WMUX_PANE_ID: "" }),
       (error: { stdout?: string }) => {
         const result = JSON.parse(error.stdout ?? "{}");
         assert.equal(result.state, "failed");
@@ -801,6 +911,7 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
       },
     );
     assert.equal(interrupted, true);
+    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent" }]);
     assert.deepEqual(lifecycle.map((event) => event.status), ["failed"]);
     assert.equal(lifecycle[0].message && String(lifecycle[0].message).includes("setup failure prompt"), false);
   } finally {
@@ -814,4 +925,43 @@ test("Windows wmux-title sends the bearer token used by authenticated APIs", () 
   assert.match(helper, /function Get-WmuxToken/);
   assert.match(helper, /\$Headers\['Authorization'\] = "Bearer \$WmuxToken"/);
   assert.match(helper, /Invoke-RestMethod[^\n]+-Headers \$Headers/);
+});
+
+test("wmuxctl prefers automation auth and scoped preflight never falls back", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-scoped-"));
+  fs.mkdirSync(path.join(home, ".wmux"));
+  fs.writeFileSync(path.join(home, ".wmux", "automation-token"), `${"A".repeat(43)}\n`);
+  const authorizations: Array<string | undefined> = [];
+  const server = http.createServer((request, response) => {
+    authorizations.push(request.headers.authorization);
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end('{"error":"unauthorized"}');
+  });
+  const url = await listen(server);
+  try {
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--scoped-auth", "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+    }));
+    assert.deepEqual(authorizations, [`Bearer ${"A".repeat(43)}`], "a rejected scoped credential is never retried with legacy auth");
+    fs.unlinkSync(path.join(home, ".wmux", "automation-token"));
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--scoped-auth", "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+    }), /requires WMUX_AUTOMATION_TOKEN/);
+    assert.equal(authorizations.length, 1, "preflight failure makes no compatibility request");
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--automation-token-path", path.join(home, "missing"), "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+    }), /configured automation token file is empty or unreadable/);
+    assert.equal(authorizations.length, 1, "an explicitly configured scoped path never falls through to legacy auth");
+    await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "bootstrap"], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: home, WMUX_AUTOMATION_TOKEN: "short", WMUX_TOKEN: "legacy-test-token" },
+    }), /configured automation token is empty or malformed/);
+    assert.equal(authorizations.length, 1, "an invalid scoped environment never falls through to legacy auth");
+  } finally {
+    await close(server);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

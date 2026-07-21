@@ -14,6 +14,11 @@ running the wmux service.
 4. Confirm the new service health endpoint before moving machine inventory.
 5. Back up the ignored config and `~/.wmux` state without committing either.
 
+Authentication migration is phased: first run with `WMUX_BROWSER_AUTH_MODE` omitted (or `shared-or-login`), then provision distinct scoped credentials with `node scripts/wmux-provision-scoped-auth.mjs`, update controllers and staged helpers, and run scoped-only preflight.
+Confirm browser login and pane durability, then set `login-only` and restart.
+Roll back by setting `shared-or-login` (or removing the variable), restarting, and verifying the retained legacy token.
+Keep legacy material through acceptance; this documents a procedure, not a claim about any live deployment.
+
 Do not casually copy `~/.wmux/token`, `registration-token`, `auth.json`, or
 `session-secret`. Copying them preserves broad credentials; omitting them lets
 the new service create an independent trust boundary. If a credential appears
@@ -83,11 +88,10 @@ Before opening the first pane, verify the target's SSH host fingerprint against
 trusted Tailscale metadata or another trusted channel. Tailscale SSH may also
 require an interactive re-authentication check from the new server.
 
-The first static SSH pane stages current helpers and writes the new server's
-authenticated `~/.wmux/url` and `~/.wmux/token` on the target. Existing shells
-on the old wmux server keep running, but their file-fallback hooks and helpers
-will then post to the new server. Drain old agent-event work first when that
-cutover would be disruptive.
+The first static SSH pane stages current helpers and writes the new server's authenticated URL and appropriate helper credential on the target.
+In compatibility mode this may be the legacy token; scoped mode must not stage controller auth.
+Existing shells on the old wmux server keep running, but their file-fallback hooks and helpers will then post to the new server.
+Drain old agent-event work first when that cutover would be disruptive.
 
 ## Validate
 

@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import { isTerminalProtocolResponse } from "../shared/terminal-protocol.js";
+import type { BrowserAuthMode } from "./auth.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
 import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
@@ -19,6 +20,7 @@ interface SocketState {
   paneId: string;
   cols: number;
   rows: number;
+  inputSequence?: number;
 }
 
 // A session that exits cleanly (code 0) after running at least this long is
@@ -52,6 +54,22 @@ export const sessionAccessTokenForMachine = (
   machine: MachineConfig,
   accessToken: string,
 ): string => (machine.source === "registered" ? "" : accessToken);
+
+export const paneAuthEnvironmentForMachine = (
+  machine: MachineConfig,
+  accessToken: string,
+  helperToken: string,
+  browserAuthMode: BrowserAuthMode,
+): Record<string, string> => {
+  const scopedToken = sessionAccessTokenForMachine(machine, helperToken);
+  return {
+    ...(scopedToken ? { WMUX_HELPER_TOKEN: scopedToken } : {}),
+    WMUX_TOKEN: helperToken || browserAuthMode === "login-only"
+      ? ""
+      : sessionAccessTokenForMachine(machine, accessToken),
+    WMUX_BROWSER_AUTH_MODE: browserAuthMode,
+  };
+};
 
 export const resolveDisposalMachine = (
   sessionMachine: MachineConfig | undefined,
@@ -105,6 +123,8 @@ export class SessionManager {
     private readonly onPaneReferencesChanged: () => void = () => undefined,
     private readonly pasteImages: PasteImageStager = new PasteImageStaging(),
     private readonly terminalEnvironment: () => Record<string, string> = () => ({}),
+    private readonly helperToken = "",
+    private readonly browserAuthMode: BrowserAuthMode = "shared-or-login",
   ) {
     this.currentMachines = typeof machines === "function" ? machines : () => machines;
   }
@@ -174,12 +194,15 @@ export class SessionManager {
       socket.close(1011, error instanceof Error ? error.message : "session start failed");
       return;
     }
+    this.send(socket, { type: "starting", paneId, phase: "connecting", label: "Opening terminal…" });
     const resizeOwner = this.ensureResizeOwner(paneId, socket, session, initialSize);
 
     socket.on("message", (raw) => {
       const message = this.parse(raw.toString());
       if (!message) return;
       if (message.type === "input") {
+        const socketState = this.socketState.get(socket);
+        if (socketState && message.sequence !== undefined) socketState.inputSequence = message.sequence;
         this.promoteResizeOwner(paneId, socket, session);
         if (isAgentInterruptInput(message.data)) this.state.interruptAgentForPane(paneId);
         const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
@@ -191,7 +214,7 @@ export class SessionManager {
       }
       if (message.type === "resize") {
         const size = normalizeSize(message.cols, message.rows);
-        this.socketState.set(socket, { paneId, ...size });
+        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size });
         if (message.foreground === false) {
           this.releaseResizeOwner(paneId, socket);
           return;
@@ -200,7 +223,7 @@ export class SessionManager {
       }
       if (message.type === "activate") {
         const size = normalizeSize(message.cols, message.rows);
-        this.socketState.set(socket, { paneId, ...size });
+        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size });
         if (message.foreground === false) {
           this.releaseResizeOwner(paneId, socket);
           return;
@@ -266,7 +289,11 @@ export class SessionManager {
         replay: replay.data,
         replayKind: replay.kind,
         outputOnly: true,
+        ...(this.shouldUseDurableClientRefresh(pane) && replay.kind === "raw" && replay.data === ""
+          ? { waitForRefresh: true as const }
+          : {}),
       });
+      this.scheduleDurableClientRefresh(pane, socket);
     };
     if (session.attachReady) void session.attachReady.then(sendReady);
     else sendReady();
@@ -345,6 +372,7 @@ export class SessionManager {
     const streamPath = streamPathForMachine(machine.id);
     const sessionEnv = {
       ...this.terminalEnvironment(),
+      ...paneAuthEnvironmentForMachine(machine, this.accessToken, this.helperToken, this.browserAuthMode),
       WMUX_URL: resolveHelperUrl(`http://${process.env.WMUX_HOST ?? "127.0.0.1"}:${process.env.WMUX_PORT ?? "3478"}`),
       WMUX_WORKSPACE_ID: context?.workspace.id ?? "",
       WMUX_WORKSPACE_NAME: context?.workspace.name ?? "",
@@ -353,7 +381,6 @@ export class SessionManager {
       WMUX_PANE_ID: pane.id,
       // A shared registration credential can update dynamic machine records.
       // Never forward the broader browser/API credential to those targets.
-      WMUX_TOKEN: sessionAccessTokenForMachine(machine, this.accessToken),
       WMUX_BOOTSTRAP_TOKEN:
         machine.source === "registered" && machine.kind === "powershell-ssh" && machine.sessionBackend !== "agent"
           ? (this.bootstrapTokenForMachine(machine.id) ?? "")
@@ -373,7 +400,7 @@ export class SessionManager {
     this.schedulePaneCwdRefresh(pane, machine, session);
 
     session.on("output", (data) => {
-      this.broadcast(pane.id, { type: "output", paneId: pane.id, data });
+      this.broadcastOutput(pane.id, data);
       this.applyBackpressure(pane.id, session);
     });
     session.on("title", (title) => {
@@ -388,6 +415,9 @@ export class SessionManager {
       machine.agentUrl = undefined;
       this.sessionMachines.set(pane.id, structuredClone(machine));
       this.state.updatePane(pane.id, { agentPort });
+    });
+    session.on("phase", (phase, label) => {
+      this.broadcast(pane.id, { type: "starting", paneId: pane.id, phase, label });
     });
     session.on("exit", (code) => {
       if (this.ignoredSessionExits.has(session)) return;
@@ -467,6 +497,21 @@ export class SessionManager {
     }
     for (const socket of this.outputWatchers.get(paneId) ?? []) {
       this.send(socket, payload);
+    }
+  }
+
+  private broadcastOutput(paneId: string, data: string): void {
+    for (const socket of this.sockets.get(paneId) ?? []) {
+      const inputSequence = this.socketState.get(socket)?.inputSequence;
+      this.send(socket, {
+        type: "output",
+        paneId,
+        data,
+        ...(inputSequence === undefined ? {} : { inputSequence }),
+      });
+    }
+    for (const socket of this.outputWatchers.get(paneId) ?? []) {
+      this.send(socket, { type: "output", paneId, data });
     }
   }
 
@@ -683,10 +728,13 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.type === "input" && typeof parsed.data === "string") {
+      const sequence = parsed.sequence;
+      if (sequence !== undefined && (!Number.isSafeInteger(sequence) || Number(sequence) < 1)) return null;
       return {
         type: "input",
         data: parsed.data,
         ...(parsed.terminalResponse === true ? { terminalResponse: true } : {}),
+        ...(sequence === undefined ? {} : { sequence: Number(sequence) }),
       };
     }
     if (

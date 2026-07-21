@@ -47,6 +47,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl file openssh-client python3 screen tmux \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /home/node/.wmux \
+  && chmod 700 /home/node/.wmux \
   && chown node:node /home/node/.wmux
 
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules

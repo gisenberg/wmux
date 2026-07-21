@@ -36,8 +36,25 @@ test("legacy settings migrate while preserving normalized values", () => {
       tuiFrameRate: 15,
       terminalScrollMode: "batched",
       machineAliases: { local: "Home" },
+      collapsedWorkspaceIds: [],
     });
     assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_SETTINGS_SCHEMA_VERSION);
+  });
+});
+
+test("configured font size supplies a default while persisted settings override it", () => {
+  withTempSettings((filePath) => {
+    const configured = new SettingsStore(filePath, {
+      terminalFontSize: 16,
+    });
+    assert.equal(configured.snapshot().terminalFontSize, 16);
+
+    configured.update({ terminalFontSize: 18 });
+    const reloaded = new SettingsStore(filePath, {
+      terminalFontSize: 20,
+    });
+    assert.equal(reloaded.snapshot().terminalFontSize, 18);
+    assert.equal(reloaded.defaultsSnapshot().terminalFontSize, 20);
   });
 });
 
@@ -71,6 +88,7 @@ test("version 1 and version 2 settings migrate to inactive tab suspension", () =
       tuiFrameRate: 15,
       terminalScrollMode: "batched",
       machineAliases: { local: "Home" },
+      collapsedWorkspaceIds: [],
     });
   });
 });

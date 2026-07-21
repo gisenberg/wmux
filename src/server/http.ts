@@ -8,16 +8,24 @@ import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { resolveKeybindings } from "../shared/keybindings.js";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { readAgentProfileBundle } from "./agent-profile.js";
 import {
+  authenticateRequest,
   type AuthConfig,
-  isAuthorized,
   issueSessionToken,
   requestBearerToken,
   requestToken,
-  tokensMatch,
+  registeredHostPrincipal,
+  registrationPrincipal,
   verifyCredentials,
 } from "./auth.js";
+import {
+  authorizeHttpPrincipal,
+  authorizeWebSocketPrincipal,
+  classifyHttpRoute,
+  classifyWebSocket,
+} from "./auth-policy.js";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { buildDoctorReport } from "./doctor.js";
 import { HostRegistryError, type HostRegistry } from "./host-registry.js";
@@ -43,7 +51,14 @@ import type {
   WmuxSettings,
 } from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
-import type { StateStore } from "./state.js";
+import {
+  StateIdConflictError,
+  WorkspaceDepthError,
+  type SplitCreationIds,
+  type StateStore,
+  type TabCreationIds,
+  type WorkspaceCreationIds,
+} from "./state.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsStore } from "./settings.js";
 import {
@@ -141,6 +156,15 @@ const clientRoot = (): string => {
   return path.resolve(here, "../client");
 };
 
+const bundledMesloFontFiles = {
+  regular: "meslo-lgm-nerd-font-mono-regular.woff2",
+  bold: "meslo-lgm-nerd-font-mono-bold.woff2",
+  italic: "meslo-lgm-nerd-font-mono-italic.woff2",
+  "bold-italic": "meslo-lgm-nerd-font-mono-bold-italic.woff2",
+} as const;
+
+type BundledMesloFontFace = keyof typeof bundledMesloFontFiles;
+
 type WmuxHttpServer = http.Server | https.Server;
 
 export const createHttpServer = (
@@ -156,6 +180,7 @@ export const createHttpServer = (
     hostRegistry?: HostRegistry;
     registrationToken?: string;
     trustedProxies?: ReadonlySet<string>;
+    terminalFontFamily?: string;
     healthRefreshIntervals?: { machines?: number; streams?: number };
     healthResolvers?: {
       machines?: typeof resolveMachineStatuses;
@@ -242,6 +267,7 @@ export const createHttpServer = (
     const snapshot = state.snapshot();
     return {
       revision: snapshot.revision,
+      workspaceTreeRevision: snapshot.workspaceTreeRevision,
       healthEpoch,
       machines: currentMachineStatuses(),
       workspaces: snapshot.workspaces,
@@ -249,8 +275,10 @@ export const createHttpServer = (
       notifications: snapshot.notifications,
       agentEvents: snapshot.agentEvents,
       runs: snapshot.runs,
+      terminalFontFamily: options.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
       settings: settings.snapshot(),
       keybindings: options.keybindings ?? resolveKeybindings(),
+      settingsDefaults: settings.defaultsSnapshot(),
       streams: streamStatuses,
     };
   };
@@ -348,39 +376,57 @@ export const createHttpServer = (
     const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? bindHost}`);
     const machines = currentMachines();
 
-    // Token gate: everything under /api requires a valid token, except the
-    // unauthenticated bootstrap endpoints (liveness, auth capability probe, and
-    // login itself). The static app shell is served unauthenticated so the
-    // browser can load and then present its stored token.
-    const unauthenticatedApi = new Set(["/api/health", "/api/auth-info", "/api/login"]);
-    const registrationPost = url.pathname === "/api/registry/hosts" && request.method === "POST";
-    const registrationAuthorized =
-      Boolean(registrationToken) && tokensMatch(registrationToken ?? "", requestBearerToken(request));
+    const bundledMesloFont = request.method === "GET" || request.method === "HEAD"
+      ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
+      : null;
+
+    // Every API method/path is classified before authentication so new routes
+    // cannot silently inherit a broad credential's authority.
+    const routePolicy = classifyHttpRoute(request.method, url.pathname);
+    const registrationPost = routePolicy?.access === "registration";
+    const registrationAuth = registrationPrincipal(registrationToken, requestBearerToken(request));
     const helperMatch = url.pathname.match(/^\/api\/helpers\/windows\/([^/]+)(?:\/bootstrap)?$/);
     const helperMachine = helperMatch
       ? machines.find((machine) => machine.id === helperMatch[1])
       : undefined;
-    const registeredHelperAuthorized =
+    const registeredHelperPrincipal = registeredHostPrincipal(
+      helperMachine?.id ?? "",
       request.method === "GET" &&
       url.pathname.endsWith("/bootstrap") &&
       helperMachine?.source === "registered" &&
-      Boolean(hostRegistry?.acceptsBootstrapToken(helperMachine.id, requestToken(request, url)));
-    if (registrationPost && !registrationAuthorized) {
-      sendJson(response, 401, { error: "unauthorized" });
-      return;
-    }
-    if (
-      url.pathname.startsWith("/api/") &&
-      !registrationPost &&
-      !unauthenticatedApi.has(url.pathname) &&
-      !registeredHelperAuthorized &&
-      !isAuthorized(auth, request, url)
-    ) {
-      sendJson(response, 401, { error: "unauthorized" });
-      return;
+      Boolean(hostRegistry?.acceptsBootstrapToken(helperMachine.id, requestToken(request, url))),
+    );
+    if (url.pathname.startsWith("/api/")) {
+      if (!routePolicy) {
+        sendJson(response, 401, { error: "unauthorized" });
+        return;
+      }
+      const principal = registeredHelperPrincipal.kind === "registered-host"
+        ? registeredHelperPrincipal
+        : registrationPost
+          ? registrationAuth
+          : authenticateRequest(auth, request, url);
+      const registeredWindowsEndpoint = helperMachine?.source === "registered"
+        && (routePolicy.id === "windows-bootstrap" || routePolicy.id === "windows-helpers");
+      const wrongRegisteredWindowsPrincipal = registeredWindowsEndpoint
+        && (routePolicy.id === "windows-bootstrap"
+          ? principal.kind !== "registered-host"
+          : principal.kind === "helper" || principal.kind === "registered-host");
+      if (wrongRegisteredWindowsPrincipal || !authorizeHttpPrincipal(auth, principal, routePolicy)) {
+        sendJson(response, principal.kind === "anonymous" ? 401 : 403, { error: "unauthorized" });
+        return;
+      }
     }
 
     try {
+      if (bundledMesloFont) {
+        const face = bundledMesloFont[1] as BundledMesloFontFace;
+        if (!serveBundledMesloFont(root, face, request.method === "HEAD", response)) {
+          sendJson(response, 404, { error: "font_not_found" });
+        }
+        return;
+      }
+
       if (url.pathname === "/api/health" && request.method === "GET") {
         sendJson(response, 200, { ok: true });
         return;
@@ -388,13 +434,17 @@ export const createHttpServer = (
 
       if (url.pathname === "/api/auth-info" && request.method === "GET") {
         // Lets the browser decide whether to show a login form vs. a token hint.
-        sendJson(response, 200, { authEnabled: auth.enabled, loginEnabled: auth.loginEnabled });
+        sendJson(response, 200, {
+          authEnabled: auth.enabled,
+          loginEnabled: auth.loginEnabled,
+          browserAuthMode: auth.browserAuthMode ?? "shared-or-login",
+        }, { "cache-control": "no-store" });
         return;
       }
 
       if (url.pathname === "/api/login" && request.method === "POST") {
         if (!auth.enabled || !auth.loginEnabled) {
-          sendJson(response, 404, { error: "login_disabled" });
+          sendJson(response, 404, { error: "login_disabled" }, { "cache-control": "no-store" });
           return;
         }
         const clientAddress = observedClientAddress(request, trustedProxies)
@@ -406,22 +456,30 @@ export const createHttpServer = (
             response,
             429,
             { error: "login_rate_limited", retryAfterMs: attempt.retryAfterMs },
-            { "retry-after": String(Math.max(1, Math.ceil(attempt.retryAfterMs / 1_000))) },
+            {
+              "retry-after": String(Math.max(1, Math.ceil(attempt.retryAfterMs / 1_000))),
+              "cache-control": "no-store",
+            },
           );
           return;
         }
         const body = (await readBody(request)) as { username?: unknown; password?: unknown };
         if (typeof body.username !== "string" || typeof body.password !== "string") {
-          sendJson(response, 400, { error: "invalid_credentials_format" });
+          sendJson(response, 400, { error: "invalid_credentials_format" }, { "cache-control": "no-store" });
           return;
         }
         if (!await verifyCredentials(auth, body.username, body.password)) {
-          sendJson(response, 401, { error: "invalid_credentials" });
+          sendJson(response, 401, { error: "invalid_credentials" }, { "cache-control": "no-store" });
           return;
         }
         loginAttempts.reset(clientAddress);
         const token = issueSessionToken(auth.sessionSecret, SESSION_TTL_MS, Date.now());
-        sendJson(response, 200, { token, expiresInMs: SESSION_TTL_MS });
+        sendJson(response, 200, { token, expiresInMs: SESSION_TTL_MS }, { "cache-control": "no-store" });
+        return;
+      }
+
+      if (url.pathname === "/api/auth/session" && request.method === "GET") {
+        sendJson(response, 200, { authenticated: true }, { "cache-control": "no-store" });
         return;
       }
 
@@ -502,8 +560,10 @@ export const createHttpServer = (
           const value = url.searchParams.get(key);
           if (value) extraEnv[key] = value;
         }
-        if (machine.source !== "registered" && auth.token) {
-          extraEnv.WMUX_TOKEN = auth.token;
+        if (machine.source !== "registered") {
+          if (auth.helperToken) extraEnv.WMUX_HELPER_TOKEN = auth.helperToken;
+          else if ((auth.browserAuthMode ?? "shared-or-login") === "shared-or-login" && auth.token) extraEnv.WMUX_TOKEN = auth.token;
+          extraEnv.WMUX_BROWSER_AUTH_MODE = auth.browserAuthMode ?? "shared-or-login";
         }
         response.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",
@@ -605,6 +665,7 @@ export const createHttpServer = (
           tuiFrameRate?: WmuxSettings["tuiFrameRate"];
           terminalScrollMode?: WmuxSettings["terminalScrollMode"];
           machineAliases?: Record<string, string>;
+          collapsedWorkspaceIds?: string[];
         };
         settings.update({
           terminalFontSize: body.terminalFontSize,
@@ -614,6 +675,7 @@ export const createHttpServer = (
           tuiFrameRate: body.tuiFrameRate,
           terminalScrollMode: body.terminalScrollMode,
           machineAliases: body.machineAliases,
+          collapsedWorkspaceIds: body.collapsedWorkspaceIds,
         });
         sendJson(response, 200, { settings: settings.snapshot(), state: currentPayload() });
         return;
@@ -623,15 +685,42 @@ export const createHttpServer = (
         const body = (await readBody(request)) as {
           machineId?: string;
           sourcePaneId?: string;
+          parentPaneId?: string;
           createdBy?: "user" | "agent";
+          parentWorkspaceId?: unknown;
+          clientIds?: unknown;
         };
+        if (body.parentWorkspaceId !== undefined) {
+          sendJson(response, 400, { error: "parent_workspace_id_not_accepted" }); return;
+        }
+        if (body.parentPaneId !== undefined && body.createdBy !== "agent") {
+          sendJson(response, 400, { error: "parent_pane_requires_agent" }); return;
+        }
+        const parentPane = body.parentPaneId ? state.findPane(body.parentPaneId) ?? undefined : undefined;
+        if (body.parentPaneId && (!parentPane || parentPane.status === "exited")) {
+          sendJson(response, 422, { error: "parent_pane_unavailable" }); return;
+        }
         const machineId = resolveMachineId(machines, body.machineId);
+        const clientIds = parseClientCreationIds(body.clientIds, {
+          workspaceId: "ws",
+          tabId: "tab",
+          paneId: "pane",
+        }) as WorkspaceCreationIds | undefined;
         const sourcePane = body.sourcePaneId ? state.findPane(body.sourcePaneId) ?? undefined : undefined;
-        const workspace = state.createWorkspace(
-          machineId,
-          await cwdForSourcePane(state, machines, sourcePane, machineId),
-          body.createdBy === "agent" ? "agent" : "user",
-        );
+        const cwdPane = sourcePane ?? parentPane;
+        let workspace;
+        try {
+          workspace = state.createWorkspace(
+            machineId,
+            await cwdForSourcePane(state, machines, cwdPane, machineId),
+            body.createdBy === "agent" ? "agent" : "user",
+            parentPane ? state.findPaneContext(parentPane.id)?.workspace.id : undefined,
+            clientIds,
+          );
+        } catch (error) {
+          if (error instanceof WorkspaceDepthError) { sendJson(response, 422, { error: error.code }); return; }
+          throw error;
+        }
         sendJson(response, 201, { workspace, state: currentPayload() });
         return;
       }
@@ -641,23 +730,27 @@ export const createHttpServer = (
           workspaceId?: unknown;
           targetWorkspaceId?: unknown;
           position?: unknown;
+          workspaceTreeRevision?: unknown;
         };
         if (
           typeof body.workspaceId !== "string" ||
-          typeof body.targetWorkspaceId !== "string" ||
-          (body.position !== "before" && body.position !== "after")
+          (body.position !== "out-of" && typeof body.targetWorkspaceId !== "string") ||
+          (body.position === "out-of" && body.targetWorkspaceId !== undefined && typeof body.targetWorkspaceId !== "string") ||
+          (body.position !== "before" && body.position !== "after" && body.position !== "into" && body.position !== "out-of") ||
+          !Number.isInteger(body.workspaceTreeRevision)
         ) {
           sendJson(response, 400, { error: "invalid_workspace_reorder" });
           return;
         }
-        const reordered = state.reorderWorkspace(
+        const reordered = state.reorderWorkspaceResult(
           body.workspaceId,
-          body.targetWorkspaceId,
+          typeof body.targetWorkspaceId === "string" ? body.targetWorkspaceId : undefined,
           body.position as WorkspaceReorderPosition,
+          body.workspaceTreeRevision as number,
         );
-        if (!reordered) {
-          sendJson(response, 404, { error: "workspace_not_found" });
-          return;
+        if (!reordered.ok) {
+          const status = reordered.status === "conflict" ? 409 : reordered.status === "not_found" ? 404 : 422;
+          sendJson(response, status, { error: `workspace_${reordered.status}`, state: currentPayload() }); return;
         }
         sendJson(response, 200, { state: currentPayload() });
         return;
@@ -933,14 +1026,20 @@ export const createHttpServer = (
 
       const tabs = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs$/);
       if (tabs && request.method === "POST") {
-        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string };
+        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string; clientIds?: unknown };
         const snapshot = state.snapshot();
         const workspace = snapshot.workspaces.find((candidate) => candidate.id === tabs[1]);
         const sourcePane = body.sourcePaneId
           ? workspace?.tabs.flatMap((tab) => tab.panes).find((pane) => pane.id === body.sourcePaneId)
           : undefined;
         const machineId = resolveMachineId(machines, body.machineId, workspace?.machineId);
-        const tab = state.createTab(tabs[1], machineId, await cwdForSourcePane(state, machines, sourcePane, machineId));
+        const clientIds = parseClientCreationIds(body.clientIds, { tabId: "tab", paneId: "pane" }) as TabCreationIds | undefined;
+        const tab = state.createTab(
+          tabs[1],
+          machineId,
+          await cwdForSourcePane(state, machines, sourcePane, machineId),
+          clientIds,
+        );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
       }
@@ -966,23 +1065,28 @@ export const createHttpServer = (
           paneId?: string;
           direction?: "horizontal" | "vertical";
           machineId?: string;
+          clientIds?: unknown;
         };
         if (!body.paneId || (body.direction !== "horizontal" && body.direction !== "vertical")) {
           sendJson(response, 400, { error: "invalid_split" });
           return;
         }
         const snapshot = state.snapshot();
-        const sourcePane = snapshot.workspaces
+        const targetTab = snapshot.workspaces
           .flatMap((workspace) => workspace.tabs)
-          .flatMap((tab) => tab.panes)
-          .find((pane) => pane.id === body.paneId);
-        const machineId = resolveMachineId(machines, body.machineId, sourcePane?.machineId);
+          .find((tab) => tab.id === split[1]);
+        if (!targetTab) throw new HttpError(404, "tab_not_found");
+        const sourcePane = targetTab.panes.find((pane) => pane.id === body.paneId);
+        if (!sourcePane) throw new HttpError(404, "pane_not_found");
+        const machineId = resolveMachineId(machines, body.machineId, sourcePane.machineId);
+        const clientIds = parseClientCreationIds(body.clientIds, { paneId: "pane" }) as SplitCreationIds | undefined;
         const tab = state.splitPane(
           split[1],
           body.paneId,
           body.direction,
           machineId,
           await cwdForSourcePane(state, machines, sourcePane, machineId),
+          clientIds,
         );
         sendJson(response, 201, { tab, state: currentPayload() });
         return;
@@ -1074,6 +1178,10 @@ export const createHttpServer = (
     } catch (error) {
       if (error instanceof HttpError || error instanceof HostRegistryError || error instanceof PasteImageStageError) {
         sendJson(response, error.status, { error: error.code });
+        return;
+      }
+      if (error instanceof StateIdConflictError) {
+        sendJson(response, 409, { error: "client_id_conflict" });
         return;
       }
       // Log full detail server-side but never leak internal messages/paths to
@@ -1177,9 +1285,14 @@ export const createHttpServer = (
     }
     const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? bindHost}`);
     if (options.dev && url.pathname === "/ws/vite-hmr") return;
-    // WebSockets can't set an Authorization header from the browser, so the
-    // token rides on the query string; enforce it before any handshake.
-    if (!isAuthorized(auth, request, url)) {
+    const socketClass = classifyWebSocket(url.pathname);
+    if (!socketClass) {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    const principal = authenticateRequest(auth, request, url);
+    if (!authorizeWebSocketPrincipal(auth, principal, socketClass)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
@@ -1310,6 +1423,30 @@ const cwdForSourcePane = async (
   return cwd ?? sourcePane.cwd;
 };
 
+const clientIdPattern = (prefix: string): RegExp => new RegExp(`^${prefix}_[0-9a-f]{16,64}$`);
+
+const parseClientCreationIds = (
+  value: unknown,
+  fields: Record<string, string>,
+): Record<string, string> | undefined => {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "invalid_client_ids");
+  }
+  const record = value as Record<string, unknown>;
+  const expectedKeys = Object.keys(fields);
+  if (Object.keys(record).length !== expectedKeys.length) throw new HttpError(400, "invalid_client_ids");
+  const result: Record<string, string> = {};
+  for (const key of expectedKeys) {
+    const id = record[key];
+    if (typeof id !== "string" || !clientIdPattern(fields[key]).test(id)) {
+      throw new HttpError(400, "invalid_client_ids");
+    }
+    result[key] = id;
+  }
+  return result;
+};
+
 const maxAttachmentBytes = 8 * 1024 * 1024;
 
 const attachmentExtensions: Record<string, string> = {
@@ -1430,6 +1567,31 @@ const staticHeaders = (filePath: string): Record<string, string> => {
     headers["cache-control"] = "public, max-age=31536000, immutable";
   }
   return headers;
+};
+
+const serveBundledMesloFont = (
+  root: string,
+  face: BundledMesloFontFace,
+  headOnly: boolean,
+  response: http.ServerResponse,
+): boolean => {
+  const fileName = bundledMesloFontFiles[face];
+  const candidates = [
+    path.join(root, "fonts", "meslo", fileName),
+    path.join(root, "public", "fonts", "meslo", fileName),
+  ];
+  const filePath = candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!filePath) return false;
+  const stat = fs.statSync(filePath);
+  response.writeHead(200, {
+    "content-type": "font/woff2",
+    "content-length": String(stat.size),
+    "cache-control": "public, max-age=31536000, immutable",
+    "x-content-type-options": "nosniff",
+  });
+  if (headOnly) response.end();
+  else fs.createReadStream(filePath).pipe(response);
+  return true;
 };
 
 const machineExists = (machines: MachineConfig[], machineId: string): boolean =>

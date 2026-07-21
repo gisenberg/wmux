@@ -4,20 +4,26 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import test from "node:test";
-import type { WebSocket } from "ws";
+import { promisify } from "node:util";
+import { WebSocket } from "ws";
+import { createHttpServer } from "../src/server/http.js";
 import { durableSessionName } from "../src/server/machines.js";
 import {
   isAgentInterruptInput,
   isTerminalProtocolResponseInput,
+  paneAuthEnvironmentForMachine,
   parseClientMessage,
   resolveDisposalMachine,
   sessionAccessTokenForMachine,
   SessionManager,
 } from "../src/server/session-manager.js";
 import { StateStore } from "../src/server/state.js";
+import { SettingsStore } from "../src/server/settings.js";
 import type { MachineConfig } from "../src/server/types.js";
+
+const execFileAsync = promisify(execFile);
 
 test("registered sessions never receive the broad wmux API token", () => {
   const registered: MachineConfig = {
@@ -29,6 +35,24 @@ test("registered sessions never receive the broad wmux API token", () => {
   };
   assert.equal(sessionAccessTokenForMachine(registered, "broad-token"), "");
   assert.equal(sessionAccessTokenForMachine({ ...registered, source: "config" }, "broad-token"), "broad-token");
+});
+
+test("pane auth staging prefers helper scope, preserves default fallback, and keeps registered panes empty", () => {
+  const configured: MachineConfig = { id: "static", name: "Static", kind: "ssh", source: "config" };
+  const registered: MachineConfig = { ...configured, id: "dynamic", source: "registered" };
+  assert.deepEqual(paneAuthEnvironmentForMachine(configured, "legacy", "helper", "login-only"), {
+    WMUX_HELPER_TOKEN: "helper",
+    WMUX_TOKEN: "",
+    WMUX_BROWSER_AUTH_MODE: "login-only",
+  });
+  assert.deepEqual(paneAuthEnvironmentForMachine(configured, "legacy", "", "shared-or-login"), {
+    WMUX_TOKEN: "legacy",
+    WMUX_BROWSER_AUTH_MODE: "shared-or-login",
+  });
+  assert.deepEqual(paneAuthEnvironmentForMachine(registered, "legacy", "helper", "login-only"), {
+    WMUX_TOKEN: "",
+    WMUX_BROWSER_AUTH_MODE: "login-only",
+  });
 });
 
 test("pane disposal prefers the live session's pre-heartbeat machine snapshot", () => {
@@ -267,6 +291,28 @@ const waitForCondition = async (predicate: () => boolean, timeoutMs = 3_000): Pr
   }
 };
 
+const waitForWebSocketMessage = async (
+  ws: WebSocket,
+  predicate: (message: any) => boolean,
+  timeoutMs = 5_000,
+): Promise<any> => new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => {
+    cleanup();
+    reject(new Error("timed out waiting for websocket message"));
+  }, timeoutMs);
+  const onMessage = (raw: WebSocket.RawData) => {
+    const message = JSON.parse(raw.toString());
+    if (!predicate(message)) return;
+    cleanup();
+    resolve(message);
+  };
+  const cleanup = () => {
+    clearTimeout(timeout);
+    ws.off("message", onMessage);
+  };
+  ws.on("message", onMessage);
+});
+
 const withState = async (machine: MachineConfig, run: (state: StateStore, dir: string) => Promise<void>) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-manager-"));
   try {
@@ -368,6 +414,40 @@ test("terminal-generated response metadata survives client message parsing", () 
     type: "input",
     data: "text",
   });
+  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 42 })), {
+    type: "input",
+    data: "x",
+    sequence: 42,
+  });
+  assert.equal(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 0 })), null);
+  assert.equal(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 1.5 })), null);
+});
+
+test("pane output acknowledges each browser's latest input sequence without tagging output watchers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-input-ack-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const manager = new SessionManager(state, [machine]);
+  const client = socket();
+  const watcher = socket();
+  const internals = manager as unknown as {
+    sockets: Map<string, Set<WebSocket>>;
+    outputWatchers: Map<string, Set<WebSocket>>;
+    socketState: Map<WebSocket, { paneId: string; cols: number; rows: number; inputSequence?: number }>;
+    broadcastOutput: (paneId: string, data: string) => void;
+  };
+  try {
+    internals.sockets.set(pane.id, new Set([client]));
+    internals.outputWatchers.set(pane.id, new Set([watcher]));
+    internals.socketState.set(client, { paneId: pane.id, cols: 80, rows: 24, inputSequence: 7 });
+    internals.broadcastOutput(pane.id, "echo");
+    assert.deepEqual(fake(client).sent.at(-1), { type: "output", paneId: pane.id, data: "echo", inputSequence: 7 });
+    assert.deepEqual(fake(watcher).sent.at(-1), { type: "output", paneId: pane.id, data: "echo" });
+  } finally {
+    manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("server recognizes terminal replies from stale browser clients", () => {
@@ -650,5 +730,85 @@ test(
         spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: "ignore" });
       }
     });
+  },
+);
+
+test(
+  "output-only HTTP websocket refreshes a controller-created tmux pane and streams later input",
+  { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
+  async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-controller-tmux-"));
+    const machine: MachineConfig = {
+      id: "local",
+      name: "Local",
+      kind: "local",
+      shell: "/bin/sh",
+      sessionBackend: "tmux",
+    };
+    const state = new StateStore([machine], path.join(dir, "state.json"));
+    const settings = new SettingsStore(path.join(dir, "settings.json"));
+    const manager = new SessionManager(state, [machine]);
+    const workspace = state.snapshot().workspaces[0];
+    const pane = workspace.tabs[0].panes[0];
+    const sessionName = durableSessionName(pane.id);
+    const server = await createHttpServer("127.0.0.1", state, [machine], manager, settings, {
+      auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" },
+      healthResolvers: { machines: async () => [], streams: async () => [] },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const base = `http://127.0.0.1:${address.port}`;
+    const output = new WebSocket(`${base.replace(/^http/, "ws")}/ws/panes/${pane.id}/output?cols=96&rows=32`);
+    const readyPromise = waitForWebSocketMessage(output, (message) => message.type === "ready");
+    try {
+      await once(output, "open");
+      const ready = await readyPromise;
+      assert.equal(ready.outputOnly, true);
+      assert.equal(ready.replay, "");
+      assert.equal(ready.waitForRefresh, true);
+      const refreshed = await waitForWebSocketMessage(
+        output,
+        (message) => message.type === "output" && message.data.length > 0,
+      );
+      assert.notEqual(refreshed.data, "", "controller should receive the refreshed tmux display");
+
+      const marker = `wmux-controller-live-${process.pid}`;
+      const liveOutput = waitForWebSocketMessage(
+        output,
+        (message) => message.type === "output" && message.data.includes(marker),
+      );
+      const input = await fetch(`${base}/api/panes/${pane.id}/input`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: `printf '${marker}\\n'\r`, cols: 96, rows: 32 }),
+      });
+      assert.equal(input.status, 200);
+      assert.match((await liveOutput).data, new RegExp(marker));
+
+      const controllerOutput = await execFileAsync(
+        "python3",
+        ["skills/wmux/scripts/wmuxctl.py", "--url", base, "output", pane.id],
+        {
+          cwd: process.cwd(),
+          env: { PATH: process.env.PATH, HOME: dir, WMUX_TOKEN: "" },
+        },
+      );
+      assert.match(controllerOutput.stdout, new RegExp(marker));
+      assert.match(controllerOutput.stdout, /^.*[$#]\s*$/m);
+
+      const closed = await fetch(`${base}/api/workspaces/${workspace.id}`, { method: "DELETE" });
+      assert.equal(closed.status, 200);
+      await waitForCondition(() => spawnSync("tmux", ["has-session", "-t", sessionName]).status !== 0);
+    } finally {
+      output.terminate();
+      manager.disposeAll();
+      server.close();
+      await once(server, "close");
+      state.flush();
+      spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: "ignore" });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   },
 );

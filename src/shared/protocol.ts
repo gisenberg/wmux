@@ -86,7 +86,7 @@ export interface PaneState {
 
 export type TitleSource = "default" | "auto" | "user";
 export type WorkspaceCreator = "user" | "agent";
-export type WorkspaceReorderPosition = "before" | "after";
+export type WorkspaceReorderPosition = "before" | "after" | "into" | "out-of";
 export type SplitDirection = "horizontal" | "vertical";
 
 export type LayoutNode =
@@ -107,6 +107,8 @@ export interface Workspace {
   id: string;
   name: string;
   createdBy?: WorkspaceCreator;
+  /** Parent is represented by preorder placement in workspaces, never an order key. */
+  parentWorkspaceId?: string;
   nameSource?: TitleSource;
   descriptor?: string;
   descriptorSource?: TitleSource;
@@ -204,10 +206,17 @@ export interface WmuxSettings {
   tuiFrameRate: TuiFrameRate;
   terminalScrollMode: TerminalScrollMode;
   machineAliases: Record<string, string>;
+  collapsedWorkspaceIds: string[];
 }
+
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  '"Fira Code", "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace';
+export const MIN_TERMINAL_FONT_SIZE = 10;
+export const MAX_TERMINAL_FONT_SIZE = 24;
 
 export interface BootstrapPayload {
   revision: number;
+  workspaceTreeRevision: number;
   healthEpoch: number;
   machines: MachineStatus[];
   workspaces: Workspace[];
@@ -215,8 +224,10 @@ export interface BootstrapPayload {
   notifications: TerminalNotification[];
   agentEvents: AgentActivity[];
   runs: TerminalRun[];
+  terminalFontFamily: string;
   settings: WmuxSettings;
   keybindings: KeybindingMap;
+  settingsDefaults: WmuxSettings;
   streams: StreamStatus[];
 }
 
@@ -278,13 +289,21 @@ export interface DoctorReport {
 }
 
 export type PaneClientMessage =
-  | { type: "input"; data: string; terminalResponse?: boolean }
+  | { type: "input"; data: string; terminalResponse?: boolean; sequence?: number }
   | { type: "resize"; cols: number; rows: number; foreground?: boolean }
   | { type: "activate"; cols: number; rows: number; foreground?: boolean };
 
 export type PaneReplayKind = "raw" | "checkpoint";
+export type PaneStartupPhase =
+  | "connecting"
+  | "checking-agent"
+  | "staging-helpers"
+  | "starting-generation"
+  | "creating-session"
+  | "replaying";
 
 export type PaneServerMessage =
+  | { type: "starting"; paneId: string; phase: PaneStartupPhase; label: string }
   | {
       type: "ready";
       paneId: string;
@@ -297,7 +316,7 @@ export type PaneServerMessage =
       outputOnly?: boolean;
       waitForRefresh?: true;
     }
-  | { type: "output"; paneId: string; data: string }
+  | { type: "output"; paneId: string; data: string; inputSequence?: number }
   | { type: "title"; paneId: string; title: string }
   | { type: "exit"; paneId: string; code: number | null }
   | { type: "removed"; paneId: string };

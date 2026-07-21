@@ -11,9 +11,24 @@ function Read-WmuxFileValue([string]$PathValue) {
 }
 
 function Get-WmuxToken {
+  $EnvValue = [Environment]::GetEnvironmentVariable('WMUX_HELPER_TOKEN', 'Process')
+  $EnvConfigured = $null -ne $EnvValue
+  $EnvToken = ([string]$EnvValue).Trim()
+  if ($EnvConfigured -and $EnvToken -notmatch '^[A-Za-z0-9_-]{32,256}$') { throw 'configured helper token is empty or malformed' }
+  $PathValue = [Environment]::GetEnvironmentVariable('WMUX_HELPER_TOKEN_PATH', 'Process')
+  $PathConfigured = $null -ne $PathValue
+  if ($PathConfigured -and [string]::IsNullOrWhiteSpace($PathValue)) { throw 'configured helper token path is empty' }
+  $TokenPath = if ($PathConfigured -and $PathValue) { $PathValue } else { Join-Path $HOME '.wmux\helper-token' }
+  if ($PathConfigured -or (Test-Path -LiteralPath $TokenPath)) {
+    $Token = Read-WmuxFileValue $TokenPath
+    if ($Token -notmatch '^[A-Za-z0-9_-]{32,256}$') { throw 'configured helper token file is unreadable or malformed' }
+    return $Token
+  }
+  if ($EnvConfigured) { return $EnvToken }
+  if ($env:WMUX_BROWSER_AUTH_MODE -eq 'login-only') { return '' }
   if ($env:WMUX_TOKEN) { return $env:WMUX_TOKEN }
-  $TokenPath = if ($env:WMUX_TOKEN_PATH) { $env:WMUX_TOKEN_PATH } else { Join-Path $HOME '.wmux\token' }
-  return Read-WmuxFileValue $TokenPath
+  $LegacyPath = if ($env:WMUX_TOKEN_PATH) { $env:WMUX_TOKEN_PATH } else { Join-Path $HOME '.wmux\token' }
+  return Read-WmuxFileValue $LegacyPath
 }
 
 $WmuxUrl = $env:WMUX_URL

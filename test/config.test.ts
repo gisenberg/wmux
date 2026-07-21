@@ -36,6 +36,20 @@ test("Windows agent ports reserve the bounded rollout range", () => {
   assert.ok(configSchema.safeParse(windowsAgent(65527)).success);
   assert.equal(configSchema.safeParse(windowsAgent(65528)).success, false);
 });
+
+test("validates terminal typography defaults", () => {
+  assert.ok(configSchema.safeParse({
+    terminalFontFamily: '"JetBrains Mono", "Cascadia Code"',
+    terminalFontSize: 16,
+  }).success);
+  for (const terminalFontFamily of ["", "bad\nfont", "x".repeat(257)]) {
+    assert.equal(configSchema.safeParse({ terminalFontFamily }).success, false);
+  }
+  for (const terminalFontSize of [9, 25, 14.5, "14"]) {
+    assert.equal(configSchema.safeParse({ terminalFontSize }).success, false);
+  }
+});
+
 test("rejects machine ids that could escape scripts, paths, or URLs", () => {
   for (const id of ["a b", "a;rm -rf /", "a/../b", "$(x)", "a'b", "", "-lead", "x".repeat(65)]) {
     assert.equal(configSchema.safeParse(machine({ id })).success, false, `id ${JSON.stringify(id)} should be rejected`);
@@ -60,9 +74,16 @@ test("WMUX_CONFIG_PATH isolates explicit runtime and test configuration", () => 
   const configPath = path.join(dir, "config.json");
   const previous = process.env.WMUX_CONFIG_PATH;
   try {
-    fs.writeFileSync(configPath, JSON.stringify(machine({ id: "isolated", name: "Isolated" })));
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...machine({ id: "isolated", name: "Isolated" }),
+      terminalFontFamily: '"JetBrains Mono"',
+      terminalFontSize: 16,
+    }));
     process.env.WMUX_CONFIG_PATH = configPath;
-    assert.deepEqual(loadConfig().machines.map((entry) => entry.id), ["local", "isolated"]);
+    const config = loadConfig();
+    assert.deepEqual(config.machines.map((entry) => entry.id), ["local", "isolated"]);
+    assert.equal(config.terminalFontFamily, '"JetBrains Mono"');
+    assert.equal(config.terminalFontSize, 16);
     process.env.WMUX_CONFIG_PATH = path.join(dir, "missing.json");
     assert.throws(() => loadConfig(), /WMUX_CONFIG_PATH does not exist/);
   } finally {

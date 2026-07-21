@@ -35,6 +35,10 @@ LOCAL_TERMINAL_QUERY_RESPONSES = {
     b"\x1b[5n": b"\x1b[0n",
 }
 
+OSC_DEFAULT_COLOR_RESPONSE_PATTERN = re.compile(
+    rb"\x1b\](10|11);rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)"
+)
+
 OSC7_PATTERN = re.compile(rb"\x1b\]7;file://([^\x07\x1b]*)(?:\x07|\x1b\\)")
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -303,22 +307,55 @@ class CwdReporter:
         return values
 
 
+def osc_default_color_response(slot: int, color: str) -> bytes | None:
+    match = re.fullmatch(r"#([0-9a-fA-F]{6})", color)
+    if not match:
+        return None
+    value = match.group(1).lower()
+    red, green, blue = value[0:2], value[2:4], value[4:6]
+    return f"\x1b]{slot};rgb:{red}{red}/{green}{green}/{blue}{blue}\x1b\\".encode("ascii")
+
+
+def local_terminal_query_responses(environment: dict[str, str]) -> dict[bytes, bytes]:
+    responses = dict(LOCAL_TERMINAL_QUERY_RESPONSES)
+    for slot, key in (
+        (10, "WMUX_TERMINAL_FOREGROUND"),
+        (11, "WMUX_TERMINAL_BACKGROUND"),
+    ):
+        reply = osc_default_color_response(slot, environment.get(key, ""))
+        if reply is None:
+            continue
+        for terminator in (b"\x07", b"\x1b\\"):
+            responses[f"\x1b]{slot};?".encode("ascii") + terminator] = reply
+    return responses
+
+
 class TerminalQueryResponder:
-    def __init__(self) -> None:
+    def __init__(self, responses: dict[bytes, bytes] | None = None) -> None:
         self.pending = b""
+        self.responses = responses if responses is not None else LOCAL_TERMINAL_QUERY_RESPONSES
+        self.default_color_slots = {
+            slot
+            for slot in (b"10", b"11")
+            if any(query.startswith(b"\x1b]" + slot + b";?") for query in self.responses)
+        }
 
     def feed(self, data: bytes) -> list[bytes]:
         replies: list[bytes] = []
-        queries = tuple(LOCAL_TERMINAL_QUERY_RESPONSES)
+        queries = tuple(self.responses)
         for value in data:
             self.pending += bytes((value,))
             while self.pending and not any(query.startswith(self.pending) for query in queries):
                 self.pending = self.pending[1:]
-            reply = LOCAL_TERMINAL_QUERY_RESPONSES.get(self.pending)
+            reply = self.responses.get(self.pending)
             if reply is not None:
                 replies.append(reply)
                 self.pending = b""
         return replies
+
+    def owns_response(self, data: bytes) -> bool:
+        match = OSC_DEFAULT_COLOR_RESPONSE_PATTERN.fullmatch(data)
+        return match is not None and match.group(1) in self.default_color_slots
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -989,10 +1026,11 @@ class ConptyBackend:
         from winpty import Backend, PtyProcess  # type: ignore
 
         command = session_command(config, payload, cwd)
+        environment = session_environment(config, payload)
         self.process = PtyProcess.spawn(
             command,
             cwd=cwd if os.path.isdir(cwd) else None,
-            env=session_environment(config, payload),
+            env=environment,
             dimensions=(max(1, int(rows)), max(2, int(cols))),
             backend=Backend.ConPTY,
         )
@@ -1007,7 +1045,7 @@ class ConptyBackend:
             raise
         self.lock = threading.Lock()
         self.closed = False
-        self.query_responder = TerminalQueryResponder()
+        self.query_responder = TerminalQueryResponder(local_terminal_query_responses(environment))
         self.locally_answered: set[bytes] = set()
 
     @property
@@ -1028,7 +1066,7 @@ class ConptyBackend:
         with self.lock:
             if self.closed:
                 return
-            if data in self.locally_answered:
+            if data in self.locally_answered or self.query_responder.owns_response(data):
                 return
             self.process.write(data.decode("utf-8", errors="replace"))
 

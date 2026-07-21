@@ -305,7 +305,34 @@ def request_status_url(args: argparse.Namespace, machine_id: str) -> str:
 
 
 def wmux_headers() -> dict:
-    token = os.environ.get("WMUX_TOKEN")
+    env_configured = "WMUX_HELPER_TOKEN" in os.environ
+    env_token = os.environ.get("WMUX_HELPER_TOKEN", "").strip()
+    if env_configured and not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", env_token):
+        raise SystemExit("wmux-stream-agent: configured helper token is empty or malformed")
+    path_configured = "WMUX_HELPER_TOKEN_PATH" in os.environ
+    path_value = os.environ.get("WMUX_HELPER_TOKEN_PATH", "").strip()
+    if path_configured and not path_value:
+        raise SystemExit("wmux-stream-agent: configured helper token path is empty")
+    helper_path = path_value if path_configured else os.path.expanduser("~/.wmux/helper-token")
+    token = ""
+    if path_configured or os.path.exists(helper_path):
+        try:
+            with open(helper_path, "r", encoding="utf-8") as handle:
+                token = handle.read().strip()
+        except OSError:
+            token = ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token):
+            raise SystemExit("wmux-stream-agent: configured helper token file is unreadable or malformed")
+    elif env_configured:
+        token = env_token
+    elif os.environ.get("WMUX_BROWSER_AUTH_MODE", "shared-or-login") != "login-only":
+        token = os.environ.get("WMUX_TOKEN")
+        if not token:
+            try:
+                with open(os.environ.get("WMUX_TOKEN_PATH") or os.path.expanduser("~/.wmux/token"), "r", encoding="utf-8") as handle:
+                    token = handle.read().strip()
+            except OSError:
+                token = ""
     return {"authorization": "Bearer " + token} if token else {}
 
 
@@ -460,10 +487,10 @@ def main() -> int:
     config = load_config(pre_args.config)
     # The wmux lease endpoint is token-gated when auth is enabled; allow the
     # token to arrive via env or the staged config file.
-    if not os.environ.get("WMUX_TOKEN"):
+    if "WMUX_HELPER_TOKEN" not in os.environ:
         config_token = config_string(config, "token")
         if config_token:
-            os.environ["WMUX_TOKEN"] = config_token
+            os.environ["WMUX_HELPER_TOKEN"] = config_token
     system = platform.system().lower()
     default_input_pixel_format = ""
 

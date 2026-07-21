@@ -19,6 +19,7 @@ const windowsBootstrapEnvKeys = new Set([
   "WMUX_TERMINAL_BACKGROUND",
   "WMUX_TERMINAL_ANSI_PALETTE",
   "KITTY_WINDOW_ID",
+  "WMUX_BROWSER_AUTH_MODE",
 ]);
 const windowsRequiredHelperNames = [
   "wmux-agent-event",
@@ -143,6 +144,9 @@ $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 if ($env:WMUX_TOKEN) {
   [System.IO.File]::WriteAllText((Join-Path $StateDir 'token'), [string]::Concat($env:WMUX_TOKEN, [Environment]::NewLine), $Utf8NoBom)
 }
+if ($env:WMUX_HELPER_TOKEN) {
+  [System.IO.File]::WriteAllText((Join-Path $StateDir 'helper-token'), [string]::Concat($env:WMUX_HELPER_TOKEN, [Environment]::NewLine), $Utf8NoBom)
+}
 if ($env:WMUX_URL) {
   [System.IO.File]::WriteAllText((Join-Path $StateDir 'url'), [string]::Concat($env:WMUX_URL, [Environment]::NewLine), $Utf8NoBom)
 }
@@ -152,6 +156,8 @@ $WmuxHeaders = @{}
 $WmuxBootstrapToken = ${psSingleQuote(bootstrapToken ?? "")}
 if ($WmuxBootstrapToken) {
   $WmuxHeaders['Authorization'] = "Bearer $WmuxBootstrapToken"
+} elseif ($env:WMUX_HELPER_TOKEN) {
+  $WmuxHeaders['Authorization'] = "Bearer $($env:WMUX_HELPER_TOKEN)"
 } elseif ($env:WMUX_TOKEN) {
   $WmuxHeaders['Authorization'] = "Bearer $($env:WMUX_TOKEN)"
 }

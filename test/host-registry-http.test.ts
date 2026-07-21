@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
-import type { AuthConfig } from "../src/server/auth.js";
+import { issueSessionToken, type AuthConfig } from "../src/server/auth.js";
 import { HostRegistry } from "../src/server/host-registry.js";
 import { createHttpServer } from "../src/server/http.js";
 import type { SessionManager } from "../src/server/session-manager.js";
@@ -171,7 +171,9 @@ test("registration remains token-gated when main wmux auth is disabled", async (
 });
 
 test("registry responses and browser bootstrap redact observed-host agent credentials", async () => {
-  const app = await startServer();
+  const auth = { ...sharedAuth, helperToken: "H".repeat(43) };
+  const app = await startServer(auth);
+  const browserSession = issueSessionToken(auth.sessionSecret, 60_000, Date.now());
   try {
     const body = registrationBody({
       id: "dynamic-win",
@@ -211,6 +213,29 @@ test("registry responses and browser bootstrap redact observed-host agent creden
       `${app.baseUrl}/api/helpers/windows/dynamic-win/bootstrap?token=registration-token`,
     );
     assert.equal(enrollmentBootstrap.status, 401);
+
+    for (const endpoint of [
+      "/api/helpers/windows/dynamic-win",
+      "/api/helpers/windows/dynamic-win/bootstrap",
+    ]) {
+      const browserDenied = await fetch(`${app.baseUrl}${endpoint}`, { headers: bearer(browserSession) });
+      assert.equal(browserDenied.status, 403);
+      assert.doesNotMatch(await browserDenied.text(), /private-agent-token|H{43}|wmux-token/);
+    }
+    const helperBundleDenied = await fetch(`${app.baseUrl}/api/helpers/windows/dynamic-win`, {
+      headers: bearer(auth.helperToken),
+    });
+    assert.equal(helperBundleDenied.status, 403);
+    const helperBootstrapDenied = await fetch(`${app.baseUrl}/api/helpers/windows/dynamic-win/bootstrap`, {
+      headers: bearer(auth.helperToken),
+    });
+    assert.equal(helperBootstrapDenied.status, 403);
+    assert.equal((await fetch(
+      `${app.baseUrl}/api/helpers/windows/dynamic-win/bootstrap?token=${encodeURIComponent(auth.helperToken)}`,
+    )).status, 401);
+    assert.equal((await fetch(`${app.baseUrl}/api/helpers/windows/dynamic-win/bootstrap`, {
+      headers: bearer("wmux-token"),
+    })).status, 403);
 
     const bootstrapToken = app.registry.bootstrapToken("dynamic-win");
     assert.ok(bootstrapToken);

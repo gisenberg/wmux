@@ -80,6 +80,31 @@ test("agent event helper prefers the refreshed token file over a stale environme
   }
 });
 
+test("agent event helper uses helper scope and never falls back in login-only mode", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-event-helper-token-"));
+  const authorizations: string[] = [];
+  const server = http.createServer((request, response) => {
+    authorizations.push(request.headers.authorization ?? "");
+    response.writeHead(request.headers.authorization === `Bearer ${"H".repeat(43)}` ? 201 : 401).end();
+  });
+  try {
+    fs.mkdirSync(path.join(home, ".wmux"));
+    fs.writeFileSync(path.join(home, ".wmux", "helper-token"), `${"H".repeat(43)}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(home, ".wmux", "token"), "legacy-token\n", { mode: 0o600 });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await runAgentEvent(
+      ["--url", `http://127.0.0.1:${address.port}`, "--pane", "pane-1", "--force"],
+      agentEventEnv(home, { WMUX_BROWSER_AUTH_MODE: "login-only", WMUX_TOKEN: "stale-legacy" }),
+    );
+    assert.deepEqual(authorizations, [`Bearer ${"H".repeat(43)}`]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("agent event helper sends the full assistant response as structured JSON", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-event-"));
   const transcriptPath = path.join(dir, "transcript.jsonl");

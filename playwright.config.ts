@@ -8,6 +8,7 @@ fs.mkdirSync(runtimeDir, { recursive: true });
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "auth-login-only.spec.ts",
   outputDir: "test-results/playwright",
   fullyParallel: false,
   workers: 1,

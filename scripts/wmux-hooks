@@ -180,12 +180,41 @@ const redact = (value: unknown, secrets: string[]) => {
 
 const wmuxConfig = () => {
   const home = process.env.HOME ?? ""
+  const expandHome = (filePath: string) => filePath === "~"
+    ? home
+    : filePath.startsWith("~/")
+      ? home + filePath.slice(1)
+      : filePath
   const read = (filePath: string) => {
     try { return fs.readFileSync(filePath, "utf8").trim() } catch { return "" }
   }
+  const scopedPattern = /^[A-Za-z0-9_-]{32,256}$/
+  const envConfigured = Object.prototype.hasOwnProperty.call(process.env, "WMUX_AUTOMATION_TOKEN")
+  if (envConfigured) {
+    const token = process.env.WMUX_AUTOMATION_TOKEN?.trim() ?? ""
+    if (!scopedPattern.test(token)) throw new Error("configured automation token is empty or malformed")
+    return { url: process.env.WMUX_URL || read(home + "/.wmux/url"), token }
+  }
+  const pathConfigured = Object.prototype.hasOwnProperty.call(process.env, "WMUX_AUTOMATION_TOKEN_PATH")
+  const configuredPath = process.env.WMUX_AUTOMATION_TOKEN_PATH?.trim() ?? ""
+  if (pathConfigured && !configuredPath) throw new Error("configured automation token path is empty")
+  const automationPath = expandHome(configuredPath || "~/.wmux/automation-token")
+  if (pathConfigured || fs.existsSync(automationPath)) {
+    let token = ""
+    try { token = fs.readFileSync(automationPath, "utf8").trim() } catch {
+      throw new Error("configured automation token file is empty or unreadable")
+    }
+    if (!token) throw new Error("configured automation token file is empty or unreadable")
+    if (!scopedPattern.test(token)) throw new Error("configured automation token file is malformed")
+    return { url: process.env.WMUX_URL || read(home + "/.wmux/url"), token }
+  }
+  if (process.env.WMUX_BROWSER_AUTH_MODE === "login-only") {
+    throw new Error("login-only mode requires an automation token")
+  }
+  const legacyPath = expandHome(process.env.WMUX_TOKEN_PATH?.trim() || "~/.wmux/token")
   return {
     url: process.env.WMUX_URL || read(home + "/.wmux/url"),
-    token: process.env.WMUX_TOKEN || read(home + "/.wmux/token"),
+    token: process.env.WMUX_TOKEN || read(legacyPath),
   }
 }
 
@@ -304,7 +333,12 @@ class PaneChannel {
   private closed = false
   private waiters = new Set<ChannelWaiter>()
 
-  private constructor(private ws: WebSocket) {
+  private constructor(
+    private ws: WebSocket,
+    private base: string,
+    private token: string,
+    private paneId: string,
+  ) {
     ws.onmessage = (event: MessageEvent) => {
       try {
         const message = JSON.parse(String(event.data))
@@ -326,11 +360,12 @@ class PaneChannel {
 
   static open(base: string, token: string, paneId: string, timeout: number, signal: AbortSignal) {
     return new Promise<PaneChannel>((resolve, reject) => {
-      const endpoint = new URL(joinUrl(base, "ws/panes/" + encodeURIComponent(paneId)))
+      const endpoint = new URL(joinUrl(base, "ws/panes/" + encodeURIComponent(paneId) + "/output"))
       endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:"
-      if (token) endpoint.searchParams.set("token", token)
-      const ws = new WebSocket(endpoint)
-      const channel = new PaneChannel(ws)
+      endpoint.searchParams.set("cols", "96")
+      endpoint.searchParams.set("rows", "32")
+      const ws = new WebSocket(endpoint, token ? { headers: { Authorization: "Bearer " + token } } as any : undefined)
+      const channel = new PaneChannel(ws, base, token, paneId)
       let settled = false
       const finish = (error?: Error) => {
         if (settled) return
@@ -427,15 +462,19 @@ class PaneChannel {
     })
   }
 
-  send(data: string) {
+  async send(data: string, signal: AbortSignal) {
     if (this.closed || this.failed || this.ws.readyState !== 1) {
       throw new DelegationProtocolError("wmux pane channel is unavailable")
     }
-    this.ws.send(JSON.stringify({ type: "input", data }))
+    await requestJson(this.base, this.token, "/api/panes/" + encodeURIComponent(this.paneId) + "/input", {
+      method: "POST",
+      body: JSON.stringify({ data }),
+      signal,
+    })
   }
 
   interrupt() {
-    try { this.send("\u0003") } catch {}
+    void this.send("\u0003", new AbortController().signal).catch(() => {})
   }
 
   close() {
@@ -463,9 +502,9 @@ const delay = (milliseconds: number, signal: AbortSignal) => new Promise<void>((
 })
 
 const sendLine = async (channel: PaneChannel, value: string, signal: AbortSignal) => {
-  channel.send(value)
+  await channel.send(value, signal)
   await delay(INPUT_DELAY_MS, signal)
-  channel.send("\r")
+  await channel.send("\r", signal)
 }
 
 const taskOutput = (
@@ -572,6 +611,7 @@ const delegate = tool({
 
     const { url, token } = wmuxConfig()
     if (!url) throw new Error("wmux URL is not configured")
+    const parentPaneId = process.env.WMUX_PANE_ID || ""
     const bootstrap: any = await requestJson(url, token, "/api/bootstrap", { signal: context.abort })
     const machine = Array.isArray(bootstrap.machines) && bootstrap.machines.find((candidate: any) =>
       candidate?.id === args.machine && candidate.reachable === true
@@ -582,7 +622,11 @@ const delegate = tool({
 
     const made: any = await requestJson(url, token, "/api/workspaces", {
       method: "POST",
-      body: JSON.stringify({ machineId: args.machine, createdBy: "agent" }),
+      body: JSON.stringify({
+        machineId: args.machine,
+        createdBy: "agent",
+        ...(parentPaneId ? { parentPaneId } : {}),
+      }),
       signal: context.abort,
     })
     const workspace = made?.workspace

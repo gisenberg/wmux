@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "./api";
 import { setToken } from "./token";
 
 interface LoginViewProps {
   embedded?: boolean;
+  loginEnabled: boolean;
   onAuthenticated: () => void;
 }
 
@@ -12,19 +13,11 @@ interface LoginViewProps {
  * offers a username/password form (minting a session token); otherwise it
  * explains the token-URL path used by machine clients.
  */
-export const LoginView = ({ embedded = false, onAuthenticated }: LoginViewProps) => {
-  const [loginEnabled, setLoginEnabled] = useState<boolean | null>(null);
+export const LoginView = ({ embedded = false, loginEnabled, onAuthenticated }: LoginViewProps) => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api
-      .authInfo()
-      .then((info) => setLoginEnabled(info.loginEnabled))
-      .catch(() => setLoginEnabled(false));
-  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
