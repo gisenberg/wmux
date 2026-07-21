@@ -515,42 +515,29 @@ wmuxctl delegate codex windows-box --directory 'T:\git\example\project' \
   --sandbox danger-full-access --structured-outcome
 ```
 
-Codex defaults to its read-only sandbox and Claude defaults to plan permission
-mode. `--write-access` opts into Codex workspace writes or Claude accepted edits;
-it does not bypass approval prompts. OpenCode cannot enforce a comparable
-read-only mode, so its delegation requires explicit `--write-access`.
-`--unattended` separately opts into the runtime's non-interactive approval
-bypass and should only be used for work explicitly authorized on a trusted
-target. For OpenCode, the staged runner probes the installed CLI and uses its
-advertised `--auto` or `--dangerously-skip-permissions` option, failing closed
-if neither is available. Prompts are sent through pane stdin rather than shell
-arguments and are redacted from returned terminal output.
-`--sandbox danger-full-access` disables Codex filesystem and network sandboxing
-without enabling the separate unattended approval option.
-`--structured-outcome` requires Codex to report `completed`, `blocked`, or
-`failed` with a summary, so a normal process exit cannot turn blocked work into
-a successful result.
+Codex defaults to its read-only sandbox and Claude defaults to plan permission mode.
+`--write-access` opts into Codex workspace writes or Claude accepted edits; it does not bypass approval prompts.
+OpenCode cannot enforce a comparable read-only mode, so its delegation requires explicit `--write-access`.
+`--unattended` separately opts into the runtime's non-interactive approval bypass and should only be used for work explicitly authorized on a trusted target.
+For OpenCode, the staged runner probes the installed CLI and uses its advertised `--auto` or `--dangerously-skip-permissions` option, failing closed if neither is available.
+Prompts are sent through pane stdin rather than shell arguments and are redacted from returned terminal output.
+`--sandbox danger-full-access` disables Codex filesystem and network sandboxing without enabling the separate unattended approval option.
+`--structured-outcome` requires Codex to report `completed`, `blocked`, or `failed` with a summary, so a normal process exit cannot turn blocked work into a successful result.
 
 Delegations leave their durable workspace open by default.
 On Windows, this preserves the Codex conversation for a later turn with the same title.
 `--close-on-success` (`close_on_success` in the OpenCode tool) closes only after a successful result and completed lifecycle event.
 Failed, stopped, and timed-out workspaces remain available for inspection.
-The permission-gated `wmux_close` tool accepts `workspace_id` to explicitly
-close a workspace later, but refuses anything not recorded as agent-created.
-The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions
-to `ask` in memory without rewriting `opencode.json`; an explicit per-tool
-OpenCode permission of `allow`, `ask`, or `deny` takes precedence.
-Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require
-manual recovery. Restart OpenCode after installing or updating the plugin so it
-loads the generated tools.
+The permission-gated `wmux_close` tool accepts `workspace_id` to explicitly close a workspace later, but refuses anything not recorded as agent-created.
+The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions to `ask` in memory without rewriting `opencode.json`; an explicit per-tool OpenCode permission of `allow`, `ask`, or `deny` takes precedence.
+Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require manual recovery.
+Restart OpenCode after installing or updating the plugin so it loads the generated tools.
 
 The older `wmux-opencode-run` helper remains staged for compatibility with existing integrations.
 New POSIX callers should use `wmux-agent-run` through `wmuxctl delegate`.
 
-On Windows, run `wmux-windows-setup install-hooks`, then review and trust the
-command with `/hooks` in a new Codex session. Dynamically registered hosts do
-not receive broad wmux API credentials; lifecycle hooks on those hosts require
-separately provisioned API authentication or event posts fail with `401`.
+On Windows, run `wmux-windows-setup install-hooks`, then review and trust the command with `/hooks` in a new Codex session.
+Dynamically registered hosts do not receive broad wmux API credentials; lifecycle hooks on those hosts require separately provisioned API authentication or event posts fail with `401`.
 
 OpenCode's semantic Copy action and Codex's `/copy` command can write through OSC 52. wmux accepts
 canonical UTF-8 writes to the `c` clipboard selection (`ESC ] 52 ; c ; base64`) and tmux's empty

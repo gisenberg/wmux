@@ -997,6 +997,10 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     prompt = read_delegate_prompt(args)
     if args.runtime == "opencode" and not args.write_access:
         raise SystemExit("wmuxctl: OpenCode delegation cannot enforce read-only mode; add --write-access explicitly")
+    if args.sandbox and args.runtime != "codex":
+        raise SystemExit("wmuxctl: explicit sandbox modes currently require the Codex runtime")
+    if args.structured_outcome and args.runtime != "codex":
+        raise SystemExit("wmuxctl: structured outcomes currently require the Codex runtime")
     bootstrap = client.bootstrap()
     machine = next((item for item in bootstrap.get("machines", []) if item.get("id") == args.machine), None)
     if not machine or machine.get("reachable") is not True:
@@ -1013,9 +1017,6 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         raise SystemExit("wmuxctl: Windows delegation directory must be drive-absolute or home-relative")
     if is_windows and args.runtime != "codex":
         raise SystemExit("wmuxctl: Windows delegation currently supports the Codex runtime")
-    if args.structured_outcome and args.runtime != "codex":
-        raise SystemExit("wmuxctl: structured outcomes currently require the Codex runtime")
-
     title = args.title or f"{args.runtime.capitalize()} delegation"
     workspace = None
     reused = False

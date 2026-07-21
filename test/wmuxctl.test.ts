@@ -41,6 +41,36 @@ const cli = (url: string, args: string[], env: NodeJS.ProcessEnv = {}) => execFi
   env: { ...process.env, WMUX_TOKEN: "test-token", ...env },
 });
 
+test("wmuxctl rejects Codex-only delegation options for other runtimes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-runtime-options-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "inspect only");
+  try {
+    await assert.rejects(
+      cli("http://127.0.0.1:1", [
+        "delegate", "claude", "local", "--directory", root,
+        "--prompt-file", promptPath, "--sandbox", "read-only",
+      ]),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /explicit sandbox modes currently require the Codex runtime/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      cli("http://127.0.0.1:1", [
+        "delegate", "claude", "local", "--directory", root,
+        "--prompt-file", promptPath, "--structured-outcome",
+      ]),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /structured outcomes currently require the Codex runtime/);
+        return true;
+      },
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("wmuxctl output and wait read authenticated pane replay", async () => {
   const authorizations: Array<string | undefined> = [];
   const replay = "\u001b[2JDo you trust the contents of this directory?\r\n1. Yes, continue\r\ntask_complete";
