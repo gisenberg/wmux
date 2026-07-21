@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import { isTerminalProtocolResponse } from "../shared/terminal-protocol.js";
+import type { BrowserAuthMode } from "./auth.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
 import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
@@ -54,6 +55,22 @@ export const sessionAccessTokenForMachine = (
   accessToken: string,
 ): string => (machine.source === "registered" ? "" : accessToken);
 
+export const paneAuthEnvironmentForMachine = (
+  machine: MachineConfig,
+  accessToken: string,
+  helperToken: string,
+  browserAuthMode: BrowserAuthMode,
+): Record<string, string> => {
+  const scopedToken = sessionAccessTokenForMachine(machine, helperToken);
+  return {
+    ...(scopedToken ? { WMUX_HELPER_TOKEN: scopedToken } : {}),
+    WMUX_TOKEN: helperToken || browserAuthMode === "login-only"
+      ? ""
+      : sessionAccessTokenForMachine(machine, accessToken),
+    WMUX_BROWSER_AUTH_MODE: browserAuthMode,
+  };
+};
+
 export const resolveDisposalMachine = (
   sessionMachine: MachineConfig | undefined,
   currentMachines: MachineConfig[],
@@ -106,6 +123,8 @@ export class SessionManager {
     private readonly onPaneReferencesChanged: () => void = () => undefined,
     private readonly pasteImages: PasteImageStager = new PasteImageStaging(),
     private readonly terminalEnvironment: () => Record<string, string> = () => ({}),
+    private readonly helperToken = "",
+    private readonly browserAuthMode: BrowserAuthMode = "shared-or-login",
   ) {
     this.currentMachines = typeof machines === "function" ? machines : () => machines;
   }
@@ -270,7 +289,11 @@ export class SessionManager {
         replay: replay.data,
         replayKind: replay.kind,
         outputOnly: true,
+        ...(this.shouldUseDurableClientRefresh(pane) && replay.kind === "raw" && replay.data === ""
+          ? { waitForRefresh: true as const }
+          : {}),
       });
+      this.scheduleDurableClientRefresh(pane, socket);
     };
     if (session.attachReady) void session.attachReady.then(sendReady);
     else sendReady();
@@ -349,6 +372,7 @@ export class SessionManager {
     const streamPath = streamPathForMachine(machine.id);
     const sessionEnv = {
       ...this.terminalEnvironment(),
+      ...paneAuthEnvironmentForMachine(machine, this.accessToken, this.helperToken, this.browserAuthMode),
       WMUX_URL: resolveHelperUrl(`http://${process.env.WMUX_HOST ?? "127.0.0.1"}:${process.env.WMUX_PORT ?? "3478"}`),
       WMUX_WORKSPACE_ID: context?.workspace.id ?? "",
       WMUX_WORKSPACE_NAME: context?.workspace.name ?? "",
@@ -357,7 +381,6 @@ export class SessionManager {
       WMUX_PANE_ID: pane.id,
       // A shared registration credential can update dynamic machine records.
       // Never forward the broader browser/API credential to those targets.
-      WMUX_TOKEN: sessionAccessTokenForMachine(machine, this.accessToken),
       WMUX_BOOTSTRAP_TOKEN:
         machine.source === "registered" && machine.kind === "powershell-ssh" && machine.sessionBackend !== "agent"
           ? (this.bootstrapTokenForMachine(machine.id) ?? "")

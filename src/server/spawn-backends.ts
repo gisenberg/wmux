@@ -115,6 +115,18 @@ const powershellSshBackend: Backend = {
     const args = ["-tt", ...sshControlArgs(extraEnv.WMUX_PANE_ID, true)];
     if (machine.port) args.push("-p", String(machine.port));
     const { WMUX_BOOTSTRAP_TOKEN: bootstrapToken, ...remoteEnv } = extraEnv;
+    if (machine.source !== "registered" && remoteEnv.WMUX_BROWSER_AUTH_MODE === "login-only" && !remoteEnv.WMUX_HELPER_TOKEN) {
+      throw new Error("login-only Windows bootstrap requires a helper token");
+    }
+    if (machine.source !== "registered" && remoteEnv.WMUX_HELPER_TOKEN) {
+      const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, remoteEnv);
+      const bootstrapLoader = [
+        `$WmuxHeaders = @{ Authorization = ${powershellQuote(`Bearer ${remoteEnv.WMUX_HELPER_TOKEN}`)} }`,
+        `iex (Invoke-RestMethod -Method Get -Uri ${powershellQuote(bootstrapUrl)} -Headers $WmuxHeaders)`,
+      ].join("\n");
+      const runtimePath = stagePowerShellSshRuntime(machine, target, extraEnv.WMUX_PANE_ID, bootstrapLoader);
+      return { file: "/bin/sh", args: [runtimePath], cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
+    }
     const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, remoteEnv, bootstrapToken);
     const bootstrapCommand = `iex (irm ${powershellQuote(bootstrapUrl)})`;
     args.push(target, machine.shell ?? "pwsh", "-NoLogo");
@@ -190,10 +202,19 @@ const resolveBackend = (machine: MachineConfig): Backend => {
   }
 };
 
+const SERVER_SCOPED_ENV_KEYS = new Set([
+  "WMUX_AUTOMATION_TOKEN",
+  "WMUX_AUTOMATION_TOKEN_PATH",
+  "WMUX_HELPER_TOKEN",
+  "WMUX_HELPER_TOKEN_PATH",
+  "WMUX_REGISTRATION_TOKEN",
+  "WMUX_REGISTRATION_TOKEN_PATH",
+]);
+
 const buildSpawnEnv = (machine: MachineConfig, extraEnv: Record<string, string>): Record<string, string> => {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") env[key] = value;
+    if (typeof value === "string" && !SERVER_SCOPED_ENV_KEYS.has(key)) env[key] = value;
   }
   env.TERM = DEFAULT_TERM;
   env.COLORTERM = "truecolor";
@@ -518,11 +539,12 @@ const durableShellScript = ({
     .filter(([, value]) => value)
     .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
     .join(" ");
-  // Persist the wmux URL/token to ~/.wmux on the target at every (re)attach.
+  // Persist the wmux URL/helper credential to ~/.wmux on the target at every (re)attach.
   // Shells inside pre-existing durable sessions keep their original env, so
   // helpers and agent hooks there rely on this file fallback to reach an
   // authenticated server (same contract as ~/.wmux/token on the server host).
   const credentialWrites = [
+    extraEnv.WMUX_HELPER_TOKEN ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_HELPER_TOKEN)} > "$HOME/.wmux/helper-token" 2>/dev/null && chmod 600 "$HOME/.wmux/helper-token" 2>/dev/null || true;` : "",
     extraEnv.WMUX_TOKEN ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_TOKEN)} > "$HOME/.wmux/token" 2>/dev/null && chmod 600 "$HOME/.wmux/token" 2>/dev/null || true;` : "",
     extraEnv.WMUX_URL ? `printf '%s\\n' ${shellQuote(extraEnv.WMUX_URL)} > "$HOME/.wmux/url" 2>/dev/null && chmod 600 "$HOME/.wmux/url" 2>/dev/null || true;` : "",
   ].filter(Boolean);
@@ -667,6 +689,51 @@ exec ssh -t ${sshOptions} ${shellQuote(target)} ${shellQuote(launchCommand)}
 `;
 
   fs.writeFileSync(temporaryPayloadPath, payload, { mode: 0o600 });
+  fs.renameSync(temporaryPayloadPath, payloadPath);
+  fs.chmodSync(payloadPath, 0o600);
+  fs.writeFileSync(temporaryWrapperPath, wrapper, { mode: 0o700 });
+  fs.renameSync(temporaryWrapperPath, wrapperPath);
+  fs.chmodSync(wrapperPath, 0o700);
+  return wrapperPath;
+};
+
+const stagePowerShellSshRuntime = (
+  machine: MachineConfig,
+  target: string,
+  paneId: string,
+  bootstrap: string,
+): string => {
+  const base = process.env.XDG_RUNTIME_DIR?.startsWith("/")
+    ? process.env.XDG_RUNTIME_DIR
+    : path.join(os.homedir(), ".wmux", "run");
+  const runtimeDir = path.join(base, "wmux", "powershell-ssh-runtimes");
+  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(runtimeDir, 0o700);
+  const stem = `v1-${durableSessionName(paneId)}`;
+  const payloadPath = path.join(runtimeDir, `${stem}.payload.ps1`);
+  const wrapperPath = path.join(runtimeDir, `${stem}.sh`);
+  const temporaryPayloadPath = `${payloadPath}.${process.pid}.tmp`;
+  const temporaryWrapperPath = `${wrapperPath}.${process.pid}.tmp`;
+  const sshOptions = [
+    "-tt",
+    ...sshControlArgs(paneId, true),
+    ...(machine.port ? ["-p", String(machine.port)] : []),
+  ].map(shellQuote).join(" ");
+  const remoteShell = shellQuote(machine.shell ?? "pwsh");
+  const profileOption = machine.loadPowerShellProfile === true ? "" : " -NoProfile";
+  const wrapper = `#!/bin/sh
+set -eu
+wmux_payload=${shellQuote(payloadPath)}
+wmux_wrapper=$0
+wmux_cleanup() { rm -f "$wmux_payload" "$wmux_wrapper"; }
+trap wmux_cleanup EXIT HUP INT TERM
+{ cat "$wmux_payload"; printf '\n'; rm -f "$wmux_payload"; cat; } | ssh ${sshOptions} ${shellQuote(target)} ${remoteShell} -NoLogo${profileOption} -ExecutionPolicy Bypass -NoExit -Command -
+wmux_status=$?
+wmux_cleanup
+trap - EXIT HUP INT TERM
+exit "$wmux_status"
+`;
+  fs.writeFileSync(temporaryPayloadPath, bootstrap, { mode: 0o600 });
   fs.renameSync(temporaryPayloadPath, payloadPath);
   fs.chmodSync(payloadPath, 0o600);
   fs.writeFileSync(temporaryWrapperPath, wrapper, { mode: 0o700 });

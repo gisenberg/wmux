@@ -290,6 +290,7 @@ export function App() {
   }, [loadBootstrap, store]);
 
   const { serviceConnection, mediaItems, dismissMedia, sendEventSocketMessage } = useEventStream({
+    enabled: !authRequired,
     onResync: (payload) => {
       if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, payload)) return;
       pendingHealthResync.current = null;

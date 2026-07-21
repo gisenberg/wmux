@@ -53,11 +53,17 @@ const json = async <T>(path: string, init?: RequestInit): Promise<T> => {
 export interface AuthInfo {
   authEnabled: boolean;
   loginEnabled: boolean;
+  browserAuthMode: "shared-or-login" | "login-only";
 }
 
 export const api = {
   bootstrap: () => json<BootstrapPayload>("/api/bootstrap"),
-  authInfo: () => json<AuthInfo>("/api/auth-info"),
+  authInfo: async (): Promise<AuthInfo> => {
+    const response = await fetch("/api/auth-info", { headers: { "cache-control": "no-store" } });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json() as Promise<AuthInfo>;
+  },
+  authSession: () => json<{ authenticated: true }>("/api/auth/session"),
   login: async (username: string, password: string): Promise<{ token: string; expiresInMs: number }> => {
     const response = await fetch("/api/login", {
       method: "POST",

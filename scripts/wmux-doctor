@@ -14,7 +14,31 @@ const read = (name) => {
   }
 };
 const baseUrl = (process.env.WMUX_URL || read("url") || "http://127.0.0.1:3478").replace(/\/+$/, "");
-const token = process.env.WMUX_TOKEN || read("token");
+const scopedToken = () => {
+  const envConfigured = Object.hasOwn(process.env, "WMUX_HELPER_TOKEN");
+  const envToken = process.env.WMUX_HELPER_TOKEN?.trim() ?? "";
+  if (envConfigured && !/^[A-Za-z0-9_-]{32,256}$/.test(envToken)) {
+    throw new Error("configured helper token is empty or malformed");
+  }
+  const pathConfigured = Object.hasOwn(process.env, "WMUX_HELPER_TOKEN_PATH");
+  if (pathConfigured && !process.env.WMUX_HELPER_TOKEN_PATH?.trim()) throw new Error("configured helper token path is empty");
+  const tokenPath = process.env.WMUX_HELPER_TOKEN_PATH || path.join(wmuxHome, "helper-token");
+  if (pathConfigured || fs.existsSync(tokenPath)) {
+    let value = "";
+    try { value = fs.readFileSync(tokenPath, "utf8").trim(); } catch {}
+    if (!/^[A-Za-z0-9_-]{32,256}$/.test(value)) throw new Error("configured helper token file is unreadable or malformed");
+    return value;
+  }
+  return envConfigured ? envToken : null;
+};
+let token;
+try {
+  const helperToken = scopedToken();
+  token = helperToken ?? (process.env.WMUX_BROWSER_AUTH_MODE === "login-only" ? "" : process.env.WMUX_TOKEN || read("token"));
+} catch (error) {
+  console.error(`wmux doctor failed: ${error instanceof Error ? error.message : "invalid helper credential"}`);
+  process.exit(2);
+}
 const requestDoctor = () => new Promise((resolve, reject) => {
   const url = new URL(`${baseUrl}/api/doctor`);
   const client = url.protocol === "https:" ? https : http;

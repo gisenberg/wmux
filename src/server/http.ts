@@ -11,14 +11,21 @@ import { resolveKeybindings } from "../shared/keybindings.js";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { readAgentProfileBundle } from "./agent-profile.js";
 import {
+  authenticateRequest,
   type AuthConfig,
-  isAuthorized,
   issueSessionToken,
   requestBearerToken,
   requestToken,
-  tokensMatch,
+  registeredHostPrincipal,
+  registrationPrincipal,
   verifyCredentials,
 } from "./auth.js";
+import {
+  authorizeHttpPrincipal,
+  authorizeWebSocketPrincipal,
+  classifyHttpRoute,
+  classifyWebSocket,
+} from "./auth-policy.js";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { buildDoctorReport } from "./doctor.js";
 import { HostRegistryError, type HostRegistry } from "./host-registry.js";
@@ -371,36 +378,42 @@ export const createHttpServer = (
       ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
       : null;
 
-    // Token gate: everything under /api requires a valid token, except the
-    // unauthenticated bootstrap endpoints. The static app shell and bundled
-    // client assets are served outside /api so the browser can load before it
-    // presents its stored token.
-    const unauthenticatedApi = new Set(["/api/health", "/api/auth-info", "/api/login"]);
-    const registrationPost = url.pathname === "/api/registry/hosts" && request.method === "POST";
-    const registrationAuthorized =
-      Boolean(registrationToken) && tokensMatch(registrationToken ?? "", requestBearerToken(request));
+    // Every API method/path is classified before authentication so new routes
+    // cannot silently inherit a broad credential's authority.
+    const routePolicy = classifyHttpRoute(request.method, url.pathname);
+    const registrationPost = routePolicy?.access === "registration";
+    const registrationAuth = registrationPrincipal(registrationToken, requestBearerToken(request));
     const helperMatch = url.pathname.match(/^\/api\/helpers\/windows\/([^/]+)(?:\/bootstrap)?$/);
     const helperMachine = helperMatch
       ? machines.find((machine) => machine.id === helperMatch[1])
       : undefined;
-    const registeredHelperAuthorized =
+    const registeredHelperPrincipal = registeredHostPrincipal(
+      helperMachine?.id ?? "",
       request.method === "GET" &&
       url.pathname.endsWith("/bootstrap") &&
       helperMachine?.source === "registered" &&
-      Boolean(hostRegistry?.acceptsBootstrapToken(helperMachine.id, requestToken(request, url)));
-    if (registrationPost && !registrationAuthorized) {
-      sendJson(response, 401, { error: "unauthorized" });
-      return;
-    }
-    if (
-      url.pathname.startsWith("/api/") &&
-      !registrationPost &&
-      !unauthenticatedApi.has(url.pathname) &&
-      !registeredHelperAuthorized &&
-      !isAuthorized(auth, request, url)
-    ) {
-      sendJson(response, 401, { error: "unauthorized" });
-      return;
+      Boolean(hostRegistry?.acceptsBootstrapToken(helperMachine.id, requestToken(request, url))),
+    );
+    if (url.pathname.startsWith("/api/")) {
+      if (!routePolicy) {
+        sendJson(response, 401, { error: "unauthorized" });
+        return;
+      }
+      const principal = registeredHelperPrincipal.kind === "registered-host"
+        ? registeredHelperPrincipal
+        : registrationPost
+          ? registrationAuth
+          : authenticateRequest(auth, request, url);
+      const registeredWindowsEndpoint = helperMachine?.source === "registered"
+        && (routePolicy.id === "windows-bootstrap" || routePolicy.id === "windows-helpers");
+      const wrongRegisteredWindowsPrincipal = registeredWindowsEndpoint
+        && (routePolicy.id === "windows-bootstrap"
+          ? principal.kind !== "registered-host"
+          : principal.kind === "helper" || principal.kind === "registered-host");
+      if (wrongRegisteredWindowsPrincipal || !authorizeHttpPrincipal(auth, principal, routePolicy)) {
+        sendJson(response, principal.kind === "anonymous" ? 401 : 403, { error: "unauthorized" });
+        return;
+      }
     }
 
     try {
@@ -419,13 +432,17 @@ export const createHttpServer = (
 
       if (url.pathname === "/api/auth-info" && request.method === "GET") {
         // Lets the browser decide whether to show a login form vs. a token hint.
-        sendJson(response, 200, { authEnabled: auth.enabled, loginEnabled: auth.loginEnabled });
+        sendJson(response, 200, {
+          authEnabled: auth.enabled,
+          loginEnabled: auth.loginEnabled,
+          browserAuthMode: auth.browserAuthMode ?? "shared-or-login",
+        }, { "cache-control": "no-store" });
         return;
       }
 
       if (url.pathname === "/api/login" && request.method === "POST") {
         if (!auth.enabled || !auth.loginEnabled) {
-          sendJson(response, 404, { error: "login_disabled" });
+          sendJson(response, 404, { error: "login_disabled" }, { "cache-control": "no-store" });
           return;
         }
         const clientAddress = observedClientAddress(request, trustedProxies)
@@ -437,22 +454,30 @@ export const createHttpServer = (
             response,
             429,
             { error: "login_rate_limited", retryAfterMs: attempt.retryAfterMs },
-            { "retry-after": String(Math.max(1, Math.ceil(attempt.retryAfterMs / 1_000))) },
+            {
+              "retry-after": String(Math.max(1, Math.ceil(attempt.retryAfterMs / 1_000))),
+              "cache-control": "no-store",
+            },
           );
           return;
         }
         const body = (await readBody(request)) as { username?: unknown; password?: unknown };
         if (typeof body.username !== "string" || typeof body.password !== "string") {
-          sendJson(response, 400, { error: "invalid_credentials_format" });
+          sendJson(response, 400, { error: "invalid_credentials_format" }, { "cache-control": "no-store" });
           return;
         }
         if (!await verifyCredentials(auth, body.username, body.password)) {
-          sendJson(response, 401, { error: "invalid_credentials" });
+          sendJson(response, 401, { error: "invalid_credentials" }, { "cache-control": "no-store" });
           return;
         }
         loginAttempts.reset(clientAddress);
         const token = issueSessionToken(auth.sessionSecret, SESSION_TTL_MS, Date.now());
-        sendJson(response, 200, { token, expiresInMs: SESSION_TTL_MS });
+        sendJson(response, 200, { token, expiresInMs: SESSION_TTL_MS }, { "cache-control": "no-store" });
+        return;
+      }
+
+      if (url.pathname === "/api/auth/session" && request.method === "GET") {
+        sendJson(response, 200, { authenticated: true }, { "cache-control": "no-store" });
         return;
       }
 
@@ -533,8 +558,10 @@ export const createHttpServer = (
           const value = url.searchParams.get(key);
           if (value) extraEnv[key] = value;
         }
-        if (machine.source !== "registered" && auth.token) {
-          extraEnv.WMUX_TOKEN = auth.token;
+        if (machine.source !== "registered") {
+          if (auth.helperToken) extraEnv.WMUX_HELPER_TOKEN = auth.helperToken;
+          else if ((auth.browserAuthMode ?? "shared-or-login") === "shared-or-login" && auth.token) extraEnv.WMUX_TOKEN = auth.token;
+          extraEnv.WMUX_BROWSER_AUTH_MODE = auth.browserAuthMode ?? "shared-or-login";
         }
         response.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",
@@ -1230,9 +1257,14 @@ export const createHttpServer = (
     }
     const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? bindHost}`);
     if (options.dev && url.pathname === "/ws/vite-hmr") return;
-    // WebSockets can't set an Authorization header from the browser, so the
-    // token rides on the query string; enforce it before any handshake.
-    if (!isAuthorized(auth, request, url)) {
+    const socketClass = classifyWebSocket(url.pathname);
+    if (!socketClass) {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    const principal = authenticateRequest(auth, request, url);
+    if (!authorizeWebSocketPrincipal(auth, principal, socketClass)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;

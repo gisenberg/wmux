@@ -5,14 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+  authenticateRequest,
   hashPassword,
-  isAuthorized,
   issueSessionToken,
   loadAuthConfig,
   loadRegistrationAuthConfig,
   requestBearerToken,
   requestToken,
   tokensMatch,
+  validateAuthCredentialSeparation,
   verifyCredentials,
   type AuthConfig,
 } from "../src/server/auth.js";
@@ -34,6 +35,7 @@ const baseAuth = (over: Partial<AuthConfig> = {}): AuthConfig => ({
 const withIsolatedHome = (run: (dir: string) => void): void => {
   const saved = { ...process.env };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-auth-"));
+  process.env.HOME = dir;
   process.env.WMUX_TOKEN_PATH = path.join(dir, "token");
   process.env.WMUX_AUTH_PATH = path.join(dir, "auth.json");
   process.env.WMUX_SESSION_SECRET_PATH = path.join(dir, "session-secret");
@@ -42,6 +44,11 @@ const withIsolatedHome = (run: (dir: string) => void): void => {
   delete process.env.WMUX_ALLOW_INSECURE_DEFAULT_LOGIN;
   delete process.env.WMUX_TOKEN;
   delete process.env.WMUX_REGISTRATION_TOKEN;
+  delete process.env.WMUX_BROWSER_AUTH_MODE;
+  delete process.env.WMUX_AUTOMATION_TOKEN;
+  delete process.env.WMUX_AUTOMATION_TOKEN_PATH;
+  delete process.env.WMUX_HELPER_TOKEN;
+  delete process.env.WMUX_HELPER_TOKEN_PATH;
   try {
     run(dir);
   } finally {
@@ -64,16 +71,16 @@ test("requestToken reads Authorization header then query", () => {
   assert.equal(requestBearerToken(fakeRequest()), null);
 });
 
-test("isAuthorized accepts the shared token, rejects a bad one", () => {
+test("request authentication accepts the shared token and rejects a bad one", () => {
   const auth = baseAuth();
-  assert.equal(isAuthorized(auth, fakeRequest({ authorization: "Bearer s3cret" }), urlWith()), true);
-  assert.equal(isAuthorized(auth, fakeRequest(), urlWith("?token=s3cret")), true);
-  assert.equal(isAuthorized(auth, fakeRequest({ authorization: "Bearer nope" }), urlWith()), false);
-  assert.equal(isAuthorized(auth, fakeRequest(), urlWith()), false);
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: "Bearer s3cret" }), urlWith()).kind, "legacy-shared");
+  assert.equal(authenticateRequest(auth, fakeRequest(), urlWith("?token=s3cret")).kind, "legacy-shared");
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: "Bearer nope" }), urlWith()).kind, "anonymous");
+  assert.equal(authenticateRequest(auth, fakeRequest(), urlWith()).kind, "anonymous");
 });
 
-test("isAuthorized is open when auth disabled", () => {
-  assert.equal(isAuthorized(baseAuth({ enabled: false }), fakeRequest(), urlWith()), true);
+test("authentication-disabled requests remain anonymous for policy-level bypass", () => {
+  assert.equal(authenticateRequest(baseAuth({ enabled: false }), fakeRequest(), urlWith()).kind, "anonymous");
 });
 
 test("scrypt password hashing verifies the right password only", async () => {
@@ -87,13 +94,13 @@ test("a session token authorizes until it expires", () => {
   const auth = baseAuth();
   const now = 1_000_000;
   const token = issueSessionToken(auth.sessionSecret, 60_000, now);
-  assert.equal(isAuthorized(auth, fakeRequest({ authorization: `Bearer ${token}` }), urlWith(), now + 30_000), true);
-  assert.equal(isAuthorized(auth, fakeRequest({ authorization: `Bearer ${token}` }), urlWith(), now + 120_000), false);
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: `Bearer ${token}` }), urlWith(), now + 30_000).kind, "browser-session");
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: `Bearer ${token}` }), urlWith(), now + 120_000).kind, "anonymous");
 });
 
 test("a session token forged with the wrong secret is rejected", () => {
   const token = issueSessionToken("attacker-key", 60_000, 1_000_000);
-  assert.equal(isAuthorized(baseAuth(), fakeRequest({ authorization: `Bearer ${token}` }), urlWith(), 1_000_001), false);
+  assert.equal(authenticateRequest(baseAuth(), fakeRequest({ authorization: `Bearer ${token}` }), urlWith(), 1_000_001).kind, "anonymous");
 });
 
 test("loadAuthConfig honors WMUX_DISABLE_AUTH", () => {
@@ -146,7 +153,155 @@ test("loadAuthConfig starts token-only without configured credentials", () => {
     assert.ok(auth.sessionSecret.length >= 16);
     assert.equal(fs.existsSync(path.join(dir, "auth.json")), false);
     assert.ok(fs.existsSync(path.join(dir, "session-secret")));
+    assert.equal(fs.existsSync(path.join(dir, "automation-token")), false);
+    assert.equal(fs.existsSync(path.join(dir, "helper-token")), false);
+    assert.equal(auth.browserAuthMode, "shared-or-login");
   });
+});
+
+test("explicit shared-or-login preserves compatibility behavior without scoped files", () => {
+  withIsolatedHome((dir) => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "shared-or-login";
+    const auth = loadAuthConfig();
+    assert.equal(auth.browserAuthMode, "shared-or-login");
+    assert.ok(auth.token);
+    assert.equal(auth.automationToken, undefined);
+    assert.equal(auth.helperToken, undefined);
+    assert.equal(fs.existsSync(path.join(dir, "automation-token")), false);
+    assert.equal(fs.existsSync(path.join(dir, "helper-token")), false);
+  });
+});
+
+test("invalid browser auth modes and auth disablement in login-only fail closed", () => {
+  withIsolatedHome(() => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "typo";
+    assert.throws(() => loadAuthConfig(), /WMUX_BROWSER_AUTH_MODE/);
+    process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+    process.env.WMUX_DISABLE_AUTH = "1";
+    assert.throws(() => loadAuthConfig(), /cannot be used/);
+  });
+});
+
+const writeSecret = (filePath: string, value: string): void => {
+  fs.writeFileSync(filePath, `${value}\n`, { mode: 0o600 });
+  fs.chmodSync(filePath, 0o600);
+};
+
+const useScopedPaths = (dir: string): void => {
+  process.env.WMUX_AUTOMATION_TOKEN_PATH = path.join(dir, "automation-token");
+  process.env.WMUX_HELPER_TOKEN_PATH = path.join(dir, "helper-token");
+};
+
+test("login-only loads persistent distinct credentials without creating a legacy token", () => {
+  withIsolatedHome((dir) => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+    useScopedPaths(dir);
+    fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({
+      username: "operator",
+      passwordHash: hashPassword("correct horse battery staple"),
+    }));
+    writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
+    writeSecret(path.join(dir, "automation-token"), "A".repeat(43));
+    writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
+    const auth = loadAuthConfig();
+    assert.equal(auth.browserAuthMode, "login-only");
+    assert.equal(auth.token, "");
+    assert.equal(auth.loginEnabled, true);
+    assert.equal(auth.automationToken, "A".repeat(43));
+    assert.equal(auth.helperToken, "H".repeat(43));
+    assert.equal(fs.existsSync(path.join(dir, "token")), false);
+  });
+});
+
+test("login-only rejects every missing mandatory credential", () => {
+  for (const missing of ["credentials", "session", "automation", "helper"] as const) {
+    withIsolatedHome((dir) => {
+      process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+      useScopedPaths(dir);
+      if (missing !== "credentials") {
+        fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ username: "operator", passwordHash: hashPassword("safe-password") }));
+      }
+      if (missing !== "session") writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
+      if (missing !== "automation") writeSecret(path.join(dir, "automation-token"), "A".repeat(43));
+      if (missing !== "helper") writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
+      assert.throws(() => loadAuthConfig(), /login-only|missing or unreadable/);
+    });
+  }
+});
+
+test("login-only rejects malformed, unsafe, and duplicate scoped secret files", () => {
+  withIsolatedHome((dir) => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+    useScopedPaths(dir);
+    fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ username: "operator", passwordHash: hashPassword("safe-password") }));
+    writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
+    writeSecret(path.join(dir, "automation-token"), "too-short");
+    writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
+    assert.throws(() => loadAuthConfig(), /32-256 base64url/);
+  });
+  withIsolatedHome((dir) => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+    useScopedPaths(dir);
+    fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ username: "operator", passwordHash: hashPassword("safe-password") }));
+    writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
+    writeSecret(path.join(dir, "automation-token"), "A".repeat(43));
+    writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
+    fs.chmodSync(path.join(dir, "helper-token"), 0o644);
+    assert.throws(() => loadAuthConfig(), /permissions must be 0600/);
+  });
+  withIsolatedHome((dir) => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+    useScopedPaths(dir);
+    fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ username: "operator", passwordHash: hashPassword("safe-password") }));
+    writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
+    writeSecret(path.join(dir, "real-token"), "A".repeat(43));
+    fs.symlinkSync(path.join(dir, "real-token"), path.join(dir, "automation-token"));
+    writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
+    assert.throws(() => loadAuthConfig(), /regular non-symlink/);
+  });
+  withIsolatedHome((dir) => {
+    process.env.WMUX_BROWSER_AUTH_MODE = "login-only";
+    useScopedPaths(dir);
+    fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ username: "operator", passwordHash: hashPassword("safe-password") }));
+    writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
+    writeSecret(path.join(dir, "automation-token"), "D".repeat(43));
+    writeSecret(path.join(dir, "helper-token"), "D".repeat(43));
+    assert.throws(() => loadAuthConfig(), /helper token must differ from automation token/);
+  });
+});
+
+test("credential separation includes registration and machine agent secrets", () => {
+  const auth = baseAuth({
+    browserAuthMode: "login-only",
+    automationToken: "A".repeat(43),
+    helperToken: "H".repeat(43),
+  });
+  assert.throws(
+    () => validateAuthCredentialSeparation(auth, "A".repeat(43), []),
+    /host registration token must differ from automation token/,
+  );
+  assert.throws(
+    () => validateAuthCredentialSeparation(auth, "R".repeat(43), [{ label: "machine agent token", token: "H".repeat(43) }]),
+    /machine agent token must differ from helper token/,
+  );
+});
+
+test("request authentication returns typed principals and keeps scoped tokens header-only", () => {
+  const now = 1_000_000;
+  const auth = baseAuth({
+    browserAuthMode: "shared-or-login",
+    automationToken: "A".repeat(43),
+    helperToken: "H".repeat(43),
+  });
+  const session = issueSessionToken(auth.sessionSecret, 60_000, now);
+  assert.equal(authenticateRequest(auth, fakeRequest(), urlWith()).kind, "anonymous");
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: "Bearer s3cret" }), urlWith()).kind, "legacy-shared");
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: `Bearer ${session}` }), urlWith(), now).kind, "browser-session");
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: `Bearer ${"A".repeat(43)}` }), urlWith()).kind, "automation");
+  assert.equal(authenticateRequest(auth, fakeRequest({ authorization: `Bearer ${"H".repeat(43)}` }), urlWith()).kind, "helper");
+  assert.equal(authenticateRequest(auth, fakeRequest(), urlWith(`?token=${"A".repeat(43)}`)).kind, "anonymous");
+  assert.equal(authenticateRequest(auth, fakeRequest(), urlWith(`?token=${"H".repeat(43)}`)).kind, "anonymous");
+  assert.equal(authenticateRequest({ ...auth, browserAuthMode: "login-only" }, fakeRequest({ authorization: "Bearer s3cret" }), urlWith()).kind, "anonymous");
 });
 
 test("loadAuthConfig does not mark an existing or environment token as newly generated", () => {

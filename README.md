@@ -318,8 +318,7 @@ need separately provisioned authorization.
 > nodes is WireGuard-encrypted even when the application URL uses HTTP, but a
 > subnet-routed leg may be plaintext after it leaves the Tailscale endpoint.
 
-Every API and WebSocket endpoint is token-gated in addition to private bind,
-Host, and Origin checks.
+Within the private Host/Origin/bind boundary, only `/api/health`, auth metadata, password login, and the static login shell are public; all other application APIs and wmux WebSockets remain credential-gated.
 
 - On first start, wmux creates `~/.wmux/token` and prints a one-time browser URL
   containing that token. Set `WMUX_TOKEN` or `WMUX_TOKEN_PATH` to supply one.
@@ -330,13 +329,25 @@ Host, and Origin checks.
   helper prints this reminder after updating the credential file.
 - `WMUX_DISABLE_AUTH=1` disables token checks only for deliberately isolated
   environments; it does not make public deployment supported.
+- `WMUX_BROWSER_AUTH_MODE` defaults to `shared-or-login`, preserving existing shared-token URLs, `wmuxctl`, helpers, registration, and WebSockets.
+  Upgrades create no scoped-token files and add no startup requirement.
+  Set `WMUX_BROWSER_AUTH_MODE=login-only` only after provisioning valid password login credentials, a persistent session secret, and distinct automation and helper credentials; missing, malformed, unsafe, or duplicate credentials fail startup rather than downgrading.
+- Provision scoped credentials without displaying them with `node scripts/wmux-provision-scoped-auth.mjs`.
+  Provide `WMUX_AUTOMATION_TOKEN` / `WMUX_AUTOMATION_TOKEN_PATH` and `WMUX_HELPER_TOKEN` / `WMUX_HELPER_TOKEN_PATH` (file form preferred).
+  Use owner-only token files at the configured paths and never put credentials in arguments, logs, documentation, or URLs.
+- Automation and helper credentials are distinct typed principals.
+  Automation is limited to reviewed controller actions and pane-output WebSocket access; helper is limited to reviewed event, title, notification, media, clipboard, stream, and profile operations.
+  Both use authorization headers only; scoped credentials are forbidden in query parameters and never fall back or retry across scopes.
+  Registration remains separate.
+- The browser must pass the password-session gate before bootstrap or browser WebSockets.
+  The MVP still retains browser session material in localStorage and browser WebSocket query transport; cookie sessions, CSRF protection, revocation, and finer capabilities remain deferred.
+  wmux is not a public-Internet deployment.
 - Use HTTPS away from loopback and treat every token as a password.
 - Keep helper, clipboard, media, agent, and streaming endpoints behind the same
   private boundary. The Windows agent and Moonlight gateway use separate tokens.
 
-Browser session tokens currently live in `localStorage`, WebSocket auth uses a
-query parameter, and static helpers may receive a broadly privileged shared
-token. wmux is not a hardened multi-user service.
+Browser session tokens currently live in `localStorage` and WebSocket auth uses a query parameter.
+wmux is not a hardened multi-user service.
 
 ## Workspaces and Interaction
 

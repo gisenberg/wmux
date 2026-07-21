@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.request
 
@@ -20,11 +21,31 @@ def _wmux_url():
 
 
 def _wmux_token():
+    env_configured = "WMUX_HELPER_TOKEN" in os.environ
+    env_token = os.environ.get("WMUX_HELPER_TOKEN", "").strip()
+    if env_configured and not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", env_token):
+        raise SystemExit(f"{command_name}: configured helper token is empty or malformed")
+    path_configured = "WMUX_HELPER_TOKEN_PATH" in os.environ
+    path_value = os.environ.get("WMUX_HELPER_TOKEN_PATH", "").strip()
+    if path_configured and not path_value:
+        raise SystemExit(f"{command_name}: configured helper token path is empty")
+    path = path_value if path_configured else os.path.expanduser("~/.wmux/helper-token")
+    if path_configured or os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                token = handle.read().strip()
+        except OSError:
+            token = ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token):
+            raise SystemExit(f"{command_name}: configured helper token file is unreadable or malformed")
+        return token
+    if env_configured:
+        return env_token
+    if os.environ.get("WMUX_BROWSER_AUTH_MODE", "shared-or-login") == "login-only":
+        return ""
     token = os.environ.get("WMUX_TOKEN")
     if token:
         return token
-    # Fall back to the server's local token file so hooks in existing/durable
-    # local panes authenticate even when WMUX_TOKEN was never in their env.
     path = os.environ.get("WMUX_TOKEN_PATH") or os.path.expanduser("~/.wmux/token")
     try:
         with open(path, "r", encoding="utf-8") as handle:

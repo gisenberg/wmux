@@ -28,6 +28,12 @@ export const initToken = (): void => {
 
 export const getToken = (): string => cachedToken;
 
+export const isBrowserSessionToken = (token: string): boolean => token.startsWith("wsess.");
+
+export const clearNonSessionToken = (): void => {
+  if (!isBrowserSessionToken(cachedToken)) setToken("");
+};
+
 export const setToken = (token: string): void => {
   cachedToken = token.trim();
   try {

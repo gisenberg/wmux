@@ -40,8 +40,12 @@ test("login verifies asynchronously and throttles attempts per client address", 
   });
 
   try {
+    const authInfo = await fetch(`http://127.0.0.1:${address.port}/api/auth-info`);
+    assert.equal(authInfo.headers.get("cache-control"), "no-store");
+    assert.equal(((await authInfo.json()) as { browserAuthMode: string }).browserAuthMode, "shared-or-login");
     const success = await login("correct horse");
     assert.equal(success.status, 200);
+    assert.equal(success.headers.get("cache-control"), "no-store");
     assert.match(((await success.json()) as { token: string }).token, /^wsess\./);
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -50,6 +54,7 @@ test("login verifies asynchronously and throttles attempts per client address", 
     const limited = await login("wrong password");
     assert.equal(limited.status, 429);
     assert.ok(Number(limited.headers.get("retry-after")) >= 1);
+    assert.equal(limited.headers.get("cache-control"), "no-store");
     assert.equal(((await limited.json()) as { error: string }).error, "login_rate_limited");
   } finally {
     server.close();
