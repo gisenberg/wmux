@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
     Math.random = () => 0;
   });
@@ -84,7 +85,7 @@ test("creates a workspace through the command palette and preserves its direct l
   await expect(palette).toBeVisible();
   await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").fill("New workspace on Local");
   await palette.getByPlaceholder("Search commands, workspaces, tabs, hosts").press("Enter");
-  await expect(page.locator(".terminal-startup-status")).toContainText("Creating shell on local");
+  await expect(page.locator(".terminal-startup-status", { hasText: "Creating shell on local" })).toBeVisible();
   releaseCreation();
 
   await expect.poll(async () => {
