@@ -1059,6 +1059,22 @@ test("mobile boot profiles cannot tint browser safe-area chrome", async ({ page 
   });
 });
 
+test("mobile boot exits without a decorative delay once bootstrap is ready", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only boot timing coverage");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  let markBootstrapReady: (() => void) | undefined;
+  const bootstrapReady = new Promise<void>((resolve) => {
+    markBootstrapReady = resolve;
+  });
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname === "/api/bootstrap" && response.ok()) markBootstrapReady?.();
+  });
+
+  await page.goto("/");
+  await bootstrapReady;
+  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 2_000 });
+});
+
 test("mobile chat retains focus and bottom anchoring across viewport changes", async ({ page, request }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only viewport coverage");
 

@@ -1341,6 +1341,7 @@ export function App() {
     return (
       <RetroBootScreen
         authRequired={authRequired}
+        isMobile={mobileViewport.isMobile}
         ready={Boolean(state) && !authRequired}
         onAuthenticated={() => void loadBootstrap()}
         onComplete={finishBoot}

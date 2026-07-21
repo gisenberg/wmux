@@ -12,6 +12,7 @@ import { setToken } from "./token";
 
 interface RetroBootScreenProps {
   authRequired: boolean;
+  isMobile: boolean;
   ready: boolean;
   onAuthenticated: () => void;
   onComplete: () => void;
@@ -36,8 +37,11 @@ const chooseBootProfile = () => {
   return profile;
 };
 
-export function RetroBootScreen(props: RetroBootScreenProps) {
+export function RetroBootScreen({ isMobile, ...props }: RetroBootScreenProps) {
   const [profile] = useState(chooseBootProfile);
+  useEffect(() => {
+    if (isMobile && props.ready && !props.authRequired) props.onComplete();
+  }, [isMobile, props.authRequired, props.onComplete, props.ready]);
   if (profile.graphicalShell) return <RetroGraphicalBootScreen profile={profile} {...props} />;
   return <RetroTerminalBootScreen profile={profile} {...props} />;
 }
@@ -48,7 +52,7 @@ function RetroTerminalBootScreen({
   ready,
   onAuthenticated,
   onComplete,
-}: RetroBootScreenProps & { profile: RetroBootProfile }) {
+}: Omit<RetroBootScreenProps, "isMobile"> & { profile: RetroBootProfile }) {
   const screenRef = useRef<HTMLElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const authRequiredRef = useRef(authRequired);
