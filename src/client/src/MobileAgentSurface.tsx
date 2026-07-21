@@ -9,13 +9,11 @@ import {
   Command as CommandIcon,
   Image as ImageIcon,
   LoaderCircle,
-  MessageSquare,
   Play,
   Send,
   Square,
   TerminalSquare,
   X,
-  Zap,
 } from "lucide-react";
 import type { PaneAttachment } from "./api";
 import type {
@@ -451,6 +449,16 @@ export function MobileAgentSurface({
               paneLabel={paneLabel}
             />
           )}
+          {pane && !agentSession.canSend ? (
+            <MobileAgentLaunchPanel
+              reason={agentSession.reason}
+              sending={sending}
+              launchingAgent={launchingAgent}
+              error={sendError}
+              notice={sendNotice}
+              onStart={startAgent}
+            />
+          ) : null}
         </div>
         {!threadAtBottom ? (
           <button
@@ -468,7 +476,7 @@ export function MobileAgentSurface({
         ) : null}
       </div>
       <MobileRecentActivity items={recentItems} />
-      <form
+      {agentSession.canSend ? <form
         className="mobile-agent-composer"
         onSubmit={(event) => {
           event.preventDefault();
@@ -479,36 +487,6 @@ export function MobileAgentSurface({
         <span className="mobile-agent-composer-handle" aria-hidden="true" />
         {sendError ? <div className="mobile-agent-error">{sendError}</div> : null}
         {sendNotice ? <div className="mobile-agent-notice">{sendNotice}</div> : null}
-        {pane && !agentSession.canSend ? (
-          <div className="mobile-agent-launch-panel">
-            <div className="mobile-agent-launch-copy">
-              <Bot size={18} />
-              <span>
-                <strong>No agent detected</strong>
-                <small>{agentSession.reason}</small>
-                <small className="mobile-agent-launch-access">Agents start with full access on this private machine.</small>
-              </span>
-            </div>
-            <div className="mobile-agent-launch-actions">
-              <button
-                type="button"
-                disabled={sending || Boolean(launchingAgent)}
-                onClick={() => void startAgent("codex")}
-              >
-                <Play size={14} />
-                <span>{launchingAgent === "codex" ? "Starting Codex" : "Start Codex"}</span>
-              </button>
-              <button
-                type="button"
-                disabled={sending || Boolean(launchingAgent)}
-                onClick={() => void startAgent("claude")}
-              >
-                <Play size={14} />
-                <span>{launchingAgent === "claude" ? "Starting Claude" : "Start Claude"}</span>
-              </button>
-            </div>
-          </div>
-        ) : null}
         {pendingImages.length ? (
           <div className="mobile-agent-attachments" aria-label="Images to send">
             {pendingImages.map((attachment) => (
@@ -535,7 +513,7 @@ export function MobileAgentSurface({
             ref={composerRef}
             value={draft}
             aria-label="Agent message"
-            placeholder={pane ? (agentSession.canSend ? `Message ${agentSession.agent ?? "agent"} or paste images` : "Start an agent to chat") : "No active session"}
+            placeholder={pane ? `Message ${agentSession.agent ?? "agent"} or paste images` : "No active session"}
             disabled={!pane}
             rows={1}
             autoComplete="off"
@@ -555,17 +533,19 @@ export function MobileAgentSurface({
             {sending ? <LoaderCircle className="mobile-agent-send-spinner" size={17} /> : <Send size={16} />}
           </button>
         </div>
-        <div className="mobile-agent-composer-actions">
-          <button
-            type="button"
-            className="mobile-agent-stop"
-            title="Interrupt"
-            aria-label="Interrupt agent"
-            disabled={!pane || !agentRunning || sending}
-            onClick={() => void sendInterrupt()}
-          >
-            <Square size={14} />
-          </button>
+        <div className={agentRunning ? "mobile-agent-composer-actions has-stop" : "mobile-agent-composer-actions"}>
+          {agentRunning ? (
+            <button
+              type="button"
+              className="mobile-agent-stop"
+              title="Interrupt"
+              aria-label="Interrupt agent"
+              disabled={sending}
+              onClick={() => void sendInterrupt()}
+            >
+              <Square size={14} />
+            </button>
+          ) : null}
           <button type="button" title="Focus terminal" disabled={!onFocusTerminal} onClick={onFocusTerminal}>
             <TerminalSquare size={15} />
             <span>Focus terminal</span>
@@ -575,7 +555,62 @@ export function MobileAgentSurface({
             <span>Actions</span>
           </button>
         </div>
-      </form>
+      </form> : (
+        <div className="mobile-agent-inactive-actions">
+          <button type="button" title="Focus terminal" disabled={!onFocusTerminal} onClick={onFocusTerminal}>
+            <TerminalSquare size={15} />
+            <span>Focus terminal</span>
+          </button>
+          <button type="button" title="Actions" disabled={!onOpenActions} onClick={onOpenActions}>
+            <CommandIcon size={15} />
+            <span>Actions</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MobileAgentLaunchPanel({
+  reason,
+  sending,
+  launchingAgent,
+  error,
+  notice,
+  onStart,
+}: {
+  reason: string;
+  sending: boolean;
+  launchingAgent: AgentLauncher | null;
+  error: string;
+  notice: string;
+  onStart: (agent: AgentLauncher) => Promise<void>;
+}) {
+  return (
+    <div className="mobile-agent-launch-panel">
+      {error ? <div className="mobile-agent-error">{error}</div> : null}
+      {notice ? <div className="mobile-agent-notice">{notice}</div> : null}
+      <div className="mobile-agent-launch-copy">
+        <Bot size={18} />
+        <span>
+          <strong>No agent detected</strong>
+          <small>{reason}</small>
+          <small className="mobile-agent-launch-access">Agents start with full access on this private machine.</small>
+        </span>
+      </div>
+      <div className="mobile-agent-launch-actions">
+        {(["codex", "claude"] as const).map((agent) => (
+          <button
+            key={agent}
+            type="button"
+            disabled={sending || Boolean(launchingAgent)}
+            onClick={() => void onStart(agent)}
+          >
+            <Play size={14} />
+            <span>{launchingAgent === agent ? `Starting ${agent === "codex" ? "Codex" : "Claude"}` : `Start ${agent === "codex" ? "Codex" : "Claude"}`}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -599,10 +634,6 @@ function MobileAgentEmptyState({
 }) {
   return (
     <div className="mobile-agent-empty">
-      <div className="mobile-agent-empty-icon">
-        <MessageSquare size={34} />
-      </div>
-      <strong>No agent activity yet</strong>
       <div className="mobile-agent-session-card">
         <TerminalSquare size={26} />
         <div>
@@ -615,10 +646,6 @@ function MobileAgentEmptyState({
             {pane ? <span>{paneLabel}</span> : null}
           </span>
         </div>
-      </div>
-      <div className="mobile-agent-ready">
-        <Zap size={17} />
-        <span>Ready for input</span>
       </div>
     </div>
   );

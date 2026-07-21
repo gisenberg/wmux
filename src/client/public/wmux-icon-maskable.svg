@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="wmux terminal prompt">
+  <rect width="512" height="512" fill="#101114"/>
+  <path d="M112 112h288v288H112z" fill="#0a0b0d" stroke="#d4b45f" stroke-width="14"/>
+  <path d="M112 178h288M178 112v288" stroke="#2a2d33" stroke-width="7"/>
+  <path d="m205 226 54 30-54 30" fill="none" stroke="#f4d35e" stroke-linecap="square" stroke-linejoin="miter" stroke-width="22"/>
+  <path d="M278 295h64" stroke="#65d58a" stroke-linecap="square" stroke-width="22"/>
+  <path d="M130 142h14M158 142h14" stroke="#d4b45f" stroke-width="10"/>
+</svg>

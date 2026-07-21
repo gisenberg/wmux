@@ -1786,9 +1786,13 @@ button.active-tool {
   justify-items: center;
   align-content: center;
   gap: 16px;
-  min-height: 100%;
+  min-height: 0;
   color: var(--muted);
   text-align: center;
+}
+
+.mobile-agent-empty:only-child {
+  min-height: 100%;
 }
 
 .mobile-agent-empty-icon {
@@ -2261,6 +2265,12 @@ button.active-tool {
   padding: 10px;
 }
 
+.mobile-agent-thread > .mobile-agent-launch-panel {
+  flex: 0 0 auto;
+  width: 100%;
+  margin-top: auto;
+}
+
 .mobile-agent-launch-copy {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -2514,6 +2524,34 @@ button.active-tool {
 .mobile-agent-composer-actions button:last-child {
   margin-left: auto;
   color: var(--gold-hot);
+}
+
+.mobile-agent-inactive-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border-top: 1px solid var(--line);
+  background: var(--black);
+  padding:
+    6px
+    calc(8px + var(--wmux-mobile-right-inset, 0px))
+    max(6px, env(safe-area-inset-bottom))
+    calc(8px + var(--wmux-mobile-left-inset, 0px));
+}
+
+.mobile-agent-inactive-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--text);
+  font: 700 12px/1 var(--wmux-mono-font);
+  text-transform: uppercase;
 }
 
 .mobile-agent-stop:disabled,
@@ -2818,8 +2856,12 @@ button.active-tool {
 
 .mobile-open-tui .mobile-agent-composer-actions {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+.mobile-open-tui .mobile-agent-composer-actions.has-stop {
+  grid-template-columns: 44px minmax(0, 1fr) auto;
 }
 
 .mobile-open-tui .mobile-agent-composer-actions button:last-child {
@@ -3137,6 +3179,10 @@ button.active-tool {
 }
 
 .mobile-pane-toolbar {
+  display: none;
+}
+
+.mobile-terminal-keys {
   display: none;
 }
 
@@ -4762,7 +4808,7 @@ button.active-tool {
     position: absolute;
     inset: var(--wmux-mobile-top-inset) auto 0 var(--wmux-mobile-left-inset);
     z-index: 40;
-    grid-template-rows: 48px auto auto minmax(88px, 1fr) 18px minmax(76px, 0.72fr);
+    grid-template-rows: 48px auto auto minmax(88px, 1fr) 44px auto;
     width: var(--wmux-mobile-drawer-width);
     max-width: var(--wmux-mobile-drawer-width);
     height: auto;
@@ -4777,7 +4823,7 @@ button.active-tool {
   }
 
   .app-shell .sidebar.mobile-open-tui-sidebar {
-    grid-template-rows: 44px auto 36px minmax(88px, 1fr) 30px auto;
+    grid-template-rows: 44px auto 36px minmax(88px, 1fr) 44px auto;
     gap: 0;
     border-right-color: var(--gold-dim);
     border-radius: 0;
@@ -4811,6 +4857,32 @@ button.active-tool {
   .mobile-open-tui-sidebar .sidebar-label {
     color: var(--gold-dim);
     font-size: 10px;
+  }
+
+  .mobile-host-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 44px;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--black);
+    padding: 0 4px;
+    color: var(--gold-dim);
+    font: 900 10px/1 var(--wmux-mono-font);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .mobile-host-summary span:last-child {
+    color: var(--muted);
+  }
+
+  .machine-list.mobile-collapsed {
+    display: none;
   }
 
   .mobile-open-tui-sidebar .target-host-label::before,
@@ -4872,15 +4944,54 @@ button.active-tool {
     clip-path: none;
   }
 
+  .workspace-tree-row {
+    padding-left: 20px;
+  }
+
+  .workspace-tree-row:has(> .workspace-disclosure) {
+    padding-left: 44px;
+  }
+
+  .workspace-tree-row .workspace-item {
+    padding-right: 48px;
+  }
+
+  .workspace-disclosure,
+  .workspace-move-button {
+    top: 8px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .workspace-move-button {
+    right: 0;
+  }
+
   .workspace-move-backdrop {
     place-items: end center;
   }
 
   .workspace-move-dialog {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     max-height: min(78dvh, 620px);
     overflow: auto;
     padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  .workspace-move-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .workspace-move-actions button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    flex: none;
   }
 
   .mobile-open-tui-sidebar .workspace-item:hover {
@@ -4991,6 +5102,10 @@ button.active-tool {
   .mobile-open-tui-sidebar .host-label::before {
     content: "// ";
     color: var(--faint);
+  }
+
+  .mobile-open-tui-sidebar .mobile-host-summary::before {
+    content: none;
   }
 
   .mobile-open-tui-sidebar .machine-list {
@@ -5570,6 +5685,40 @@ button.active-tool {
     color: #e7a19a;
   }
 
+  .mobile-terminal-keys {
+    align-items: stretch;
+    grid-template-columns: repeat(7, minmax(44px, 1fr));
+    min-width: 0;
+    overflow-x: auto;
+    border-top: 1px solid var(--line);
+    background: var(--black);
+    padding-right: var(--wmux-mobile-right-inset);
+    padding-left: var(--wmux-mobile-left-inset);
+    scrollbar-width: none;
+  }
+
+  .mobile-terminal-keys::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-terminal-keys button {
+    min-width: 44px;
+    height: 44px;
+    border: 0;
+    border-right: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--panel);
+    color: var(--text);
+    font: 800 12px/1 var(--wmux-mono-font);
+    text-transform: uppercase;
+    touch-action: manipulation;
+  }
+
+  .mobile-terminal-keys button.active {
+    background: var(--panel-3);
+    color: var(--gold);
+  }
+
   .mobile-keyboard-open .workspace {
     grid-template-rows: 0 minmax(0, 1fr);
   }
@@ -5636,6 +5785,10 @@ button.active-tool {
     padding: 10px 12px;
   }
 
+  .mobile-keyboard-open .mobile-open-tui .mobile-agent-input-row textarea {
+    padding-left: 28px;
+  }
+
   .mobile-keyboard-open .mobile-agent-send {
     height: 44px;
   }
@@ -5686,7 +5839,86 @@ button.active-tool {
 
   .mobile-keyboard-open .terminal-pane,
   .mobile-keyboard-open .terminal-pane.has-media {
-    grid-template-rows: 0 minmax(0, 1fr) 0;
+    grid-template-rows: 0 minmax(0, 1fr) 44px 0;
+  }
+
+  .mobile-keyboard-open .mobile-terminal-keys {
+    display: grid;
+  }
+
+  .mobile-close-backdrop {
+    position: fixed;
+    z-index: 90;
+    inset: 0;
+    display: grid;
+    align-items: end;
+    background: rgba(0, 0, 0, 0.78);
+    padding:
+      var(--wmux-mobile-top-inset)
+      var(--wmux-mobile-right-inset)
+      max(0px, env(safe-area-inset-bottom))
+      var(--wmux-mobile-left-inset);
+  }
+
+  .mobile-close-dialog {
+    display: grid;
+    gap: 14px;
+    width: 100%;
+    border: 1px solid var(--red);
+    background: var(--black);
+    padding: 16px;
+    color: var(--text);
+    font-family: var(--wmux-mono-font);
+  }
+
+  .mobile-close-dialog header {
+    display: grid;
+    gap: 5px;
+  }
+
+  .mobile-close-dialog header span {
+    color: var(--red);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+
+  .mobile-close-dialog header strong {
+    color: var(--ivory);
+    font-size: 18px;
+    text-transform: uppercase;
+  }
+
+  .mobile-close-dialog p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .mobile-close-dialog p strong {
+    color: var(--ivory);
+  }
+
+  .mobile-close-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .mobile-close-actions button {
+    min-height: 48px;
+    border: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--panel);
+    color: var(--text);
+    font: 800 12px/1 var(--wmux-mono-font);
+    text-transform: uppercase;
+  }
+
+  .mobile-close-actions button.danger {
+    border-color: var(--red);
+    color: #ffaaa1;
   }
 
   .command-item {
@@ -5957,7 +6189,7 @@ button.active-tool {
 
 @media (max-height: 500px) and (pointer: coarse) {
   .app-shell .sidebar {
-    grid-template-rows: 44px auto auto minmax(48px, 1fr) 18px minmax(52px, 0.65fr);
+    grid-template-rows: 44px auto auto minmax(48px, 1fr) 44px auto;
     gap: 6px;
     padding: 8px;
   }

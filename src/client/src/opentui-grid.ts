@@ -21,6 +21,7 @@ export interface CellMetrics {
   height: number;
   cols: number;
   rows: number;
+  viewportHeight?: number;
 }
 
 export interface CanvasViewport {
@@ -233,7 +234,13 @@ export const syncPainterViewport = (
   painter.setViewport(viewport.deviceW, viewport.deviceH, viewport.cssW, viewport.cssH);
   const { cols, rows } = painter.fit(viewport.cssW, viewport.cssH);
   painter.resize(cols, rows);
-  return { width: painter.cellWidth, height: painter.cellHeight, cols, rows };
+  return {
+    width: painter.cellWidth,
+    height: painter.cellHeight,
+    cols,
+    rows,
+    viewportHeight: viewport.cssH,
+  };
 };
 
 export const observeCanvasViewport = (
