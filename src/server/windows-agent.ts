@@ -97,6 +97,7 @@ export type WindowsAgentUpdateActivator = (machine: MachineConfig, port?: number
 const MAX_REPLAY_BYTES = 2 * 1024 * 1024;
 const SESSION_CREATE_TIMEOUT_MS = 30_000;
 const UPDATE_ACTIVATION_TIMEOUT_MS = 30_000;
+const UPDATE_RESTART_TIMEOUT_MS = 60_000;
 
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
   if (machine.agentUrl) return machine.agentUrl.replace(/\/+$/, "");
@@ -239,6 +240,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     private readonly rows: number,
     private readonly extraEnv: Record<string, string> = {},
     private readonly activateUpdate: WindowsAgentUpdateActivator = activateWindowsAgentUpdate,
+    private readonly updateRestartTimeoutMs = UPDATE_RESTART_TIMEOUT_MS,
   ) {
     super();
     this.checkpoint = new TerminalCheckpoint(cols, rows, extraEnv);
@@ -529,8 +531,9 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.reportPendingUpdate(actualDisplay, expectedDisplay, activeSessions);
     }
 
-    while (!this.stopped) {
-      await delay(500);
+    const updateDeadline = Date.now() + this.updateRestartTimeoutMs;
+    while (!this.stopped && Date.now() < updateDeadline) {
+      await delay(Math.min(500, Math.max(1, updateDeadline - Date.now())));
       try {
         const current = await this.get<WindowsAgentHealth>("/health", 1500);
         const currentRelease = current.releaseVersion ?? current.version;
@@ -545,6 +548,12 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         // drained process. Keep waiting; no remote pane is owned by this
         // pending session yet.
       }
+    }
+    if (!this.stopped) {
+      throw new Error(
+        `Windows agent update on ${this.machine.id} did not become current within `
+        + `${Math.ceil(this.updateRestartTimeoutMs / 1000)} seconds`,
+      );
     }
     return false;
   }
@@ -773,23 +782,82 @@ const legacyAgentSupportsDrain = (release: string): boolean => {
   return major > 0 || minor >= 7;
 };
 
-export const activateWindowsAgentUpdate: WindowsAgentUpdateActivator = async (machine, port) => {
+interface WindowsAgentUpdateSshInvocation {
+  args: string[];
+  acknowledgementAction: "activate-update" | "rollout-update";
+}
+
+export const buildWindowsAgentUpdateSshInvocation = (
+  machine: MachineConfig,
+  port?: number,
+): WindowsAgentUpdateSshInvocation => {
   if (!machine.host) throw new Error(`machine ${machine.id} is missing an SSH host`);
   const target = machine.user ? `${machine.user}@${machine.host}` : machine.host;
   const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
   if (machine.port) args.push("-p", String(machine.port));
-  args.push(target, machine.shell ?? "pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-");
+  const acknowledgementAction = port ? "rollout-update" : "activate-update";
   const script = `
 $Service = Join-Path $env:LOCALAPPDATA 'wmux\\bin\\wmux-windows-agent-service.ps1'
 if (-not (Test-Path -LiteralPath $Service -PathType Leaf)) {
   Write-Error "wmux Windows agent service helper is not staged at $Service"
   exit 127
 }
-& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Service ${port ? `rollout-update --port ${port}` : "activate-update"}
-exit $LASTEXITCODE
+& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Service ${port ? `rollout-update --port ${port}` : acknowledgementAction}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+[pscustomobject]@{
+  wmuxUpdateActivation = $true
+  action = '${acknowledgementAction}'
+  port = ${port ?? "$null"}
+} | ConvertTo-Json -Compress
+exit 0
 `;
+  const encodedCommand = Buffer.from(script, "utf16le").toString("base64");
+  args.push(
+    target,
+    machine.shell || "pwsh",
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    encodedCommand,
+  );
+  return { args, acknowledgementAction };
+};
+
+export const parseWindowsAgentUpdateAcknowledgement = (
+  stdout: string,
+  expectedAction: "activate-update" | "rollout-update",
+  expectedPort?: number,
+): number | void => {
+  const lines = stdout.trim().split(/\r?\n/).reverse();
+  for (const line of lines) {
+    if (!line.trim().startsWith("{")) continue;
+    try {
+      const payload = JSON.parse(line) as {
+        wmuxUpdateActivation?: boolean;
+        action?: string;
+        port?: number | null;
+      };
+      if (payload.wmuxUpdateActivation !== true) continue;
+      if (payload.action !== expectedAction) {
+        throw new Error(`expected ${expectedAction}, received ${payload.action ?? "none"}`);
+      }
+      if (expectedPort !== undefined && payload.port !== expectedPort) {
+        throw new Error(`expected port ${expectedPort}, received ${payload.port ?? "none"}`);
+      }
+      return expectedPort;
+    } catch (error) {
+      if (error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
+  throw new Error(`missing ${expectedAction} acknowledgement`);
+};
+
+export const activateWindowsAgentUpdate: WindowsAgentUpdateActivator = async (machine, port) => {
+  const invocation = buildWindowsAgentUpdateSshInvocation(machine, port);
   return new Promise<number | void>((resolve, reject) => {
-    const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("ssh", invocation.args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -798,19 +866,13 @@ exit $LASTEXITCODE
       settled = true;
       clearTimeout(timer);
       if (error) reject(error);
-      else if (port) {
-        const line = stdout.trim().split(/\r?\n/).reverse().find((candidate) => candidate.trim().startsWith("{"));
-        if (!line) resolve(port);
-        else {
-          try {
-            const payload = JSON.parse(line) as { port?: number };
-            if (payload.port !== port) throw new Error(`expected port ${port}, received ${payload.port ?? "none"}`);
-            resolve(port);
-          } catch (parseError) {
-            reject(new Error(`invalid Windows agent rollout response: ${formatError(parseError)}`));
-          }
+      else {
+        try {
+          resolve(parseWindowsAgentUpdateAcknowledgement(stdout, invocation.acknowledgementAction, port));
+        } catch (parseError) {
+          reject(new Error(`invalid Windows agent update response: ${formatError(parseError)}`));
         }
-      } else resolve();
+      }
     };
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -829,7 +891,6 @@ exit $LASTEXITCODE
       if (status === 0) finish();
       else finish(new Error(`remote update activation failed with exit ${status ?? "unknown"}${stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""}`));
     });
-    child.stdin.end(script);
   });
 };
 
