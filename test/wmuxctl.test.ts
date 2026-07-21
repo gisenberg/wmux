@@ -488,6 +488,9 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
       request.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         inputs.push(body);
+        if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
+          runId = body.data.slice("wmux-agent-run request ".length);
+        }
         if (inputs.length === 3) {
           const delegated = JSON.parse(Buffer.from(body.data, "base64").toString("utf8"));
           runId = delegated.runId;
@@ -527,7 +530,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
       "",
     ].join("\r\n"));
     let replay = "operator@host /srv/project ❯ ";
-    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount === 2) replay = `WMUX_AGENT_READY ${runId}\r\n`;
     if (upgradeCount === 3) {
       const result = Buffer.from(JSON.stringify({ runId, runtime: "codex", ok: true, result: "review complete", error: "" })).toString("base64");
       replay = `WMUX_AGENT_RESULT ${result}\r\nWMUX_AGENT_DONE ${runId} 0\r\n`;
@@ -546,7 +549,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     assert.equal(result.result, "review complete");
     assert.equal(result.closed, true);
     assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
-    assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), ["wmux-agent-run", "\r"]);
+    assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), [`wmux-agent-run request ${runId}`, "\r"]);
     assert.equal(inputs.some((body) => String(body.data).includes(prompt)), false);
     assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
     assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message, runId: event.runId })), [
@@ -783,7 +786,9 @@ test("wmuxctl delegate recovers a completed result from durable lifecycle status
       request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (typeof body.data === "string" && body.data !== "wmux-agent-run" && body.data !== "\r") {
+        if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
+          runId = body.data.slice("wmux-agent-run request ".length);
+        } else if (typeof body.data === "string" && body.data !== "\r") {
           runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
         }
         jsonResponse(response, {});
@@ -820,7 +825,7 @@ test("wmuxctl delegate recovers a completed result from durable lifecycle status
       "",
     ].join("\r\n"));
     let replay = "operator@host /srv/project ❯ ";
-    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount === 2) replay = `WMUX_AGENT_READY ${runId}\r\n`;
     if (upgradeCount === 3) replay = `WMUX_AGENT_DONE ${runId} 0\r\n`;
     socket.end(websocketFrame({ type: "ready", paneId: "pane_recover", replay }));
   });
@@ -892,7 +897,9 @@ test("wmuxctl delegate finishes from lifecycle status when terminal replay has n
       request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (typeof body.data === "string" && body.data !== "wmux-agent-run" && body.data !== "\r") {
+        if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
+          runId = body.data.slice("wmux-agent-run request ".length);
+        } else if (typeof body.data === "string" && body.data !== "\r") {
           runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
         }
         jsonResponse(response, {});
@@ -930,7 +937,7 @@ test("wmuxctl delegate finishes from lifecycle status when terminal replay has n
       "",
     ].join("\r\n"));
     let replay = "operator@host /srv/project ❯ ";
-    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount === 2) replay = `WMUX_AGENT_READY ${runId}\r\n`;
     if (upgradeCount >= 3) replay = "agent output without control markers\r\n";
     socket.end(websocketFrame({ type: "ready", paneId: "pane_lifecycle_first", replay }));
   });
@@ -1005,7 +1012,9 @@ test("wmuxctl delegate records observer failure without replacing the agent outc
       request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (typeof body.data === "string" && body.data !== "wmux-agent-run" && body.data !== "\r" && body.data !== "\u0003") {
+        if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
+          runId = body.data.slice("wmux-agent-run request ".length);
+        } else if (typeof body.data === "string" && body.data !== "\r" && body.data !== "\u0003") {
           runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
         }
         jsonResponse(response, {});
@@ -1032,7 +1041,7 @@ test("wmuxctl delegate records observer failure without replacing the agent outc
       "",
     ].join("\r\n"));
     let replay = "operator@host /srv/project ❯ ";
-    if (upgradeCount === 2) replay = "WMUX_AGENT_READY\r\n";
+    if (upgradeCount === 2) replay = `WMUX_AGENT_READY ${runId}\r\n`;
     if (upgradeCount >= 3) replay = "agent output without control markers\r\n";
     socket.end(websocketFrame({ type: "ready", paneId: "pane_observer_error", replay }));
   });

@@ -18,6 +18,7 @@ MAX_TEXT = 64_000
 TERMINATION_GRACE = 2.0
 HELP_PROBE_TIMEOUT = 5.0
 MAX_HELP_OUTPUT = 256 * 1024
+MAX_BLANK_REQUEST_LINES = 8
 RUNTIMES = {"opencode", "codex", "claude"}
 SANDBOX_MODES = {"read-only", "workspace-write", "danger-full-access"}
 RESULT_FORMATS = {"outcome-v1"}
@@ -56,6 +57,18 @@ def fail(run_id, message, code=2):
     return code
 
 
+def read_request_line():
+    for _attempt in range(MAX_BLANK_REQUEST_LINES + 1):
+        line = sys.stdin.buffer.readline(MAX_LINE + 1)
+        if len(line) > MAX_LINE:
+            raise ValueError("request is too large")
+        if line.strip():
+            return line
+        if not line:
+            break
+    raise ValueError("request must be Base64 JSON")
+
+
 def request_from_stdin(marker="WMUX_AGENT_READY"):
     tty_state = None
     if sys.stdin.isatty() and os.name == "nt":
@@ -89,15 +102,13 @@ def request_from_stdin(marker="WMUX_AGENT_READY"):
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, quiet)
         try:
             print(marker, flush=True)
-            line = sys.stdin.buffer.readline(MAX_LINE + 1)
+            line = read_request_line()
         finally:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, tty_state)
             print(flush=True)
     else:
         print(marker, flush=True)
-        line = sys.stdin.buffer.readline(MAX_LINE + 1)
-    if len(line) > MAX_LINE:
-        raise ValueError("request is too large")
+        line = read_request_line()
     try:
         request = json.loads(base64.b64decode(line.strip(), validate=True))
     except Exception as error:
@@ -554,15 +565,23 @@ def main():
         if expected and not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", expected):
             return fail("unknown", "invalid TUI runId")
         return tui_main(expected)
-    if len(sys.argv) != 1:
-        return fail("unknown", "usage: wmux-agent-run [tui RUN_ID]")
-    run_id = "unknown"
+    expected_run_id = ""
+    if len(sys.argv) == 3 and sys.argv[1] == "request":
+        expected_run_id = sys.argv[2]
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", expected_run_id):
+            return fail("unknown", "invalid request runId")
+    elif len(sys.argv) != 1:
+        return fail("unknown", "usage: wmux-agent-run [request RUN_ID|tui RUN_ID]")
+    run_id = expected_run_id or "unknown"
     schema_path = None
     try:
-        request = request_from_stdin()
+        marker = "WMUX_AGENT_READY %s" % expected_run_id if expected_run_id else "WMUX_AGENT_READY"
+        request = request_from_stdin(marker)
         candidate = request.get("runId")
         if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,128}", candidate):
             run_id = candidate
+        if expected_run_id and candidate != expected_run_id:
+            raise ValueError("request runId does not match the launched helper")
         run_id, runtime, prompt, directory = validate(request)
         env = os.environ.copy()
         env["WMUX_DELEGATED_RUN"] = "1"

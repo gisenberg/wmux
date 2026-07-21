@@ -57,6 +57,63 @@ print(json.dumps(module.prepare_windows_command(
   assert.match(completed.stdout, /false/);
 });
 
+posixTest("wmux-agent-run ignores blank TTY lines before a POSIX request", () => {
+  const probe = `
+import base64
+import importlib.machinery
+import importlib.util
+import io
+import json
+import sys
+import types
+
+loader = importlib.machinery.SourceFileLoader("wmux_agent_run", sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+request = {"runId": "posix-input", "runtime": "codex", "prompt": "inspect", "directory": "/repo"}
+encoded = base64.b64encode(json.dumps(request).encode()).decode()
+
+class TtyInput:
+    buffer = io.BytesIO(("\\r\\n\\n" + encoded + "\\n").encode())
+
+    def isatty(self):
+        return True
+
+    def fileno(self):
+        return 0
+
+sys.modules["termios"] = types.SimpleNamespace(
+    ECHO=8,
+    TCSADRAIN=1,
+    tcgetattr=lambda _descriptor: [0, 0, 0, 8],
+    tcsetattr=lambda *_args: None,
+)
+sys.stdin = TtyInput()
+print(json.dumps(module.request_from_stdin("WMUX_AGENT_READY posix-input"), sort_keys=True))
+`;
+  const completed = spawnSync("python3", ["-c", probe, helper], { encoding: "utf8" });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /WMUX_AGENT_READY posix-input/);
+  assert.match(completed.stdout, /"runId": "posix-input"/);
+});
+
+posixTest("wmux-agent-run correlates request startup failures with the expected run", () => {
+  const runId = "startup-failure";
+  const completed = spawnSync(helper, ["request", runId], {
+    encoding: "utf8",
+    input: "\n".repeat(9),
+  });
+  assert.equal(completed.status, 2, completed.stderr);
+  assert.match(completed.stdout, new RegExp(`^WMUX_AGENT_READY ${runId}$`, "m"));
+  assert.deepEqual(decodeResult(completed.stdout), {
+    runId,
+    ok: false,
+    error: "request must be Base64 JSON",
+  });
+  assert.match(completed.stdout, new RegExp(`^WMUX_AGENT_DONE ${runId} 2$`, "m"));
+});
+
 const waitFor = async (predicate: () => boolean, message: string, timeout = 3000) => {
   const deadline = Date.now() + timeout;
   while (!predicate()) {

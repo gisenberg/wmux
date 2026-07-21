@@ -1488,8 +1488,23 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 ),
                 3,
             )
-            submit_line(client, info["paneId"], "wmux-agent-run", True, args.cols, args.rows)
-            wait_for_output(client, info["paneId"], r"(?m)^WMUX_AGENT_READY$", args.ready_timeout, args.cols, args.rows)
+            ready_marker = f"WMUX_AGENT_READY {run_id}"
+            submit_line(
+                client,
+                info["paneId"],
+                f"wmux-agent-run request {run_id}",
+                True,
+                args.cols,
+                args.rows,
+            )
+            wait_for_output(
+                client,
+                info["paneId"],
+                rf"(?m)^{re.escape(ready_marker)}$",
+                args.ready_timeout,
+                args.cols,
+                args.rows,
+            )
             request = {
                 "runId": run_id,
                 "runtime": args.runtime,
