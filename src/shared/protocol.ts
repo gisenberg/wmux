@@ -151,6 +151,7 @@ export interface TerminalClipboard {
 
 export interface AgentActivity {
   id: string;
+  runId?: string;
   workspaceId: string;
   tabId: string;
   paneId: string;
