@@ -194,7 +194,7 @@ export const api = {
     }),
   closePane: (tabId: string, paneId: string) =>
     json<{ state: BootstrapPayload }>(`/api/tabs/${tabId}/panes/${paneId}`, { method: "DELETE" }),
-  sendPaneInput: (paneId: string, data: string, cols = 96, rows = 32) =>
+  sendPaneInput: (paneId: string, data: string | readonly string[], cols = 96, rows = 32) =>
     json<BootstrapPayload>(`/api/panes/${encodeURIComponent(paneId)}/input`, {
       method: "POST",
       body: JSON.stringify({ data, cols, rows }),

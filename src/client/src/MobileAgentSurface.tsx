@@ -37,7 +37,7 @@ interface MobileAgentSurfaceProps {
   workspace?: Workspace;
   tab?: SurfaceTab;
   pane?: PaneState;
-  onSendInput: (paneId: string, data: string) => Promise<void>;
+  onSendInput: (paneId: string, data: string | readonly string[]) => Promise<void>;
   onUploadAttachment: (paneId: string, attachment: PaneAttachmentUpload) => Promise<PaneAttachment>;
   onFocusTerminal?: () => void;
   onOpenActions?: () => void;
@@ -964,12 +964,11 @@ const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[
 };
 
 export const sendMobileComposerInput = async (
-  sendInput: (paneId: string, data: string) => Promise<void>,
+  sendInput: (paneId: string, data: string | readonly string[]) => Promise<void>,
   paneId: string,
   message: string,
 ) => {
-  await sendInput(paneId, message);
-  await sendInput(paneId, "\r");
+  await sendInput(paneId, [message, "\r"]);
 };
 
 const isSupportedImageMimeType = (mimeType: string): boolean =>

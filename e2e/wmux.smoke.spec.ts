@@ -1151,6 +1151,15 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   await page.getByRole("button", { name: "Latest" }).click();
   const composer = page.getByRole("textbox", { name: "Agent message" });
   await composer.fill("mobile follow-up");
+  const composerInputRequests: unknown[] = [];
+  page.on("request", (browserRequest) => {
+    if (
+      browserRequest.method() === "POST"
+      && browserRequest.url().includes(`/api/panes/${tab?.activePaneId}/input`)
+    ) {
+      composerInputRequests.push(browserRequest.postDataJSON());
+    }
+  });
   await page.setViewportSize({ width: 390, height: 520 });
   const appShell = page.locator("main.app-shell");
   await expect(appShell).toHaveClass(/mobile-keyboard-open/);
@@ -1171,6 +1180,9 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   await composer.focus();
   await send.click();
   await expect(composer).toBeFocused();
+  await expect.poll(() => composerInputRequests).toEqual([
+    { data: ["mobile follow-up", "\r"], cols: 96, rows: 32 },
+  ]);
 
   await page.setViewportSize({ width: 390, height: 720 });
   await expect(appShell).not.toHaveClass(/mobile-keyboard-open/);

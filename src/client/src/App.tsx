@@ -907,7 +907,7 @@ export function App() {
     },
   );
 
-  const sendPaneInput = async (paneId: string, data: string): Promise<void> => {
+  const sendPaneInput = async (paneId: string, data: string | readonly string[]): Promise<void> => {
     try {
       await refresh(await api.sendPaneInput(paneId, data));
     } catch (nextError) {

@@ -63,13 +63,12 @@ test("only settled successful events expose assistant response text", () => {
   );
 });
 
-test("mobile composer sends Enter as a distinct sequential terminal input", async () => {
-  const writes: Array<{ paneId: string; data: string }> = [];
+test("mobile composer batches text and Enter in one request", async () => {
+  const writes: Array<{ paneId: string; data: string | readonly string[] }> = [];
   await sendMobileComposerInput(async (paneId, data) => {
     writes.push({ paneId, data });
   }, "pane-1", "hello agent");
   assert.deepEqual(writes, [
-    { paneId: "pane-1", data: "hello agent" },
-    { paneId: "pane-1", data: "\r" },
+    { paneId: "pane-1", data: ["hello agent", "\r"] },
   ]);
 });
