@@ -563,6 +563,222 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
   }
 });
 
+test("wmuxctl durable Codex sessions launch once and correlate plain multi-turn responses", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-session-"));
+  const promptPath = path.join(root, "prompt.md");
+  const prompts = ["inspect the current branch", "now summarize the prior turn"];
+  fs.writeFileSync(promptPath, prompts[0]);
+  const inputs: Array<Record<string, unknown>> = [];
+  const lifecycle: Array<Record<string, unknown>> = [];
+  const statusReads = new Map<string, number>();
+  let workspaceCreated = false;
+  let turnRunId = "";
+  let launchRunId = "";
+  const machine = {
+    id: "linux-box",
+    kind: "ssh",
+    platform: "linux",
+    reachable: true,
+    source: "static",
+    endpoint: "10.0.0.2:22",
+  };
+  const workspace = {
+    id: "ws_session",
+    machineId: "linux-box",
+    createdBy: "agent",
+    activeTabId: "tab_session",
+    tabs: [{
+      id: "tab_session",
+      activePaneId: "pane_session",
+      panes: [{ id: "pane_session", machineId: "linux-box", status: "running" }],
+    }],
+  };
+  const reply = (response: http.ServerResponse, body: unknown, status = 200) => {
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      reply(response, {
+        machines: [machine],
+        workspaces: workspaceCreated ? [workspace] : [],
+        delegations: lifecycle
+          .filter((event) => event.runId)
+          .map((event) => ({ runId: event.runId, paneId: event.paneId, state: "completed" })),
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      workspaceCreated = true;
+      request.resume();
+      request.on("end", () => reply(response, { workspace, state: {} }, 201));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_session/title") {
+      request.resume();
+      request.on("end", () => reply(response, {}));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/agent-events") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const event = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        lifecycle.push(event);
+        turnRunId = event.runId;
+        statusReads.set(turnRunId, 0);
+        reply(response, {}, 201);
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/panes/pane_session/input") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        inputs.push(body);
+        if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run tui ")) {
+          launchRunId = body.data.slice("wmux-agent-run tui ".length);
+        }
+        reply(response, {});
+      });
+      return;
+    }
+    const statusMatch = request.url?.match(/^\/api\/delegations\/([^/]+)$/);
+    if (request.method === "GET" && statusMatch) {
+      const runId = statusMatch[1];
+      const reads = (statusReads.get(runId) ?? 0) + 1;
+      statusReads.set(runId, reads);
+      reply(response, {
+        delegation: reads === 1
+          ? { runId, state: "running", summary: "codex running" }
+          : {
+              runId,
+              state: "completed",
+              result: `plain response for ${runId}`,
+              summary: "codex completed",
+            },
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("upgrade", (request, socket) => {
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    let replay = "operator@host /srv/project $ ";
+    if (inputs.length === 2) replay = `WMUX_AGENT_TUI_READY ${launchRunId}`;
+    if (inputs.length === 4) replay = `WMUX_AGENT_TUI_LAUNCH ${launchRunId}`;
+    if (inputs.length >= 6) replay = "OpenAI Codex · /srv/project › ";
+    socket.end(websocketFrame({ type: "ready", paneId: "pane_session", replay }));
+  });
+
+  const url = await listen(server);
+  try {
+    const first = JSON.parse((await cli(url, [
+      "delegate", "codex", "linux-box", "--directory", "/srv/project",
+      "--prompt-file", promptPath, "--title", "Durable workstream", "--session",
+      "--write-access", "--sandbox", "danger-full-access", "--gate-timeout", "0.01",
+    ])).stdout);
+    assert.equal(first.state, "completed");
+    assert.equal(first.session, true);
+    assert.equal(first.reused, false);
+    assert.equal(first.workspaceId, "ws_session");
+    assert.match(first.result, /^plain response for /);
+    const launchRequests = inputs.filter((body) => String(body.data).startsWith("wmux-agent-run tui "));
+    assert.equal(launchRequests.length, 1);
+    const encodedRequest = String(inputs[2].data);
+    assert.deepEqual(JSON.parse(Buffer.from(encodedRequest, "base64").toString("utf8")), {
+      runId: first.runId,
+      runtime: "codex",
+      directory: "/srv/project",
+      unattended: false,
+      writeAccess: true,
+      sandboxMode: "danger-full-access",
+    });
+
+    fs.writeFileSync(promptPath, prompts[1]);
+    const inputCount = inputs.length;
+    const second = JSON.parse((await cli(url, [
+      "delegate", "codex", "linux-box", "--directory", "/srv/project",
+      "--prompt-file", promptPath, "--title", "Follow-up turn", "--session",
+      "--session-workspace", first.workspaceId, "--write-access", "--sandbox", "danger-full-access",
+    ])).stdout);
+    assert.equal(second.state, "completed");
+    assert.equal(second.session, true);
+    assert.equal(second.reused, true);
+    assert.equal(second.workspaceId, first.workspaceId);
+    assert.notEqual(second.runId, first.runId);
+    assert.equal(inputs.slice(inputCount).some((body) => String(body.data).startsWith("wmux-agent-run tui ")), false);
+    const pasted = inputs
+      .filter((body) => !String(body.data).startsWith("wmux-agent-run tui "))
+      .map((body) => String(body.data))
+      .join("");
+    assert.match(pasted, /inspect the current branch/);
+    assert.match(pasted, /now summarize the prior turn/);
+    assert.doesNotMatch(pasted, /Return the entire final response as exactly one JSON object/);
+    assert.deepEqual(lifecycle.map((event) => event.status), ["running", "running"]);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("wmuxctl refuses to replace a missing durable session with a new workspace", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-missing-session-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "continue the prior conversation");
+  let createRequests = 0;
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        machines: [{
+          id: "linux-box",
+          kind: "ssh",
+          platform: "linux",
+          reachable: true,
+          endpoint: "10.0.0.2:22",
+        }],
+        workspaces: [],
+        delegations: [],
+      }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      createRequests += 1;
+    }
+    response.writeHead(404).end();
+  });
+
+  const url = await listen(server);
+  try {
+    await assert.rejects(
+      cli(url, [
+        "delegate", "codex", "linux-box", "--directory", "/srv/project",
+        "--prompt-file", promptPath, "--session", "--session-workspace", "ws_missing",
+      ]),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /session workspace does not exist/);
+        return true;
+      },
+    );
+    assert.equal(createRequests, 0);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and structured outcome", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-windows-delegate-"));
   const promptPath = path.join(root, "prompt.md");

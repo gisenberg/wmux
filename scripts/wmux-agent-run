@@ -154,12 +154,16 @@ def validate(request, tui=False):
     if tui:
         if "prompt" in request:
             raise ValueError("interactive request must not contain prompt")
-        allowed = {"runId", "runtime", "directory", "model", "agent"}
+        allowed = {"runId", "runtime", "directory", "model", "agent", "unattended", "writeAccess", "sandboxMode"}
         unknown = sorted(set(request) - allowed)
         if unknown:
             raise ValueError("interactive request contains forbidden key: %s" % unknown[0])
         if "agent" in request and runtime != "opencode":
             raise ValueError("interactive agent is only valid for opencode")
+        if "sandboxMode" in request and runtime != "codex":
+            raise ValueError("interactive sandbox mode is only valid for codex")
+        if request.get("unattended") is True and runtime != "codex":
+            raise ValueError("interactive unattended mode is only valid for codex")
     return run_id, runtime, prompt, directory
 
 
@@ -174,6 +178,11 @@ def tui_command_for(request, runtime):
         raise ValueError("%s executable did not resolve to an absolute path" % runtime)
     model = request.get("model")
     argv = [executable]
+    if runtime == "codex" and any(key in request for key in ("sandboxMode", "writeAccess", "unattended")):
+        sandbox_mode = request.get("sandboxMode") or ("workspace-write" if request.get("writeAccess") is True else "read-only")
+        argv.extend(["--sandbox", sandbox_mode])
+        if request.get("unattended") is True:
+            argv.extend(["--ask-for-approval", "never"])
     if runtime == "opencode" and request.get("agent"):
         argv.extend(["--agent", request["agent"]])
     if model:

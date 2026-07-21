@@ -1126,6 +1126,88 @@ def wait_for_tui_snapshot(
         time.sleep(min(0.1, max(0, remaining)))
 
 
+def launch_posix_tui(
+    client: WmuxClient,
+    info: dict[str, Any],
+    runtime: str,
+    directory: str,
+    model: str,
+    opencode_agent: str,
+    accept_trust: bool,
+    ready_timeout: float,
+    gate_timeout: float,
+    cols: int,
+    rows: int,
+    request_options: dict[str, Any] | None = None,
+) -> str:
+    launch_run_id = info["runId"]
+    before, _ = replay_digest(client, info["paneId"], cols, rows)
+    submit_line(client, info["paneId"], f"wmux-agent-run tui {launch_run_id}", True, cols, rows)
+    ready = wait_for_helper_marker(
+        client,
+        info["paneId"],
+        before,
+        f"WMUX_AGENT_TUI_READY {launch_run_id}",
+        launch_run_id,
+        ready_timeout,
+        cols,
+        rows,
+    )
+    request: dict[str, Any] = {
+        "runId": launch_run_id,
+        "runtime": runtime,
+        "directory": directory,
+        **(request_options or {}),
+    }
+    if model:
+        request["model"] = model
+    if runtime == "opencode" and opencode_agent:
+        request["agent"] = opencode_agent
+    encoded = base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode()
+    submit_line(client, info["paneId"], encoded, True, cols, rows)
+    launched = wait_for_helper_marker(
+        client,
+        info["paneId"],
+        hashlib.sha256(ready.encode()).hexdigest(),
+        f"WMUX_AGENT_TUI_LAUNCH {launch_run_id}",
+        launch_run_id,
+        ready_timeout,
+        cols,
+        rows,
+    )
+    launch_digest = hashlib.sha256(launched.encode()).hexdigest()
+    submit_line(client, info["paneId"], f"WMUX_AGENT_TUI_ACK {launch_run_id}", True, cols, rows)
+    launched, gate = wait_for_tui_snapshot(
+        client,
+        info["paneId"],
+        launch_digest,
+        launch_run_id,
+        ready_timeout,
+        cols,
+        rows,
+        gate_timeout=gate_timeout,
+    )
+    if gate == "trust":
+        if not accept_trust:
+            raise SystemExit("wmuxctl: repository-trust prompt detected; rerun with --accept-trust after review")
+        submit_line(client, info["paneId"], "1", True, cols, rows)
+        launched, gate = wait_for_tui_snapshot(
+            client,
+            info["paneId"],
+            hashlib.sha256(launched.encode()).hexdigest(),
+            launch_run_id,
+            ready_timeout,
+            cols,
+            rows,
+            gate_timeout=gate_timeout,
+        )
+        if gate:
+            raise SystemExit("wmuxctl: TUI remained at a safety prompt after trust response")
+    elif gate:
+        raise SystemExit(f"wmuxctl: {gate} prompt detected; refusing to automate it")
+    return launched
+
+
 def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     validate_tui_args(args)
     prompt = read_tui_prompt(args)
@@ -1140,50 +1222,24 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     try:
         client.set_workspace_title(info["workspaceId"], args.title or f"{args.runtime.capitalize()} TUI")
         wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows)
-        before, _ = replay_digest(client, info["paneId"], args.cols, args.rows)
         # Recheck after pane creation so a dynamic registration cannot drift.
         current_machine = require_posix_machine(client, args.machine)
         if machine_identity(current_machine) != initial_identity:
             raise SystemExit("wmuxctl: machine identity changed before TUI launch")
-        submit_line(client, info["paneId"], f"wmux-agent-run tui {info['runId']}", True, args.cols, args.rows)
-        ready = wait_for_helper_marker(
-            client, info["paneId"], before, f"WMUX_AGENT_TUI_READY {info['runId']}", info["runId"],
-            args.ready_timeout, args.cols, args.rows,
-        )
-        ready_digest = hashlib.sha256(ready.encode()).hexdigest()
-        request: dict[str, Any] = {"runId": info["runId"], "runtime": args.runtime, "directory": args.directory}
-        if args.model:
-            request["model"] = args.model
-        if args.runtime == "opencode" and args.opencode_agent:
-            request["agent"] = args.opencode_agent
-        encoded = base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode()
-        submit_line(client, info["paneId"], encoded, True, args.cols, args.rows)
-        launched = wait_for_helper_marker(
-            client, info["paneId"], ready_digest, f"WMUX_AGENT_TUI_LAUNCH {info['runId']}", info["runId"],
-            args.ready_timeout, args.cols, args.rows,
+        launched = launch_posix_tui(
+            client,
+            info,
+            args.runtime,
+            args.directory,
+            args.model,
+            args.opencode_agent,
+            args.accept_trust,
+            args.ready_timeout,
+            args.gate_timeout,
+            args.cols,
+            args.rows,
         )
         launch_digest = hashlib.sha256(launched.encode()).hexdigest()
-        # The helper cannot start the child until this unique acknowledgement;
-        # after it, alternate-screen checkpoints may replace the launch marker.
-        submit_line(client, info["paneId"], f"WMUX_AGENT_TUI_ACK {info['runId']}", True, args.cols, args.rows)
-        launched, gate = wait_for_tui_snapshot(
-            client, info["paneId"], launch_digest, info["runId"], args.ready_timeout, args.cols, args.rows,
-            gate_timeout=args.gate_timeout,
-        )
-        launch_digest = hashlib.sha256(launched.encode()).hexdigest()
-        if gate == "trust":
-            if not args.accept_trust:
-                raise SystemExit("wmuxctl: repository-trust prompt detected; rerun with --accept-trust after review")
-            submit_line(client, info["paneId"], "1", True, args.cols, args.rows)
-            launched, gate = wait_for_tui_snapshot(
-                client, info["paneId"], launch_digest, info["runId"], args.ready_timeout, args.cols, args.rows,
-                gate_timeout=args.gate_timeout,
-            )
-            launch_digest = hashlib.sha256(launched.encode()).hexdigest()
-            if gate:
-                raise SystemExit("wmuxctl: TUI remained at a safety prompt after trust response")
-        elif gate:
-            raise SystemExit(f"wmuxctl: {gate} prompt detected; refusing to automate it")
         info["state"] = "ready"
         if prompt is not None:
             paste = "\x1b[200~" + prompt + "\x1b[201~"
@@ -1338,8 +1394,56 @@ def wait_for_delegation_result(
             time.sleep(min(0.5, remaining))
 
 
+def session_workspace(
+    bootstrap: dict[str, Any],
+    workspace_id: str,
+    machine_id: str,
+    runtime: str,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"ws_[A-Za-z0-9]+", workspace_id):
+        raise SystemExit("wmuxctl: invalid session workspace ID")
+    workspace = next(
+        (candidate for candidate in bootstrap.get("workspaces", []) if candidate.get("id") == workspace_id),
+        None,
+    )
+    if workspace is None:
+        raise SystemExit("wmuxctl: session workspace does not exist")
+    if workspace.get("machineId") != machine_id or workspace.get("createdBy") != "agent":
+        raise SystemExit("wmuxctl: session workspace does not belong to the requested agent target")
+    info = describe_workspace("", workspace, require_explicit_multi_tab=True)
+    active = next(
+        (
+            delegation
+            for delegation in bootstrap.get("delegations", [])
+            if delegation.get("paneId") == info["paneId"]
+            and delegation.get("state") not in TERMINAL_DELEGATION_STATES
+        ),
+        None,
+    )
+    if active:
+        raise SystemExit(f"wmuxctl: {runtime.capitalize()} session is already running turn {active.get('runId')}")
+    return workspace
+
+
 def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     prompt = read_delegate_prompt(args)
+    if args.session_workspace and not args.session:
+        raise SystemExit("wmuxctl: --session-workspace requires --session")
+    if args.session and args.runtime != "codex":
+        raise SystemExit("wmuxctl: durable sessions currently require the Codex runtime")
+    if args.session and args.structured_outcome:
+        raise SystemExit("wmuxctl: durable sessions return native agent responses; omit --structured-outcome")
+    if args.session and args.close_on_success:
+        raise SystemExit("wmuxctl: durable sessions cannot use --close-on-success")
+    if args.session:
+        if UNSAFE_TUI_PROMPT_CONTROL.search(prompt):
+            raise SystemExit(
+                "wmuxctl: session prompt contains an unsafe terminal control character; only TAB and LF are allowed"
+            )
+        for key in ("timeout", "ready_timeout", "gate_timeout"):
+            value = getattr(args, key)
+            if not math.isfinite(value) or value <= 0:
+                raise SystemExit(f"wmuxctl: --{key.replace('_', '-')} must be positive and finite")
     if args.runtime == "opencode" and not args.write_access:
         raise SystemExit("wmuxctl: OpenCode delegation cannot enforce read-only mode; add --write-access explicitly")
     if args.sandbox and args.runtime != "codex":
@@ -1365,7 +1469,10 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     title = args.title or f"{args.runtime.capitalize()} delegation"
     workspace = None
     reused = False
-    if is_windows and args.title:
+    if args.session_workspace:
+        workspace = session_workspace(bootstrap, args.session_workspace, args.machine, args.runtime)
+        reused = True
+    elif is_windows and args.title and not args.session:
         candidates = [
             candidate
             for candidate in bootstrap.get("workspaces", [])
@@ -1407,9 +1514,10 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         workspace, _state = client.create_workspace(args.machine, parent_pane_id)
     info = describe_workspace(client.url, workspace)
     run_id = str(uuid.uuid4())
+    info["runId"] = run_id
     secrets = [prompt, client.token]
     try:
-        if is_windows and reused:
+        if reused:
             replay = str(
                 client.read_pane_output(
                     info["paneId"],
@@ -1419,8 +1527,16 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 ).get("replay")
                 or ""
             )
-            if re.search(r"(?m)^PS [^\n>]*>\s*$", clean_terminal_text(replay)):
+            clean_replay = clean_terminal_text(replay)
+            shell_ready = (
+                re.search(r"(?m)^PS [^\n>]*>\s*$", clean_replay)
+                if is_windows
+                else re.search(r"(?m)^.*(?:[$#%❯])\s*$", clean_replay)
+            )
+            if shell_ready:
                 reused = False
+            elif not re.search(CODEX_READY_PATTERN, clean_replay):
+                raise SystemExit("wmuxctl: saved Codex session is not at an idle agent prompt")
         if not reused:
             client.set_workspace_title(workspace["id"], title)
         client.record_agent_event(
@@ -1467,6 +1583,50 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 args.cols,
                 args.rows,
             )
+            wait_for_prompt_acceptance(
+                client,
+                info["paneId"],
+                run_id,
+                args.runtime,
+                args.ready_timeout,
+                args.cols,
+                args.rows,
+            )
+        elif args.session:
+            if not reused:
+                info["shellReadySeconds"] = round(
+                    wait_for_shell_ready(
+                        client,
+                        info["paneId"],
+                        info["machineId"],
+                        args.ready_timeout,
+                        args.cols,
+                        args.rows,
+                    ),
+                    3,
+                )
+                current_machine = require_posix_machine(client, args.machine)
+                if machine_identity(current_machine) != machine_identity(machine):
+                    raise SystemExit("wmuxctl: machine identity changed before durable session launch")
+                launch_posix_tui(
+                    client,
+                    info,
+                    args.runtime,
+                    args.directory,
+                    args.model,
+                    args.opencode_agent,
+                    args.accept_trust,
+                    args.ready_timeout,
+                    args.gate_timeout,
+                    args.cols,
+                    args.rows,
+                    {
+                        "unattended": args.unattended,
+                        "writeAccess": args.write_access,
+                        "sandboxMode": args.sandbox or ("workspace-write" if args.write_access else "read-only"),
+                    },
+                )
+            submit_interactive_prompt(client, info["paneId"], prompt, args.cols, args.rows)
             wait_for_prompt_acceptance(
                 client,
                 info["paneId"],
@@ -1552,6 +1712,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             "error": "" if ok else detail,
             "closed": False,
             "reused": reused,
+            "session": args.session,
         })
         if outcome == "blocked":
             info["state"] = "blocked"
@@ -1814,8 +1975,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     delegate.add_argument("--unattended", action="store_true", help="disable agent approval prompts; dangerous on trusted targets only")
     delegate.add_argument("--close-on-success", action="store_true", help="close the workspace only after success")
+    delegate.add_argument("--session", action="store_true", help="reuse a persistent Codex TUI for correlated turns")
+    delegate.add_argument("--session-workspace", default="", help="agent workspace ID returned by an earlier session turn")
+    delegate.add_argument("--accept-trust", action="store_true", help="accept only a recognized repository-trust prompt on session launch")
     delegate.add_argument("--timeout", type=float, default=900, help="delegated task timeout in seconds")
     delegate.add_argument("--ready-timeout", type=float, default=30, help="shell/helper readiness timeout in seconds")
+    delegate.add_argument("--gate-timeout", type=float, default=5, help="post-start session safety-gate observation in seconds")
     delegate.add_argument("--cols", type=int, default=120)
     delegate.add_argument("--rows", type=int, default=36)
     delegate.set_defaults(func=cmd_delegate)

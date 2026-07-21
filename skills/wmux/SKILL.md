@@ -59,11 +59,12 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
 - Helpers prefer `WMUX_HELPER_TOKEN`/`WMUX_HELPER_TOKEN_PATH`; POSIX and Windows staging follow the same rule. Never use automation auth as helper fallback.
 - Always give automated work a descriptive `--title`; `wmuxctl open`, `run`, and `ps` reuse an existing workspace with that exact title by default. Use `--new` only when a genuinely separate workspace is wanted.
 - Treat visibility as a contract. If the user asked for visible work, start substantive and long-lived processes in the wmux pane, not through direct SSH. Direct SSH remains appropriate for quick diagnostics only.
-- Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, or Claude task on a POSIX target, or a durable Codex task on a Windows PowerShell-over-SSH target.
+- Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, or Claude task, or add `--session` for a durable Codex conversation on POSIX or Windows.
   Pass the prompt through `--prompt-file` or stdin, never as a shell argument.
-  On POSIX, the helper creates a fresh agent-owned workspace and waits for the staged runner.
-  On Windows, it starts a normal Codex TUI and reuses the idle session for later delegations with the same machine and exact title.
-  Each Windows turn gets a distinct lifecycle run ID, and a busy titled session rejects concurrent delegation.
+  One-shot POSIX delegation creates a fresh agent-owned workspace and waits for the staged runner.
+  Session mode starts a normal Codex TUI and returns its workspace ID; pass that ID with `--session-workspace` for every later turn.
+  Each session turn gets a distinct lifecycle run ID, and a busy session rejects concurrent delegation.
+  Session mode returns the native assistant response and therefore rejects `--structured-outcome` and `--close-on-success`.
   The helper returns the direct URL and bounded final result on both paths.
 - Delegation completion races terminal replay against the durable lifecycle ledger. Treat `failureKind: observer` as loss of controller visibility rather than proof that the delegated agent failed, and inspect the retained workspace or `GET /api/delegations/:runId` before retrying destructive work.
 - Use `wmuxctl tui` for an interactive POSIX OpenCode, Codex, or Claude session. It starts the real terminal-attached TUI through the staged foreground supervisor, keeps the workspace open, and does not create manual lifecycle events. Use `--prompt-file PATH`, `--prompt-file -`, piped stdin, or deliberate `--no-prompt`; prompts are bracketed-pasted only after the launch ACK, fresh child output, and the bounded `--gate-timeout` observation (five seconds by default). Repository trust fails closed unless the reviewed invocation adds `--accept-trust`, which answers only a recognized numbered `1` yes/trust/continue choice using separate text and Enter requests, then repeats the observation. Login, credentials, generic onboarding, and unknown first-run screens are never automated. If the runtime exits early, input is quarantined; manual Ctrl-C returns to the shell. `localUrl` uses the caller's API base; `url` prefers the configured `publicUrl`, which otherwise falls back to local.
@@ -98,15 +99,16 @@ For a delegated task, prefer the structured command:
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py delegate codex MACHINE \
   --directory /absolute/project \
   --prompt-file /private/path/task.md \
-  --title "Descriptive task"
+  --title "Descriptive task" \
+  --session --accept-trust
 ```
 
 On Windows, use a drive-absolute or home-relative directory and the Codex runtime.
-Keep the title stable across messages in one workstream so wmux reuses the existing Codex conversation.
+Record the returned `workspaceId` and pass it as `--session-workspace` for every follow-up in the same workstream.
 Replace `codex` with `claude` as requested on POSIX targets.
 Add `--write-access` for edits and `--unattended` only with explicit authorization.
 Use `--sandbox danger-full-access` only when the operator explicitly requests no Codex sandboxing; it does not enable unattended approval.
-Add `--structured-outcome` when callers need blocked work to remain distinct from successful completion.
+Omit `--session` and add `--structured-outcome` only for an atomic Codex task whose caller requires a machine-shaped blocked/completed result.
 OpenCode additionally requires `--write-access` because its adapter cannot enforce read-only execution.
 
 For an interactive Codex or Claude TUI:

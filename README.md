@@ -443,7 +443,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-media` | Render images, audio, or video through the browser |
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
 | `wmux-hooks` | Install Claude, Codex, or OpenCode lifecycle hooks |
-| `wmuxctl delegate` / `tui` | Run a visible one-shot task on a supported POSIX or Windows target, or an interactive OpenCode, Codex, or Claude TUI on POSIX |
+| `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, or Claude TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
 | `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
@@ -492,6 +492,10 @@ parity is not included.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
+Adding `--session` selects a persistent Codex TUI on either POSIX or Windows instead of the one-shot JSON runner.
+The first session turn returns its `workspaceId`; pass that value back with `--session-workspace` so later turns reuse the exact agent process without depending on a title.
+Every turn receives a new lifecycle run ID and returns the native assistant response recorded by the installed Codex hooks.
+Session mode deliberately rejects `--structured-outcome` and `--close-on-success` because the conversation, not a JSON envelope or disposable process, is the durable abstraction.
 It accepts the prompt from a file or stdin, records lifecycle events, and returns a bounded result plus the direct workspace URL.
 POSIX delegation creates a fresh durable workspace and starts the staged `wmux-agent-run` transport.
 When `WMUX_PANE_ID` is available, the new POSIX agent workspace is nested beneath the invoking wmux workspace; this uses the explicit pane context rather than title heuristics.
@@ -508,6 +512,12 @@ For example:
 ```bash
 wmuxctl delegate codex linux-box --directory /srv/project \
   --prompt-file /tmp/task.md --title "Review authentication"
+wmuxctl delegate codex linux-box --directory /srv/project \
+  --prompt-file /tmp/first-turn.md --title "Authentication workstream" \
+  --session --accept-trust --sandbox danger-full-access
+wmuxctl delegate codex linux-box --directory /srv/project \
+  --prompt-file /tmp/follow-up.md --title "Implement review findings" \
+  --session --session-workspace ws_example --sandbox danger-full-access
 wmuxctl delegate claude linux-box --directory /srv/project \
   --prompt-file /tmp/fix.md --title "Fix authentication" --write-access
 wmuxctl delegate codex windows-box --directory 'T:\git\example\project' \
@@ -525,7 +535,7 @@ Prompts are sent through pane stdin rather than shell arguments and are redacted
 `--structured-outcome` requires Codex to report `completed`, `blocked`, or `failed` with a summary, so a normal process exit cannot turn blocked work into a successful result.
 
 Delegations leave their durable workspace open by default.
-On Windows, this preserves the Codex conversation for a later turn with the same title.
+Session mode preserves the Codex conversation for later turns that name its exact returned workspace ID.
 `--close-on-success` (`close_on_success` in the OpenCode tool) closes only after a successful result and completed lifecycle event.
 Failed, stopped, and timed-out workspaces remain available for inspection.
 The permission-gated `wmux_close` tool accepts `workspace_id` to explicitly close a workspace later, but refuses anything not recorded as agent-created.

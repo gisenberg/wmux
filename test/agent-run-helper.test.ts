@@ -291,7 +291,15 @@ print('interactive ready')
 `);
   fs.chmodSync(executable, 0o755);
   try {
-    const request = { runId: "tui-1", runtime: "codex", directory: dir, model: "model-x" };
+    const request = {
+      runId: "tui-1",
+      runtime: "codex",
+      directory: dir,
+      model: "model-x",
+      writeAccess: true,
+      unattended: false,
+      sandboxMode: "danger-full-access",
+    };
     const completed = spawnSync(helper, ["tui", "tui-1"], {
       input: `${Buffer.from(JSON.stringify(request)).toString("base64")}\nWMUX_AGENT_TUI_ACK tui-1\nWMUX_AGENT_TUI_RELEASE tui-1\n`, encoding: "utf8",
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CAPTURE_PATH: capture },
@@ -300,7 +308,11 @@ print('interactive ready')
     assert.match(completed.stdout, /WMUX_AGENT_TUI_READY tui-1/);
     assert.match(completed.stdout, /WMUX_AGENT_TUI_LAUNCH tui-1/);
     assert.match(completed.stdout, /WMUX_AGENT_TUI_EXIT tui-1 0/);
-    assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), { argv: ["--model", "model-x"], cwd: dir, interactive: "1" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), {
+      argv: ["--sandbox", "danger-full-access", "--model", "model-x"],
+      cwd: dir,
+      interactive: "1",
+    });
     assert.equal(completed.stdout.includes("prompt"), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -318,8 +330,11 @@ posixTest("wmux-agent-run tui rejects mismatched ids, forbidden or unknown field
     const cases = [
       [{ runId: "other", runtime: "codex", directory: dir }, "runId does not match"],
       [{ runId: "tui-invalid", runtime: "codex", directory: dir, prompt: "secret" }, "must not contain prompt"],
-      [{ runId: "tui-invalid", runtime: "codex", directory: dir, unattended: false }, "forbidden key: unattended"],
-      [{ runId: "tui-invalid", runtime: "codex", directory: dir, writeAccess: false }, "forbidden key: writeAccess"],
+      [{ runId: "tui-invalid", runtime: "codex", directory: dir, unattended: "yes" }, "invalid unattended"],
+      [{ runId: "tui-invalid", runtime: "codex", directory: dir, writeAccess: "yes" }, "invalid writeAccess"],
+      [{ runId: "tui-invalid", runtime: "codex", directory: dir, sandboxMode: "host" }, "sandboxMode must be"],
+      [{ runId: "tui-invalid", runtime: "opencode", directory: dir, sandboxMode: "read-only" }, "sandbox mode is only valid for codex"],
+      [{ runId: "tui-invalid", runtime: "claude", directory: dir, unattended: true }, "unattended mode is only valid for codex"],
       [{ runId: "tui-invalid", runtime: "codex", directory: dir, title: "not transported" }, "forbidden key: title"],
       [{ runId: "tui-invalid", runtime: "codex", directory: dir, surprise: true }, "forbidden key: surprise"],
       [{ runId: "tui-invalid", runtime: "codex", directory: dir, agent: "build" }, "only valid for opencode"],
