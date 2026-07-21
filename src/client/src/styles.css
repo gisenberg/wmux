@@ -2856,8 +2856,12 @@ button.active-tool {
 
 .mobile-open-tui .mobile-agent-composer-actions {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+.mobile-open-tui .mobile-agent-composer-actions.has-stop {
+  grid-template-columns: 44px minmax(0, 1fr) auto;
 }
 
 .mobile-open-tui .mobile-agent-composer-actions button:last-child {
@@ -5779,6 +5783,10 @@ button.active-tool {
   .mobile-keyboard-open .mobile-agent-input-row textarea {
     min-height: 44px;
     padding: 10px 12px;
+  }
+
+  .mobile-keyboard-open .mobile-open-tui .mobile-agent-input-row textarea {
+    padding-left: 28px;
   }
 
   .mobile-keyboard-open .mobile-agent-send {

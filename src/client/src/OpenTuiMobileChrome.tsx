@@ -39,6 +39,7 @@ type MobileChromeRenderModel = Pick<
 > & { animationTick: number };
 
 const runningFrames = ["|", "/", "-", "\\"];
+const mobileActionHeight = 44;
 
 export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
   const theme = useOpenTuiTheme();
@@ -187,8 +188,10 @@ const drawMobileChrome = (
       ? rgba.gold
       : rgba.muted;
   const versionText = model.versionStatus === "outdated" && model.versionLabel ? `[${model.versionLabel}]` : "";
-  const actionRowCount = rows >= 5 ? 3 : 2;
-  const actionRow = Math.max(0, rows - actionRowCount);
+  const viewportHeight = metrics.viewportHeight ?? rows * metrics.height;
+  const actionBoundary = Math.max(0, viewportHeight - mobileActionHeight);
+  const actionRow = Math.min(rows - 1, Math.max(0, Math.ceil(actionBoundary / metrics.height)));
+  const actionRowCount = rows - actionRow;
   if (actionRow >= 3) {
     write(1, 1, `> ${model.workspaceName}`, rgba.gold, true);
     if (versionText) write(1, Math.max(1, cols - versionText.length - 1), versionText, versionColor, true);

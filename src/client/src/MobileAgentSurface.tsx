@@ -533,7 +533,7 @@ export function MobileAgentSurface({
             {sending ? <LoaderCircle className="mobile-agent-send-spinner" size={17} /> : <Send size={16} />}
           </button>
         </div>
-        <div className="mobile-agent-composer-actions">
+        <div className={agentRunning ? "mobile-agent-composer-actions has-stop" : "mobile-agent-composer-actions"}>
           {agentRunning ? (
             <button
               type="button"

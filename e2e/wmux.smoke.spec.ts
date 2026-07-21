@@ -978,6 +978,18 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   const chrome = page.getByRole("banner", { name: "Mobile session controls" });
   await expect(chrome).toBeVisible();
   await expect.poll(() => chrome.evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBe(96);
+  const modeRowGeometry = await chrome.evaluate((element) => {
+    const canvas = element.querySelector("canvas")?.getBoundingClientRect();
+    const actions = element.querySelector(".open-tui-mobile-chrome-actions")?.getBoundingClientRect();
+    if (!canvas || !actions) return null;
+    const cellHeight = Math.round(12 * 1.2);
+    const rows = Math.max(1, Math.floor(canvas.height / cellHeight));
+    const actionBoundary = Math.max(0, canvas.height - actions.height);
+    const paintedActionTop = canvas.top + Math.min(rows - 1, Math.ceil(actionBoundary / cellHeight)) * cellHeight;
+    return { actionTop: actions.top, paintedActionTop };
+  });
+  expect(modeRowGeometry).not.toBeNull();
+  expect(modeRowGeometry!.paintedActionTop).toBeGreaterThanOrEqual(modeRowGeometry!.actionTop);
   await expect(chrome.getByRole("button", { name: "Open terminal" })).toHaveAttribute("aria-pressed", "true");
   await chrome.getByRole("button", { name: "Open chat" }).click();
   await expect(page.getByText("No agent detected", { exact: true })).toBeVisible();
@@ -1286,6 +1298,7 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   await page.setViewportSize({ width: 390, height: 520 });
   const appShell = page.locator("main.app-shell");
   await expect(appShell).toHaveClass(/mobile-keyboard-open/);
+  await expect.poll(() => composer.evaluate((element) => window.getComputedStyle(element).paddingLeft)).toBe("28px");
 
   const compactTargets = page.locator(".mobile-agent-input-row button, .mobile-agent-composer-actions button");
   const targetSizes = await compactTargets.evaluateAll((elements) =>
@@ -1306,4 +1319,24 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
 
   await page.setViewportSize({ width: 390, height: 720 });
   await expect(appShell).not.toHaveClass(/mobile-keyboard-open/);
+
+  const completedEvent = await request.post("/api/agent-events", {
+    data: {
+      workspaceId: workspace?.id,
+      tabId: tab?.id,
+      paneId: tab?.activePaneId,
+      agent: "codex",
+      status: "completed",
+      title: "Mobile keyboard regression",
+      summary: "Composer controls remain contained after the run",
+    },
+  });
+  expect(completedEvent.ok()).toBeTruthy();
+  await expect(page.getByRole("button", { name: "Interrupt agent" })).toHaveCount(0);
+  const focusTerminalContained = await page.getByRole("button", { name: "Focus terminal" }).evaluate((button) => {
+    const buttonRect = button.getBoundingClientRect();
+    const labelRect = button.querySelector("span")?.getBoundingClientRect();
+    return Boolean(labelRect && labelRect.left >= buttonRect.left && labelRect.right <= buttonRect.right);
+  });
+  expect(focusTerminalContained).toBe(true);
 });
