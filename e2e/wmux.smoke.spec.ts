@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -37,6 +37,33 @@ const routeTerminalFontFamily = async (page: Page, terminalFontFamily: string): 
       webSocket.send(message);
     });
   });
+};
+
+interface E2eWorkspace {
+  id: string;
+  name: string;
+  activeTabId: string;
+  parentWorkspaceId?: string;
+  tabs: Array<{ panes: Array<{ id: string }> }>;
+}
+
+const createNestedWorkspacePair = async (request: APIRequestContext): Promise<{
+  root: E2eWorkspace;
+  child: E2eWorkspace;
+}> => {
+  const rootResponse = await request.post("/api/workspaces", { data: { machineId: "local" } });
+  expect(rootResponse.ok()).toBeTruthy();
+  const root = (await rootResponse.json() as { workspace: E2eWorkspace }).workspace;
+  const childResponse = await request.post("/api/workspaces", {
+    data: {
+      machineId: "local",
+      createdBy: "agent",
+      parentPaneId: root.tabs[0].panes[0].id,
+    },
+  });
+  expect(childResponse.ok()).toBeTruthy();
+  const child = (await childResponse.json() as { workspace: E2eWorkspace }).workspace;
+  return { child, root };
 };
 
 test("publishes standalone app metadata for direct workspace routes", async ({ page, request }) => {
@@ -180,6 +207,94 @@ test("creates a workspace through the command palette and preserves its direct l
   await page.reload();
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
   await expect(page).toHaveURL(new RegExp(`${directPath.replaceAll("/", "\\/")}$`));
+});
+
+test("navigates, persists, filters, and moves nested workspaces", async ({ page, request }, testInfo) => {
+  test.setTimeout(60_000);
+  const { child, root } = await createNestedWorkspacePair(request);
+  const rootPath = `/workspaces/${root.id}/tabs/${root.activeTabId}`;
+  const openWorkspaceNavigation = async () => {
+    if (!testInfo.project.name.startsWith("mobile-")) return;
+    await page.getByRole("banner", { name: "Mobile session controls" })
+      .getByRole("button", { name: "Open workspaces and hosts" })
+      .click();
+  };
+  const rootItem = () => page.locator(`a[role="treeitem"][href^="/workspaces/${root.id}/"]`);
+  const childItem = () => page.locator(`a[role="treeitem"][href^="/workspaces/${child.id}/"]`);
+
+  try {
+    await page.goto(rootPath);
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await openWorkspaceNavigation();
+    await expect(rootItem()).toHaveAttribute("aria-level", "1");
+    await expect(rootItem()).toHaveAttribute("aria-expanded", "true");
+    await expect(childItem()).toHaveAttribute("aria-level", "2");
+    await expect(childItem()).toHaveAttribute("href", new RegExp(`^/workspaces/${child.id}/tabs/${child.activeTabId}$`));
+
+    await page.getByRole("button", { name: `Collapse ${root.name}` }).press("Enter");
+    await expect(rootItem()).toHaveAttribute("aria-expanded", "false");
+    await expect(childItem()).toHaveCount(0);
+    await expect.poll(async () => {
+      const response = await request.get("/api/bootstrap");
+      const payload = await response.json() as { settings: { collapsedWorkspaceIds: string[] } };
+      return payload.settings.collapsedWorkspaceIds;
+    }).toContain(root.id);
+
+    await page.reload();
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await openWorkspaceNavigation();
+    await expect(rootItem()).toHaveAttribute("aria-expanded", "false");
+    await expect(childItem()).toHaveCount(0);
+
+    await page.getByRole("button", { name: `Expand ${root.name}` }).press("Enter");
+    await expect(childItem()).toHaveAttribute("aria-level", "2");
+    await page.getByRole("button", { name: `Move ${child.name}` }).press("Enter");
+    const moveDialog = page.getByRole("dialog", { name: `Move ${child.name}` });
+    await expect(moveDialog).toBeVisible();
+    await moveDialog.getByRole("button", { name: "Move out one level" }).click();
+    await expect.poll(async () => {
+      const response = await request.get("/api/bootstrap");
+      const payload = await response.json() as { workspaces: E2eWorkspace[] };
+      return payload.workspaces.find((workspace) => workspace.id === child.id)?.parentWorkspaceId ?? null;
+    }).toBeNull();
+    await expect(childItem()).toHaveAttribute("aria-level", "1");
+
+    await expect(page.getByRole("button", { name: `Move ${child.name}` })).toBeVisible();
+    if (testInfo.project.name.startsWith("mobile-")) {
+      await page.getByRole("combobox", { name: "Filter workspace list by host" }).selectOption("local");
+    } else {
+      await page.getByRole("button", { name: /^Workspace host filter:/ }).press("Enter");
+    }
+    await expect(page.getByRole("button", { name: `Move ${child.name}` })).toHaveCount(0);
+    await expect(rootItem()).toBeVisible();
+    await expect(childItem()).toBeVisible();
+  } finally {
+    await request.delete(`/api/workspaces/${child.id}`);
+    await request.delete(`/api/workspaces/${root.id}`);
+  }
+});
+
+test("legacy workspace tree preserves nested indentation and agent origin", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "legacy desktop tree coverage");
+  const { child, root } = await createNestedWorkspacePair(request);
+  try {
+    await page.goto(`/workspaces/${root.id}/tabs/${root.activeTabId}?legacy=1`);
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    const rootItem = page.locator(`a.workspace-item[href^="/workspaces/${root.id}/"]`);
+    const childItem = page.locator(`a.workspace-item[href^="/workspaces/${child.id}/"]`);
+    await expect(rootItem).toHaveAttribute("aria-level", "1");
+    await expect(childItem).toHaveAttribute("aria-level", "2");
+    await expect(rootItem.locator("xpath=..")).toHaveCSS("margin-left", "0px");
+    await expect(childItem.locator("xpath=..")).toHaveCSS("margin-left", "14px");
+    await expect(childItem.getByTitle("Created by an agent")).toHaveText("AI");
+    await page.getByRole("button", { name: `Collapse ${root.name}` }).click();
+    await expect(childItem).toHaveCount(0);
+    await page.getByRole("button", { name: `Expand ${root.name}` }).click();
+    await expect(childItem).toBeVisible();
+  } finally {
+    await request.delete(`/api/workspaces/${child.id}`);
+    await request.delete(`/api/workspaces/${root.id}`);
+  }
 });
 
 test("drags legacy workspace rows into a persisted order", async ({ page, request }, testInfo) => {
