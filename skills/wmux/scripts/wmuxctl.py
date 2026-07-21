@@ -32,6 +32,9 @@ TERMINAL_DELEGATION_STATES = frozenset(
     {"completed", "blocked", "failed", "error", "cancelled", "stopped", "timed_out", "interrupted"}
 )
 CODEX_READY_PATTERN = r"(?s)OpenAI Codex.*?›(?:\s|$)"
+# Bracketed paste is an input protocol, not an escaping boundary. Preserve TAB
+# and LF, normalize CRLF below, and reject bare CR plus every other C0/C1/DEL.
+UNSAFE_TUI_PROMPT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 class DelegationObservationError(RuntimeError):
@@ -909,18 +912,24 @@ def read_tui_prompt(args: argparse.Namespace) -> str | None:
         return None
     if args.prompt_file and args.prompt_file != "-":
         try:
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+            with Path(args.prompt_file).open("r", encoding="utf-8", newline="") as handle:
+                prompt = handle.read()
         except (OSError, UnicodeError) as error:
             raise SystemExit(f"wmuxctl: cannot read TUI prompt: {error}") from error
     elif args.prompt_file == "-" or not sys.stdin.isatty():
         try:
-            prompt = sys.stdin.read()
+            prompt = sys.stdin.buffer.read().decode("utf-8")
         except UnicodeError as error:
             raise SystemExit(f"wmuxctl: cannot read TUI prompt: {error}") from error
     else:
         raise SystemExit("wmuxctl: provide --prompt-file, pipe a prompt on stdin, or use --no-prompt")
-    if not prompt or "\x00" in prompt or len(prompt.encode("utf-8")) > 128 * 1024:
-        raise SystemExit("wmuxctl: TUI prompt must be 1..131072 UTF-8 bytes and contain no NUL")
+    prompt = prompt.replace("\r\n", "\n")
+    if not prompt or len(prompt.encode("utf-8")) > 128 * 1024:
+        raise SystemExit("wmuxctl: TUI prompt must be 1..131072 UTF-8 bytes")
+    if UNSAFE_TUI_PROMPT_CONTROL.search(prompt):
+        raise SystemExit(
+            "wmuxctl: TUI prompt contains an unsafe terminal control character; only TAB and LF are allowed"
+        )
     return prompt
 
 

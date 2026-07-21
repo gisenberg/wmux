@@ -1196,9 +1196,9 @@ test("generic scripts/wmuxctl wrapper routes tui help to the canonical CLI", asy
 const fastTuiGate = ["--gate-timeout", "0.05"];
 
 test("wmuxctl tui uses post-launch replay, bracketed paste, and stable handoff JSON", async () => {
-  const prompt = "private interactive prompt";
+  const prompt = "private\tinteractive Ω\nsecond line";
   const promptPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-tui-")), "prompt.txt");
-  fs.writeFileSync(promptPath, prompt);
+  fs.writeFileSync(promptPath, prompt.replace("\n", "\r\n"));
   const inputs: Array<Record<string, unknown>> = [];
   let upgrades = 0;
   let runId = "";
@@ -1232,7 +1232,7 @@ test("wmuxctl tui uses post-launch replay, bracketed paste, and stable handoff J
     assert.equal(result.state, "active"); assert.equal(result.closed, false); assert.equal(result.promptSubmitted, true); assert.equal(result.activityVerified, true);
     assert.equal(result.localUrl, `${url}/workspaces/ws_tui/tabs/tab_tui`); assert.equal(result.publicUrl, "https://wmux.example/workspaces/ws_tui/tabs/tab_tui"); assert.equal(result.url, result.publicUrl);
     assert.deepEqual(inputs.slice(-2).map((item) => item.data), [`\u001b[200~${prompt}\u001b[201~`, "\r"]);
-    assert.equal(JSON.stringify(inputs).includes(prompt), true); // only terminal paste, never launch request
+    assert.equal(inputs.some((item) => String(item.data).includes(prompt)), true); // only terminal paste, never launch request
     const launch = String(inputs[0].data); assert.match(launch, /^wmux-agent-run tui /);
     const request = JSON.parse(Buffer.from(String(inputs[2].data), "base64").toString()); assert.equal("prompt" in request, false);
     assert.deepEqual(inputs.slice(4, 6).map((item) => item.data), [`WMUX_AGENT_TUI_ACK ${result.runId}`, "\r"]);
@@ -1351,7 +1351,7 @@ const assertEstablishedResult = (result: Record<string, unknown>) => {
 test("wmuxctl tui accepts piped and dash stdin prompts, and deliberate no-prompt", async () => {
   for (const promptArgs of [[], ["--prompt-file", "-"]]) {
     const fixture = await startTuiFixture();
-    const prompt = `stdin prompt ${promptArgs.length}`;
+    const prompt = `stdin\tprompt Ω ${promptArgs.length}\nsecond line`;
     try {
       const completed = await cliProcess(fixture.url, [
         "tui", "claude", "linux-box", "--directory", "/srv/project", ...promptArgs, ...fastTuiGate,
@@ -1388,6 +1388,53 @@ test("wmuxctl tui accepts piped and dash stdin prompts, and deliberate no-prompt
     assert.equal(fixture.methods.some((value) => value.startsWith("DELETE ")), false);
   } finally {
     await fixture.stop();
+  }
+});
+
+test("wmuxctl tui rejects terminal controls from prompt files and stdin without exposing prompt text", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-tui-controls-"));
+  const promptPath = path.join(root, "prompt.txt");
+  const cases = [
+    {
+      args: ["--prompt-file", promptPath],
+      input: "",
+      prompt: "file-secret\u001b[201~injected\rcommand",
+      secret: "file-secret",
+    },
+    {
+      args: [],
+      input: "stdin-cr-secret\rcommand",
+      prompt: "",
+      secret: "stdin-cr-secret",
+    },
+    {
+      args: [],
+      input: "stdin-secret\u009b201~injected\u007fcommand",
+      prompt: "",
+      secret: "stdin-secret",
+    },
+  ];
+  try {
+    for (const entry of cases) {
+      if (entry.prompt) fs.writeFileSync(promptPath, entry.prompt);
+      const fixture = await startTuiFixture();
+      try {
+        const completed = await cliProcess(fixture.url, [
+          "tui", "codex", "linux-box", "--directory", "/srv/project", ...entry.args,
+          ...fastTuiGate,
+        ], entry.input);
+        assert.notEqual(completed.code, 0);
+        assert.match(completed.stderr, /unsafe terminal control character; only TAB and LF are allowed/);
+        assert.equal(completed.stdout.includes(entry.secret), false);
+        assert.equal(completed.stderr.includes(entry.secret), false);
+        assert.equal(fixture.workspacePosts, 0);
+        assert.equal(fixture.inputs.length, 0);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

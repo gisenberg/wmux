@@ -537,7 +537,10 @@ Restart OpenCode after installing or updating the plugin so it loads the generat
 with its working directory set by the staged helper. It leaves every workspace
 open and intentionally creates no manual lifecycle event (installed hooks own
 interactive turns). Prompts are read only from a UTF-8 file or stdin; they never
-appear in argv or the launch JSON. The helper resolves the runtime executable
+appear in argv or the launch JSON. Prompt text may contain ordinary Unicode,
+tabs, and LF newlines; CRLF is normalized to LF, while other C0/C1 controls,
+including ESC, bare CR, and DEL, are rejected before workspace creation. The
+helper resolves the runtime executable
 before changing directory, emits a unique launch marker, and waits for an exact
 controller ACK before starting the terminal-attached child. The controller then
 requires fresh child output and continuously observes startup for safety gates
