@@ -415,6 +415,7 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
   let runId = "";
   let upgradeCount = 0;
   let promptSubmitted = false;
+  let promptSubmitAttempts = 0;
   let createRequests = 0;
   const machine = { id: "windows-runner", kind: "powershell-ssh", platform: "win", reachable: true };
   const workspace = {
@@ -459,6 +460,7 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
         lifecycle.push(event);
         runId = event.runId;
         promptSubmitted = false;
+        promptSubmitAttempts = 0;
         agentEvents.unshift(event);
         jsonResponse(response, {}, 201);
       });
@@ -470,7 +472,10 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
       request.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         inputs.push(body);
-        if (body.data === "\r" && inputs.some((input) => input.data === "\u001b[201~")) promptSubmitted = true;
+        if (body.data === "\r" && inputs.some((input) => input.data === "\u001b[201~")) {
+          promptSubmitAttempts += 1;
+          promptSubmitted = promptSubmitAttempts >= 2;
+        }
         jsonResponse(response, {});
       });
       return;

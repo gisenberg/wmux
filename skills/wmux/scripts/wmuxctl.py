@@ -660,6 +660,45 @@ def interactive_delegate_prompt(prompt: str, structured_outcome: bool) -> str:
     )
 
 
+def wait_for_prompt_acceptance(
+    client: WmuxClient,
+    pane_id: str,
+    run_id: str,
+    runtime: str,
+    timeout: float,
+    cols: int,
+    rows: int,
+) -> None:
+    started = time.monotonic()
+    next_enter = started + 1
+    last_status_error = ""
+    while True:
+        try:
+            durable = client.delegation_status(run_id)
+        except SystemExit as error:
+            last_status_error = str(error)
+        else:
+            if durable:
+                state = durable.get("state")
+                summary = durable.get("summary")
+                if state in TERMINAL_DELEGATION_STATES:
+                    return
+                if state == "running" and isinstance(summary, str) and summary.strip().lower() == f"{runtime} running":
+                    return
+            last_status_error = ""
+
+        now = time.monotonic()
+        if now - started >= timeout:
+            detail = f": {last_status_error}" if last_status_error else ""
+            raise DelegationObservationError(
+                f"wmuxctl: {runtime.capitalize()} did not acknowledge the submitted prompt within {timeout:g}s{detail}"
+            )
+        if now >= next_enter:
+            client.send_input(pane_id, "\r", cols, rows)
+            next_enter = now + 1
+        time.sleep(min(0.25, timeout - (now - started)))
+
+
 def cmd_send(client: WmuxClient, args: argparse.Namespace) -> int:
     sent_bytes = submit_line(client, args.pane, args.line, args.enter, args.cols, args.rows)
     info = {"paneId": args.pane, "sentBytes": sent_bytes}
@@ -951,6 +990,15 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 client,
                 info["paneId"],
                 interactive_delegate_prompt(prompt, args.structured_outcome),
+                args.cols,
+                args.rows,
+            )
+            wait_for_prompt_acceptance(
+                client,
+                info["paneId"],
+                run_id,
+                args.runtime,
+                args.ready_timeout,
                 args.cols,
                 args.rows,
             )
