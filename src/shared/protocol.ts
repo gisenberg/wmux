@@ -310,12 +310,15 @@ export type PaneServerMessage =
       pid: number;
       title: string;
       status: PaneState["status"];
-      resizeOwner?: boolean;
+      cols: number;
+      rows: number;
+      resizeOwner: boolean;
       replay: string;
       replayKind: PaneReplayKind;
       outputOnly?: boolean;
       waitForRefresh?: true;
     }
+  | { type: "size"; paneId: string; cols: number; rows: number; resizeOwner: boolean }
   | { type: "output"; paneId: string; data: string; inputSequence?: number }
   | { type: "title"; paneId: string; title: string }
   | { type: "exit"; paneId: string; code: number | null }

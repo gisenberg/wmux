@@ -434,13 +434,13 @@ test("pane output acknowledges each browser's latest input sequence without tagg
   const internals = manager as unknown as {
     sockets: Map<string, Set<WebSocket>>;
     outputWatchers: Map<string, Set<WebSocket>>;
-    socketState: Map<WebSocket, { paneId: string; cols: number; rows: number; inputSequence?: number }>;
+    socketState: Map<WebSocket, { paneId: string; cols: number; rows: number; foreground: boolean; inputSequence?: number }>;
     broadcastOutput: (paneId: string, data: string) => void;
   };
   try {
     internals.sockets.set(pane.id, new Set([client]));
     internals.outputWatchers.set(pane.id, new Set([watcher]));
-    internals.socketState.set(client, { paneId: pane.id, cols: 80, rows: 24, inputSequence: 7 });
+    internals.socketState.set(client, { paneId: pane.id, cols: 80, rows: 24, foreground: true, inputSequence: 7 });
     internals.broadcastOutput(pane.id, "echo");
     assert.deepEqual(fake(client).sent.at(-1), { type: "output", paneId: pane.id, data: "echo", inputSequence: 7 });
     assert.deepEqual(fake(watcher).sent.at(-1), { type: "output", paneId: pane.id, data: "echo" });
@@ -525,7 +525,62 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
   });
 });
 
-test("foreground activation cannot steal resize ownership without input", { skip: process.platform === "win32" }, async () => {
+test("active resize ownership keeps every viewer on one authoritative grid", { skip: process.platform === "win32" }, async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    const first = socket();
+    const second = socket();
+    manager.attach(pane.id, first, 80, 24);
+    const firstReady = await waitForMessage(first, (message) => message.type === "ready");
+    assert.deepEqual(
+      { cols: firstReady.cols, rows: firstReady.rows, resizeOwner: firstReady.resizeOwner },
+      { cols: 80, rows: 24, resizeOwner: true },
+    );
+    fake(first).message({ type: "activate", cols: 80, rows: 24, foreground: true });
+
+    const internals = manager as unknown as {
+      sessions: Map<string, { resize: (cols: number, rows: number) => void }>;
+    };
+    const session = internals.sessions.get(pane.id);
+    assert.ok(session);
+    const originalResize = session.resize.bind(session);
+    const resizes: Array<[number, number]> = [];
+    session.resize = (cols, rows) => {
+      resizes.push([cols, rows]);
+      originalResize(cols, rows);
+    };
+
+    manager.attach(pane.id, second, 100, 30);
+    const secondReady = await waitForMessage(second, (message) => message.type === "ready");
+    assert.deepEqual(
+      { cols: secondReady.cols, rows: secondReady.rows, resizeOwner: secondReady.resizeOwner },
+      { cols: 80, rows: 24, resizeOwner: false },
+    );
+    fake(second).message({ type: "activate", cols: 100, rows: 30, foreground: true });
+    assert.deepEqual(resizes, []);
+
+    fake(second).message({ type: "input", data: "" });
+    assert.deepEqual(resizes, [[100, 30]]);
+    assert.deepEqual(
+      await waitForMessage(first, (message) => message.type === "size" && message.cols === 100),
+      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: false },
+    );
+    assert.deepEqual(
+      await waitForMessage(second, (message) => message.type === "size" && message.cols === 100),
+      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: true },
+    );
+    fake(first).message({ type: "activate", cols: 80, rows: 24, foreground: true });
+    assert.deepEqual(resizes, [[100, 30]]);
+
+    fake(first).message({ type: "input", data: "" });
+    assert.deepEqual(resizes, [[100, 30], [80, 24]]);
+    manager.disposeAll();
+  });
+});
+
+test("an inactive owner keeps the canonical size until another foreground viewer activates", { skip: process.platform === "win32" }, async () => {
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -534,6 +589,7 @@ test("foreground activation cannot steal resize ownership without input", { skip
     const second = socket();
     manager.attach(pane.id, first, 80, 24);
     await waitForMessage(first, (message) => message.type === "ready");
+    fake(first).message({ type: "activate", cols: 80, rows: 24, foreground: true });
 
     const internals = manager as unknown as {
       sessions: Map<string, { resize: (cols: number, rows: number) => void }>;
@@ -549,16 +605,28 @@ test("foreground activation cannot steal resize ownership without input", { skip
 
     manager.attach(pane.id, second, 100, 30);
     await waitForMessage(second, (message) => message.type === "ready");
-    fake(second).message({ type: "activate", cols: 100, rows: 30, foreground: true });
+    fake(first).message({ type: "resize", cols: 90, rows: 27, foreground: false });
     assert.deepEqual(resizes, []);
 
-    fake(second).message({ type: "input", data: "" });
+    fake(second).message({ type: "activate", cols: 100, rows: 30, foreground: true });
     assert.deepEqual(resizes, [[100, 30]]);
-    fake(first).message({ type: "activate", cols: 80, rows: 24, foreground: true });
-    assert.deepEqual(resizes, [[100, 30]]);
+    assert.deepEqual(
+      await waitForMessage(first, (message) => message.type === "size" && message.cols === 100),
+      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: false },
+    );
 
-    fake(first).message({ type: "input", data: "" });
-    assert.deepEqual(resizes, [[100, 30], [80, 24]]);
+    fake(first).message({ type: "resize", cols: 110, rows: 34, foreground: false });
+    assert.deepEqual(resizes, [[100, 30]]);
+    fake(second).message({ type: "resize", cols: 100, rows: 30, foreground: false });
+    fake(second).close();
+    assert.deepEqual(resizes, [[100, 30]]);
+    assert.deepEqual(
+      await waitForMessage(first, (message) => message.type === "size" && message.resizeOwner),
+      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: true },
+    );
+
+    fake(first).message({ type: "activate", cols: 110, rows: 34, foreground: true });
+    assert.deepEqual(resizes, [[100, 30], [110, 34]]);
     manager.disposeAll();
   });
 });

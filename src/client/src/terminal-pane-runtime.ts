@@ -67,6 +67,9 @@ interface WheelScrollCoalescerOptions {
 
 export interface TerminalFitter {
   fit: () => void;
+  proposedDimensions: () => { cols: number; rows: number } | undefined;
+  setAuthoritativeSize: (cols: number, rows: number, resizeOwner: boolean) => void;
+  setForeground: (foreground: boolean) => void;
   dispose: () => void;
 }
 
@@ -86,17 +89,41 @@ export const sendInput = (
   sendPaneMessage(ws, { type: "input", data, terminalResponse, ...(sequence === undefined ? {} : { sequence }) });
 };
 
-export const createTerminalFitter = (term: Terminal, element: HTMLElement): TerminalFitter => {
+export const createTerminalFitter = (
+  term: Terminal,
+  element: HTMLElement,
+  onProposedDimensions?: (dimensions: { cols: number; rows: number }) => void,
+): TerminalFitter => {
   let frame: number | undefined;
-  const fit = () => {
+  let proposed: { cols: number; rows: number } | undefined;
+  let authoritative: { cols: number; rows: number } | undefined;
+  let resizeOwner = true;
+  let foreground = true;
+  const proposedDimensions = () => {
     const metrics = term.renderer?.getMetrics();
-    if (!metrics?.width || !metrics.height || !element.clientWidth || !element.clientHeight) return;
+    if (!metrics?.width || !metrics.height || !element.clientWidth || !element.clientHeight) return undefined;
     const style = window.getComputedStyle(element);
     const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
     const verticalPadding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-    const cols = Math.max(2, Math.floor((element.clientWidth - horizontalPadding) / metrics.width));
-    const rows = Math.max(1, Math.floor((element.clientHeight - verticalPadding) / metrics.height));
-    if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+    return {
+      cols: Math.max(2, Math.floor((element.clientWidth - horizontalPadding) / metrics.width)),
+      rows: Math.max(1, Math.floor((element.clientHeight - verticalPadding) / metrics.height)),
+    };
+  };
+  const applySize = (dimensions: { cols: number; rows: number }) => {
+    if (dimensions.cols !== term.cols || dimensions.rows !== term.rows) {
+      term.resize(dimensions.cols, dimensions.rows);
+    }
+  };
+  const fit = () => {
+    const next = proposedDimensions();
+    if (!next) return;
+    if (!proposed || proposed.cols !== next.cols || proposed.rows !== next.rows) {
+      proposed = next;
+      onProposedDimensions?.(next);
+    }
+    if (!authoritative || (resizeOwner && foreground)) applySize(next);
+    else applySize(authoritative);
   };
   const scheduleFit = () => {
     if (frame !== undefined) cancelAnimationFrame(frame);
@@ -109,6 +136,17 @@ export const createTerminalFitter = (term: Terminal, element: HTMLElement): Term
   observer.observe(element);
   return {
     fit,
+    proposedDimensions: () => proposed ?? proposedDimensions(),
+    setAuthoritativeSize: (cols, rows, nextResizeOwner) => {
+      authoritative = { cols: safeCols(cols), rows: safeRows(rows) };
+      resizeOwner = nextResizeOwner;
+      if (resizeOwner && foreground) fit();
+      else applySize(authoritative);
+    },
+    setForeground: (nextForeground) => {
+      foreground = nextForeground;
+      if (authoritative && !(resizeOwner && foreground)) applySize(authoritative);
+    },
     dispose: () => {
       observer.disconnect();
       if (frame !== undefined) cancelAnimationFrame(frame);
@@ -116,16 +154,16 @@ export const createTerminalFitter = (term: Terminal, element: HTMLElement): Term
   };
 };
 
-export const sendResizeMessage = (
+export const sendResizeDimensions = (
   ws: WebSocket | null,
   type: "resize" | "activate",
-  term: Terminal,
+  dimensions: { cols: number; rows: number },
   foreground = false,
 ): void => {
   sendPaneMessage(ws, {
     type: foreground ? type : "resize",
-    cols: safeCols(term.cols),
-    rows: safeRows(term.rows),
+    cols: safeCols(dimensions.cols),
+    rows: safeRows(dimensions.rows),
     foreground,
   });
 };

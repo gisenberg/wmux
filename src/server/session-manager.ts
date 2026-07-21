@@ -20,6 +20,7 @@ interface SocketState {
   paneId: string;
   cols: number;
   rows: number;
+  foreground: boolean;
   inputSequence?: number;
 }
 
@@ -107,12 +108,14 @@ export class SessionManager {
   private sockets = new Map<string, Set<WebSocket>>();
   private outputWatchers = new Map<string, Set<WebSocket>>();
   private resizeOwners = new Map<string, WebSocket>();
+  private paneSizes = new Map<string, { cols: number; rows: number }>();
   private socketState = new Map<WebSocket, SocketState>();
   private ignoredSessionExits = new WeakSet<ManagedSession>();
   private sessionMachines = new Map<string, MachineConfig>();
   private paneInputEpochs = new Map<string, number>();
   private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
   private durableRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
+  private durableResizeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly currentMachines: () => MachineConfig[];
 
   constructor(
@@ -183,7 +186,7 @@ export class SessionManager {
     if (!this.sockets.has(paneId)) this.sockets.set(paneId, new Set());
     const paneSockets = this.sockets.get(paneId);
     paneSockets?.add(socket);
-    this.socketState.set(socket, { paneId, ...initialSize });
+    this.socketState.set(socket, { paneId, ...initialSize, foreground: false });
     let session: ManagedSession;
     try {
       session = this.ensureSession(pane, initialSize.cols, initialSize.rows);
@@ -195,7 +198,7 @@ export class SessionManager {
       return;
     }
     this.send(socket, { type: "starting", paneId, phase: "connecting", label: "Opening terminal…" });
-    const resizeOwner = this.ensureResizeOwner(paneId, socket, session, initialSize);
+    this.ensureResizeOwner(paneId, socket, session, initialSize);
 
     socket.on("message", (raw) => {
       const message = this.parse(raw.toString());
@@ -214,21 +217,17 @@ export class SessionManager {
       }
       if (message.type === "resize") {
         const size = normalizeSize(message.cols, message.rows);
-        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size });
-        if (message.foreground === false) {
-          this.releaseResizeOwner(paneId, socket);
-          return;
+        const foreground = message.foreground !== false;
+        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size, foreground });
+        if (foreground && this.resizeOwners.get(paneId) === socket) {
+          this.applyResizeOwnerSize(paneId, socket, session);
         }
-        if (this.resizeOwners.get(paneId) === socket) session.resize(size.cols, size.rows);
       }
       if (message.type === "activate") {
         const size = normalizeSize(message.cols, message.rows);
-        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size });
-        if (message.foreground === false) {
-          this.releaseResizeOwner(paneId, socket);
-          return;
-        }
-        this.activateResizeOwner(paneId, socket, session);
+        const foreground = message.foreground !== false;
+        this.socketState.set(socket, { ...this.socketState.get(socket), paneId, ...size, foreground });
+        if (foreground) this.activateResizeOwner(paneId, socket, session);
       }
     });
 
@@ -241,13 +240,15 @@ export class SessionManager {
     const sendReady = () => {
       if (socket.readyState !== socket.OPEN || !this.socketState.has(socket)) return;
       const attachReplay = this.replayOutputFor(pane, session);
+      const size = this.paneSizes.get(paneId) ?? initialSize;
       this.send(socket, {
         type: "ready",
         paneId,
         pid: session.pid,
         title: pane.title,
         status: pane.status,
-        resizeOwner,
+        ...size,
+        resizeOwner: this.resizeOwners.get(paneId) === socket,
         replay: attachReplay.data,
         replayKind: attachReplay.kind,
         ...(this.shouldUseDurableClientRefresh(pane) && attachReplay.kind === "raw" && attachReplay.data === ""
@@ -280,12 +281,15 @@ export class SessionManager {
     const sendReady = () => {
       if (socket.readyState !== socket.OPEN || !this.outputWatchers.get(paneId)?.has(socket)) return;
       const replay = this.outputReplayFor(session);
+      const authoritativeSize = this.paneSizes.get(paneId) ?? size;
       this.send(socket, {
         type: "ready",
         paneId,
         pid: session.pid,
         title: pane.title,
         status: pane.status,
+        ...authoritativeSize,
+        resizeOwner: false,
         replay: replay.data,
         replayKind: replay.kind,
         outputOnly: true,
@@ -424,6 +428,8 @@ export class SessionManager {
       this.broadcast(pane.id, { type: "exit", paneId: pane.id, code });
       this.sessions.delete(pane.id);
       this.resizeOwners.delete(pane.id);
+      this.paneSizes.delete(pane.id);
+      this.cancelDurableResizeRefresh(pane.id);
       const context = this.state.findPaneContext(pane.id);
       if (!context) return;
 
@@ -543,6 +549,8 @@ export class SessionManager {
   disposeAll(): void {
     for (const timer of this.durableRefreshTimers) clearTimeout(timer);
     this.durableRefreshTimers.clear();
+    for (const timer of this.durableResizeRefreshTimers.values()) clearTimeout(timer);
+    this.durableResizeRefreshTimers.clear();
     for (const timer of this.pausedSessions.values()) clearInterval(timer);
     this.pausedSessions.clear();
     for (const session of this.sessions.values()) {
@@ -553,6 +561,9 @@ export class SessionManager {
     this.sessions.clear();
     this.sessionMachines.clear();
     this.paneInputEpochs.clear();
+    this.resizeOwners.clear();
+    this.paneSizes.clear();
+    this.socketState.clear();
     this.pasteImages.dispose();
   }
 
@@ -590,6 +601,27 @@ export class SessionManager {
     }
   }
 
+  private scheduleDurableResizeRefresh(pane: PaneState): void {
+    if (!this.shouldUseDurableClientRefresh(pane)) return;
+    const previous = this.durableResizeRefreshTimers.get(pane.id);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.durableResizeRefreshTimers.delete(pane.id);
+      const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
+      if (machine && !(machine.source === "registered" && machine.online === false)) {
+        void sessionDriverForMachine(machine).refreshClient(machine, pane.id);
+      }
+    }, 120);
+    timer.unref?.();
+    this.durableResizeRefreshTimers.set(pane.id, timer);
+  }
+
+  private cancelDurableResizeRefresh(paneId: string): void {
+    const timer = this.durableResizeRefreshTimers.get(paneId);
+    if (timer) clearTimeout(timer);
+    this.durableResizeRefreshTimers.delete(paneId);
+  }
+
   private shouldUseDurableClientRefresh(pane: PaneState): boolean {
     const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
     if (!machine || (machine.source === "registered" && machine.online === false)) return false;
@@ -603,6 +635,8 @@ export class SessionManager {
     this.ignoredSessionExits.add(existing);
     this.sessions.delete(pane.id);
     this.resizeOwners.delete(pane.id);
+    this.paneSizes.delete(pane.id);
+    this.cancelDurableResizeRefresh(pane.id);
     existing.kill();
     return true;
   }
@@ -616,23 +650,22 @@ export class SessionManager {
     socket: WebSocket,
     session: ManagedSession,
     size: { cols: number; rows: number },
-  ): boolean {
+  ): void {
     const owner = this.resizeOwners.get(paneId);
     const paneSockets = this.sockets.get(paneId);
     if (owner && paneSockets?.has(owner) && owner.readyState === owner.OPEN) {
-      return owner === socket;
+      return;
     }
     this.resizeOwners.set(paneId, socket);
+    this.paneSizes.set(paneId, size);
     session.resize(size.cols, size.rows);
-    return true;
   }
 
   private promoteResizeOwner(paneId: string, socket: WebSocket, session: ManagedSession): void {
-    if (this.resizeOwners.get(paneId) === socket) return;
     const state = this.socketState.get(socket);
     if (!state) return;
-    this.resizeOwners.set(paneId, socket);
-    session.resize(state.cols, state.rows);
+    state.foreground = true;
+    this.applyResizeOwnerSize(paneId, socket, session);
   }
 
   private activateResizeOwner(paneId: string, socket: WebSocket, session: ManagedSession): void {
@@ -640,13 +673,15 @@ export class SessionManager {
     if (!state) return;
     const owner = this.resizeOwners.get(paneId);
     const paneSockets = this.sockets.get(paneId);
-    if (owner && owner !== socket && paneSockets?.has(owner) && owner.readyState === owner.OPEN) return;
-    this.resizeOwners.set(paneId, socket);
-    session.resize(state.cols, state.rows);
-  }
-
-  private releaseResizeOwner(paneId: string, socket: WebSocket): void {
-    if (this.resizeOwners.get(paneId) === socket) this.resizeOwners.delete(paneId);
+    const ownerState = owner ? this.socketState.get(owner) : undefined;
+    if (
+      owner
+      && owner !== socket
+      && paneSockets?.has(owner)
+      && owner.readyState === owner.OPEN
+      && ownerState?.foreground
+    ) return;
+    this.applyResizeOwnerSize(paneId, socket, session);
   }
 
   private reassignResizeOwner(paneId: string, closedSocket: WebSocket, session: ManagedSession): void {
@@ -655,16 +690,53 @@ export class SessionManager {
       return;
     }
 
-    const nextSocket = [...(this.sockets.get(paneId) ?? [])].find((candidate) => candidate.readyState === candidate.OPEN);
+    const candidates = [...(this.sockets.get(paneId) ?? [])].filter(
+      (candidate) => candidate.readyState === candidate.OPEN,
+    );
+    const foregroundSocket = candidates.find((candidate) => this.socketState.get(candidate)?.foreground);
+    const nextSocket = foregroundSocket ?? candidates[0];
     if (!nextSocket) {
       this.resizeOwners.delete(paneId);
       this.deleteEmptySocketSet(paneId);
       return;
     }
 
-    const nextSize = this.socketState.get(nextSocket);
+    if (foregroundSocket) {
+      this.applyResizeOwnerSize(paneId, foregroundSocket, session);
+      return;
+    }
     this.resizeOwners.set(paneId, nextSocket);
-    if (nextSize && !session.isExited) session.resize(nextSize.cols, nextSize.rows);
+    this.broadcastPaneSize(paneId);
+  }
+
+  private applyResizeOwnerSize(paneId: string, socket: WebSocket, session: ManagedSession): void {
+    const state = this.socketState.get(socket);
+    if (!state) return;
+    const previousOwner = this.resizeOwners.get(paneId);
+    const previousSize = this.paneSizes.get(paneId);
+    const sizeChanged = !previousSize || previousSize.cols !== state.cols || previousSize.rows !== state.rows;
+    this.resizeOwners.set(paneId, socket);
+    this.paneSizes.set(paneId, { cols: state.cols, rows: state.rows });
+    if (sizeChanged && !session.isExited) {
+      session.resize(state.cols, state.rows);
+      const pane = this.state.findPane(paneId);
+      if (pane) this.scheduleDurableResizeRefresh(pane);
+    }
+    if (previousOwner !== socket || sizeChanged) this.broadcastPaneSize(paneId);
+  }
+
+  private broadcastPaneSize(paneId: string): void {
+    const size = this.paneSizes.get(paneId);
+    if (!size) return;
+    const owner = this.resizeOwners.get(paneId);
+    for (const socket of this.sockets.get(paneId) ?? []) {
+      this.send(socket, {
+        type: "size",
+        paneId,
+        ...size,
+        resizeOwner: owner === socket,
+      });
+    }
   }
 
   private deleteEmptySocketSet(paneId: string): void {
@@ -678,6 +750,8 @@ export class SessionManager {
     this.sessionMachines.delete(paneId);
     this.paneInputEpochs.delete(paneId);
     this.resizeOwners.delete(paneId);
+    this.paneSizes.delete(paneId);
+    this.cancelDurableResizeRefresh(paneId);
     if (session) session.kill();
     const fallbackMachineId = machineId ?? session?.pane.machineId ?? this.state.findPane(paneId)?.machineId;
     const machine = resolveDisposalMachine(sessionMachine, this.currentMachines(), fallbackMachineId);
