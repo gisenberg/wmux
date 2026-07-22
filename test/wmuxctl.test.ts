@@ -1475,6 +1475,7 @@ const startTuiFixture = async (options: TuiFixtureOptions = {}) => {
   const prefix = options.pathPrefix ?? "";
   const inputs: Array<Record<string, unknown>> = [];
   const methods: string[] = [];
+  const workspaceRequests: Array<Record<string, unknown>> = [];
   let bootstrapCount = 0;
   let workspacePosts = 0;
   let upgrades = 0;
@@ -1514,8 +1515,12 @@ const startTuiFixture = async (options: TuiFixtureOptions = {}) => {
     }
     if (request.method === "POST" && route === "/api/workspaces") {
       workspacePosts += 1;
-      request.resume();
-      request.on("end", () => reply(response, { workspace, state: {} }, 201));
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        reply(response, { workspace, state: {} }, 201);
+      });
       return;
     }
     if (request.method === "POST" && route === "/api/workspaces/ws_tui_fixture/title") {
@@ -1557,10 +1562,32 @@ const startTuiFixture = async (options: TuiFixtureOptions = {}) => {
     url: `${origin}${prefix}`,
     inputs,
     methods,
+    workspaceRequests,
     get workspacePosts() { return workspacePosts; },
     async stop() { await close(server); },
   };
 };
+
+test("wmuxctl tui nests fresh workspaces from its invoking pane and otherwise creates roots", async () => {
+  const args = ["tui", "codex", "linux-box", "--directory", "/srv/project", "--no-prompt", ...fastTuiGate];
+  const nested = await startTuiFixture();
+  try {
+    await cli(nested.url, args, { WMUX_PANE_ID: "pane_parent" });
+    assert.deepEqual(nested.workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
+  } finally {
+    await nested.stop();
+  }
+
+  const root = await startTuiFixture();
+  const rootEnv = { ...process.env, WMUX_TOKEN: "test-token" };
+  delete rootEnv.WMUX_PANE_ID;
+  try {
+    await execFileAsync("python3", [wmuxctl, "--url", root.url, ...args], { cwd: repoRoot, env: rootEnv });
+    assert.deepEqual(root.workspaceRequests, [{ machineId: "linux-box", createdBy: "agent" }]);
+  } finally {
+    await root.stop();
+  }
+});
 
 const establishedFields = [
   "machineId", "workspaceId", "tabId", "paneId", "runId", "runtime", "state", "closed",

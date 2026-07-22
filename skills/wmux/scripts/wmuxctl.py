@@ -1214,7 +1214,8 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     public_base = safe_public_url(args.public_url, client.url)
     initial_machine = require_posix_machine(client, args.machine)
     initial_identity = machine_identity(initial_machine)
-    workspace, _state = client.create_workspace(args.machine)
+    parent_pane_id = os.environ.get("WMUX_PANE_ID", "")
+    workspace, _state = client.create_workspace(args.machine, parent_pane_id)
     info = describe_workspace(client.url, workspace)
     info.update(urls(client.url, public_base, info["workspaceId"], info["tabId"]))
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,
