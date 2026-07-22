@@ -543,7 +543,7 @@ The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions 
 Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require manual recovery.
 Restart OpenCode after installing or updating the plugin so it loads the generated tools.
 
-`wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane, with its working directory set by the staged helper.
+`wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane, with its working directory set by the staged helper. When invoked inside a wmux pane, the new workspace nests beneath that pane; outside wmux it remains a root workspace.
 It leaves every workspace open and intentionally creates no manual lifecycle event (installed hooks own interactive turns).
 Prompts are read only from a UTF-8 file or stdin; they never appear in argv or the launch JSON.
 Prompt text may contain ordinary Unicode, tabs, and LF newlines; CRLF is normalized to LF, while other C0/C1 controls, including ESC, bare CR, and DEL, are rejected before workspace creation.
