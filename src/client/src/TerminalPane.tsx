@@ -39,6 +39,8 @@ import {
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionCellPaint,
+  terminalPredictionStyleAtCursor,
   terminalPredictionEchoProbeMatches,
   type PredictedTerminalInput,
   type TerminalPredictionEchoProbe,
@@ -487,10 +489,36 @@ export const TerminalPane = memo(function TerminalPane({
         return;
       }
 
+      const cols = safeCols(term.cols);
+      const viewport = term.wasmTerm?.getViewport();
+      if (!viewport) {
+        disarmPrediction();
+        return;
+      }
+      const cellAt = (col: number, row: number) => viewport[row * cols + col];
+      const predictionStyle = terminalPredictionStyleAtCursor(
+        viewport,
+        cols,
+        cursor,
+        (row) => term.wasmTerm?.isRowWrapped(row) ?? false,
+      );
+
       const fragment = document.createDocumentFragment();
       layer.style.fontSize = `${terminalFontSizeRef.current}px`;
-      const addCell = (col: number, row: number, text: string, className: string) => {
+      const addCell = (
+        col: number,
+        row: number,
+        text: string,
+        className: string,
+        coversAuthoritativeCursor = false,
+      ) => {
         const cell = document.createElement("span");
+        const paint = terminalPredictionCellPaint(
+          predictionStyle,
+          cellAt(col, row),
+          text,
+          coversAuthoritativeCursor,
+        );
         cell.className = className;
         cell.textContent = text;
         cell.style.left = `${col * metrics.width}px`;
@@ -498,6 +526,8 @@ export const TerminalPane = memo(function TerminalPane({
         cell.style.width = `${metrics.width}px`;
         cell.style.height = `${metrics.height}px`;
         cell.style.lineHeight = `${metrics.height}px`;
+        cell.style.color = paint.foreground;
+        cell.style.backgroundColor = paint.background;
         fragment.append(cell);
       };
       addCell(
@@ -505,6 +535,7 @@ export const TerminalPane = memo(function TerminalPane({
         layout.authoritativeCursor.row,
         "",
         "terminal-input-prediction-cell",
+        true,
       );
       for (const cell of layout.cells) {
         addCell(cell.col, cell.row, cell.text, "terminal-input-prediction-cell");

@@ -1,3 +1,5 @@
+import { CellFlags, type GhosttyCell } from "ghostty-web";
+
 export interface PredictedTerminalInput {
   sequence: number;
   kind: "insert" | "backspace";
@@ -16,6 +18,11 @@ export interface PredictedTerminalLayout {
   authoritativeCursor: { col: number; row: number };
 }
 
+export interface TerminalPredictionCellStyle {
+  foreground: string;
+  background: string;
+}
+
 export type TerminalPredictionScreen = "normal" | "alternate";
 
 export interface TerminalPredictionEchoProbe {
@@ -26,6 +33,92 @@ export interface TerminalPredictionEchoProbe {
 }
 
 const MAX_ECHO_PROBE_INPUTS = 16;
+const DEFAULT_FOREGROUND = "var(--terminal-foreground)";
+const DEFAULT_BACKGROUND = "var(--terminal-background)";
+
+const rgb = (red: number, green: number, blue: number): string => `rgb(${red}, ${green}, ${blue})`;
+
+export const effectiveTerminalPredictionCellStyle = (
+  cell: GhosttyCell | undefined,
+): TerminalPredictionCellStyle => {
+  if (!cell) return { foreground: DEFAULT_FOREGROUND, background: DEFAULT_BACKGROUND };
+  const inverse = Boolean(cell.flags & CellFlags.INVERSE);
+  const foregroundIsDefault = inverse ? cell.bgIsDefault : cell.fgIsDefault;
+  const backgroundIsDefault = inverse ? cell.fgIsDefault : cell.bgIsDefault;
+  return {
+    foreground: foregroundIsDefault
+      ? (inverse ? DEFAULT_BACKGROUND : DEFAULT_FOREGROUND)
+      : inverse
+        ? rgb(cell.bg_r, cell.bg_g, cell.bg_b)
+        : rgb(cell.fg_r, cell.fg_g, cell.fg_b),
+    background: backgroundIsDefault
+      ? (inverse ? DEFAULT_FOREGROUND : DEFAULT_BACKGROUND)
+      : inverse
+        ? rgb(cell.fg_r, cell.fg_g, cell.fg_b)
+        : rgb(cell.bg_r, cell.bg_g, cell.bg_b),
+  };
+};
+
+const terminalCellCarriesStyle = (cell: GhosttyCell | undefined): cell is GhosttyCell => Boolean(
+  cell
+  && (
+    cell.codepoint !== 0
+    || !cell.fgIsDefault
+    || !cell.bgIsDefault
+    || cell.flags !== 0
+    || cell.width !== 1
+  )
+);
+
+export const terminalPredictionStyleAtCursor = (
+  viewport: readonly GhosttyCell[],
+  cols: number,
+  cursor: { x: number; y: number },
+  isRowWrapped: (row: number) => boolean,
+): TerminalPredictionCellStyle => {
+  const cellAt = (col: number, row: number): GhosttyCell | undefined => {
+    if (col < 0 || col >= cols || row < 0) return undefined;
+    return viewport[row * cols + col];
+  };
+  const current = cellAt(cursor.x, cursor.y);
+  if (terminalCellCarriesStyle(current)) return effectiveTerminalPredictionCellStyle(current);
+
+  const previous = cursor.x > 0
+    ? cellAt(cursor.x - 1, cursor.y)
+    : cursor.y > 0 && isRowWrapped(cursor.y - 1)
+      ? cellAt(cols - 1, cursor.y - 1)
+      : undefined;
+  return effectiveTerminalPredictionCellStyle(
+    terminalCellCarriesStyle(previous) ? previous : current,
+  );
+};
+
+const terminalCellHasVisibleContent = (cell: GhosttyCell | undefined): boolean => Boolean(
+  cell
+  && (
+    (cell.codepoint !== 0 && cell.codepoint !== 32 && !(cell.flags & CellFlags.INVISIBLE))
+    || (cell.flags & (CellFlags.UNDERLINE | CellFlags.STRIKETHROUGH))
+  )
+);
+
+export const terminalPredictionCellPaint = (
+  style: TerminalPredictionCellStyle,
+  underlyingCell: GhosttyCell | undefined,
+  text: string,
+  coversAuthoritativeCursor = false,
+): TerminalPredictionCellStyle => {
+  const underlyingStyle = effectiveTerminalPredictionCellStyle(underlyingCell);
+  const needsConcreteBackground = coversAuthoritativeCursor
+    || Boolean(text) && (
+      !underlyingCell
+      || terminalCellHasVisibleContent(underlyingCell)
+      || underlyingStyle.background !== style.background
+    );
+  return {
+    foreground: style.foreground,
+    background: needsConcreteBackground ? style.background : "transparent",
+  };
+};
 
 export const predictedTerminalInput = (sequence: number, data: string): PredictedTerminalInput | null => {
   if (data === "\b" || data === "\x7f") return { sequence, kind: "backspace", text: "" };
