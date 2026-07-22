@@ -970,19 +970,26 @@ export function App() {
     });
   };
 
-  const closeActiveWorkspace = () => {
-    if (!activeWorkspace) return;
-    const run = () => closeWorkspaceById(activeWorkspace.id);
+  const requestCloseWorkspace = (workspaceId: string, returnFocus?: HTMLElement | null) => {
+    const workspace = store.get()?.workspaces.find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return;
+    const run = () => closeWorkspaceById(workspace.id);
     if (!mobileViewport.isMobile) {
       void run();
       return;
     }
     setPendingMobileClose({
       kind: "workspace",
-      title: activeWorkspace.name,
-      sessionCount: activeWorkspace.tabs.reduce((count, tab) => count + tab.panes.length, 0),
+      title: workspace.name,
+      sessionCount: workspace.tabs.reduce((count, tab) => count + tab.panes.length, 0),
       run,
+      returnFocus,
     });
+  };
+
+  const closeActiveWorkspace = () => {
+    if (!activeWorkspace) return;
+    requestCloseWorkspace(activeWorkspace.id);
   };
 
   const reorderWorkspace = guard(
@@ -1714,12 +1721,12 @@ export function App() {
                     </span>
                   ) : null}
                 </a>
-                {!workspaceTree.movesDisabled ? (
+                {mobileViewport.isMobile || !workspaceTree.movesDisabled ? (
                   <button
                     type="button"
                     className="workspace-move-button"
-                    title={`Move ${workspace.name}`}
-                    aria-label={`Move ${workspace.name}`}
+                    title={mobileViewport.isMobile ? `Workspace options for ${workspace.name}` : `Move ${workspace.name}`}
+                    aria-label={mobileViewport.isMobile ? `Workspace options for ${workspace.name}` : `Move ${workspace.name}`}
                     onClick={(event) => setMoveWorkspace({ workspaceId: workspace.id, returnFocus: event.currentTarget })}
                   >
                     <MoreHorizontal size={14} />
@@ -1825,6 +1832,10 @@ export function App() {
             returnFocus={moveWorkspace.returnFocus}
             onClose={() => setMoveWorkspace(null)}
             onMove={(intent: WorkspaceMoveIntent) => reorderWorkspace(intent.workspaceId, intent.targetWorkspaceId, intent.position)}
+            allowMove={!workspaceTree.movesDisabled}
+            onRequestClose={mobileViewport.isMobile
+              ? (workspaceId) => requestCloseWorkspace(workspaceId, moveWorkspace.returnFocus)
+              : undefined}
           />
         ) : null}
       </aside>

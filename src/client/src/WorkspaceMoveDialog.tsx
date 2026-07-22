@@ -6,17 +6,22 @@ export function WorkspaceMoveDialog({
   workspaceId,
   workspaces,
   onMove,
+  onRequestClose,
   onClose,
   returnFocus,
+  allowMove = true,
 }: {
   workspaceId: string;
   workspaces: Workspace[];
   onMove: (intent: WorkspaceMoveIntent) => void | Promise<void>;
+  onRequestClose?: (workspaceId: string) => void;
   onClose: () => void;
   returnFocus?: HTMLElement | null;
+  allowMove?: boolean;
 }) {
   const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef(true);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const intents = useMemo(() => workspaceMoveIntents(workspaces, workspaceId), [workspaceId, workspaces]);
@@ -68,9 +73,11 @@ export function WorkspaceMoveDialog({
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("focusin", onFocusIn, true);
       restoreInert();
-      window.requestAnimationFrame(() => {
-        if (returnFocusTarget?.isConnected) returnFocusTarget.focus({ preventScroll: true });
-      });
+      if (restoreFocusRef.current) {
+        window.requestAnimationFrame(() => {
+          if (returnFocusTarget?.isConnected) returnFocusTarget.focus({ preventScroll: true });
+        });
+      }
     };
   }, [returnFocus]);
   useEffect(() => {
@@ -86,6 +93,13 @@ export function WorkspaceMoveDialog({
   };
   const supported = (position: WorkspaceMoveIntent["position"]) => intents.some((intent) =>
     intent.position === position && (position === "out-of" || intent.targetWorkspaceId === targetId));
+  const title = onRequestClose ? `Workspace options: ${source?.name ?? "workspace"}` : `Move ${source?.name ?? "workspace"}`;
+  const requestClose = () => {
+    if (!onRequestClose) return;
+    restoreFocusRef.current = false;
+    onClose();
+    onRequestClose(workspaceId);
+  };
 
   return (
     <div ref={backdropRef} className="workspace-move-backdrop" role="presentation" onMouseDown={(event) => {
@@ -100,23 +114,30 @@ export function WorkspaceMoveDialog({
         tabIndex={-1}
       >
         <div className="workspace-move-heading">
-          <strong id="workspace-move-title">Move {source?.name ?? "workspace"}</strong>
-          <button type="button" onClick={onClose} aria-label="Close move menu">×</button>
+          <strong id="workspace-move-title">{title}</strong>
+          <button type="button" onClick={onClose} aria-label={onRequestClose ? "Dismiss workspace options" : "Close move menu"}>×</button>
         </div>
-        {targetWorkspaces.length > 0 ? (
+        {allowMove && targetWorkspaces.length > 0 ? (
           <label>
             Target workspace
             <select value={targetId} onChange={(event) => setTargetId(event.target.value)}>
               {targetWorkspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
             </select>
           </label>
-        ) : <p>No valid tree targets.</p>}
-        <div className="workspace-move-actions">
-          <button type="button" disabled={!supported("before")} onClick={() => move("before")}>Move before</button>
-          <button type="button" disabled={!supported("after")} onClick={() => move("after")}>Move after</button>
-          <button type="button" disabled={!supported("into")} onClick={() => move("into")}>Nest inside</button>
-          <button type="button" disabled={!supported("out-of")} onClick={() => move("out-of")}>Move out one level</button>
-        </div>
+        ) : allowMove ? <p>No valid tree targets.</p> : null}
+        {allowMove ? (
+          <div className="workspace-move-actions">
+            <button type="button" disabled={!supported("before")} onClick={() => move("before")}>Move before</button>
+            <button type="button" disabled={!supported("after")} onClick={() => move("after")}>Move after</button>
+            <button type="button" disabled={!supported("into")} onClick={() => move("into")}>Nest inside</button>
+            <button type="button" disabled={!supported("out-of")} onClick={() => move("out-of")}>Move out one level</button>
+          </div>
+        ) : null}
+        {onRequestClose ? (
+          <div className="workspace-options-danger">
+            <button type="button" onClick={requestClose}>Close workspace</button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
