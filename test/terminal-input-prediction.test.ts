@@ -1,12 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CellFlags, type GhosttyCell } from "ghostty-web";
 import {
   createTerminalPredictionEchoProbe,
+  effectiveTerminalPredictionCellStyle,
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionCellPaint,
   terminalPredictionEchoProbeMatches,
+  terminalPredictionStyleAtCursor,
 } from "../src/client/src/terminal-input-prediction.js";
+
+const terminalCell = (overrides: Partial<GhosttyCell> = {}): GhosttyCell => ({
+  codepoint: 0,
+  fg_r: 0,
+  fg_g: 0,
+  fg_b: 0,
+  bg_r: 0,
+  bg_g: 0,
+  bg_b: 0,
+  fgIsDefault: true,
+  bgIsDefault: true,
+  flags: 0,
+  width: 1,
+  hyperlink_id: 0,
+  grapheme_len: 0,
+  ...overrides,
+});
 
 test("terminal prediction accepts bounded printable input and backspace only", () => {
   assert.deepEqual(predictedTerminalInput(1, "a"), { sequence: 1, kind: "insert", text: "a" });
@@ -149,5 +170,130 @@ test("terminal prediction wraps inserts but refuses ambiguous wrapped backspace"
       [predictedTerminalInput(1, "\b")!],
     ),
     null,
+  );
+});
+
+test("terminal prediction resolves default, explicit, and inverse effective colors", () => {
+  assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell()), {
+    foreground: "var(--terminal-foreground)",
+    background: "var(--terminal-background)",
+  });
+  assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell({
+    fg_r: 12,
+    fg_g: 34,
+    fg_b: 56,
+    bg_r: 78,
+    bg_g: 90,
+    bg_b: 123,
+    fgIsDefault: false,
+    bgIsDefault: false,
+  })), {
+    foreground: "rgb(12, 34, 56)",
+    background: "rgb(78, 90, 123)",
+  });
+  assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell({
+    fg_r: 12,
+    fg_g: 34,
+    fg_b: 56,
+    bg_r: 78,
+    bg_g: 90,
+    bg_b: 123,
+    fgIsDefault: false,
+    bgIsDefault: false,
+    flags: CellFlags.INVERSE,
+  })), {
+    foreground: "rgb(78, 90, 123)",
+    background: "rgb(12, 34, 56)",
+  });
+  assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell({ flags: CellFlags.INVERSE })), {
+    foreground: "var(--terminal-background)",
+    background: "var(--terminal-foreground)",
+  });
+});
+
+test("terminal prediction inherits an active colored span across empty and wrapped cells", () => {
+  const colored = terminalCell({
+    codepoint: "P".codePointAt(0),
+    fg_r: 240,
+    fg_g: 240,
+    fg_b: 240,
+    bg_r: 20,
+    bg_g: 80,
+    bg_b: 140,
+    fgIsDefault: false,
+    bgIsDefault: false,
+  });
+  const viewport = [terminalCell(), colored, terminalCell(), terminalCell()];
+  assert.deepEqual(terminalPredictionStyleAtCursor(viewport, 4, { x: 2, y: 0 }, () => false), {
+    foreground: "rgb(240, 240, 240)",
+    background: "rgb(20, 80, 140)",
+  });
+  const explicitlyStyledCursorCell = terminalCell({
+    bg_r: 90,
+    bg_g: 30,
+    bg_b: 120,
+    bgIsDefault: false,
+  });
+  assert.deepEqual(terminalPredictionStyleAtCursor(
+    [terminalCell(), colored, explicitlyStyledCursorCell, terminalCell()],
+    4,
+    { x: 2, y: 0 },
+    () => false,
+  ), {
+    foreground: "var(--terminal-foreground)",
+    background: "rgb(90, 30, 120)",
+  });
+
+  const wrappedViewport = [terminalCell(), terminalCell(), terminalCell(), colored, terminalCell()];
+  assert.deepEqual(terminalPredictionStyleAtCursor(
+    wrappedViewport,
+    4,
+    { x: 0, y: 1 },
+    (row) => row === 0,
+  ), {
+    foreground: "rgb(240, 240, 240)",
+    background: "rgb(20, 80, 140)",
+  });
+  assert.deepEqual(terminalPredictionStyleAtCursor(
+    wrappedViewport,
+    4,
+    { x: 0, y: 1 },
+    () => false,
+  ), {
+    foreground: "var(--terminal-foreground)",
+    background: "var(--terminal-background)",
+  });
+});
+
+test("terminal prediction keeps matching empty backgrounds transparent and covers mismatches", () => {
+  const defaultStyle = effectiveTerminalPredictionCellStyle(terminalCell());
+  assert.deepEqual(terminalPredictionCellPaint(defaultStyle, terminalCell(), "x"), {
+    foreground: "var(--terminal-foreground)",
+    background: "transparent",
+  });
+  assert.equal(
+    terminalPredictionCellPaint(defaultStyle, terminalCell({ codepoint: "q".codePointAt(0) }), "x").background,
+    "var(--terminal-background)",
+  );
+  assert.equal(
+    terminalPredictionCellPaint(defaultStyle, terminalCell(), "", true).background,
+    "var(--terminal-background)",
+  );
+
+  const coloredStyle = {
+    foreground: "rgb(240, 240, 240)",
+    background: "rgb(20, 80, 140)",
+  };
+  assert.equal(
+    terminalPredictionCellPaint(coloredStyle, terminalCell(), "x").background,
+    "rgb(20, 80, 140)",
+  );
+  assert.equal(
+    terminalPredictionCellPaint(coloredStyle, undefined, "x").background,
+    "rgb(20, 80, 140)",
+  );
+  assert.equal(
+    terminalPredictionCellPaint(coloredStyle, terminalCell(), "").background,
+    "transparent",
   );
 });

@@ -693,6 +693,18 @@ button.active-tool {
   flex: 1 1 150px;
 }
 
+.workspace-options-danger {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.workspace-options-danger button {
+  width: 100%;
+  min-height: 44px;
+  border-color: var(--red);
+  color: #ffaaa1;
+}
+
 .workspace-item.drop-before::before {
   top: 0;
 }
@@ -3332,7 +3344,7 @@ button.active-tool {
 }
 
 .terminal-input-prediction-cell {
-  background: var(--terminal-background);
+  background: transparent;
 }
 
 .terminal-input-prediction-cursor {

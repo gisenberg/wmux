@@ -5,6 +5,7 @@ export interface MobileCloseRequest {
   title: string;
   sessionCount: number;
   run: () => void | Promise<void>;
+  returnFocus?: HTMLElement | null;
 }
 
 export function MobileCloseDialog({
@@ -18,7 +19,7 @@ export function MobileCloseDialog({
   const dialogRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const returnFocus = request.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     cancelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -30,7 +31,7 @@ export function MobileCloseDialog({
       window.removeEventListener("keydown", onKeyDown);
       returnFocus?.focus();
     };
-  }, [onCancel]);
+  }, [onCancel, request.returnFocus]);
 
   const noun = request.sessionCount === 1 ? "session" : "sessions";
   return (

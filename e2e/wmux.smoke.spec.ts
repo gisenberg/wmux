@@ -273,14 +273,16 @@ test("navigates, persists, filters, and moves nested workspaces", async ({ page,
   test.setTimeout(60_000);
   const { child, root } = await createNestedWorkspacePair(request);
   const rootPath = `/workspaces/${root.id}/tabs/${root.activeTabId}`;
+  const isMobile = testInfo.project.name.startsWith("mobile-");
   const openWorkspaceNavigation = async () => {
-    if (!testInfo.project.name.startsWith("mobile-")) return;
+    if (!isMobile) return;
     await page.getByRole("banner", { name: "Mobile session controls" })
       .getByRole("button", { name: "Open workspaces and hosts" })
       .click();
   };
   const rootItem = () => page.locator(`a[role="treeitem"][href^="/workspaces/${root.id}/"]`);
   const childItem = () => page.locator(`a[role="treeitem"][href^="/workspaces/${child.id}/"]`);
+  const childActionName = isMobile ? `Workspace options for ${child.name}` : `Move ${child.name}`;
 
   try {
     await page.goto(rootPath);
@@ -308,10 +310,13 @@ test("navigates, persists, filters, and moves nested workspaces", async ({ page,
 
     await page.getByRole("button", { name: `Expand ${root.name}` }).press("Enter");
     await expect(childItem()).toHaveAttribute("aria-level", "2");
-    await page.getByRole("button", { name: `Move ${child.name}` }).press("Enter");
-    const moveDialog = page.getByRole("dialog", { name: `Move ${child.name}` });
+    const childAction = page.getByRole("button", { name: childActionName });
+    await childAction.press("Enter");
+    const moveDialog = page.getByRole("dialog", {
+      name: isMobile ? `Workspace options: ${child.name}` : `Move ${child.name}`,
+    });
     await expect(moveDialog).toBeVisible();
-    if (testInfo.project.name.startsWith("mobile-")) {
+    if (isMobile) {
       const actionBoxes = await moveDialog.locator(".workspace-move-actions button").evaluateAll((buttons) => buttons.map((button) => {
         const rect = button.getBoundingClientRect();
         return {
@@ -327,6 +332,13 @@ test("navigates, persists, filters, and moves nested workspaces", async ({ page,
       expect(actionBoxes.every((box, index) => box.height >= 44 && box.right <= page.viewportSize()!.width && (
         index === 0 || box.top > actionBoxes[index - 1].top
       ))).toBe(true);
+      await moveDialog.getByRole("button", { name: "Close workspace", exact: true }).click();
+      const closeDialog = page.getByRole("dialog", { name: "Close workspace?" });
+      await expect(closeDialog).toContainText(child.name);
+      await closeDialog.getByRole("button", { name: "Cancel" }).click();
+      await expect(childAction).toBeFocused();
+      await childAction.press("Enter");
+      await expect(moveDialog).toBeVisible();
     }
     await moveDialog.getByRole("button", { name: "Move out one level" }).click();
     await expect.poll(async () => {
@@ -336,15 +348,30 @@ test("navigates, persists, filters, and moves nested workspaces", async ({ page,
     }).toBeNull();
     await expect(childItem()).toHaveAttribute("aria-level", "1");
 
-    await expect(page.getByRole("button", { name: `Move ${child.name}` })).toBeVisible();
-    if (testInfo.project.name.startsWith("mobile-")) {
+    await expect(page.getByRole("button", { name: childActionName })).toBeVisible();
+    if (isMobile) {
       await page.getByRole("combobox", { name: "Filter workspace list by host" }).selectOption("local");
     } else {
       await page.getByRole("button", { name: /^Workspace host filter:/ }).press("Enter");
     }
-    await expect(page.getByRole("button", { name: `Move ${child.name}` })).toHaveCount(0);
     await expect(rootItem()).toBeVisible();
     await expect(childItem()).toBeVisible();
+    if (isMobile) {
+      await expect(page.getByRole("button", { name: childActionName })).toBeVisible();
+      await page.getByRole("button", { name: childActionName }).click();
+      await expect(moveDialog.locator(".workspace-move-actions")).toHaveCount(0);
+      await moveDialog.getByRole("button", { name: "Close workspace", exact: true }).click();
+      const closeDialog = page.getByRole("dialog", { name: "Close workspace?" });
+      await closeDialog.getByRole("button", { name: "Close workspace" }).click();
+      await expect.poll(async () => {
+        const response = await request.get("/api/bootstrap");
+        const payload = await response.json() as { workspaces: E2eWorkspace[] };
+        return payload.workspaces.some((workspace) => workspace.id === child.id);
+      }).toBe(false);
+      await expect(childItem()).toHaveCount(0);
+    } else {
+      await expect(page.getByRole("button", { name: childActionName })).toHaveCount(0);
+    }
   } finally {
     await request.delete(`/api/workspaces/${child.id}`);
     await request.delete(`/api/workspaces/${root.id}`);
@@ -596,6 +623,11 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await page.keyboard.type("x");
     const predictedX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
     await expect(predictedX).toBeVisible();
+    await expect.poll(() => predictedX.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe("rgba(0, 0, 0, 0)");
+    await expect.poll(() => activePane.locator(".terminal-input-prediction-cell").first().evaluate((element) =>
+      getComputedStyle(element).backgroundColor,
+    )).toBe("rgb(16, 17, 20)");
     const predictedXLeft = await predictedX.evaluate((element: HTMLElement) => element.style.left);
     await page.keyboard.press("Backspace");
     await expect.poll(() => activePane.locator(".terminal-input-prediction-cursor")
@@ -604,6 +636,23 @@ test("predicts bounded shell and alternate-screen input locally", async ({
 
     await page.keyboard.press("Backspace");
     await page.waitForTimeout(350);
+    await page.keyboard.type("PS1=$'\\e[30;46mP>' bash --noprofile --norc -i");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(600);
+    await page.keyboard.type("a");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("x");
+    const predictedColoredX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
+    await expect(predictedColoredX).toBeVisible();
+    await expect.poll(() => predictedColoredX.evaluate((element) => ({
+      background: getComputedStyle(element).backgroundColor,
+      foreground: getComputedStyle(element).color,
+    }))).toEqual({ background: "rgb(101, 185, 199)", foreground: "rgb(27, 29, 34)" });
+    await page.keyboard.press("Control+C");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("exit");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(500);
     await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[HREADY\\r\\n'");
     await page.keyboard.press("Enter");
     await page.waitForTimeout(600);
@@ -753,6 +802,26 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
     await expect.poll(() => page.locator("html").evaluate((element) =>
       element.style.getPropertyValue("--black"),
     )).toBe("#282a36");
+
+    await page.routeWebSocket(/\/ws\/panes\//, (browserSocket) => {
+      const serverSocket = browserSocket.connectToServer();
+      browserSocket.onMessage((message) => serverSocket.send(message));
+      serverSocket.onMessage((message) => setTimeout(() => browserSocket.send(message), 250));
+    });
+    await page.reload();
+    const activePane = page.locator(".terminal-pane.active");
+    await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
+    await activePane.locator(".terminal-host textarea").evaluate((element: HTMLTextAreaElement) => element.focus());
+    await page.keyboard.type("a");
+    await page.waitForTimeout(350);
+    await page.keyboard.type("x");
+    const predictedX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
+    await expect(predictedX).toBeVisible();
+    await expect.poll(() => predictedX.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe("rgba(0, 0, 0, 0)");
+    await expect.poll(() => activePane.locator(".terminal-input-prediction-cell").first().evaluate((element) =>
+      getComputedStyle(element).backgroundColor,
+    )).toBe("rgb(40, 42, 54)");
   } finally {
     const restored = await request.post("/api/settings", { data: originalSettings });
     expect(restored.ok()).toBeTruthy();
@@ -1210,6 +1279,26 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
       right: Math.round(hostRect.right - layerRect.right),
     };
   })).toEqual({ left: 32, right: 48 });
+  const safeAreaPrediction = await activePane.locator(".terminal-input-prediction-layer").evaluate((element) => {
+    const layer = element as HTMLElement;
+    const cell = document.createElement("span");
+    cell.className = "terminal-input-prediction-cell";
+    cell.textContent = "x";
+    cell.style.left = "0";
+    cell.style.top = "0";
+    cell.style.width = "8px";
+    cell.style.height = "16px";
+    layer.append(cell);
+    const layerRect = layer.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    const result = {
+      background: getComputedStyle(cell).backgroundColor,
+      inside: cellRect.left >= layerRect.left && cellRect.right <= layerRect.right,
+    };
+    cell.remove();
+    return result;
+  });
+  expect(safeAreaPrediction).toEqual({ background: "rgba(0, 0, 0, 0)", inside: true });
   const chromeInsets = await page.locator(".open-tui-mobile-chrome-canvas").evaluate((canvas) => {
     const chromeRect = canvas.parentElement!.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();
@@ -1228,8 +1317,8 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
   const navigation = page.getByRole("complementary", { name: "Workspace navigation" });
   await expect(navigation).toBeVisible();
   await expect(navigation.locator(".workspace-version-badge")).toHaveCount(0);
-  const moveTarget = navigation.getByRole("button", { name: /^Move / }).first();
-  await expect.poll(() => moveTarget.evaluate((element) => {
+  const workspaceOptionsTarget = navigation.getByRole("button", { name: /^Workspace options for / }).first();
+  await expect.poll(() => workspaceOptionsTarget.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { width: Math.round(rect.width), height: Math.round(rect.height) };
   })).toEqual({ width: 44, height: 44 });
