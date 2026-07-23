@@ -630,12 +630,16 @@ def find_workspace(client: WmuxClient, machine_id: str, title: str) -> dict[str,
     return sorted(matches, key=lambda workspace: workspace.get("updatedAt") or workspace.get("createdAt") or "")[-1]
 
 
+def invoking_parent_pane_id() -> str:
+    return os.environ.get("WMUX_PANE_ID", "")
+
+
 def get_or_create_workspace(client: WmuxClient, machine_id: str, title: str, force_new: bool) -> tuple[dict[str, Any], bool]:
     if not force_new:
         workspace = find_workspace(client, machine_id, title)
         if workspace:
             return workspace, True
-    workspace, _state = client.create_workspace(machine_id)
+    workspace, _state = client.create_workspace(machine_id, invoking_parent_pane_id())
     if title:
         client.set_workspace_title(workspace["id"], title)
         workspace["manualTitle"] = title
@@ -1214,8 +1218,7 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     public_base = safe_public_url(args.public_url, client.url)
     initial_machine = require_posix_machine(client, args.machine)
     initial_identity = machine_identity(initial_machine)
-    parent_pane_id = os.environ.get("WMUX_PANE_ID", "")
-    workspace, _state = client.create_workspace(args.machine, parent_pane_id)
+    workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id())
     info = describe_workspace(client.url, workspace)
     info.update(urls(client.url, public_base, info["workspaceId"], info["tabId"]))
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,
@@ -1511,8 +1514,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     if workspace is None:
         # This is inherited only by a newly created delegated workspace. Reused
         # title matches retain their server-owned parent relationship.
-        parent_pane_id = os.environ.get("WMUX_PANE_ID", "")
-        workspace, _state = client.create_workspace(args.machine, parent_pane_id)
+        workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id())
     info = describe_workspace(client.url, workspace)
     run_id = str(uuid.uuid4())
     info["runId"] = run_id
