@@ -428,6 +428,141 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
   }
 });
 
+test("wmuxctl shared workspace consumers parent only newly created workspaces", async () => {
+  const workspaceRequests: Array<Record<string, unknown>> = [];
+  let workspaceCount = 0;
+  const workspace = (index: number, title = "") => ({
+    id: `ws_${index}`,
+    machineId: "linux-box",
+    activeTabId: `tab_${index}`,
+    tabs: [{ id: `tab_${index}`, activePaneId: `pane_${index}`, panes: [{ id: `pane_${index}`, machineId: "linux-box" }] }],
+    ...(title ? { name: title } : {}),
+  });
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ machines: [], workspaces: [] }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        workspaceRequests.push(body);
+        workspaceCount += 1;
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace: workspace(workspaceCount), state: {} }));
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url?.match(/^\/api\/workspaces\/ws_\d+\/title$/)) {
+      request.resume();
+      request.on("end", () => response.end("{}"));
+      return;
+    }
+    if (request.method === "POST" && request.url?.match(/^\/api\/panes\/pane_\d+\/input$/)) {
+      request.resume();
+      request.on("end", () => response.end("{}"));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const url = await listen(server);
+  try {
+    await cli(url, ["open", "linux-box", "--title", "Open"], { WMUX_PANE_ID: "pane_parent" });
+    await cli(url, ["run", "linux-box", "--title", "Run", "--line", "true", "--no-wait-ready"], { WMUX_PANE_ID: "pane_parent" });
+    await cli(url, ["ps", "linux-box", "--title", "Ps", "--script", "Write-Output ok", "--no-wait-ready"], { WMUX_PANE_ID: "pane_parent" });
+    assert.deepEqual(workspaceRequests, [
+      { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
+      { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
+      { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
+    ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("wmuxctl omits empty or missing workspace parents", async () => {
+  const workspaceRequests: Array<Record<string, unknown>> = [];
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ workspaces: [] }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace: { id: `ws_${workspaceRequests.length}`, machineId: "linux-box", activeTabId: "tab", tabs: [{ id: "tab", activePaneId: "pane", panes: [{ id: "pane", machineId: "linux-box" }] }] }, state: {} }));
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url?.includes("/title")) {
+      request.resume(); request.on("end", () => response.end("{}")); return;
+    }
+    response.writeHead(404).end();
+  });
+  const url = await listen(server);
+  const args = [wmuxctl, "--url", url, "open", "linux-box", "--title", "Root"];
+  try {
+    await cli(url, ["open", "linux-box", "--title", "Empty"], { WMUX_PANE_ID: "" });
+    const env = { ...process.env, WMUX_TOKEN: "test-token" };
+    delete env.WMUX_PANE_ID;
+    await execFileAsync("python3", args, { cwd: repoRoot, env });
+    assert.deepEqual(workspaceRequests, [
+      { machineId: "linux-box", createdBy: "agent" },
+      { machineId: "linux-box", createdBy: "agent" },
+    ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("wmuxctl reuse never reparents, while --new creates a child and preserves parent errors", async () => {
+  const workspace = { id: "ws_existing", name: "Shared", machineId: "linux-box", activeTabId: "tab", tabs: [{ id: "tab", activePaneId: "pane", panes: [{ id: "pane", machineId: "linux-box" }] }] };
+  const workspaceRequests: Array<Record<string, unknown>> = [];
+  let rejectParent = false;
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ workspaces: [workspace] }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        workspaceRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        if (rejectParent) { response.writeHead(422, { "content-type": "application/json" }); response.end('{"error":"invalid parent"}'); return; }
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace: { ...workspace, id: "ws_new" }, state: {} }));
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url?.includes("/title")) { request.resume(); request.on("end", () => response.end("{}")); return; }
+    response.writeHead(404).end();
+  });
+  const url = await listen(server);
+  try {
+    await cli(url, ["open", "linux-box", "--title", "Shared"], { WMUX_PANE_ID: "pane_parent" });
+    assert.equal(workspaceRequests.length, 0);
+    await cli(url, ["open", "linux-box", "--title", "Shared", "--new"], { WMUX_PANE_ID: "pane_parent" });
+    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
+    rejectParent = true;
+    await assert.rejects(cli(url, ["open", "linux-box", "--title", "Rejected", "--new"], { WMUX_PANE_ID: "pane_invalid" }), (error: { stderr?: string }) => {
+      assert.match(error.stderr ?? "", /wmuxctl: HTTP 422 for \/api\/workspaces: {"error":"invalid parent"}/);
+      return true;
+    });
+    assert.deepEqual(workspaceRequests.at(-1), { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_invalid" });
+  } finally {
+    await close(server);
+  }
+});
+
 test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-"));
   const promptPath = path.join(root, "prompt.md");

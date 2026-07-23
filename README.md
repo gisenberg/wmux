@@ -500,8 +500,7 @@ Every turn receives a new lifecycle run ID and returns the native assistant resp
 Session mode deliberately rejects `--structured-outcome` and `--close-on-success` because the conversation, not a JSON envelope or disposable process, is the durable abstraction.
 It accepts the prompt from a file or stdin, records lifecycle events, and returns a bounded result plus the direct workspace URL.
 POSIX delegation creates a fresh durable workspace and starts the staged `wmux-agent-run` transport.
-When `WMUX_PANE_ID` is available, the new POSIX agent workspace is nested beneath the invoking wmux workspace; this uses the explicit pane context rather than title heuristics.
-Delegations started outside wmux remain root workspaces.
+When a non-empty `WMUX_PANE_ID` is available, a newly created agent workspace is nested beneath the invoking wmux workspace; this uses the explicit pane context rather than title heuristics. This applies to `delegate`, `tui`, and the shared `open`, `run`, and `ps` workspace commands. Reused workspaces retain their existing parent, while `--new` creates a nested child. Calls outside wmux, or with an empty variable, remain root workspaces. Parent validation errors are returned without falling back to a root workspace.
 Windows delegation starts a normal Codex TUI and submits the prompt through bracketed paste after the TUI is ready.
 A later Windows delegation with the same machine and exact title reuses that idle Codex session while assigning the new turn its own run ID.
 The helper rejects concurrent delegation to a titled session that is already running work.
