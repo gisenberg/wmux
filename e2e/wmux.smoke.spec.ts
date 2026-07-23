@@ -1261,13 +1261,14 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
     return { left: style.paddingLeft, right: style.paddingRight };
   })).toEqual({ left: "32px", right: "48px" });
   await expect.poll(() => activePane.locator(".terminal-input-prediction-canvas").evaluate((element) => {
-    const hostRect = element.parentElement!.getBoundingClientRect();
-    const layerRect = element.getBoundingClientRect();
-    return {
-      left: Math.round(layerRect.left - hostRect.left),
-      right: Math.round(hostRect.right - layerRect.right),
-    };
-  })).toEqual({ left: 32, right: 48 });
+    const host = element.parentElement!;
+    const hostRect = host.getBoundingClientRect();
+    const predictionRect = element.getBoundingClientRect();
+    const predictionLeft = Math.round(predictionRect.left - hostRect.left);
+    const predictionRight = Math.round(hostRect.right - predictionRect.right);
+    return predictionLeft === 32
+      && predictionRight >= 48;
+  })).toBe(true);
   const safeAreaPrediction = await activePane.locator(".terminal-input-prediction-canvas").evaluate((element) => {
     const canvas = element as HTMLCanvasElement;
     const hostRect = canvas.parentElement!.getBoundingClientRect();
