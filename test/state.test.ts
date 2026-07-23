@@ -483,6 +483,23 @@ test("agent messages are sanitized and persist across restart", () => {
   });
 });
 
+test("agent titles update auto-owned workspaces but preserve user-owned titles", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspace = store.snapshot().workspaces[0];
+    const paneId = workspace.tabs[0].panes[0].id;
+
+    store.recordAgentEvent({ paneId, agent: "opencode", status: "running", title: "OpenCode title" });
+    assert.equal(store.snapshot().workspaces[0].name, "OpenCode title");
+    assert.equal(store.snapshot().workspaces[0].nameSource, "auto");
+
+    store.setWorkspaceTitle(workspace.id, "Manual wmux title");
+    store.recordAgentEvent({ paneId, agent: "opencode", status: "running", title: "Later OpenCode title" });
+    assert.equal(store.snapshot().workspaces[0].name, "Manual wmux title");
+    assert.equal(store.snapshot().workspaces[0].nameSource, "user");
+  });
+});
+
 test("delegation results retain more detail than browser activity", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);

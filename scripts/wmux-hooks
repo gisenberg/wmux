@@ -769,6 +769,15 @@ const applyPermissionDefaults = (config: any) => {
 
 export default (async ({ client, directory }) => {
   const active = new Map<string, { messageID: string; prompt: string; title: string; pending: Set<string> }>()
+  const titles = new Map<string, string>()
+  const cacheTitle = (sessionID: string, title: unknown) => {
+    titles.delete(sessionID)
+    titles.set(sessionID, sessionTitle(typeof title === "string" ? title : undefined))
+    if (titles.size > 128) {
+      const oldest = titles.keys().next().value
+      if (oldest) titles.delete(oldest)
+    }
+  }
 
   return {
     config: async (config) => applyPermissionDefaults(config),
@@ -778,12 +787,20 @@ export default (async ({ client, directory }) => {
       const session = await client.session.get({ path: { id: input.sessionID }, query: { directory } }).catch(() => undefined)
       if (!session || session.data?.parentID) return
       const prompt = text(output.parts)
-      const title = sessionTitle(session.data?.title)
+      if (!titles.has(input.sessionID)) cacheTitle(input.sessionID, session.data?.title)
+      const title = titles.get(input.sessionID) ?? ""
       active.set(input.sessionID, { messageID: output.message.id, prompt, title, pending: new Set() })
       await send({ hook_event_name: "UserPromptSubmit", title, prompt })
     },
     event: async ({ event }) => {
       if (delegated) return
+      if (event.type === "session.updated") {
+        const info = event.properties.info
+        if (!info || typeof info.id !== "string" || info.parentID) return
+        if (typeof info.title !== "string") return
+        cacheTitle(info.id, info.title)
+        return
+      }
       const sessionID = event.properties.sessionID
       if (!sessionID) return
       const current = active.get(sessionID)
@@ -810,7 +827,7 @@ export default (async ({ client, directory }) => {
       active.delete(sessionID)
 
       const session = await client.session.get({ path: { id: sessionID }, query: { directory } }).catch(() => undefined)
-      const title = sessionTitle(session?.data?.title) || current.title
+      const title = titles.get(sessionID) || sessionTitle(session?.data?.title) || current.title
 
       if (event.type === "session.error") {
         const error = event.properties.error
