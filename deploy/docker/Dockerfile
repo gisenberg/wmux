@@ -7,7 +7,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
   && apt-get install -y --no-install-recommends g++ make python3 \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-COPY vendor/ghostty-web-pr169/ghostty-web-0.4.1-pr169-faf6fbd-wmux2.tgz \
+COPY vendor/ghostty-web-pr169/ghostty-web-0.4.1-pr169-faf6fbd-wmux3.tgz \
   ./vendor/ghostty-web-pr169/
 RUN npm ci
 
