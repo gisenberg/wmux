@@ -3322,33 +3322,14 @@ button.active-tool {
   caret-color: transparent;
 }
 
-.terminal-input-prediction-layer {
+.terminal-input-prediction-canvas {
   position: absolute;
   z-index: 1;
-  inset: 0;
-  overflow: hidden;
-  color: var(--terminal-foreground);
-  font-family: var(--wmux-mono-font);
-  font-size: inherit;
-  font-variant-ligatures: none;
-  pointer-events: none;
-}
-
-.terminal-input-prediction-cell,
-.terminal-input-prediction-cursor {
-  position: absolute;
-  box-sizing: border-box;
+  top: 0;
+  left: 0;
   display: block;
   overflow: hidden;
-  white-space: pre;
-}
-
-.terminal-input-prediction-cell {
-  background: transparent;
-}
-
-.terminal-input-prediction-cursor {
-  border-left: 2px solid var(--terminal-foreground);
+  pointer-events: none;
 }
 
 .terminal-context-copy-bridge {
@@ -5599,8 +5580,7 @@ button.active-tool {
     touch-action: none;
   }
 
-  .terminal-input-prediction-layer {
-    right: var(--wmux-mobile-right-inset);
+  .terminal-input-prediction-canvas {
     left: var(--wmux-mobile-left-inset);
   }
 

@@ -140,10 +140,12 @@ test("registers and loads the bundled Meslo terminal font", async ({ page }, tes
       .filter((face) => face.family === "MesloLGM Nerd Font")
       .map((face) => ({ style: face.style, weight: face.weight, status: face.status }));
     const terminalFontFamily = getComputedStyle(document.querySelector(".terminal-host") as HTMLElement).fontFamily;
-    const predictionFontFamily = getComputedStyle(
-      document.querySelector(".terminal-input-prediction-layer") as HTMLElement,
-    ).fontFamily;
-    return { faces, predictionFontFamily, terminalFontFamily };
+    const predictionCanvas = document.querySelector(".terminal-input-prediction-canvas");
+    return {
+      faces,
+      hasPredictionCanvas: predictionCanvas instanceof HTMLCanvasElement,
+      terminalFontFamily,
+    };
   });
 
   expect(result.faces).toEqual(expect.arrayContaining([
@@ -154,7 +156,7 @@ test("registers and loads the bundled Meslo terminal font", async ({ page }, tes
   ]));
   expect(result.faces).toHaveLength(4);
   expect(result.terminalFontFamily).toContain("MesloLGM Nerd Font");
-  expect(result.predictionFontFamily).toBe(result.terminalFontFamily);
+  expect(result.hasPredictionCanvas).toBe(true);
 });
 
 test("does not block terminal startup on slow bundled fonts", async ({ page }, testInfo) => {
@@ -621,18 +623,15 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await page.waitForTimeout(350);
 
     await page.keyboard.type("x");
-    const predictedX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
-    await expect(predictedX).toBeVisible();
-    await expect.poll(() => predictedX.evaluate((element) => getComputedStyle(element).backgroundColor))
-      .toBe("rgba(0, 0, 0, 0)");
-    await expect.poll(() => activePane.locator(".terminal-input-prediction-cell").first().evaluate((element) =>
-      getComputedStyle(element).backgroundColor,
-    )).toBe("rgb(16, 17, 20)");
-    const predictedXLeft = await predictedX.evaluate((element: HTMLElement) => element.style.left);
+    const predictionCanvas = activePane.locator(".terminal-input-prediction-canvas");
+    await expect(predictionCanvas).toHaveAttribute("data-active", "true");
+    const predictedX = JSON.parse(
+      (await predictionCanvas.getAttribute("data-prediction-cells")) ?? "[]",
+    )[0] as { col: number; row: number };
     await page.keyboard.press("Backspace");
-    await expect.poll(() => activePane.locator(".terminal-input-prediction-cursor")
-      .evaluate((element: HTMLElement) => element.style.left)).toBe(predictedXLeft);
-    await expect(activePane.locator(".terminal-input-prediction-layer")).toBeEmpty({ timeout: 1_000 });
+    await expect.poll(() => predictionCanvas.getAttribute("data-prediction-cursor"))
+      .toBe(JSON.stringify({ col: predictedX.col, row: predictedX.row }));
+    await expect(predictionCanvas).not.toHaveAttribute("data-active", "true", { timeout: 1_000 });
 
     await page.keyboard.press("Backspace");
     await page.waitForTimeout(350);
@@ -642,12 +641,7 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await page.keyboard.type("a");
     await page.waitForTimeout(350);
     await page.keyboard.type("x");
-    const predictedColoredX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
-    await expect(predictedColoredX).toBeVisible();
-    await expect.poll(() => predictedColoredX.evaluate((element) => ({
-      background: getComputedStyle(element).backgroundColor,
-      foreground: getComputedStyle(element).color,
-    }))).toEqual({ background: "rgb(101, 185, 199)", foreground: "rgb(27, 29, 34)" });
+    await expect(predictionCanvas).toHaveAttribute("data-active", "true");
     await page.keyboard.press("Control+C");
     await page.waitForTimeout(350);
     await page.keyboard.type("exit");
@@ -661,12 +655,13 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await page.waitForTimeout(350);
 
     await page.keyboard.type("z");
-    const predictedZ = activePane.locator(".terminal-input-prediction-cell", { hasText: "z" });
-    await expect(predictedZ).toBeVisible();
-    const predictedZLeft = await predictedZ.evaluate((element: HTMLElement) => element.style.left);
+    await expect(predictionCanvas).toHaveAttribute("data-active", "true");
+    const predictedZ = JSON.parse(
+      (await predictionCanvas.getAttribute("data-prediction-cells")) ?? "[]",
+    )[0] as { col: number; row: number };
     await page.keyboard.press("Backspace");
-    await expect.poll(() => activePane.locator(".terminal-input-prediction-cursor")
-      .evaluate((element: HTMLElement) => element.style.left)).toBe(predictedZLeft);
+    await expect.poll(() => predictionCanvas.getAttribute("data-prediction-cursor"))
+      .toBe(JSON.stringify({ col: predictedZ.col, row: predictedZ.row }));
     await page.waitForTimeout(350);
     await page.keyboard.press("Control+C");
     await page.waitForTimeout(300);
@@ -815,13 +810,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
     await page.keyboard.type("a");
     await page.waitForTimeout(350);
     await page.keyboard.type("x");
-    const predictedX = activePane.locator(".terminal-input-prediction-cell", { hasText: "x" });
-    await expect(predictedX).toBeVisible();
-    await expect.poll(() => predictedX.evaluate((element) => getComputedStyle(element).backgroundColor))
-      .toBe("rgba(0, 0, 0, 0)");
-    await expect.poll(() => activePane.locator(".terminal-input-prediction-cell").first().evaluate((element) =>
-      getComputedStyle(element).backgroundColor,
-    )).toBe("rgb(40, 42, 54)");
+    await expect(activePane.locator(".terminal-input-prediction-canvas")).toHaveAttribute("data-active", "true");
   } finally {
     const restored = await request.post("/api/settings", { data: originalSettings });
     expect(restored.ok()).toBeTruthy();
@@ -1271,34 +1260,26 @@ test("mobile chrome keeps navigation, chat, terminal, and actions reachable", as
     const style = window.getComputedStyle(element);
     return { left: style.paddingLeft, right: style.paddingRight };
   })).toEqual({ left: "32px", right: "48px" });
-  await expect.poll(() => activePane.locator(".terminal-input-prediction-layer").evaluate((element) => {
-    const hostRect = element.parentElement!.getBoundingClientRect();
-    const layerRect = element.getBoundingClientRect();
+  await expect.poll(() => activePane.locator(".terminal-input-prediction-canvas").evaluate((element) => {
+    const host = element.parentElement!;
+    const hostRect = host.getBoundingClientRect();
+    const predictionRect = element.getBoundingClientRect();
+    const predictionLeft = Math.round(predictionRect.left - hostRect.left);
+    const predictionRight = Math.round(hostRect.right - predictionRect.right);
+    return predictionLeft === 32
+      && predictionRight >= 48;
+  })).toBe(true);
+  const safeAreaPrediction = await activePane.locator(".terminal-input-prediction-canvas").evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const hostRect = canvas.parentElement!.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const pixel = canvas.getContext("2d")?.getImageData(0, 0, 1, 1).data;
     return {
-      left: Math.round(layerRect.left - hostRect.left),
-      right: Math.round(hostRect.right - layerRect.right),
+      alpha: pixel?.[3] ?? -1,
+      inside: canvasRect.left >= hostRect.left && canvasRect.right <= hostRect.right,
     };
-  })).toEqual({ left: 32, right: 48 });
-  const safeAreaPrediction = await activePane.locator(".terminal-input-prediction-layer").evaluate((element) => {
-    const layer = element as HTMLElement;
-    const cell = document.createElement("span");
-    cell.className = "terminal-input-prediction-cell";
-    cell.textContent = "x";
-    cell.style.left = "0";
-    cell.style.top = "0";
-    cell.style.width = "8px";
-    cell.style.height = "16px";
-    layer.append(cell);
-    const layerRect = layer.getBoundingClientRect();
-    const cellRect = cell.getBoundingClientRect();
-    const result = {
-      background: getComputedStyle(cell).backgroundColor,
-      inside: cellRect.left >= layerRect.left && cellRect.right <= layerRect.right,
-    };
-    cell.remove();
-    return result;
   });
-  expect(safeAreaPrediction).toEqual({ background: "rgba(0, 0, 0, 0)", inside: true });
+  expect(safeAreaPrediction).toEqual({ alpha: 0, inside: true });
   const chromeInsets = await page.locator(".open-tui-mobile-chrome-canvas").evaluate((canvas) => {
     const chromeRect = canvas.parentElement!.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();
