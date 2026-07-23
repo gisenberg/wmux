@@ -21,6 +21,7 @@ export interface PredictedTerminalLayout {
 export interface TerminalPredictionCellStyle {
   foreground: string;
   background: string;
+  flags: number;
 }
 
 export type TerminalPredictionScreen = "normal" | "alternate";
@@ -41,7 +42,7 @@ const rgb = (red: number, green: number, blue: number): string => `rgb(${red}, $
 export const effectiveTerminalPredictionCellStyle = (
   cell: GhosttyCell | undefined,
 ): TerminalPredictionCellStyle => {
-  if (!cell) return { foreground: DEFAULT_FOREGROUND, background: DEFAULT_BACKGROUND };
+  if (!cell) return { foreground: DEFAULT_FOREGROUND, background: DEFAULT_BACKGROUND, flags: 0 };
   const inverse = Boolean(cell.flags & CellFlags.INVERSE);
   const foregroundIsDefault = inverse ? cell.bgIsDefault : cell.fgIsDefault;
   const backgroundIsDefault = inverse ? cell.fgIsDefault : cell.bgIsDefault;
@@ -56,6 +57,7 @@ export const effectiveTerminalPredictionCellStyle = (
       : inverse
         ? rgb(cell.fg_r, cell.fg_g, cell.fg_b)
         : rgb(cell.bg_r, cell.bg_g, cell.bg_b),
+    flags: cell.flags,
   };
 };
 
@@ -117,6 +119,7 @@ export const terminalPredictionCellPaint = (
   return {
     foreground: style.foreground,
     background: needsConcreteBackground ? style.background : "transparent",
+    flags: style.flags,
   };
 };
 

@@ -46,6 +46,7 @@ import {
   type TerminalPredictionEchoProbe,
   type TerminalPredictionScreen,
 } from "./terminal-input-prediction";
+import { TerminalPredictionRenderer } from "./terminal-prediction-renderer";
 import {
   classifyTerminalLatencyInput,
   normalizeDomEventTimestamp,
@@ -171,7 +172,7 @@ export const TerminalPane = memo(function TerminalPane({
   const colorSchemeRef = useRef(colorScheme);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalHostShellRef = useRef<HTMLDivElement | null>(null);
-  const predictionLayerRef = useRef<HTMLDivElement | null>(null);
+  const predictionCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const rectangularSelectionRef = useRef<RectangularSelection | null>(null);
@@ -180,8 +181,8 @@ export const TerminalPane = memo(function TerminalPane({
   const socketControllerRef = useRef<PaneSocketController | null>(null);
   const suspendSocketRef = useRef(inactiveTabStreaming === "suspend" && !tabVisible);
   const discardPendingOutputRef = useRef<(() => void) | null>(null);
+  const invalidatePredictionRef = useRef<(() => void) | null>(null);
   const tuiFrameRateRef = useRef(tuiFrameRate);
-  const terminalFontSizeRef = useRef(terminalFontSize);
   const terminalScrollModeRef = useRef(terminalScrollMode);
   const keybindingsRef = useRef<CompiledKeybindingMap>(compileKeybindings(keybindings));
   const appleKeybindingsRef = useRef(appleKeybindings);
@@ -320,6 +321,14 @@ export const TerminalPane = memo(function TerminalPane({
     let terminalOutputTimer: number | undefined;
     let predictionExpiryTimer: number | undefined;
     let predictionProbeTimer: number | undefined;
+    let predictionRenderer: TerminalPredictionRenderer | undefined;
+    let predictionAcknowledgedSequence: number | undefined;
+    let clearPredictionsAfterRender = false;
+    let rendererDevicePixelRatio = 1;
+    let predictionMetricsStale = true;
+    let deviceScaleQuery: MediaQueryList | undefined;
+    let deviceScaleQueryListener: (() => void) | undefined;
+    let windowScaleListener: (() => void) | undefined;
     let osc52PendingTimer: number | undefined;
     let viewportFitFrame: number | undefined;
     let viewportFitTimer: number | undefined;
@@ -377,11 +386,13 @@ export const TerminalPane = memo(function TerminalPane({
     };
 
     const clearPredictionLayer = () => {
-      predictionLayerRef.current?.replaceChildren();
+      predictionRenderer?.clear();
     };
 
     const clearPredictions = () => {
       predictedInputs = [];
+      predictionAcknowledgedSequence = undefined;
+      clearPredictionsAfterRender = false;
       if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
       predictionExpiryTimer = undefined;
       clearPredictionLayer();
@@ -399,6 +410,7 @@ export const TerminalPane = memo(function TerminalPane({
       clearPredictionProbe();
       clearPredictions();
     };
+    invalidatePredictionRef.current = disarmPrediction;
 
     const predictionScreen = (term: Terminal): TerminalPredictionScreen =>
       term.wasmTerm?.isAlternateScreen() ? "alternate" : "normal";
@@ -465,17 +477,23 @@ export const TerminalPane = memo(function TerminalPane({
 
     const schedulePredictionExpiry = () => {
       if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
-      predictionExpiryTimer = window.setTimeout(clearPredictions, 1000);
+      predictionExpiryTimer = window.setTimeout(
+        clearPredictions,
+        predictionAcknowledgedSequence === undefined ? 1000 : 2000,
+      );
     };
 
     const renderPredictions = (term: Terminal) => {
-      const layer = predictionLayerRef.current;
-      const metrics = readCellMetrics(term);
+      const renderer = predictionRenderer;
+      const metrics = term.renderer?.getMetrics();
       const cursor = term.wasmTerm?.getCursor();
+      const currentDevicePixelRatio = window.devicePixelRatio || 1;
       if (
-        !layer
+        !renderer
         || !metrics
         || !cursor
+        || predictionMetricsStale
+        || currentDevicePixelRatio !== rendererDevicePixelRatio
         || predictionArmedScreen !== predictionScreen(term)
         || replayingTerminalOutput
         || term.getViewportY() > 0
@@ -502,56 +520,48 @@ export const TerminalPane = memo(function TerminalPane({
         cursor,
         (row) => term.wasmTerm?.isRowWrapped(row) ?? false,
       );
-
-      const fragment = document.createDocumentFragment();
-      layer.style.fontSize = `${terminalFontSizeRef.current}px`;
-      const addCell = (
-        col: number,
-        row: number,
-        text: string,
-        className: string,
-        coversAuthoritativeCursor = false,
-      ) => {
-        const cell = document.createElement("span");
-        const paint = terminalPredictionCellPaint(
-          predictionStyle,
-          cellAt(col, row),
-          text,
-          coversAuthoritativeCursor,
-        );
-        cell.className = className;
-        cell.textContent = text;
-        cell.style.left = `${col * metrics.width}px`;
-        cell.style.top = `${row * metrics.height}px`;
-        cell.style.width = `${metrics.width}px`;
-        cell.style.height = `${metrics.height}px`;
-        cell.style.lineHeight = `${metrics.height}px`;
-        cell.style.color = paint.foreground;
-        cell.style.backgroundColor = paint.background;
-        fragment.append(cell);
-      };
-      addCell(
-        layout.authoritativeCursor.col,
-        layout.authoritativeCursor.row,
-        "",
-        "terminal-input-prediction-cell",
-        true,
-      );
-      for (const cell of layout.cells) {
-        addCell(cell.col, cell.row, cell.text, "terminal-input-prediction-cell");
+      const authoritativeCanvas = term.renderer?.getCanvas();
+      if (!authoritativeCanvas || !renderer.paint({
+        metrics,
+        devicePixelRatio: rendererDevicePixelRatio,
+        cols,
+        rows: safeRows(term.rows),
+        fontSize: term.options.fontSize,
+        fontFamily: term.options.fontFamily,
+        theme: colorSchemeRef.current.terminal,
+        layout,
+        style: predictionStyle,
+        cellAt,
+        cellPaint: terminalPredictionCellPaint,
+        cursorStyle: cursor.style ?? term.options.cursorStyle ?? "block",
+        authoritativeCanvas,
+      })) {
+        disarmPrediction();
       }
-      addCell(layout.cursor.col, layout.cursor.row, "", "terminal-input-prediction-cursor");
-      layer.replaceChildren(fragment);
     };
 
     const acknowledgePredictions = (sequence: number | undefined) => {
       if (sequence === undefined || predictedInputs.length === 0) return;
-      predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > sequence);
-      if (predictedInputs.length === 0) {
-        clearPredictions();
-      } else {
-        schedulePredictionExpiry();
+      predictionAcknowledgedSequence = Math.max(predictionAcknowledgedSequence ?? 0, sequence);
+      if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
+      predictionExpiryTimer = window.setTimeout(clearPredictions, 2000);
+    };
+
+    const settlePredictionsAfterRender = (term: Terminal) => {
+      if (clearPredictionsAfterRender) {
+        disarmPrediction();
+        return;
       }
+      if (predictionAcknowledgedSequence !== undefined) {
+        const acknowledgedSequence = predictionAcknowledgedSequence;
+        predictionAcknowledgedSequence = undefined;
+        predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > acknowledgedSequence);
+        if (predictedInputs.length === 0) {
+          clearPredictions();
+          return;
+        }
+      }
+      if (predictedInputs.length > 0) renderPredictions(term);
     };
 
     const copyRectangularSelection = (term: Terminal, selection: string): void => {
@@ -737,7 +747,6 @@ export const TerminalPane = memo(function TerminalPane({
     const writeTerminalTextNow = (term: Terminal, text: string) => {
       if (!text) return;
       terminalLatency.recordWrite(pane.id, performance.now());
-      clearPredictionLayer();
       const placeholderCells: KittyPlaceholderCell[] = [];
       writeTerminalOutput(
         term,
@@ -755,7 +764,13 @@ export const TerminalPane = memo(function TerminalPane({
         },
       );
       recordKittyPlaceholderCells(placeholderCells);
-      if (predictedInputs.length > 0) renderPredictions(term);
+      if (
+        predictedInputs.length > 0
+        && predictionAcknowledgedSequence === undefined
+        && !clearPredictionsAfterRender
+      ) {
+        renderPredictions(term);
+      }
     };
 
     const flushQueuedTerminalText = (term: Terminal) => {
@@ -1066,6 +1081,9 @@ export const TerminalPane = memo(function TerminalPane({
             terminalLatency.recordOutput(pane.id, message.inputSequence, message.data.length, performance.now());
             acknowledgePredictionProbe(message.inputSequence);
             acknowledgePredictions(message.inputSequence);
+            if (predictedInputs.length > 0 && message.inputSequence === undefined) {
+              clearPredictionsAfterRender = true;
+            }
             if (replayDraining()) replayBufferedOutput.push(message.data);
             else handleOutput(term, message.data);
             durableRefreshRevealGate?.noteOutput();
@@ -1165,6 +1183,9 @@ export const TerminalPane = memo(function TerminalPane({
         touchHostShell.addEventListener("pointercancel", touchPointerCancelListener);
       }
       term.open(containerRef.current);
+      if (predictionCanvasRef.current) {
+        predictionRenderer = new TerminalPredictionRenderer(predictionCanvasRef.current);
+      }
       configureTerminalInput(term);
       terminalBlurListener = () => {
         mobileControlArmedRef.current = false;
@@ -1189,6 +1210,7 @@ export const TerminalPane = memo(function TerminalPane({
       if ("fonts" in document) {
         fontLoadingDoneListener = () => {
           if (cancelled || terminalRef.current !== term || !term.renderer) return;
+          disarmPrediction();
           const family = term.options.fontFamily;
           // FontFaceSet completion does not invalidate an existing canvas.
           // A whitespace-only option transition forces Ghostty to remeasure
@@ -1205,7 +1227,11 @@ export const TerminalPane = memo(function TerminalPane({
       renderDisposable = term.onRender(() => {
         terminalLatency.recordRender(pane.id, performance.now());
         verifyPredictionProbe(term);
+        if (rendererDevicePixelRatio === (window.devicePixelRatio || 1)) {
+          predictionMetricsStale = false;
+        }
         refreshMetrics(term);
+        settlePredictionsAfterRender(term);
         if (rectangularSelection?.overlay) setRectangleVersion((version) => version + 1);
       });
       bufferDisposable = term.buffer.onBufferChange(() => rectangularSelection?.clear());
@@ -1410,6 +1436,37 @@ export const TerminalPane = memo(function TerminalPane({
       window.addEventListener("pageshow", pageShowListener);
       document.addEventListener("visibilitychange", visibilityChangeListener);
 
+      const refreshRendererDeviceScale = () => {
+        const nextDevicePixelRatio = window.devicePixelRatio || 1;
+        if (
+          nextDevicePixelRatio === rendererDevicePixelRatio
+          && !predictionMetricsStale
+        ) return;
+        predictionMetricsStale = true;
+        disarmPrediction();
+        rendererDevicePixelRatio = nextDevicePixelRatio;
+        term.setDevicePixelRatio(nextDevicePixelRatio);
+        fitAddon?.fit();
+        refreshMetrics(term);
+      };
+      const armDeviceScaleQuery = () => {
+        if (!window.matchMedia) return;
+        if (deviceScaleQuery && deviceScaleQueryListener) {
+          deviceScaleQuery.removeEventListener("change", deviceScaleQueryListener);
+        }
+        deviceScaleQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        deviceScaleQueryListener = () => {
+          refreshRendererDeviceScale();
+          armDeviceScaleQuery();
+        };
+        deviceScaleQuery.addEventListener("change", deviceScaleQueryListener);
+      };
+      rendererDevicePixelRatio = window.devicePixelRatio || 1;
+      predictionMetricsStale = false;
+      windowScaleListener = refreshRendererDeviceScale;
+      window.addEventListener("resize", windowScaleListener);
+      armDeviceScaleQuery();
+
       const forwardTerminalData = (rawData: string) => {
         let data = rawData;
         if (mobileControlArmedRef.current) {
@@ -1419,6 +1476,7 @@ export const TerminalPane = memo(function TerminalPane({
           if (control !== undefined) data = control;
         }
         const terminalResponse = isTerminalProtocolResponse(data);
+        if (!terminalResponse) refreshRendererDeviceScale();
         if (!terminalResponse) inputEpochRef.current += 1;
         if (!terminalResponse) rectangularSelection?.clear();
         if (awaitingRestart && !terminalResponse) {
@@ -1450,17 +1508,20 @@ export const TerminalPane = memo(function TerminalPane({
             && activeRef.current
             && !replayingTerminalOutput
             && term.getViewportY() <= 0;
+          const awaitingAuthoritativeRender = clearPredictionsAfterRender
+            || predictionAcknowledgedSequence !== undefined;
           if (
             prediction
             && predictionArmedScreen === screen
             && canPredict
+            && !clearPredictionsAfterRender
           ) {
             predictedInputs.push(prediction);
             renderPredictions(term);
             terminalLatency.recordPredictionMutation(pane.id, sequence, performance.now());
             requestAnimationFrame((timestamp) => terminalLatency.recordPredictionPaint(pane.id, sequence!, timestamp));
             schedulePredictionExpiry();
-          } else {
+          } else if (!awaitingAuthoritativeRender) {
             clearPredictions();
             if (prediction && canPredict) {
               if (predictionArmedScreen && predictionArmedScreen !== screen) disarmPrediction();
@@ -1469,7 +1530,11 @@ export const TerminalPane = memo(function TerminalPane({
             else disarmPrediction();
           }
         }
-        if (inputMayLeaveShellPrompt(data)) {
+        if (
+          inputMayLeaveShellPrompt(data)
+          && !clearPredictionsAfterRender
+          && predictionAcknowledgedSequence === undefined
+        ) {
           shellCursorPlacementRef.current = false;
           disarmPrediction();
         }
@@ -1541,7 +1606,7 @@ export const TerminalPane = memo(function TerminalPane({
       term.element?.addEventListener("keydown", latencyKeyDownListener, { capture: true });
       term.onResize(() => {
         rectangularSelection?.clear();
-        clearPredictions();
+        disarmPrediction();
         const ws = socketRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
           sendResizeMessage(ws, "resize", term, foreground());
@@ -1564,6 +1629,7 @@ export const TerminalPane = memo(function TerminalPane({
       wheelScroll?.dispose();
       touchScroll.cancel();
       if (discardPendingOutputRef.current === resetPendingOutput) discardPendingOutputRef.current = null;
+      if (invalidatePredictionRef.current === disarmPrediction) invalidatePredictionRef.current = null;
       rectangularSelection?.dispose();
       rectangularSelectionRef.current = null;
       socketController?.dispose();
@@ -1601,6 +1667,10 @@ export const TerminalPane = memo(function TerminalPane({
       if (windowBlurListener) window.removeEventListener("blur", windowBlurListener);
       if (pageShowListener) window.removeEventListener("pageshow", pageShowListener);
       if (visibilityChangeListener) document.removeEventListener("visibilitychange", visibilityChangeListener);
+      if (windowScaleListener) window.removeEventListener("resize", windowScaleListener);
+      if (deviceScaleQuery && deviceScaleQueryListener) {
+        deviceScaleQuery.removeEventListener("change", deviceScaleQueryListener);
+      }
       if (fontLoadingDoneListener && "fonts" in document) {
         document.fonts.removeEventListener("loadingdone", fontLoadingDoneListener);
       }
@@ -1634,7 +1704,7 @@ export const TerminalPane = memo(function TerminalPane({
 
   useEffect(() => {
     const term = terminalRef.current;
-    terminalFontSizeRef.current = terminalFontSize;
+    invalidatePredictionRef.current?.();
     if (!term?.renderer) return;
     let cancelled = false;
     void ensureWmuxFonts(terminalFontFamily, terminalFontSize).then(() => {
@@ -1655,6 +1725,7 @@ export const TerminalPane = memo(function TerminalPane({
   useEffect(() => {
     const term = terminalRef.current;
     if (!term) return;
+    invalidatePredictionRef.current?.();
     term.options.theme = colorScheme.terminal;
   }, [colorScheme]);
 
@@ -1784,10 +1855,9 @@ export const TerminalPane = memo(function TerminalPane({
           className="terminal-host"
           style={{ fontFamily: resolvedTerminalFontFamily }}
         />
-        <div
-          ref={predictionLayerRef}
-          className="terminal-input-prediction-layer"
-          style={{ fontFamily: resolvedTerminalFontFamily }}
+        <canvas
+          ref={predictionCanvasRef}
+          className="terminal-input-prediction-canvas"
           aria-hidden="true"
         />
         {!terminalReady ? (

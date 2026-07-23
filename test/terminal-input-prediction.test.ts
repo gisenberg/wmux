@@ -11,6 +11,7 @@ import {
   terminalPredictionEchoProbeMatches,
   terminalPredictionStyleAtCursor,
 } from "../src/client/src/terminal-input-prediction.js";
+import { ghosttyCanvasFont } from "../src/client/src/terminal-prediction-renderer.js";
 
 const terminalCell = (overrides: Partial<GhosttyCell> = {}): GhosttyCell => ({
   codepoint: 0,
@@ -177,6 +178,7 @@ test("terminal prediction resolves default, explicit, and inverse effective colo
   assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell()), {
     foreground: "var(--terminal-foreground)",
     background: "var(--terminal-background)",
+    flags: 0,
   });
   assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell({
     fg_r: 12,
@@ -187,9 +189,19 @@ test("terminal prediction resolves default, explicit, and inverse effective colo
     bg_b: 123,
     fgIsDefault: false,
     bgIsDefault: false,
+    flags: CellFlags.BOLD
+      | CellFlags.ITALIC
+      | CellFlags.FAINT
+      | CellFlags.UNDERLINE
+      | CellFlags.STRIKETHROUGH,
   })), {
     foreground: "rgb(12, 34, 56)",
     background: "rgb(78, 90, 123)",
+    flags: CellFlags.BOLD
+      | CellFlags.ITALIC
+      | CellFlags.FAINT
+      | CellFlags.UNDERLINE
+      | CellFlags.STRIKETHROUGH,
   });
   assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell({
     fg_r: 12,
@@ -204,10 +216,12 @@ test("terminal prediction resolves default, explicit, and inverse effective colo
   })), {
     foreground: "rgb(78, 90, 123)",
     background: "rgb(12, 34, 56)",
+    flags: CellFlags.INVERSE,
   });
   assert.deepEqual(effectiveTerminalPredictionCellStyle(terminalCell({ flags: CellFlags.INVERSE })), {
     foreground: "var(--terminal-background)",
     background: "var(--terminal-foreground)",
+    flags: CellFlags.INVERSE,
   });
 });
 
@@ -222,11 +236,21 @@ test("terminal prediction inherits an active colored span across empty and wrapp
     bg_b: 140,
     fgIsDefault: false,
     bgIsDefault: false,
+    flags: CellFlags.BOLD
+      | CellFlags.ITALIC
+      | CellFlags.FAINT
+      | CellFlags.UNDERLINE
+      | CellFlags.STRIKETHROUGH,
   });
   const viewport = [terminalCell(), colored, terminalCell(), terminalCell()];
   assert.deepEqual(terminalPredictionStyleAtCursor(viewport, 4, { x: 2, y: 0 }, () => false), {
     foreground: "rgb(240, 240, 240)",
     background: "rgb(20, 80, 140)",
+    flags: CellFlags.BOLD
+      | CellFlags.ITALIC
+      | CellFlags.FAINT
+      | CellFlags.UNDERLINE
+      | CellFlags.STRIKETHROUGH,
   });
   const explicitlyStyledCursorCell = terminalCell({
     bg_r: 90,
@@ -242,6 +266,7 @@ test("terminal prediction inherits an active colored span across empty and wrapp
   ), {
     foreground: "var(--terminal-foreground)",
     background: "rgb(90, 30, 120)",
+    flags: 0,
   });
 
   const wrappedViewport = [terminalCell(), terminalCell(), terminalCell(), colored, terminalCell()];
@@ -253,6 +278,11 @@ test("terminal prediction inherits an active colored span across empty and wrapp
   ), {
     foreground: "rgb(240, 240, 240)",
     background: "rgb(20, 80, 140)",
+    flags: CellFlags.BOLD
+      | CellFlags.ITALIC
+      | CellFlags.FAINT
+      | CellFlags.UNDERLINE
+      | CellFlags.STRIKETHROUGH,
   });
   assert.deepEqual(terminalPredictionStyleAtCursor(
     wrappedViewport,
@@ -262,6 +292,7 @@ test("terminal prediction inherits an active colored span across empty and wrapp
   ), {
     foreground: "var(--terminal-foreground)",
     background: "var(--terminal-background)",
+    flags: 0,
   });
 });
 
@@ -270,6 +301,7 @@ test("terminal prediction keeps matching empty backgrounds transparent and cover
   assert.deepEqual(terminalPredictionCellPaint(defaultStyle, terminalCell(), "x"), {
     foreground: "var(--terminal-foreground)",
     background: "transparent",
+    flags: 0,
   });
   assert.equal(
     terminalPredictionCellPaint(defaultStyle, terminalCell({ codepoint: "q".codePointAt(0) }), "x").background,
@@ -283,6 +315,7 @@ test("terminal prediction keeps matching empty backgrounds transparent and cover
   const coloredStyle = {
     foreground: "rgb(240, 240, 240)",
     background: "rgb(20, 80, 140)",
+    flags: CellFlags.BOLD | CellFlags.ITALIC,
   };
   assert.equal(
     terminalPredictionCellPaint(coloredStyle, terminalCell(), "x").background,
@@ -295,5 +328,20 @@ test("terminal prediction keeps matching empty backgrounds transparent and cover
   assert.equal(
     terminalPredictionCellPaint(coloredStyle, terminalCell(), "").background,
     "transparent",
+  );
+  assert.equal(
+    terminalPredictionCellPaint(coloredStyle, terminalCell(), "x").flags,
+    CellFlags.BOLD | CellFlags.ITALIC,
+  );
+});
+
+test("terminal prediction uses Ghostty-compatible font strings for styled faces", () => {
+  assert.equal(
+    ghosttyCanvasFont(14, "Fira Code, monospace"),
+    "14px \"Fira Code\", monospace",
+  );
+  assert.equal(
+    ghosttyCanvasFont(16, "\"MesloLGM Nerd Font\", monospace", CellFlags.BOLD | CellFlags.ITALIC),
+    "italic bold 16px \"MesloLGM Nerd Font\", monospace",
   );
 });

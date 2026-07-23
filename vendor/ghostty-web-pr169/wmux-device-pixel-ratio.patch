@@ -1,0 +1,71 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index 7ffcbc8..573f1d3 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -1718,6 +1718,18 @@ export class CanvasRenderer {
+     this.metrics = this.measureFont();
+   }
+ 
++  /**
++   * Update the device scale used for metrics and backing-store sizing.
++   * Returns true when the scale changed.
++   */
++  public setDevicePixelRatio(devicePixelRatio: number): boolean {
++    const next = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
++    if (next === this.devicePixelRatio) return false;
++    this.devicePixelRatio = next;
++    this.metrics = this.measureFont();
++    return true;
++  }
++
+   /**
+    * Update cursor style
+    */
+diff --git a/lib/terminal.ts b/lib/terminal.ts
+index 3a476a1..ce91f3a 100644
+--- a/lib/terminal.ts
++++ b/lib/terminal.ts
+@@ -296,17 +296,25 @@ export class Terminal extends TerminalCore {
+ 
+     this.renderer.resize(this.cols, this.rows);
+ 
+-    const metrics = this.renderer.getMetrics();
+-    this.canvas.width = metrics.width * this.cols;
+-    this.canvas.height = metrics.height * this.rows;
+-    this.canvas.style.width = `${metrics.width * this.cols}px`;
+-    this.canvas.style.height = `${metrics.height * this.rows}px`;
+-
+     this.updateWasmPixelSize();
+ 
+     this.renderer.render(this.wasmTerm, true, this.viewportY, this);
+   }
+ 
++  /**
++   * Refresh canvas metrics after browser zoom or monitor-scale changes.
++   * Returns true when a new render was requested.
++   */
++  public setDevicePixelRatio(devicePixelRatio: number = window.devicePixelRatio ?? 1): boolean {
++    if (!this.renderer || !this.wasmTerm) return false;
++    if (!this.renderer.setDevicePixelRatio(devicePixelRatio)) return false;
++    this.renderer.resize(this.cols, this.rows);
++    this.updateWasmPixelSize();
++    this.renderer.render(this.wasmTerm, true, this.viewportY, this, this.scrollbarOpacity);
++    this.renderEmitter.fire({ start: 0, end: this.rows - 1 });
++    return true;
++  }
++
+   private buildThemeColorsConfig(theme: Required<ITheme>): GhosttyTerminalConfig {
+     return {
+       fgColor: this.parseColorToHex(theme.foreground),
+diff --git a/package.json b/package.json
+index 3a26673..44ca31c 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "ghostty-web",
+-  "version": "0.4.1-pr169.faf6fbd.wmux2",
++  "version": "0.4.1-pr169.faf6fbd.wmux3",
+   "description": "Web-based terminal emulator using Ghostty's VT100 parser via WebAssembly",
+   "type": "module",
+   "main": "./dist/ghostty-web.cjs.js",
