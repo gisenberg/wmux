@@ -489,6 +489,8 @@ trust step.
 `${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/wmux.ts`; it does not modify
 `opencode.json`. POSIX installation is supported; OpenCode's Windows installer
 parity is not included.
+An interactive OpenCode session rename appears in wmux on its next prompt;
+wmux preserves a user-owned workspace title.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
