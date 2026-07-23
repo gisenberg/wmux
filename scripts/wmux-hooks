@@ -787,7 +787,7 @@ export default (async ({ client, directory }) => {
       const session = await client.session.get({ path: { id: input.sessionID }, query: { directory } }).catch(() => undefined)
       if (!session || session.data?.parentID) return
       const prompt = text(output.parts)
-      if (!titles.has(input.sessionID)) cacheTitle(input.sessionID, session.data?.title)
+      cacheTitle(input.sessionID, session.data?.title)
       const title = titles.get(input.sessionID) ?? ""
       active.set(input.sessionID, { messageID: output.message.id, prompt, title, pending: new Set() })
       await send({ hook_event_name: "UserPromptSubmit", title, prompt })

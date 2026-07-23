@@ -46,7 +46,7 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.match(plugin, /const session = await client\.session\.get/);
     assert.match(plugin, /const sessionTitle = \(title: string \| undefined\)/);
     assert.match(plugin, /\^New session - \\d\{4\}/);
-    assert.match(plugin, /if \(!titles\.has\(input\.sessionID\)\) cacheTitle\(input\.sessionID, session\.data\?\.title\)/);
+    assert.match(plugin, /cacheTitle\(input\.sessionID, session\.data\?\.title\)/);
     assert.match(plugin, /const title = titles\.get\(sessionID\) \|\| sessionTitle\(session\?\.data\?\.title\) \|\| current\.title/);
     await execFileAsync(process.execPath, ["--experimental-strip-types", "--check", pluginPath]);
     const before = fs.statSync(pluginPath).mtimeMs;
@@ -158,12 +158,13 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
     const createPlugin = pluginModule.default as (input: Record<string, unknown>) => Promise<Record<string, (...args: unknown[]) => Promise<void>>>;
+    let topLevelSessionTitle: unknown = "OpenCode integration";
     const client = {
       session: {
         get: async ({ path: { id } }: { path: { id: string } }) => {
           if (id === "session-unavailable") throw new Error("session unavailable");
           if (id === "child-session") return { data: { title: "Child title", parentID: "session-1" } };
-          return { data: { title: "OpenCode integration", parentID: undefined } };
+          return { data: { title: topLevelSessionTitle, parentID: undefined } };
         },
         messages: async () => ({
           data: [
@@ -200,6 +201,7 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
     );
     assert.equal(maxRequestsInFlight, 1);
 
+    topLevelSessionTitle = "Renamed in OpenCode";
     await plugin.event({ event: { type: "session.updated", properties: { info: { id: "session-1", title: "Renamed in OpenCode" } } } });
     assert.equal(captured.length, 5, "session.updated only caches title metadata");
     await plugin["chat.message"](
@@ -207,15 +209,18 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
       { message: { id: "user-2" }, parts: [{ type: "text", text: "continue" }] },
     );
     await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session-1" } } });
+    topLevelSessionTitle = "Authoritative newer title";
     await plugin.event({ event: { type: "session.updated", properties: { info: { id: "session-1", title: "Renamed in OpenCode" } } } });
     await plugin["chat.message"](
       { sessionID: "session-1" },
       { message: { id: "user-3" }, parts: [{ type: "text", text: "continue again" }] },
     );
+    topLevelSessionTitle = undefined;
     await plugin.event({ event: { type: "session.updated", properties: { info: { id: "session-1" } } } });
+    assert.equal(captured.length, 8, "partial session.updated preserves cached metadata until the next prompt fetch");
     await plugin["chat.message"](
       { sessionID: "session-1" },
-      { message: { id: "user-4" }, parts: [{ type: "text", text: "missing title retains rename" }] },
+      { message: { id: "user-4" }, parts: [{ type: "text", text: "missing authoritative title" }] },
     );
     await plugin.event({ event: { type: "session.updated", properties: { info: { id: "session-1", title: "" } } } });
     await plugin["chat.message"](
@@ -241,8 +246,8 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
       [
         { status: "running", title: "Renamed in OpenCode" },
         { status: "completed", title: "Renamed in OpenCode" },
-        { status: "running", title: "Renamed in OpenCode" },
-        { status: "running", title: "Renamed in OpenCode" },
+        { status: "running", title: "Authoritative newer title" },
+        { status: "running", title: "missing authoritative title" },
         { status: "running", title: "empty title" },
         { status: "running", title: "default title" },
       ],
