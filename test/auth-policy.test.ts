@@ -47,7 +47,8 @@ const routeCases: Array<[string, string, string]> = [
   ["workspace-auto-title", "POST", "/api/workspaces/ws/auto-title"], ["tab-create", "POST", "/api/workspaces/ws/tabs"],
   ["tab-close", "DELETE", "/api/workspaces/ws/tabs/tab"], ["tab-title", "POST", "/api/workspaces/ws/tabs/tab/title"],
   ["pane-split", "POST", "/api/tabs/tab/split"], ["split-ratio", "POST", "/api/tabs/tab/split-ratio"],
-  ["pane-input", "POST", "/api/panes/pane/input"], ["pane-notifications-read", "POST", "/api/panes/pane/notifications/read"],
+  ["pane-input", "POST", "/api/panes/pane/input"], ["pane-review-create", "POST", "/api/panes/pane/reviews"],
+  ["pane-notifications-read", "POST", "/api/panes/pane/notifications/read"],
   ["pane-close", "DELETE", "/api/tabs/tab/panes/pane"], ["attachment-read", "GET", "/api/attachments/pane/file"],
 ];
 
@@ -79,6 +80,11 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/streams/host/request")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("DELETE", "/api/streams/host/request/request")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/workspaces")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/panes/pane/reviews")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/panes/pane/reviews")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/panes/pane/reviews")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("registration"), policy("POST", "/api/panes/pane/reviews")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("registered-host"), policy("POST", "/api/panes/pane/reviews")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("registration"), policy("POST", "/api/registry/hosts")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/registry/hosts")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("registered-host"), policy("GET", "/api/helpers/windows/win/bootstrap")), true);

@@ -349,6 +349,21 @@ Within the private Host/Origin/bind boundary, only `/api/health`, auth metadata,
 Browser session tokens currently live in `localStorage` and WebSocket auth uses a query parameter.
 wmux is not a hardened multi-user service.
 
+### Repository working-tree snapshots
+
+`POST /api/panes/:paneId/reviews` accepts exactly `{"kind":"working-tree"}` from a normally authenticated browser principal.
+The server resolves the pane, local machine, current directory, and repository root from canonical server state.
+The client cannot select a host, path, executable, shell command, or Git argument.
+
+The response contains a memory-only content revision, HEAD revision when one exists, repository-relative file summaries, staged and unstaged tracked patches, and synthesized patches for bounded UTF-8 untracked files.
+File summaries preserve rename, deletion, mode, binary, and submodule metadata while replacing unsafe or undecodable paths with stable non-reversible labels.
+Ignored files are excluded.
+Explicit response metadata reports file, patch-byte, hunk, line, long-line, per-file and aggregate untracked-content, Git-output, timeout, and consistency limits so a partial snapshot is never presented as complete.
+
+This first boundary is read-only and local-only.
+It has no browser review UI, remote adapter, persisted review state, Git mutation, fetch, credential operation, or Hunk/OpenTUI runtime.
+Automation, helper, registration, and registered-host credentials cannot access the route.
+
 ## Workspaces and Interaction
 
 - Workspaces contain linked tabs and draggable split panes.

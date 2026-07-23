@@ -84,6 +84,102 @@ export interface PaneState {
   createdAt: string;
 }
 
+export type RepositoryReviewKind = "working-tree";
+export type RepositoryFileStatus =
+  | "unmodified"
+  | "modified"
+  | "type-changed"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "unmerged"
+  | "untracked"
+  | "unknown";
+export type RepositoryBinaryState = "yes" | "no" | "unknown";
+export type RepositoryPathEncoding = "utf8" | "sanitized" | "undecodable";
+export type RepositoryPatchTruncationReason =
+  | "git-output"
+  | "patch-bytes"
+  | "hunks"
+  | "lines"
+  | "long-line"
+  | "sanitized"
+  | "undecodable"
+  | "untracked-bytes"
+  | "untracked-total-bytes";
+
+export interface WorkingTreeReviewRequest {
+  kind: "working-tree";
+}
+
+export interface RepositoryPatch {
+  text: string;
+  capturedBytes: number;
+  hunkCount: number;
+  lineCount: number;
+  truncated: boolean;
+  truncationReasons: RepositoryPatchTruncationReason[];
+}
+
+export interface RepositoryFileSummary {
+  path: string;
+  pathEncoding: RepositoryPathEncoding;
+  originalPath?: string;
+  originalPathEncoding?: RepositoryPathEncoding;
+  indexStatus: RepositoryFileStatus;
+  workingTreeStatus: RepositoryFileStatus;
+  tracked: boolean;
+  binary: RepositoryBinaryState;
+  submodule: boolean;
+  submoduleState?: string;
+  headMode?: string;
+  indexMode?: string;
+  workingTreeMode?: string;
+  modeOnly: boolean | "unknown";
+  untrackedPatch?: RepositoryPatch;
+  contentOmitted?: "binary" | "limit" | "undecodable-path" | "unsafe-path" | "symlink" | "unsupported-file";
+}
+
+export interface RepositorySnapshotLimits {
+  timeoutMs: number;
+  totalGitOutputBytes: number;
+  patchBytes: number;
+  fileCount: number;
+  hunkCount: number;
+  lineCount: number;
+  pathBytes: number;
+  longLineBytes: number;
+  untrackedFileBytes: number;
+  totalUntrackedBytes: number;
+}
+
+export interface WorkingTreeSnapshot {
+  kind: "working-tree";
+  contentRevision: string;
+  headRevision: string | null;
+  consistency: "verified" | "best-effort";
+  ignoredFilesExcluded: true;
+  complete: boolean;
+  filesTruncated: boolean;
+  observedFileCount: number;
+  files: RepositoryFileSummary[];
+  stagedPatch: RepositoryPatch;
+  workingTreePatch: RepositoryPatch;
+  limits: RepositorySnapshotLimits;
+}
+
+export type RepositoryReviewErrorCode =
+  | "pane_not_found"
+  | "repository_review_non_local"
+  | "repository_cwd_invalid"
+  | "repository_not_found"
+  | "repository_changed"
+  | "repository_timeout"
+  | "repository_cancelled"
+  | "repository_output_too_large"
+  | "repository_process_failed";
+
 export type TitleSource = "default" | "auto" | "user";
 export type WorkspaceCreator = "user" | "agent";
 export type WorkspaceReorderPosition = "before" | "after" | "into" | "out-of";

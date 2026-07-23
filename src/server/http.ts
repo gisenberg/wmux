@@ -33,6 +33,7 @@ import { LoginAttemptThrottle } from "./login-throttle.js";
 import { readDurableSessionCwd } from "./durable-session.js";
 import { resolveMachineStatuses } from "./machines.js";
 import { normalizeIpAddress, observedClientAddress } from "./proxy-address.js";
+import { RepositoryReviewError, RepositoryReviewService } from "./repository-review.js";
 import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
 import type {
@@ -187,6 +188,7 @@ export const createHttpServer = (
       streams?: typeof resolveStreamStatuses;
     };
     keybindings?: KeybindingMap;
+    repositoryReviews?: RepositoryReviewService;
   },
 ): Promise<WmuxHttpServer> => {
   const { auth, hostRegistry, registrationToken } = options;
@@ -195,6 +197,8 @@ export const createHttpServer = (
   const trustedProxies = options.trustedProxies ?? new Set<string>();
   const loginAttempts = new LoginAttemptThrottle();
   const currentMachines = typeof machineSource === "function" ? machineSource : () => machineSource;
+  const repositoryReviews = options.repositoryReviews
+    ?? new RepositoryReviewService(state, machineSource);
   const root = clientRoot();
   const streamRequests = new StreamRequestStore();
   const healthEvents = new EventEmitter();
@@ -1130,6 +1134,45 @@ export const createHttpServer = (
         return;
       }
 
+      const paneReview = url.pathname.match(/^\/api\/panes\/([^/]+)\/reviews$/);
+      if (paneReview && request.method === "POST") {
+        let paneId: string;
+        try {
+          paneId = decodeURIComponent(paneReview[1]);
+        } catch {
+          throw new HttpError(400, "invalid_pane_id");
+        }
+        const body = await readBody(request);
+        if (
+          typeof body !== "object"
+          || body === null
+          || Array.isArray(body)
+          || Object.keys(body).length !== 1
+          || !("kind" in body)
+          || body.kind !== "working-tree"
+        ) {
+          throw new HttpError(400, "invalid_repository_review_request");
+        }
+        const abortController = new AbortController();
+        const abort = (): void => abortController.abort();
+        const abortOnClose = (): void => {
+          if (!response.writableEnded) abort();
+        };
+        request.once("aborted", abort);
+        response.once("close", abortOnClose);
+        try {
+          const snapshot = await repositoryReviews.workingTreeSnapshot(
+            paneId,
+            abortController.signal,
+          );
+          sendJson(response, 201, { snapshot }, { "cache-control": "no-store" });
+        } finally {
+          request.removeListener("aborted", abort);
+          response.removeListener("close", abortOnClose);
+        }
+        return;
+      }
+
       const readPaneNotifications = url.pathname.match(/^\/api\/panes\/([^/]+)\/notifications\/read$/);
       if (readPaneNotifications && request.method === "POST") {
         state.markPaneNotificationsRead(decodeURIComponent(readPaneNotifications[1]));
@@ -1176,7 +1219,12 @@ export const createHttpServer = (
 
       sendJson(response, 404, { error: "not_found" });
     } catch (error) {
-      if (error instanceof HttpError || error instanceof HostRegistryError || error instanceof PasteImageStageError) {
+      if (
+        error instanceof HttpError
+        || error instanceof HostRegistryError
+        || error instanceof PasteImageStageError
+        || error instanceof RepositoryReviewError
+      ) {
         sendJson(response, error.status, { error: error.code });
         return;
       }

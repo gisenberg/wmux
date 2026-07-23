@@ -68,6 +68,7 @@ export const HTTP_ROUTE_POLICIES: readonly HttpRoutePolicy[] = [
   route("pane-split", "POST", /^\/api\/tabs\/[^/]+\/split$/),
   route("split-ratio", "POST", /^\/api\/tabs\/[^/]+\/split-ratio$/),
   route("pane-input", "POST", /^\/api\/panes\/[^/]+\/input$/, "normal", ["automation"]),
+  route("pane-review-create", "POST", /^\/api\/panes\/[^/]+\/reviews$/),
   route("pane-notifications-read", "POST", /^\/api\/panes\/[^/]+\/notifications\/read$/),
   route("pane-close", "DELETE", /^\/api\/tabs\/[^/]+\/panes\/[^/]+$/),
   route("attachment-read", "GET", /^\/api\/attachments\/[^/]+\/[^/]+$/),
