@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   HttpError,
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 const MAX_UPLOAD_BODY = 12 * 1024 * 1024;
@@ -142,7 +142,7 @@ export const mediaRoutes: readonly ApiRoute[] = [
     id: "media",
     method: "POST",
     pattern: "/api/media",
-    policy: policyForRoute("media"),
+    policy: routePolicy("media", "POST", "/api/media", "normal", ["helper"]),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody(MAX_UPLOAD_BODY)) as {
         workspaceId?: string;
@@ -175,7 +175,13 @@ export const mediaRoutes: readonly ApiRoute[] = [
     id: "clipboard",
     method: "POST",
     pattern: "/api/clipboard",
-    policy: policyForRoute("clipboard"),
+    policy: routePolicy(
+      "clipboard",
+      "POST",
+      "/api/clipboard",
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         workspaceId?: string;
@@ -200,7 +206,11 @@ export const mediaRoutes: readonly ApiRoute[] = [
     id: "pane-paste-image-stage",
     method: "POST",
     pattern: /^\/api\/panes\/([^/]+)\/paste-images$/,
-    policy: policyForRoute("pane-paste-image-stage"),
+    policy: routePolicy(
+      "pane-paste-image-stage",
+      "POST",
+      /^\/api\/panes\/[^/]+\/paste-images$/,
+    ),
     handler: async ({ deps, match, readBinaryBody, request, sendJson }) => {
       if (!match) throw new Error("paste image route matched without captures");
       const paneId = decodeURIComponent(match[1]);
@@ -236,7 +246,11 @@ export const mediaRoutes: readonly ApiRoute[] = [
     id: "pane-paste-image-delete",
     method: "DELETE",
     pattern: /^\/api\/panes\/([^/]+)\/paste-images\/([^/]+)$/,
-    policy: policyForRoute("pane-paste-image-delete"),
+    policy: routePolicy(
+      "pane-paste-image-delete",
+      "DELETE",
+      /^\/api\/panes\/[^/]+\/paste-images\/[^/]+$/,
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("paste image delete route matched without captures");
       const removed = await deps.sessions.discardPasteImage(
@@ -250,7 +264,11 @@ export const mediaRoutes: readonly ApiRoute[] = [
     id: "pane-attachment-create",
     method: "POST",
     pattern: /^\/api\/panes\/([^/]+)\/attachments$/,
-    policy: policyForRoute("pane-attachment-create"),
+    policy: routePolicy(
+      "pane-attachment-create",
+      "POST",
+      /^\/api\/panes\/[^/]+\/attachments$/,
+    ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("attachment create route matched without captures");
       const paneId = decodeURIComponent(match[1]);
@@ -302,7 +320,11 @@ export const mediaRoutes: readonly ApiRoute[] = [
     id: "attachment-read",
     method: "GET",
     pattern: /^\/api\/attachments\/([^/]+)\/([^/]+)$/,
-    policy: policyForRoute("attachment-read"),
+    policy: routePolicy(
+      "attachment-read",
+      "GET",
+      /^\/api\/attachments\/[^/]+\/[^/]+$/,
+    ),
     handler: async ({ match, response, sendJson }) => {
       if (!match) throw new Error("attachment read route matched without captures");
       if (

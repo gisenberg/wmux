@@ -1,7 +1,7 @@
 import type { MachineConfig } from "../types.js";
 import {
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 const machineExists = (
@@ -17,7 +17,7 @@ export const streamRoutes: readonly ApiRoute[] = [
     id: "streams",
     method: "GET",
     pattern: "/api/streams",
-    policy: policyForRoute("streams"),
+    policy: routePolicy("streams", "GET", "/api/streams"),
     handler: async ({ deps, sendJson }) => {
       await deps.refreshStreamStatuses(false, true);
       sendJson(200, { streams: deps.getStreamStatuses() });
@@ -27,7 +27,13 @@ export const streamRoutes: readonly ApiRoute[] = [
     id: "stream-request-status",
     method: "GET",
     pattern: /^\/api\/streams\/([^/]+)\/request$/,
-    policy: policyForRoute("stream-request-status"),
+    policy: routePolicy(
+      "stream-request-status",
+      "GET",
+      /^\/api\/streams\/[^/]+\/request$/,
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, machines, match, sendJson }) => {
       if (!match) throw new Error("stream status route matched without captures");
       const machineId = decodeURIComponent(match[1]);
@@ -42,7 +48,13 @@ export const streamRoutes: readonly ApiRoute[] = [
     id: "stream-request",
     method: "POST",
     pattern: /^\/api\/streams\/([^/]+)\/request$/,
-    policy: policyForRoute("stream-request"),
+    policy: routePolicy(
+      "stream-request",
+      "POST",
+      /^\/api\/streams\/[^/]+\/request$/,
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, machines, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("stream request route matched without captures");
       const machineId = decodeURIComponent(match[1]);
@@ -73,7 +85,13 @@ export const streamRoutes: readonly ApiRoute[] = [
     id: "stream-release",
     method: "DELETE",
     pattern: /^\/api\/streams\/([^/]+)\/request\/([^/]+)$/,
-    policy: policyForRoute("stream-release"),
+    policy: routePolicy(
+      "stream-release",
+      "DELETE",
+      /^\/api\/streams\/[^/]+\/request\/[^/]+$/,
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, machines, match, sendJson }) => {
       if (!match) throw new Error("stream release route matched without captures");
       const machineId = decodeURIComponent(match[1]);

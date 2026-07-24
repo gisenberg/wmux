@@ -1,6 +1,6 @@
 import {
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 export const eventIngestRoutes: readonly ApiRoute[] = [
@@ -8,7 +8,13 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     id: "notification-create",
     method: "POST",
     pattern: "/api/notifications",
-    policy: policyForRoute("notification-create"),
+    policy: routePolicy(
+      "notification-create",
+      "POST",
+      "/api/notifications",
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         workspaceId?: string;
@@ -36,7 +42,13 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     id: "agent-event",
     method: "POST",
     pattern: "/api/agent-events",
-    policy: policyForRoute("agent-event"),
+    policy: routePolicy(
+      "agent-event",
+      "POST",
+      "/api/agent-events",
+      "normal",
+      ["automation", "helper"],
+    ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         runId?: string;
@@ -69,7 +81,13 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     id: "delegation-status",
     method: "GET",
     pattern: /^\/api\/delegations\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/,
-    policy: policyForRoute("delegation-status"),
+    policy: routePolicy(
+      "delegation-status",
+      "GET",
+      /^\/api\/delegations\/[^/]+$/,
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("delegation status route matched without captures");
       const delegation = deps.state.delegationForRun(match[1]);
@@ -84,7 +102,13 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     id: "run-event",
     method: "POST",
     pattern: "/api/run-events",
-    policy: policyForRoute("run-event"),
+    policy: routePolicy(
+      "run-event",
+      "POST",
+      "/api/run-events",
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         workspaceId?: string;
@@ -122,7 +146,11 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     id: "notification-read",
     method: "POST",
     pattern: /^\/api\/notifications\/([^/]+)\/read$/,
-    policy: policyForRoute("notification-read"),
+    policy: routePolicy(
+      "notification-read",
+      "POST",
+      /^\/api\/notifications\/[^/]+\/read$/,
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("notification read route matched without captures");
       deps.state.markNotificationRead(match[1]);

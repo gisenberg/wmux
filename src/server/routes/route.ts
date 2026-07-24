@@ -1,9 +1,6 @@
 import type http from "node:http";
 import type { AuthConfig, AuthPrincipal } from "../auth.js";
-import {
-  HTTP_ROUTE_POLICIES,
-  type HttpRoutePolicy,
-} from "../auth-policy.js";
+import type { HttpRoutePolicy } from "../auth-policy.js";
 import type { HostRegistry } from "../host-registry.js";
 import type { LoginAttemptThrottle } from "../login-throttle.js";
 import type { RepositoryReviewService } from "../repository-review.js";
@@ -82,11 +79,28 @@ export interface ApiRoute {
   handler: (ctx: RouteContext) => Promise<void>;
 }
 
-export const policyForRoute = (id: string): HttpRoutePolicy => {
-  const policy = HTTP_ROUTE_POLICIES.find((candidate) => candidate.id === id);
-  if (!policy) throw new Error(`missing HTTP route policy: ${id}`);
-  return policy;
-};
+const exactPattern = (pattern: string): RegExp =>
+  new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
+export const routePolicy = (
+  id: string,
+  method: ApiMethod,
+  pattern: RegExp | string,
+  access: HttpRoutePolicy["access"] = "normal",
+  scoped?: HttpRoutePolicy["scoped"],
+  browserSessionOnly = false,
+  registeredHost = false,
+  browserDenied = false,
+): HttpRoutePolicy => ({
+  id,
+  method,
+  pattern: typeof pattern === "string" ? exactPattern(pattern) : pattern,
+  access,
+  scoped,
+  browserSessionOnly,
+  registeredHost,
+  browserDenied,
+});
 
 export interface MatchedApiRoute {
   route: ApiRoute;

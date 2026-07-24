@@ -7,7 +7,7 @@ import {
 import type { WmuxSettings } from "../types.js";
 import {
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 export const bootstrapRoutes: readonly ApiRoute[] = [
@@ -15,7 +15,13 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
     id: "bootstrap",
     method: "GET",
     pattern: "/api/bootstrap",
-    policy: policyForRoute("bootstrap"),
+    policy: routePolicy(
+      "bootstrap",
+      "GET",
+      "/api/bootstrap",
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, sendJson }) => {
       sendJson(200, await deps.bootstrapFresh());
     },
@@ -24,7 +30,7 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
     id: "session-audit",
     method: "GET",
     pattern: "/api/session-audit",
-    policy: policyForRoute("session-audit"),
+    policy: routePolicy("session-audit", "GET", "/api/session-audit"),
     handler: async ({ sendJson }) => {
       sendJson(200, await auditDurableSessions());
     },
@@ -33,7 +39,7 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
     id: "doctor",
     method: "GET",
     pattern: "/api/doctor",
-    policy: policyForRoute("doctor"),
+    policy: routePolicy("doctor", "GET", "/api/doctor", "normal", ["helper"]),
     handler: async ({ deps, sendJson }) => {
       await deps.refreshMachineStatuses(false);
       sendJson(
@@ -51,7 +57,13 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
     id: "agent-profile",
     method: "GET",
     pattern: "/api/agent-profile",
-    policy: policyForRoute("agent-profile"),
+    policy: routePolicy(
+      "agent-profile",
+      "GET",
+      "/api/agent-profile",
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ response, sendJson }) => {
       response.setHeader("cache-control", "no-store");
       sendJson(200, readAgentProfileBundle());
@@ -61,7 +73,11 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
     id: "session-cleanup",
     method: "DELETE",
     pattern: /^\/api\/session-audit\/(tmux|screen)\/([^/]+)$/,
-    policy: policyForRoute("session-cleanup"),
+    policy: routePolicy(
+      "session-cleanup",
+      "DELETE",
+      /^\/api\/session-audit\/(tmux|screen)\/[^/]+$/,
+    ),
     handler: async ({ match, sendJson }) => {
       if (!match) throw new Error("session cleanup route matched without captures");
       sendJson(
@@ -77,7 +93,7 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
     id: "settings",
     method: "POST",
     pattern: "/api/settings",
-    policy: policyForRoute("settings"),
+    policy: routePolicy("settings", "POST", "/api/settings"),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         terminalFontSize?: number;

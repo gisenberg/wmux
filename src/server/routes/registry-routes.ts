@@ -5,7 +5,7 @@ import {
 } from "../windows-helpers.js";
 import {
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 const windowsBootstrapEnvKeys = [
@@ -27,7 +27,7 @@ export const registryRoutes: readonly ApiRoute[] = [
     id: "registry-list",
     method: "GET",
     pattern: "/api/registry/hosts",
-    policy: policyForRoute("registry-list"),
+    policy: routePolicy("registry-list", "GET", "/api/registry/hosts"),
     handler: async ({ deps, sendJson }) => {
       sendJson(200, { hosts: deps.hostRegistry?.snapshot() ?? [] });
     },
@@ -36,7 +36,12 @@ export const registryRoutes: readonly ApiRoute[] = [
     id: "registry-register",
     method: "POST",
     pattern: "/api/registry/hosts",
-    policy: policyForRoute("registry-register"),
+    policy: routePolicy(
+      "registry-register",
+      "POST",
+      "/api/registry/hosts",
+      "registration",
+    ),
     handler: async ({ deps, request, readJsonBody, sendJson }) => {
       if (!deps.hostRegistry) {
         sendJson(404, { error: "registry_disabled" });
@@ -59,7 +64,11 @@ export const registryRoutes: readonly ApiRoute[] = [
     id: "registry-delete",
     method: "DELETE",
     pattern: /^\/api\/registry\/hosts\/([^/]+)$/,
-    policy: policyForRoute("registry-delete"),
+    policy: routePolicy(
+      "registry-delete",
+      "DELETE",
+      /^\/api\/registry\/hosts\/[^/]+$/,
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!deps.hostRegistry) {
         sendJson(404, { error: "registry_disabled" });
@@ -74,7 +83,16 @@ export const registryRoutes: readonly ApiRoute[] = [
     id: "windows-bootstrap",
     method: "GET",
     pattern: /^\/api\/helpers\/windows\/([^/]+)\/bootstrap$/,
-    policy: policyForRoute("windows-bootstrap"),
+    policy: routePolicy(
+      "windows-bootstrap",
+      "GET",
+      /^\/api\/helpers\/windows\/[^/]+\/bootstrap$/,
+      "normal",
+      ["helper"],
+      false,
+      true,
+      true,
+    ),
     handler: async ({ deps, machines, match, response, sendJson, url }) => {
       if (!match) throw new Error("Windows bootstrap route matched without captures");
       const machineId = decodeURIComponent(match[1]);
@@ -127,7 +145,16 @@ export const registryRoutes: readonly ApiRoute[] = [
     id: "windows-helpers",
     method: "GET",
     pattern: /^\/api\/helpers\/windows\/([^/]+)$/,
-    policy: policyForRoute("windows-helpers"),
+    policy: routePolicy(
+      "windows-helpers",
+      "GET",
+      /^\/api\/helpers\/windows\/[^/]+$/,
+      "normal",
+      ["helper"],
+      false,
+      false,
+      true,
+    ),
     handler: async ({ deps, machines, match, sendJson }) => {
       if (!match) throw new Error("Windows helper route matched without captures");
       const machineId = decodeURIComponent(match[1]);

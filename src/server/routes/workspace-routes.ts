@@ -8,7 +8,7 @@ import type { WorkspaceReorderPosition } from "../types.js";
 import {
   HttpError,
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 const clientIdPattern = (prefix: string): RegExp =>
@@ -43,7 +43,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "workspace-create",
     method: "POST",
     pattern: "/api/workspaces",
-    policy: policyForRoute("workspace-create"),
+    policy: routePolicy(
+      "workspace-create",
+      "POST",
+      "/api/workspaces",
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, machines, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         machineId?: string;
@@ -103,7 +109,11 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "workspace-reorder",
     method: "POST",
     pattern: "/api/workspaces/reorder",
-    policy: policyForRoute("workspace-reorder"),
+    policy: routePolicy(
+      "workspace-reorder",
+      "POST",
+      "/api/workspaces/reorder",
+    ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as {
         workspaceId?: unknown;
@@ -157,7 +167,11 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "workspace-notifications-read",
     method: "POST",
     pattern: /^\/api\/workspaces\/([^/]+)\/notifications\/read$/,
-    policy: policyForRoute("workspace-notifications-read"),
+    policy: routePolicy(
+      "workspace-notifications-read",
+      "POST",
+      /^\/api\/workspaces\/[^/]+\/notifications\/read$/,
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("workspace notifications route matched without captures");
       deps.state.markWorkspaceNotificationsRead(match[1]);
@@ -168,7 +182,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "workspace-close",
     method: "DELETE",
     pattern: /^\/api\/workspaces\/([^/]+)$/,
-    policy: policyForRoute("workspace-close"),
+    policy: routePolicy(
+      "workspace-close",
+      "DELETE",
+      /^\/api\/workspaces\/[^/]+$/,
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("workspace close route matched without captures");
       const removed = deps.sessions.closeWorkspace(match[1]);
@@ -182,7 +202,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "workspace-title",
     method: "POST",
     pattern: /^\/api\/workspaces\/([^/]+)\/title$/,
-    policy: policyForRoute("workspace-title"),
+    policy: routePolicy(
+      "workspace-title",
+      "POST",
+      /^\/api\/workspaces\/[^/]+\/title$/,
+      "normal",
+      ["automation", "helper"],
+    ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("workspace title route matched without captures");
       const body = (await readJsonBody()) as { title?: string; clear?: boolean };
@@ -196,7 +222,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "workspace-auto-title",
     method: "POST",
     pattern: /^\/api\/workspaces\/([^/]+)\/auto-title$/,
-    policy: policyForRoute("workspace-auto-title"),
+    policy: routePolicy(
+      "workspace-auto-title",
+      "POST",
+      /^\/api\/workspaces\/[^/]+\/auto-title$/,
+      "normal",
+      ["helper"],
+    ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("workspace auto-title route matched without captures");
       const body = (await readJsonBody()) as {
@@ -219,7 +251,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "tab-create",
     method: "POST",
     pattern: /^\/api\/workspaces\/([^/]+)\/tabs$/,
-    policy: policyForRoute("tab-create"),
+    policy: routePolicy(
+      "tab-create",
+      "POST",
+      /^\/api\/workspaces\/[^/]+\/tabs$/,
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, machines, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("tab create route matched without captures");
       const body = (await readJsonBody()) as {
@@ -256,7 +294,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "tab-close",
     method: "DELETE",
     pattern: /^\/api\/workspaces\/([^/]+)\/tabs\/([^/]+)$/,
-    policy: policyForRoute("tab-close"),
+    policy: routePolicy(
+      "tab-close",
+      "DELETE",
+      /^\/api\/workspaces\/[^/]+\/tabs\/[^/]+$/,
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("tab close route matched without captures");
       const removed = deps.sessions.closeTab(match[1], match[2]);
@@ -270,7 +314,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "tab-title",
     method: "POST",
     pattern: /^\/api\/workspaces\/([^/]+)\/tabs\/([^/]+)\/title$/,
-    policy: policyForRoute("tab-title"),
+    policy: routePolicy(
+      "tab-title",
+      "POST",
+      /^\/api\/workspaces\/[^/]+\/tabs\/[^/]+\/title$/,
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("tab title route matched without captures");
       const body = (await readJsonBody()) as { title?: string };
@@ -282,7 +332,11 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "pane-split",
     method: "POST",
     pattern: /^\/api\/tabs\/([^/]+)\/split$/,
-    policy: policyForRoute("pane-split"),
+    policy: routePolicy(
+      "pane-split",
+      "POST",
+      /^\/api\/tabs\/[^/]+\/split$/,
+    ),
     handler: async ({ deps, machines, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("pane split route matched without captures");
       const body = (await readJsonBody()) as {
@@ -329,7 +383,11 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "split-ratio",
     method: "POST",
     pattern: /^\/api\/tabs\/([^/]+)\/split-ratio$/,
-    policy: policyForRoute("split-ratio"),
+    policy: routePolicy(
+      "split-ratio",
+      "POST",
+      /^\/api\/tabs\/[^/]+\/split-ratio$/,
+    ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("split ratio route matched without captures");
       const body = (await readJsonBody()) as { path?: string; ratio?: number };
@@ -350,7 +408,13 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "pane-input",
     method: "POST",
     pattern: /^\/api\/panes\/([^/]+)\/input$/,
-    policy: policyForRoute("pane-input"),
+    policy: routePolicy(
+      "pane-input",
+      "POST",
+      /^\/api\/panes\/[^/]+\/input$/,
+      "normal",
+      ["automation"],
+    ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("pane input route matched without captures");
       const body = (await readJsonBody()) as {
@@ -383,7 +447,11 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "pane-notifications-read",
     method: "POST",
     pattern: /^\/api\/panes\/([^/]+)\/notifications\/read$/,
-    policy: policyForRoute("pane-notifications-read"),
+    policy: routePolicy(
+      "pane-notifications-read",
+      "POST",
+      /^\/api\/panes\/[^/]+\/notifications\/read$/,
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("pane notifications route matched without captures");
       deps.state.markPaneNotificationsRead(decodeURIComponent(match[1]));
@@ -394,7 +462,11 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     id: "pane-close",
     method: "DELETE",
     pattern: /^\/api\/tabs\/([^/]+)\/panes\/([^/]+)$/,
-    policy: policyForRoute("pane-close"),
+    policy: routePolicy(
+      "pane-close",
+      "DELETE",
+      /^\/api\/tabs\/[^/]+\/panes\/[^/]+$/,
+    ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("pane close route matched without captures");
       const removed = deps.sessions.closePane(match[2]);

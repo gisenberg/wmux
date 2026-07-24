@@ -5,7 +5,7 @@ import {
 import { normalizeIpAddress, observedClientAddress } from "../proxy-address.js";
 import {
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -15,7 +15,7 @@ export const authRoutes: readonly ApiRoute[] = [
     id: "health",
     method: "GET",
     pattern: "/api/health",
-    policy: policyForRoute("health"),
+    policy: routePolicy("health", "GET", "/api/health", "public"),
     handler: async ({ sendJson }) => {
       sendJson(200, { ok: true });
     },
@@ -24,7 +24,7 @@ export const authRoutes: readonly ApiRoute[] = [
     id: "auth-info",
     method: "GET",
     pattern: "/api/auth-info",
-    policy: policyForRoute("auth-info"),
+    policy: routePolicy("auth-info", "GET", "/api/auth-info", "public"),
     handler: async ({ deps, sendJson }) => {
       const { auth } = deps;
       sendJson(200, {
@@ -38,7 +38,7 @@ export const authRoutes: readonly ApiRoute[] = [
     id: "login",
     method: "POST",
     pattern: "/api/login",
-    policy: policyForRoute("login"),
+    policy: routePolicy("login", "POST", "/api/login", "public"),
     handler: async ({ deps, request, readJsonBody, sendJson }) => {
       const { auth, loginAttempts, trustedProxies } = deps;
       if (!auth.enabled || !auth.loginEnabled) {
@@ -78,7 +78,14 @@ export const authRoutes: readonly ApiRoute[] = [
     id: "auth-session",
     method: "GET",
     pattern: "/api/auth/session",
-    policy: policyForRoute("auth-session"),
+    policy: routePolicy(
+      "auth-session",
+      "GET",
+      "/api/auth/session",
+      "normal",
+      undefined,
+      true,
+    ),
     handler: async ({ sendJson }) => {
       sendJson(200, { authenticated: true }, { "cache-control": "no-store" });
     },

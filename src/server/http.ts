@@ -59,30 +59,12 @@ import {
   MAX_PASTE_IMAGE_BYTES,
   PasteImageStageError,
 } from "./paste-image-staging.js";
-import { authRoutes } from "./routes/auth-routes.js";
-import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
-import { eventIngestRoutes } from "./routes/event-ingest-routes.js";
-import { mediaRoutes } from "./routes/media-routes.js";
-import { registryRoutes } from "./routes/registry-routes.js";
-import { repositoryRoutes } from "./routes/repository-routes.js";
-import { streamRoutes } from "./routes/stream-routes.js";
-import { workspaceRoutes } from "./routes/workspace-routes.js";
+import { apiRoutes } from "./routes/index.js";
 import {
   HttpError,
   matchApiRoute,
   type ServerDeps,
 } from "./routes/route.js";
-
-const apiRoutes = [
-  ...authRoutes,
-  ...bootstrapRoutes,
-  ...eventIngestRoutes,
-  ...mediaRoutes,
-  ...registryRoutes,
-  ...repositoryRoutes,
-  ...streamRoutes,
-  ...workspaceRoutes,
-] as const;
 
 // Default cap for JSON control endpoints; upload endpoints pass a larger cap.
 const MAX_JSON_BODY = 1024 * 1024;

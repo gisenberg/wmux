@@ -1,7 +1,7 @@
 import {
   HttpError,
   type ApiRoute,
-  policyForRoute,
+  routePolicy,
 } from "./route.js";
 
 export const repositoryRoutes: readonly ApiRoute[] = [
@@ -9,7 +9,11 @@ export const repositoryRoutes: readonly ApiRoute[] = [
     id: "pane-review-create",
     method: "POST",
     pattern: /^\/api\/panes\/([^/]+)\/reviews$/,
-    policy: policyForRoute("pane-review-create"),
+    policy: routePolicy(
+      "pane-review-create",
+      "POST",
+      /^\/api\/panes\/[^/]+\/reviews$/,
+    ),
     handler: async ({
       deps,
       match,
