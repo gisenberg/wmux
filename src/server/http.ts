@@ -15,7 +15,6 @@ import {
   MIN_DELEGATION_WAIT_TIMEOUT_SECONDS,
   type DelegationConfig,
 } from "../shared/protocol.js";
-import { readAgentProfileBundle } from "./agent-profile.js";
 import {
   authenticateRequest,
   type AuthConfig,
@@ -32,14 +31,12 @@ import {
   classifyWebSocket,
 } from "./auth-policy.js";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
-import { buildDoctorReport } from "./doctor.js";
 import { HostRegistryError, type HostRegistry } from "./host-registry.js";
 import { LoginAttemptThrottle } from "./login-throttle.js";
 import { readDurableSessionCwd } from "./durable-session.js";
 import { resolveMachineStatuses } from "./machines.js";
 import { observedClientAddress } from "./proxy-address.js";
 import { RepositoryReviewError, RepositoryReviewService } from "./repository-review.js";
-import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
 import type {
   EventClientMessage,
@@ -54,7 +51,6 @@ import type {
   TerminalMedia,
   TerminalNotification,
   WorkspaceReorderPosition,
-  WmuxSettings,
 } from "./types.js";
 import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
 import {
@@ -72,6 +68,7 @@ import {
   PasteImageStageError,
 } from "./paste-image-staging.js";
 import { authRoutes } from "./routes/auth-routes.js";
+import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
 import {
   matchApiRoute,
   type ServerDeps,
@@ -423,7 +420,11 @@ export const createHttpServer = (
     const bundledMesloFont = request.method === "GET" || request.method === "HEAD"
       ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
       : null;
-    const matchedApiRoute = matchApiRoute(authRoutes, request.method, url.pathname);
+    const matchedApiRoute = matchApiRoute(
+      [...authRoutes, ...bootstrapRoutes],
+      request.method,
+      url.pathname,
+    );
 
     // Every API method/path is classified before authentication so new routes
     // cannot silently inherit a broad credential's authority.
@@ -490,11 +491,6 @@ export const createHttpServer = (
         return;
       }
 
-      if (url.pathname === "/api/bootstrap" && request.method === "GET") {
-        sendJson(response, 200, await bootstrapFresh());
-        return;
-      }
-
       if (url.pathname === "/api/registry/hosts" && request.method === "GET") {
         sendJson(response, 200, { hosts: hostRegistry?.snapshot() ?? [] });
         return;
@@ -523,23 +519,6 @@ export const createHttpServer = (
         }
         const removed = hostRegistry.unregister(decodeURIComponent(registeredHost[1]));
         sendJson(response, removed ? 200 : 404, { removed });
-        return;
-      }
-
-      if (url.pathname === "/api/session-audit" && request.method === "GET") {
-        sendJson(response, 200, await auditDurableSessions());
-        return;
-      }
-
-      if (url.pathname === "/api/doctor" && request.method === "GET") {
-        await refreshMachineStatuses(false);
-        sendJson(response, 200, buildDoctorReport(state.snapshot(), machines, machineStatuses, await auditDurableSessions()));
-        return;
-      }
-
-      if (url.pathname === "/api/agent-profile" && request.method === "GET") {
-        response.setHeader("cache-control", "no-store");
-        sendJson(response, 200, readAgentProfileBundle());
         return;
       }
 
@@ -650,41 +629,6 @@ export const createHttpServer = (
           ...requestStatus,
           streams: streamStatuses,
         });
-        return;
-      }
-
-      const cleanupSession = url.pathname.match(/^\/api\/session-audit\/(tmux|screen)\/([^/]+)$/);
-      if (cleanupSession && request.method === "DELETE") {
-        sendJson(
-          response,
-          200,
-          await cleanupDurableSession(cleanupSession[1] as "tmux" | "screen", decodeURIComponent(cleanupSession[2])),
-        );
-        return;
-      }
-
-      if (url.pathname === "/api/settings" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          terminalFontSize?: number;
-          terminalScrollbackRows?: number;
-          colorScheme?: WmuxSettings["colorScheme"];
-          inactiveTabStreaming?: WmuxSettings["inactiveTabStreaming"];
-          tuiFrameRate?: WmuxSettings["tuiFrameRate"];
-          terminalScrollMode?: WmuxSettings["terminalScrollMode"];
-          machineAliases?: Record<string, string>;
-          collapsedWorkspaceIds?: string[];
-        };
-        settings.update({
-          terminalFontSize: body.terminalFontSize,
-          terminalScrollbackRows: body.terminalScrollbackRows,
-          colorScheme: body.colorScheme,
-          inactiveTabStreaming: body.inactiveTabStreaming,
-          tuiFrameRate: body.tuiFrameRate,
-          terminalScrollMode: body.terminalScrollMode,
-          machineAliases: body.machineAliases,
-          collapsedWorkspaceIds: body.collapsedWorkspaceIds,
-        });
-        sendJson(response, 200, { settings: settings.snapshot(), state: currentPayload() });
         return;
       }
 
