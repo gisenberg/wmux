@@ -27,17 +27,10 @@ import { OpenTuiTopbar } from "./OpenTuiTopbar";
 import { applyClientViewToState, loadActivePaneSelections, loadActiveTabSelections, markWorkspaceNotificationsReadInState, parseRouteTarget, workspaceTabPath } from "./route-state";
 import { compactMiddlePath, normalizeUserPath } from "./path-display";
 import { formatSessionReference } from "./session-reference";
-import {
-  applyHealthDelta,
-  bootstrapSatisfiesHealthDelta,
-  healthDeltaRequiresResync,
-  isIncomingRevisionNewer,
-  reconcileIncomingRevision,
-} from "./store/reconcile";
 import { ScreenStreamViewer } from "./ScreenStream";
 import { Toasts, useToasts } from "./Toasts";
 import { useAppRouting } from "./useAppRouting";
-import { useEventStream } from "./useEventStream";
+import { useStoreLifecycle } from "./store/use-store-lifecycle";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { isApplePlatform } from "./keybinding-platform";
 import { defaultKeybindings, displayBindingForAction, type KeybindingAction } from "../../shared/keybindings";
@@ -126,8 +119,6 @@ export function AppShell() {
   const store = useAppStore();
   const state = useAppState();
   const [newMachineId, setNewMachineId] = useState(() => loadMachineTargetId(window.localStorage));
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [authRequired, setAuthRequired] = useState(false);
   const [bootComplete, setBootComplete] = useState(false);
   const { toasts, pushToast, dismissToast } = useToasts();
   const {
@@ -173,11 +164,6 @@ export function AppShell() {
   const draggedWorkspaceId = useRef<string | null>(null);
   const workspaceDropPreviewRef = useRef<WorkspaceDropPreview | null>(null);
   const terminalFocusToken = useRef(0);
-  const bootstrapRetryTimer = useRef<number | undefined>(undefined);
-  const bootstrapRetryAttempt = useRef(0);
-  const bootstrapRequestId = useRef(0);
-  const loadBootstrapRef = useRef<() => Promise<void>>(async () => undefined);
-  const pendingHealthResync = useRef<Pick<BootstrapPayload, "revision" | "healthEpoch"> | null>(null);
   const mobileSidebarRef = useRef<HTMLElement | null>(null);
   const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const previousMobileSidebarCollapsed = useRef(sidebarCollapsed);
@@ -269,78 +255,21 @@ export function AppShell() {
     void refreshDiagnostics();
   }, [refreshDiagnostics]);
 
-  const loadBootstrap = useCallback(async () => {
-    const requestId = ++bootstrapRequestId.current;
-    if (bootstrapRetryTimer.current) window.clearTimeout(bootstrapRetryTimer.current);
-    bootstrapRetryTimer.current = undefined;
-    try {
-      const payload = await api.bootstrap();
-      const routed = rebaseIncomingState(activateRouteTarget(payload));
-      if (requestId !== bootstrapRequestId.current) return;
-      if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, routed)) {
-        void loadBootstrapRef.current();
-        return;
-      }
-      pendingHealthResync.current = null;
-      bootstrapRetryAttempt.current = 0;
-      setLoadError(null);
-      setAuthRequired(false);
-      const current = store.get();
-      const next = reconcileIncomingRevision(current, routed);
-      if (next !== current) store.set(next);
-    } catch (nextError) {
-      if (requestId !== bootstrapRequestId.current) return;
-      // An auth failure routes to the login screen instead of the fatal overlay.
-      if (nextError instanceof UnauthorizedError) {
-        bootstrapRetryAttempt.current = 0;
-        setLoadError(null);
-        setAuthRequired(true);
-        return;
-      }
-      bootstrapRetryAttempt.current += 1;
-      if (!store.get()) setLoadError(describeActionError(nextError));
-      const delay = Math.min(15_000, 500 * (2 ** Math.min(bootstrapRetryAttempt.current, 5)));
-      bootstrapRetryTimer.current = window.setTimeout(() => void loadBootstrapRef.current(), delay);
-    }
-  }, [rebaseIncomingState, store]);
-  loadBootstrapRef.current = loadBootstrap;
-
-  useEffect(() => {
-    void loadBootstrap();
-    const resume = () => {
-      if (document.visibilityState === "hidden" || store.get()) return;
-      void loadBootstrapRef.current();
-    };
-    window.addEventListener("online", resume);
-    document.addEventListener("visibilitychange", resume);
-    return () => {
-      bootstrapRequestId.current += 1;
-      if (bootstrapRetryTimer.current) window.clearTimeout(bootstrapRetryTimer.current);
-      window.removeEventListener("online", resume);
-      document.removeEventListener("visibilitychange", resume);
-    };
-  }, [loadBootstrap, store]);
-
-  const { serviceConnection, mediaItems, dismissMedia, sendEventSocketMessage } = useEventStream({
-    enabled: !authRequired,
-    onResync: (payload) => {
-      if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, payload)) return;
-      pendingHealthResync.current = null;
-      void refresh(payload);
-    },
-    onHealth: (delta) => {
-      const current = store.get();
-      if (healthDeltaRequiresResync(current, delta)) {
-        const pending = pendingHealthResync.current;
-        if (!pending || isIncomingRevisionNewer(pending, delta)) {
-          pendingHealthResync.current = delta;
-          void loadBootstrapRef.current();
-        }
-        return;
-      }
-      store.update((snapshot) => applyHealthDelta(snapshot, delta) ?? null);
-    },
-    onAuthRequired: () => setAuthRequired(true),
+  const {
+    authRequired,
+    dismissMedia,
+    load: loadBootstrap,
+    loadError,
+    loadRef: loadBootstrapRef,
+    mediaItems,
+    refreshRef,
+    sendEventSocketMessage,
+    serviceConnection,
+  } = useStoreLifecycle({
+    store,
+    rebaseIncomingState,
+    activateRouteTarget,
+    describeError: describeActionError,
   });
 
   const activeWorkspace = useMemo(
@@ -630,6 +559,7 @@ export function AppShell() {
     requestTerminalFocus,
     rebaseIncomingState,
   });
+  refreshRef.current = refresh;
 
   const persistCollapsedWorkspaceIds = useCallback((collapsedWorkspaceIds: string[]): Promise<void> => {
     const version = ++collapseWriteVersion.current;
