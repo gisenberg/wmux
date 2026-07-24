@@ -34,13 +34,19 @@ const writeRuntimePackages = (configHome: string) => {
 type CapturedRequest = { method: string; pathname: string; authorization?: string; body?: Record<string, unknown> };
 type FixtureWorkspace = { id: string; createdBy?: "agent" | "user"; tabs?: Array<Record<string, unknown>> };
 type ApiOptions = {
+  delegationStatusDelayMilliseconds?: number;
+  failPaneInputAt?: number;
   failTitle?: boolean;
   failDelete?: boolean;
+  holdDelegationStatus?: boolean;
   holdFirstAgentEvent?: boolean;
   parentPaneId?: string;
+  paneInputDelayMilliseconds?: number;
   workspaces?: FixtureWorkspace[];
   expectedToken?: string;
   rejectUnauthorized?: boolean;
+  delegation?: Record<string, unknown>;
+  delegationStatus?: (runId: string, reads: number) => Record<string, unknown> | undefined;
 };
 
 const startApi = async (options: ApiOptions = {}) => {
@@ -48,7 +54,9 @@ const startApi = async (options: ApiOptions = {}) => {
   const workspaces = structuredClone(options.workspaces ?? []);
   let authenticated = true;
   let heldAgentEvent = false;
+  let paneInputRequests = 0;
   let paneInputHandler: ((data: string) => void) | undefined;
+  const delegationStatusReads = new Map<string, number>();
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -70,6 +78,7 @@ const startApi = async (options: ApiOptions = {}) => {
         response.end(JSON.stringify({
           machines: [{ id: "posix-1", reachable: true, platform: "linux", kind: "ssh" }],
           workspaces,
+          ...(options.delegation ? { delegation: options.delegation } : {}),
         }));
         return;
       }
@@ -114,8 +123,36 @@ const startApi = async (options: ApiOptions = {}) => {
         return;
       }
       if (pathname === "/api/panes/pane-1/input" && request.method === "POST" && typeof body?.data === "string") {
+        paneInputRequests += 1;
+        if (paneInputRequests === options.failPaneInputAt) {
+          response.statusCode = 500;
+          response.end("{}");
+          return;
+        }
         paneInputHandler?.(body.data);
-        response.end(JSON.stringify({ written: true }));
+        const finish = () => response.end(JSON.stringify({ written: true }));
+        if (options.paneInputDelayMilliseconds) setTimeout(finish, options.paneInputDelayMilliseconds);
+        else finish();
+        return;
+      }
+      const delegationStatus = /^\/api\/delegations\/([^/]+)$/.exec(pathname);
+      if (delegationStatus && request.method === "GET" && options.delegationStatus) {
+        const runId = decodeURIComponent(delegationStatus[1]);
+        const reads = (delegationStatusReads.get(runId) ?? 0) + 1;
+        delegationStatusReads.set(runId, reads);
+        if (options.holdDelegationStatus) return;
+        const finish = () => {
+          const delegation = options.delegationStatus?.(runId, reads);
+          if (delegation) {
+            response.end(JSON.stringify({ delegation }));
+          } else {
+            response.statusCode = 404;
+            response.end("{}");
+          }
+        };
+        if (options.delegationStatusDelayMilliseconds) {
+          setTimeout(finish, options.delegationStatusDelayMilliseconds);
+        } else finish();
         return;
       }
       response.statusCode = 404;
@@ -137,7 +174,7 @@ const startApi = async (options: ApiOptions = {}) => {
 
 type SentInput = { data: string; at: number };
 
-const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () => void) => {
+const fakeWebSocket = (mode: "complete" | "failure" | "abort" | "read-error", onRequest?: () => void) => {
   const instances: FakeWebSocket[] = [];
   class FakeWebSocket {
     readyState = 0;
@@ -205,6 +242,10 @@ const fakeWebSocket = (mode: "complete" | "failure" | "abort", onRequest?: () =>
       this.decodedRequest = JSON.parse(Buffer.from(line, "base64").toString("utf8")) as Record<string, unknown>;
       onRequest?.();
       if (mode === "abort") return;
+      if (mode === "read-error") {
+        queueMicrotask(() => this.onerror?.());
+        return;
+      }
       const runId = String(this.decodedRequest.runId);
       const encode = (value: Record<string, unknown>) => Buffer.from(JSON.stringify(value)).toString("base64");
       this.emit({ type: "output", data: "x".repeat(600 * 1024) + "\r" });
@@ -463,7 +504,7 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
     const prompt = "private raw prompt Ω";
     try {
       const output = await tool.execute(
-        { machine: "posix-1", directory: repoRoot, prompt, agent: "build", title: "Delegated build", timeout_seconds: 30, auto_approve: true },
+        { machine: "posix-1", directory: repoRoot, prompt, agent: "build", title: "Delegated build", auto_approve: true },
         {
           abort: abort.signal,
           ask: (input: Record<string, unknown>) => {
@@ -479,7 +520,7 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
         permission: "wmux_delegate",
         patterns: ["posix-1", repoRoot],
         always: ["*"],
-        metadata: { machine: "posix-1", directory: repoRoot, closeOnSuccess: false },
+        metadata: { machine: "posix-1", directory: repoRoot, mode: "change", closeOnSuccess: false },
       });
       assert.equal(fake.instances.length, 1);
       const socket = fake.instances[0];
@@ -511,6 +552,8 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
           tabId: "tab-1",
           paneId: "pane-1",
           url: `${api.url}/workspaces/workspace-1/tabs/tab-1`,
+          mode: "change",
+          waitTimeoutSeconds: 7_200,
         },
       });
       assert.match(output, /State: completed/);
@@ -535,6 +578,7 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
         { agent: "opencode", status: "running", title: "Delegated build", summary: "OpenCode delegation running" },
         { agent: "opencode", status: "completed", title: "Delegated build", summary: "OpenCode delegation completed" },
       ]);
+      assert.ok(lifecycle.every((event) => event?.runId === (metadata[0] as any).metadata.runId));
       assert.equal(api.authenticated(), true);
       assert.equal(api.workspaces.some((workspace) => workspace.id === "workspace-1"), true);
       assert.equal(api.requests.some((request) => request.method === "DELETE"), false);
@@ -543,6 +587,55 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
     }
   }, { parentPaneId: "pane-parent" });
 });
+
+for (const fixture of [
+  { state: "completed", detail: "delayed durable success", ok: true },
+  { state: "failed", detail: "delayed durable worker failure", ok: false },
+]) {
+  posixTest(`generated OpenCode delegation reconciles delayed worker ${fixture.state}`, async () => {
+    await withGeneratedTool(async ({ tool, api }) => {
+      const fake = fakeWebSocket("abort");
+      api.setPaneInputHandler(fake.input);
+      const originalWebSocket = globalThis.WebSocket;
+      (globalThis as any).WebSocket = fake.WebSocket;
+      try {
+        const output = await tool.execute(
+          {
+            machine: "posix-1",
+            directory: repoRoot,
+            prompt: `wait for ${fixture.state}`,
+            timeout_seconds: 3,
+          },
+          {
+            abort: new AbortController().signal,
+            ask: () => () => undefined,
+            metadata: () => undefined,
+          },
+        );
+        assert.match(output, new RegExp(`State: ${fixture.state}`));
+        assert.match(output, new RegExp(fixture.detail));
+        assert.equal(output.includes(fixture.ok ? "<task_result>" : "<task_error>"), true);
+        const lifecycle = api.requests
+          .filter((request) => request.pathname === "/api/agent-events")
+          .map((request) => request.body?.status);
+        assert.deepEqual(lifecycle, ["running"]);
+        assert.equal(fake.instances[0].sent.some((item) => item.data === "\u0003"), false);
+      } finally {
+        (globalThis as any).WebSocket = originalWebSocket;
+      }
+    }, {
+      delegationStatus: (runId, reads) => reads < 2
+        ? { runId, state: "running", summary: "Still working" }
+        : {
+            runId,
+            state: fixture.state,
+            summary: fixture.detail,
+            result: fixture.ok ? fixture.detail : "",
+            error: fixture.ok ? "" : fixture.detail,
+          },
+    });
+  });
+}
 
 posixTest("generated wmux_close permission-gates ownership, closes agent workspaces, and is idempotent", async () => {
   await withGeneratedTool(async ({ closeTool, api }) => {
@@ -618,7 +711,7 @@ posixTest("close_on_success closes only after completed lifecycle and reports th
         permission: "wmux_delegate",
         patterns: ["posix-1", repoRoot],
         always: ["*"],
-        metadata: { machine: "posix-1", directory: repoRoot, closeOnSuccess: true },
+        metadata: { machine: "posix-1", directory: repoRoot, mode: "change", closeOnSuccess: true },
       });
       assert.match(output, /State: completed/);
       assert.match(output, /Workspace closed: true/);
@@ -714,6 +807,206 @@ posixTest("generated OpenCode delegation aborts promptly, interrupts, posts stop
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;
     }
+  });
+});
+
+for (const fixture of [
+  { name: "minimum watcher timeout with hung replay", mode: "abort" as const, timeout: 0.1 },
+  { name: "pane-output read failure", mode: "read-error" as const, timeout: 30 },
+]) {
+  posixTest(`generated OpenCode delegation detaches without interrupting on ${fixture.name}`, async () => {
+    await withGeneratedTool(async ({ tool, api }) => {
+      let submittedAt = 0;
+      const fake = fakeWebSocket(fixture.mode, () => { submittedAt = performance.now(); });
+      api.setPaneInputHandler(fake.input);
+      const originalWebSocket = globalThis.WebSocket;
+      (globalThis as any).WebSocket = fake.WebSocket;
+      const metadata: Record<string, unknown>[] = [];
+      try {
+        const output = await tool.execute(
+          {
+            machine: "posix-1",
+            directory: repoRoot,
+            prompt: `detached ${fixture.name}`,
+            timeout_seconds: fixture.timeout,
+          },
+          {
+            abort: new AbortController().signal,
+            ask: () => () => undefined,
+            metadata: (input: Record<string, unknown>) => metadata.push(input),
+          },
+        );
+        const watcherElapsed = performance.now() - submittedAt;
+        assert.ok(watcherElapsed < 500, `watcher exceeded its deadline: ${watcherElapsed}ms`);
+        assert.match(output, /State: waiting/);
+        assert.match(output, /<task_pending>/);
+        assert.match(output, /Workspace closed: false/);
+        assert.equal(fake.instances[0].sent.some((item) => item.data === "\u0003"), false);
+        assert.equal(api.requests.some((request) => request.method === "DELETE"), false);
+        assert.equal(api.workspaces.some((workspace) => workspace.id === "workspace-1"), true);
+        const lifecycle = api.requests
+          .filter((request) => request.pathname === "/api/agent-events")
+          .map((request) => request.body);
+        assert.deepEqual(lifecycle.map((event) => event?.status), ["running", "observer_error", "waiting"]);
+        assert.ok(lifecycle.every((event) => event?.runId === (metadata[0] as any).metadata.runId));
+      } finally {
+        (globalThis as any).WebSocket = originalWebSocket;
+      }
+    });
+  });
+}
+
+posixTest("generated OpenCode watcher bounds slow and hung status requests by the remaining deadline", async () => {
+  for (const fixture of [
+    { name: "slow", delay: 40, hold: false },
+    { name: "hung", delay: 0, hold: true },
+  ]) {
+    await withGeneratedTool(async ({ tool, api }) => {
+      let submittedAt = 0;
+      const fake = fakeWebSocket("abort", () => { submittedAt = performance.now(); });
+      api.setPaneInputHandler(fake.input);
+      const originalWebSocket = globalThis.WebSocket;
+      (globalThis as any).WebSocket = fake.WebSocket;
+      try {
+        const output = await tool.execute(
+          {
+            machine: "posix-1",
+            directory: repoRoot,
+            prompt: `${fixture.name} status`,
+            timeout_seconds: 0.1,
+          },
+          {
+            abort: new AbortController().signal,
+            ask: () => () => undefined,
+            metadata: () => undefined,
+          },
+        );
+        const watcherElapsed = performance.now() - submittedAt;
+        assert.ok(watcherElapsed >= 75, `${fixture.name} watcher expired too early: ${watcherElapsed}ms`);
+        assert.ok(watcherElapsed < 500, `${fixture.name} watcher overran: ${watcherElapsed}ms`);
+        assert.match(output, /State: waiting/);
+        assert.equal(fake.instances[0].sent.some((item) => item.data === "\u0003"), false);
+      } finally {
+        (globalThis as any).WebSocket = originalWebSocket;
+      }
+    }, {
+      delegationStatus: (runId) => ({ runId, state: "running", summary: "Still working" }),
+      delegationStatusDelayMilliseconds: fixture.delay,
+      holdDelegationStatus: fixture.hold,
+    });
+  }
+});
+
+posixTest("generated OpenCode watcher starts only after complete worker submission", async () => {
+  await withGeneratedTool(async ({ tool, api }) => {
+    const fake = fakeWebSocket("complete");
+    api.setPaneInputHandler(fake.input);
+    const originalWebSocket = globalThis.WebSocket;
+    (globalThis as any).WebSocket = fake.WebSocket;
+    try {
+      const started = performance.now();
+      const output = await tool.execute(
+        {
+          machine: "posix-1",
+          directory: repoRoot,
+          prompt: "delayed submission",
+          timeout_seconds: 0.1,
+        },
+        {
+          abort: new AbortController().signal,
+          ask: () => () => undefined,
+          metadata: () => undefined,
+        },
+      );
+      assert.ok(performance.now() - started >= 300, "fixture did not extend submission beyond the watcher budget");
+      assert.match(output, /State: completed/);
+      assert.equal(fake.instances[0].sent.some((item) => item.data === "\u0003"), false);
+    } finally {
+      (globalThis as any).WebSocket = originalWebSocket;
+    }
+  }, { paneInputDelayMilliseconds: 40 });
+});
+
+posixTest("generated OpenCode treats an incomplete submission as a launch failure and interrupts", async () => {
+  await withGeneratedTool(async ({ tool, api }) => {
+    const fake = fakeWebSocket("abort");
+    api.setPaneInputHandler(fake.input);
+    const originalWebSocket = globalThis.WebSocket;
+    (globalThis as any).WebSocket = fake.WebSocket;
+    try {
+      const output = await tool.execute(
+        {
+          machine: "posix-1",
+          directory: repoRoot,
+          prompt: "incomplete submission",
+          timeout_seconds: 0.1,
+        },
+        {
+          abort: new AbortController().signal,
+          ask: () => () => undefined,
+          metadata: () => undefined,
+        },
+      );
+      const interruptDeadline = Date.now() + 500;
+      while (
+        !fake.instances[0].sent.some((item) => item.data === "\u0003")
+        && Date.now() < interruptDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.match(output, /State: failed/);
+      assert.equal(fake.instances[0].sent.some((item) => item.data === "\u0003"), true);
+      assert.deepEqual(
+        api.requests.filter((request) => request.pathname === "/api/agent-events").map((request) => request.body?.status),
+        ["running", "failed"],
+      );
+    } finally {
+      (globalThis as any).WebSocket = originalWebSocket;
+    }
+  }, { failPaneInputAt: 4 });
+});
+
+posixTest("generated OpenCode delegation uses configured mode defaults and bounded overrides", async () => {
+  await withGeneratedTool(async ({ tool, api }) => {
+    const fake = fakeWebSocket("complete");
+    api.setPaneInputHandler(fake.input);
+    const originalWebSocket = globalThis.WebSocket;
+    (globalThis as any).WebSocket = fake.WebSocket;
+    const metadata: Record<string, unknown>[] = [];
+    try {
+      await tool.execute(
+        { machine: "posix-1", directory: repoRoot, prompt: "deploy validation", mode: "deploy" },
+        {
+          abort: new AbortController().signal,
+          ask: () => () => undefined,
+          metadata: (input: Record<string, unknown>) => metadata.push(input),
+        },
+      );
+      assert.equal((metadata[0] as any).metadata.mode, "deploy");
+      assert.equal((metadata[0] as any).metadata.waitTimeoutSeconds, 10_800);
+      for (const timeout_seconds of [0.01, 14_401, Number.POSITIVE_INFINITY]) {
+        await assert.rejects(
+          tool.execute(
+            { machine: "posix-1", directory: repoRoot, prompt: "invalid timeout", timeout_seconds },
+            { abort: new AbortController().signal, ask: () => () => undefined, metadata: () => undefined },
+          ),
+          /timeout_seconds must be 0.1..14400/,
+        );
+      }
+      await assert.rejects(
+        tool.execute(
+          { machine: "posix-1", directory: repoRoot, prompt: "invalid mode", mode: "review" },
+          { abort: new AbortController().signal, ask: () => () => undefined, metadata: () => undefined },
+        ),
+        /mode must be change or deploy/,
+      );
+    } finally {
+      (globalThis as any).WebSocket = originalWebSocket;
+    }
+  }, {
+    delegation: {
+      waitTimeoutSeconds: { review: 1_800, change: 7_200, deploy: 10_800 },
+    },
   });
 });
 

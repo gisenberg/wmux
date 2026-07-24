@@ -40,6 +40,10 @@ const TERMINAL_DELEGATION_STATES = new Set<DelegationState>([
 ]);
 const MAX_DELEGATIONS = 1_000;
 const DELEGATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+interface DelegationEventDisposition {
+  accepted: boolean;
+  terminalTransition: boolean;
+}
 const stateMachines = (machines: MachineConfig[]): MachineConfig[] =>
   machines.map(({
     agentToken: _agentToken,
@@ -649,26 +653,34 @@ export class StateStore extends EventEmitter {
       ...(message ? { message } : {}),
       createdAt,
     };
-    this.state.agentEvents.unshift(agentEvent);
-    this.state.agentEvents = this.state.agentEvents.slice(0, 300);
-    if (runId) this.recordDelegationEvent(agentEvent, delegationMessage);
+    const delegationDisposition = runId
+      ? this.recordDelegationEvent(agentEvent, delegationMessage)
+      : { accepted: true, terminalTransition: false };
+    if (delegationDisposition.accepted) {
+      this.state.agentEvents.unshift(agentEvent);
+      this.state.agentEvents = this.state.agentEvents.slice(0, 300);
+    }
 
     let workspaceChanged = false;
-    if (title && target.workspace.nameSource !== "user") {
+    if (delegationDisposition.accepted && title && target.workspace.nameSource !== "user") {
       target.workspace.name = title;
       target.workspace.nameSource = "auto";
       workspaceChanged = true;
     }
 
     const descriptor = summary || `${agent} ${status}`;
-    if (descriptor && target.workspace.descriptorSource !== "user") {
+    if (delegationDisposition.accepted && descriptor && target.workspace.descriptorSource !== "user") {
       target.workspace.descriptor = descriptor;
       target.workspace.descriptorSource = "auto";
       workspaceChanged = true;
     }
 
     let notification: TerminalNotification | undefined;
-    if (["completed", "failed", "error", "cancelled", "stopped"].includes(status)) {
+    const terminalNotificationStatus = ["completed", "failed", "error", "cancelled", "stopped"].includes(status);
+    if (
+      terminalNotificationStatus
+      && (!runId || delegationDisposition.terminalTransition)
+    ) {
       notification = {
         id: createId("note"),
         workspaceId: target.workspace.id,
@@ -739,10 +751,15 @@ export class StateStore extends EventEmitter {
     return true;
   }
 
-  private recordDelegationEvent(event: AgentActivity, message: string, targetState: PersistedState = this.state): void {
-    if (!event.runId) return;
+  private recordDelegationEvent(
+    event: AgentActivity,
+    message: string,
+    targetState: PersistedState = this.state,
+  ): DelegationEventDisposition {
+    if (!event.runId) return { accepted: true, terminalTransition: false };
     const existing = targetState.delegations.find((candidate) => candidate.runId === event.runId);
     if (event.status === "observer_error") {
+      const terminalExisting = Boolean(existing && TERMINAL_DELEGATION_STATES.has(existing.state));
       const observerError = message || event.summary;
       if (existing) {
         existing.observerError = observerError;
@@ -766,13 +783,13 @@ export class StateStore extends EventEmitter {
         });
       }
       this.pruneDelegations(targetState);
-      return;
+      return { accepted: !terminalExisting, terminalTransition: false };
     }
 
     const reportedState = delegationStateForStatus(event.status);
-    if (existing && TERMINAL_DELEGATION_STATES.has(existing.state) && (!reportedState || !TERMINAL_DELEGATION_STATES.has(reportedState))) {
+    if (existing && TERMINAL_DELEGATION_STATES.has(existing.state)) {
       this.pruneDelegations(targetState);
-      return;
+      return { accepted: false, terminalTransition: false };
     }
     const state = reportedState ?? existing?.state ?? "running";
     const successful = state === "completed";
@@ -807,6 +824,7 @@ export class StateStore extends EventEmitter {
     if (!existing) targetState.delegations.unshift(delegation);
     else this.moveDelegationToFront(delegation.runId, targetState);
     this.pruneDelegations(targetState);
+    return { accepted: true, terminalTransition: terminal };
   }
 
   private moveDelegationToFront(runId: string, targetState: PersistedState = this.state): void {

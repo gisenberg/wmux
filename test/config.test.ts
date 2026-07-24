@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { configSchema, loadConfig } from "../src/server/config.js";
 import { defaultKeybindings } from "../src/shared/keybindings.js";
+import { DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS } from "../src/shared/protocol.js";
 
 const machine = (overrides: Record<string, unknown>) => ({
   machines: [{ id: "box", name: "Box", kind: "ssh", host: "box.ts.net", user: "me", ...overrides }],
@@ -48,6 +49,31 @@ test("validates terminal typography defaults", () => {
   for (const terminalFontSize of [9, 25, 14.5, "14"]) {
     assert.equal(configSchema.safeParse({ terminalFontSize }).success, false);
   }
+});
+
+test("delegation wait defaults are mode-aware and config overrides are bounded", () => {
+  assert.deepEqual(loadConfig().delegation.waitTimeoutSeconds, DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS);
+  const parsed = configSchema.parse({
+    delegation: {
+      waitTimeoutSeconds: {
+        review: 900,
+        change: 7_200,
+        deploy: 10_800,
+      },
+    },
+  });
+  assert.equal(parsed.delegation?.waitTimeoutSeconds?.review, 900);
+  for (const timeout of [0, 14_401, Number.POSITIVE_INFINITY, "7200"]) {
+    assert.equal(configSchema.safeParse({
+      delegation: { waitTimeoutSeconds: { change: timeout } },
+    }).success, false);
+  }
+  assert.equal(configSchema.safeParse({
+    delegation: { waitTimeoutSeconds: { review: 0.1 } },
+  }).success, true);
+  assert.equal(configSchema.safeParse({
+    delegation: { waitTimeoutSeconds: { review: 1_800, arbitrary: 60 } },
+  }).success, false);
 });
 
 test("rejects machine ids that could escape scripts, paths, or URLs", () => {

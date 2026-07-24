@@ -1,6 +1,13 @@
 {
   "terminalFontFamily": "\"MesloLGM Nerd Font\"",
   "terminalFontSize": 15,
+  "delegation": {
+    "waitTimeoutSeconds": {
+      "review": 1800,
+      "change": 7200,
+      "deploy": 7200
+    }
+  },
   "keybindings": {
     "commandPalette.open": ["Meta+KeyK", "Ctrl+KeyK"],
     "settings.open": [],

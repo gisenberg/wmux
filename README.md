@@ -158,6 +158,13 @@ cp wmux.config.example.json wmux.config.json
 {
   "terminalFontFamily": "\"MesloLGM Nerd Font\"",
   "terminalFontSize": 15,
+  "delegation": {
+    "waitTimeoutSeconds": {
+      "review": 1800,
+      "change": 7200,
+      "deploy": 7200
+    }
+  },
   "machines": [
     {
       "id": "linux-box",
@@ -187,6 +194,11 @@ cp wmux.config.example.json wmux.config.json
   Other preferred fonts must be installed on each browser device, and wmux appends its bundled Fira Code/monospace fallback stack.
 - `terminalFontFamily` is config-only.
   Settings saved in `~/.wmux/settings.json` can override `terminalFontSize`; use **Settings → Reset → Save** to adopt a changed size default.
+- `delegation.waitTimeoutSeconds` configures how long synchronous delegation controllers watch before detaching.
+  Review mode defaults to 1,800 seconds, while change and deploy modes default to 7,200 seconds.
+  Values must be from 0.1 through 14,400 seconds.
+  Existing configs that omit this object receive the mode defaults.
+  Restart wmux after changing these startup-loaded values so `/api/bootstrap` publishes them to the CLI and generated plugin.
 - wmux adds the local machine unless `"localMachine": false` is set.
 - `kind: "local"` always executes on the current wmux server. Its display
   name does not make it a remote target, and its `cwd` must exist on that
@@ -523,6 +535,12 @@ Delegated agent hooks associate each prompt and final response with the controll
 wmux maintains a dedicated delegation ledger separately from workspace activity, so an outcome remains queryable after its pane or workspace closes.
 `wmuxctl` races terminal replay against the authenticated delegation-status endpoint, allowing either completion signal to finish the request without waiting for the other to time out.
 Controller observation failures are recorded separately and never replace an agent's terminal outcome.
+`--mode review`, `--mode change`, and `--mode deploy` select the configured wait profile.
+When omitted, `wmuxctl` selects review without `--write-access` and change with `--write-access`.
+`--timeout` is a per-dispatch controller wait override from 0.1 through 14,400 seconds.
+It does not limit agent runtime or grant process control.
+The OpenCode `wmux_delegate` tool accepts `mode: "change" | "deploy"` and the same bounded `timeout_seconds` override.
+OpenCode cannot enforce read-only delegation, so its tool does not expose review mode.
 For example:
 
 ```bash
@@ -535,10 +553,11 @@ wmuxctl delegate codex linux-box --directory /srv/project \
   --prompt-file /tmp/follow-up.md --title "Implement review findings" \
   --session --session-workspace ws_example --sandbox danger-full-access
 wmuxctl delegate claude linux-box --directory /srv/project \
-  --prompt-file /tmp/fix.md --title "Fix authentication" --write-access
+  --prompt-file /tmp/fix.md --title "Fix authentication" --write-access \
+  --mode change
 wmuxctl delegate codex windows-box --directory 'T:\git\example\project' \
   --prompt-file /tmp/import.md --title "Import catalog" --write-access \
-  --sandbox danger-full-access --structured-outcome
+  --sandbox danger-full-access --structured-outcome --mode deploy
 ```
 
 Codex defaults to its read-only sandbox and Claude defaults to plan permission mode.
@@ -553,10 +572,15 @@ Prompts are sent through pane stdin rather than shell arguments and are redacted
 Delegations leave their durable workspace open by default.
 Session mode preserves the Codex conversation for later turns that name its exact returned workspace ID.
 `--close-on-success` (`close_on_success` in the OpenCode tool) closes only after a successful result and completed lifecycle event.
-Failed, stopped, and timed-out workspaces remain available for inspection.
+If the controller wait expires or pane output becomes unreadable after submission, the controller records `observer_error` and `waiting`, returns the run and workspace identifiers, and leaves the worker untouched.
+The controller does not send Ctrl-C or close the workspace on observation loss.
+An installed worker hook can later reconcile the same run to success or worker failure through the durable ledger, including after a controller or wmux restart.
+The first worker terminal outcome wins, so repeated or conflicting completion notices cannot duplicate notifications or regress the record.
+Query `GET /api/delegations/:runId` to reconcile a detached run.
+Failed, stopped, waiting, and controller-detached workspaces remain available for inspection.
 The permission-gated `wmux_close` tool accepts `workspace_id` to explicitly close a workspace later, but refuses anything not recorded as agent-created.
 The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions to `ask` in memory without rewriting `opencode.json`; an explicit per-tool OpenCode permission of `allow`, `ask`, or `deny` takes precedence.
-Cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require manual recovery.
+Explicit cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require manual recovery.
 Restart OpenCode after installing or updating the plugin so it loads the generated tools.
 
 `wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane, with its working directory set by the staged helper. When invoked inside a wmux pane, the new workspace nests beneath that pane; outside wmux it remains a root workspace.
