@@ -1283,17 +1283,19 @@ test("wmuxctl delegate finishes from lifecycle status when terminal replay has n
     }
     if (request.method === "GET" && request.url === `/api/delegations/${runId}`) {
       statusRequests += 1;
-      jsonResponse(response, {
-        delegation: {
-          runId,
-          state: "completed",
-          runtime: "codex",
-          title: "Lifecycle-first review",
-          summary: "Codex delegation completed",
-          result: "completed without replay markers",
-          error: "",
-        },
-      });
+      setTimeout(() => {
+        jsonResponse(response, {
+          delegation: {
+            runId,
+            state: "completed",
+            runtime: "codex",
+            title: "Lifecycle-first review",
+            summary: "Codex delegation completed",
+            result: "completed without replay markers",
+            error: "",
+          },
+        });
+      }, 150);
       return;
     }
     response.writeHead(404).end();
@@ -1321,12 +1323,13 @@ test("wmuxctl delegate finishes from lifecycle status when terminal replay has n
   try {
     const delegated = await cli(url, [
       "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
-      "--title", "Lifecycle-first review", "--timeout", "10",
+      "--title", "Lifecycle-first review", "--timeout", "0.5",
     ]);
     const result = JSON.parse(delegated.stdout);
     assert.equal(result.state, "completed");
     assert.equal(result.result, "completed without replay markers");
-    assert.ok(result.elapsedSeconds < 3);
+    assert.ok(result.elapsedSeconds >= 0.1);
+    assert.ok(result.elapsedSeconds < 0.5);
     assert.equal(statusRequests, 1);
   } finally {
     await close(server);
@@ -1334,120 +1337,149 @@ test("wmuxctl delegate finishes from lifecycle status when terminal replay has n
   }
 });
 
-test("wmuxctl delegate records observer detachment without replacing the agent outcome", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-observer-error-"));
-  const promptPath = path.join(root, "prompt.md");
-  fs.writeFileSync(promptPath, "observer failure task");
-  const lifecycle: Array<Record<string, unknown>> = [];
-  let runId = "";
-  let upgradeCount = 0;
-  let interrupted = false;
-  const workspace = {
-    id: "ws_observer_error",
-    machineId: "linux-box",
-    activeTabId: "tab_observer_error",
-    tabs: [{
-      id: "tab_observer_error",
-      activePaneId: "pane_observer_error",
-      panes: [{ id: "pane_observer_error", machineId: "linux-box" }],
-    }],
-  };
-  const jsonResponse = (response: http.ServerResponse, body: unknown, status = 200) => {
-    response.writeHead(status, { "content-type": "application/json" });
-    response.end(JSON.stringify(body));
-  };
-  const server = http.createServer((request, response) => {
-    if (request.method === "GET" && request.url === "/api/bootstrap") {
-      jsonResponse(response, {
-        machines: [{ id: "linux-box", kind: "ssh", platform: "linux", reachable: true }],
-        workspaces: [workspace],
-      });
-      return;
-    }
-    if (request.method === "POST" && request.url === "/api/workspaces") {
-      request.resume();
-      request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
-      return;
-    }
-    if (request.method === "POST" && request.url === "/api/workspaces/ws_observer_error/title") {
-      request.resume();
-      request.on("end", () => jsonResponse(response, {}));
-      return;
-    }
-    if (request.method === "POST" && request.url === "/api/agent-events") {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      request.on("end", () => {
-        lifecycle.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-        jsonResponse(response, {}, 201);
-      });
-      return;
-    }
-    if (request.method === "POST" && request.url === "/api/panes/pane_observer_error/input") {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      request.on("end", () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
-          runId = body.data.slice("wmux-agent-run request ".length);
-        } else if (body.data === "\u0003") {
-          interrupted = true;
-        } else if (typeof body.data === "string" && body.data !== "\r" && body.data !== "\u0003") {
-          runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
-        }
-        jsonResponse(response, {});
-      });
-      return;
-    }
-    if (request.method === "GET" && request.url === `/api/delegations/${runId}`) {
-      jsonResponse(response, { error: "temporarily_unavailable" }, 503);
-      return;
-    }
-    response.writeHead(404).end();
-  });
-  server.on("upgrade", (request, socket) => {
-    upgradeCount += 1;
-    const key = request.headers["sec-websocket-key"];
-    assert.equal(typeof key, "string");
-    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
-    socket.write([
-      "HTTP/1.1 101 Switching Protocols",
-      "Upgrade: websocket",
-      "Connection: Upgrade",
-      `Sec-WebSocket-Accept: ${accept}`,
-      "",
-      "",
-    ].join("\r\n"));
-    let replay = "operator@host /srv/project ❯ ";
-    if (upgradeCount === 2) replay = `WMUX_AGENT_READY ${runId}\r\n`;
-    if (upgradeCount >= 3) replay = "agent output without control markers\r\n";
-    socket.end(websocketFrame({ type: "ready", paneId: "pane_observer_error", replay }));
-  });
+for (const fixture of [
+  { name: "hung status request", hangReplay: false, hangStatus: true },
+  { name: "hung replay request", hangReplay: true, hangStatus: false },
+]) {
+  test(`wmuxctl delegate bounds the minimum watcher timeout with a ${fixture.name}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-observer-error-"));
+    const promptPath = path.join(root, "prompt.md");
+    fs.writeFileSync(promptPath, "observer failure task");
+    const lifecycle: Array<Record<string, unknown>> = [];
+    let runId = "";
+    let upgradeCount = 0;
+    let interrupted = false;
+    let submissionPayloadReceived = false;
+    let workerSubmittedAt = 0;
+    const upgradedSockets = new Set<import("node:stream").Duplex>();
+    const workspace = {
+      id: "ws_observer_error",
+      machineId: "linux-box",
+      activeTabId: "tab_observer_error",
+      tabs: [{
+        id: "tab_observer_error",
+        activePaneId: "pane_observer_error",
+        panes: [{ id: "pane_observer_error", machineId: "linux-box" }],
+      }],
+    };
+    const jsonResponse = (response: http.ServerResponse, body: unknown, status = 200) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
+    const server = http.createServer((request, response) => {
+      if (request.method === "GET" && request.url === "/api/bootstrap") {
+        jsonResponse(response, {
+          machines: [{ id: "linux-box", kind: "ssh", platform: "linux", reachable: true }],
+          workspaces: [workspace],
+        });
+        return;
+      }
+      if (request.method === "POST" && request.url === "/api/workspaces") {
+        request.resume();
+        request.on("end", () => jsonResponse(response, { workspace, state: {} }, 201));
+        return;
+      }
+      if (request.method === "POST" && request.url === "/api/workspaces/ws_observer_error/title") {
+        request.resume();
+        request.on("end", () => jsonResponse(response, {}));
+        return;
+      }
+      if (request.method === "POST" && request.url === "/api/agent-events") {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on("end", () => {
+          lifecycle.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          jsonResponse(response, {}, 201);
+        });
+        return;
+      }
+      if (request.method === "POST" && request.url === "/api/panes/pane_observer_error/input") {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
+            runId = body.data.slice("wmux-agent-run request ".length);
+          } else if (body.data === "\r" && submissionPayloadReceived) {
+            workerSubmittedAt = performance.now();
+          } else if (body.data === "\u0003") {
+            interrupted = true;
+          } else if (typeof body.data === "string" && body.data !== "\r" && body.data !== "\u0003") {
+            runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
+            submissionPayloadReceived = true;
+          }
+          jsonResponse(response, {});
+        });
+        return;
+      }
+      if (request.method === "GET" && request.url === `/api/delegations/${runId}`) {
+        if (fixture.hangStatus) return;
+        jsonResponse(response, { error: "temporarily_unavailable" }, 503);
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    server.on("upgrade", (request, socket) => {
+      upgradedSockets.add(socket);
+      socket.on("close", () => upgradedSockets.delete(socket));
+      upgradeCount += 1;
+      const key = request.headers["sec-websocket-key"];
+      assert.equal(typeof key, "string");
+      const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+      socket.write([
+        "HTTP/1.1 101 Switching Protocols",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        `Sec-WebSocket-Accept: ${accept}`,
+        "",
+        "",
+      ].join("\r\n"));
+      let replay = "operator@host /srv/project ❯ ";
+      if (upgradeCount === 2) replay = `WMUX_AGENT_READY ${runId}\r\n`;
+      if (upgradeCount >= 3 && fixture.hangReplay) {
+        socket.write(websocketFrame({
+          type: "ready",
+          paneId: "pane_observer_error",
+          replay: "agent output without control markers\r\n",
+          replayKind: "raw",
+          outputOnly: true,
+          waitForRefresh: true,
+        }));
+        return;
+      }
+      if (upgradeCount >= 3) replay = "agent output without control markers\r\n";
+      socket.end(websocketFrame({ type: "ready", paneId: "pane_observer_error", replay }));
+    });
 
-  const url = await listen(server);
-  try {
-    await assert.rejects(
-      cli(url, [
-        "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
-        "--title", "Observer failure", "--timeout", "0.5",
-      ]),
-      (error: { stdout?: string }) => {
-        const result = JSON.parse(error.stdout ?? "{}");
-        assert.equal(result.state, "waiting");
-        assert.equal(result.failureKind, "observer");
-        assert.equal(result.closed, false);
-        return true;
-      },
-    );
-    assert.deepEqual(lifecycle.map((event) => event.status), ["running", "observer_error", "waiting"]);
-    assert.equal(lifecycle[1].runId, runId);
-    assert.equal(lifecycle[2].runId, runId);
-    assert.equal(interrupted, false);
-  } finally {
-    await close(server);
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+    const url = await listen(server);
+    try {
+      await assert.rejects(
+        cli(url, [
+          "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
+          "--title", "Observer failure", "--timeout", "0.1",
+        ]),
+        (error: { stdout?: string }) => {
+          const result = JSON.parse(error.stdout ?? "{}");
+          assert.equal(result.state, "waiting");
+          assert.equal(result.failureKind, "observer");
+          assert.equal(result.closed, false);
+          return true;
+        },
+      );
+      const watcherElapsed = performance.now() - workerSubmittedAt;
+      assert.ok(watcherElapsed >= 75, `delegation watcher expired too early: ${watcherElapsed}ms`);
+      assert.ok(watcherElapsed < 500, `delegation watcher exceeded its wall-clock budget: ${watcherElapsed}ms`);
+      assert.deepEqual(lifecycle.map((event) => event.status), ["running", "observer_error", "waiting"]);
+      assert.equal(lifecycle[1].runId, runId);
+      assert.equal(lifecycle[2].runId, runId);
+      assert.equal(interrupted, false);
+    } finally {
+      for (const socket of upgradedSockets) socket.destroy();
+      await close(server);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("wmuxctl delegate records failure and preserves the workspace when setup fails", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-fail-"));

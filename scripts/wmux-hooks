@@ -131,6 +131,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { Effect } from "effect"
 import { spawn } from "node:child_process"
 import fs from "node:fs"
+import { performance } from "node:perf_hooks"
 
 const eventScript = ${JSON.stringify(eventScript)}
 const delegated = process.env.WMUX_DELEGATED_RUN === "1"
@@ -228,7 +229,16 @@ const joinUrl = (base: string, suffix: string) => {
   return new URL(suffix, base.endsWith("/") ? base : base + "/").toString()
 }
 
-const requestJson = async (base: string, token: string, pathname: string, init: RequestInit = {}) => {
+const requestJson = async (
+  base: string,
+  token: string,
+  pathname: string,
+  init: RequestInit = {},
+  timeoutMilliseconds = REQUEST_TIMEOUT_MS,
+) => {
+  if (!Number.isFinite(timeoutMilliseconds) || timeoutMilliseconds <= 0) {
+    throw new DelegationTimeoutError("delegation timed out")
+  }
   const headers: Record<string, string> = {
     "content-type": "application/json",
     ...((init.headers as Record<string, string>) ?? {}),
@@ -242,7 +252,7 @@ const requestJson = async (base: string, token: string, pathname: string, init: 
   const timer = setTimeout(() => {
     timedOut = true
     controller.abort()
-  }, REQUEST_TIMEOUT_MS)
+  }, timeoutMilliseconds)
   try {
     const response = await fetch(joinUrl(base, pathname), { ...init, headers, signal: controller.signal })
     let body: any
@@ -749,17 +759,20 @@ const delegate = tool({
       })
       await postLifecycle("running", "OpenCode delegation running", "", context.abort)
 
-      const deadline = Date.now() + timeoutSeconds * 1000
-      const remaining = () => {
-        const value = deadline - Date.now()
-        if (value <= 0) throw new DelegationTimeoutError("delegation timed out")
-        return value
-      }
-      channel = await PaneChannel.open(url, token, pane.id, remaining(), context.abort)
-      await channel.waitFor((output, ready) => ready && hasPosixShellPrompt(output), remaining(), context.abort)
+      channel = await PaneChannel.open(url, token, pane.id, REQUEST_TIMEOUT_MS, context.abort)
+      await channel.waitFor(
+        (output, ready) => ready && hasPosixShellPrompt(output),
+        REQUEST_TIMEOUT_MS,
+        context.abort,
+      )
       const commandCheckpoint = channel.checkpoint()
       await sendLine(channel, "wmux-agent-run", context.abort)
-      await channel.waitFor((output) => hasReadyMarker(output), remaining(), context.abort, commandCheckpoint)
+      await channel.waitFor(
+        (output) => hasReadyMarker(output),
+        REQUEST_TIMEOUT_MS,
+        context.abort,
+        commandCheckpoint,
+      )
 
       const encoded = Buffer.from(JSON.stringify({
         runId,
@@ -772,8 +785,14 @@ const delegate = tool({
         writeAccess: true,
       })).toString("base64")
       const resultCheckpoint = channel.checkpoint()
-      workerSubmitted = true
       await sendLine(channel, encoded, context.abort)
+      workerSubmitted = true
+      const deadline = performance.now() + timeoutSeconds * 1000
+      const remaining = () => {
+        const value = deadline - performance.now()
+        if (value <= 0) throw new DelegationTimeoutError("delegation timed out")
+        return value
+      }
       let observed: {
         ok: boolean
         detail: string
@@ -788,6 +807,7 @@ const delegate = tool({
             token,
             "/api/delegations/" + encodeURIComponent(runId),
             { signal: context.abort },
+            remaining(),
           )
           observed = durableResult(status?.delegation)
         } catch (error) {
