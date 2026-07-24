@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  presentMobileInteraction,
+  transitionMobileInteraction,
+  type MobileInteractionEvent,
+  type MobileInteractionState,
+} from "./mobile/keyboard-machine";
 import { mobileViewportMediaQuery } from "./useSidebar";
 
 export interface MobileViewportBaseline {
@@ -51,9 +57,14 @@ export const isEditableViewportTarget = (target: Element | null): boolean => {
 export interface MobileViewportState {
   isMobile: boolean;
   keyboardOpen: boolean;
+  interactionState: MobileInteractionState;
+  restoreKeyboardAnchor: boolean;
+  dispatchInteraction: (event: MobileInteractionEvent) => void;
 }
 
-interface MobileViewportMetrics extends MobileViewportState {
+interface MobileViewportMetrics {
+  isMobile: boolean;
+  keyboardOpen: boolean;
   height: number;
   width: number;
   offsetTop: number;
@@ -62,15 +73,39 @@ interface MobileViewportMetrics extends MobileViewportState {
 
 export const useMobileViewportState = (): MobileViewportState => {
   const initialMetrics = measureMobileViewport();
-  const [state, setState] = useState<MobileViewportState>(() => ({
+  const initialInteractionState: MobileInteractionState = initialMetrics.keyboardOpen
+    ? "keyboard-open-chrome-collapsed"
+    : "keyboard-closed";
+  const [state, setState] = useState<Omit<MobileViewportState, "dispatchInteraction">>(() => ({
     isMobile: initialMetrics.isMobile,
-    keyboardOpen: initialMetrics.keyboardOpen,
+    keyboardOpen: presentMobileInteraction(initialInteractionState).chromeCollapsed,
+    interactionState: initialInteractionState,
+    restoreKeyboardAnchor: false,
   }));
   const viewportBaseline = useRef<MobileViewportBaseline>({
     width: initialMetrics.isMobile ? initialMetrics.width : 0,
     height: initialMetrics.isMobile ? initialMetrics.height : 0,
   });
   const keyboardOpen = useRef(initialMetrics.keyboardOpen);
+  const interactionState = useRef<MobileInteractionState>(initialInteractionState);
+
+  const dispatchInteraction = useCallback((event: MobileInteractionEvent) => {
+    interactionState.current = transitionMobileInteraction(interactionState.current, event);
+    const presentation = presentMobileInteraction(interactionState.current);
+    setState((current) => {
+      const next = {
+        ...current,
+        keyboardOpen: presentation.chromeCollapsed,
+        interactionState: interactionState.current,
+        restoreKeyboardAnchor: presentation.restoreKeyboardAnchor,
+      };
+      return current.keyboardOpen === next.keyboardOpen &&
+        current.interactionState === next.interactionState &&
+        current.restoreKeyboardAnchor === next.restoreKeyboardAnchor
+        ? current
+        : next;
+    });
+  }, []);
 
   useEffect(() => {
     const update = (resetBaseline = false) => {
@@ -86,48 +121,85 @@ export const useMobileViewportState = (): MobileViewportState => {
       } else if (!metrics.isMobile) {
         viewportBaseline.current = { width: 0, height: 0 };
       }
-      const next = metrics.isMobile
-        ? { isMobile: metrics.isMobile, keyboardOpen: metrics.keyboardOpen }
-        : { isMobile: false, keyboardOpen: false };
-      keyboardOpen.current = next.keyboardOpen;
+      keyboardOpen.current = metrics.isMobile && metrics.keyboardOpen;
+      if (!metrics.isMobile) {
+        interactionState.current = transitionMobileInteraction(interactionState.current, "reset");
+      } else {
+        interactionState.current = transitionMobileInteraction(
+          interactionState.current,
+          metrics.keyboardOpen ? "viewport-keyboard-opened" : "viewport-keyboard-closed",
+        );
+      }
+      const presentation = presentMobileInteraction(interactionState.current);
+      const next: Omit<MobileViewportState, "dispatchInteraction"> = {
+        isMobile: metrics.isMobile,
+        keyboardOpen: metrics.isMobile && presentation.chromeCollapsed,
+        interactionState: interactionState.current,
+        restoreKeyboardAnchor: metrics.isMobile && presentation.restoreKeyboardAnchor,
+      };
       document.documentElement.style.setProperty("--wmux-viewport-height", `${Math.max(1, Math.floor(metrics.height))}px`);
       document.documentElement.style.setProperty("--wmux-viewport-width", `${Math.max(1, Math.floor(metrics.width))}px`);
       document.documentElement.style.setProperty("--wmux-viewport-top", `${Math.max(0, Math.floor(metrics.offsetTop))}px`);
       document.documentElement.style.setProperty("--wmux-viewport-left", `${Math.max(0, Math.floor(metrics.offsetLeft))}px`);
       setState((current) =>
-        current.isMobile === next.isMobile && current.keyboardOpen === next.keyboardOpen ? current : next,
+        current.isMobile === next.isMobile &&
+        current.keyboardOpen === next.keyboardOpen &&
+        current.interactionState === next.interactionState &&
+        current.restoreKeyboardAnchor === next.restoreKeyboardAnchor
+          ? current
+          : next,
       );
     };
     update();
     const visualViewport = window.visualViewport;
     const updateViewport = () => update(false);
     const resetForOrientation = () => update(true);
-    let focusFrame: number | undefined;
-    const updateForFocusChange = () => {
-      if (focusFrame !== undefined) window.cancelAnimationFrame(focusFrame);
-      focusFrame = window.requestAnimationFrame(() => {
-        focusFrame = undefined;
-        update(false);
-      });
+    const updateForFocusIn = (event: FocusEvent) => {
+      if (isEditableViewportTarget(event.target instanceof Element ? event.target : null)) {
+        dispatchInteraction("editable-focused");
+      }
+      update(false);
+    };
+    const updateForFocusOut = (event: FocusEvent) => {
+      if (!isEditableViewportTarget(event.relatedTarget instanceof Element ? event.relatedTarget : null)) {
+        dispatchInteraction("editable-blurred");
+      }
+      update(false);
     };
     window.addEventListener("resize", updateViewport);
     window.addEventListener("orientationchange", resetForOrientation);
-    document.addEventListener("focusin", updateForFocusChange);
-    document.addEventListener("focusout", updateForFocusChange);
+    document.addEventListener("focusin", updateForFocusIn);
+    document.addEventListener("focusout", updateForFocusOut);
     visualViewport?.addEventListener("resize", updateViewport);
     visualViewport?.addEventListener("scroll", updateViewport);
     return () => {
       window.removeEventListener("resize", updateViewport);
       window.removeEventListener("orientationchange", resetForOrientation);
-      document.removeEventListener("focusin", updateForFocusChange);
-      document.removeEventListener("focusout", updateForFocusChange);
+      document.removeEventListener("focusin", updateForFocusIn);
+      document.removeEventListener("focusout", updateForFocusOut);
       visualViewport?.removeEventListener("resize", updateViewport);
       visualViewport?.removeEventListener("scroll", updateViewport);
-      if (focusFrame !== undefined) window.cancelAnimationFrame(focusFrame);
     };
-  }, []);
+  }, [dispatchInteraction]);
 
-  return state;
+  useEffect(() => {
+    if (!state.restoreKeyboardAnchor) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.isConnected) {
+      active.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    const next = transitionMobileInteraction(state.interactionState, "keyboard-anchor-restored");
+    interactionState.current = next;
+    const presentation = presentMobileInteraction(next);
+    setState((current) => ({
+      ...current,
+      keyboardOpen: presentation.chromeCollapsed,
+      interactionState: next,
+      restoreKeyboardAnchor: presentation.restoreKeyboardAnchor,
+    }));
+  }, [state.interactionState, state.restoreKeyboardAnchor]);
+
+  return { ...state, dispatchInteraction };
 };
 
 const measureMobileViewport = (

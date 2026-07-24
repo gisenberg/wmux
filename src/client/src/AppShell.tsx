@@ -170,7 +170,6 @@ export function AppShell() {
   const terminalFocusToken = useRef(0);
   const mobileSidebarRef = useRef<HTMLElement | null>(null);
   const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
-  const previousMobileSidebarCollapsed = useRef(sidebarCollapsed);
   const finishBoot = useCallback(() => setBootComplete(true), []);
   const dismissMobileClose = useCallback(() => setPendingMobileClose(null), []);
 
@@ -194,19 +193,25 @@ export function AppShell() {
   }, [mobileViewport.isMobile, sidebarCollapsed]);
 
   useEffect(() => {
-    const wasCollapsed = previousMobileSidebarCollapsed.current;
-    previousMobileSidebarCollapsed.current = sidebarCollapsed;
-    if (!mobileViewport.isMobile || wasCollapsed === sidebarCollapsed) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (!sidebarCollapsed) {
-        mobileSidebarCloseRef.current?.focus();
-        return;
-      }
-      const triggers = Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-controls="wmux-sidebar"]'));
-      triggers.find((trigger) => trigger.getClientRects().length > 0)?.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [mobileViewport.isMobile, sidebarCollapsed]);
+    if (!mobileViewport.isMobile) return;
+    mobileViewport.dispatchInteraction(sidebarCollapsed ? "drawer-closed" : "drawer-opened");
+  }, [mobileViewport.dispatchInteraction, mobileViewport.isMobile, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!mobileViewport.isMobile) return;
+    if (mobileViewport.interactionState === "drawer-open") {
+      mobileSidebarCloseRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (mobileViewport.interactionState !== "drawer-closing-focus-return") return;
+    const triggers = Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-controls="wmux-sidebar"]'));
+    triggers.find((trigger) => trigger.getClientRects().length > 0)?.focus({ preventScroll: true });
+    mobileViewport.dispatchInteraction("drawer-focus-restored");
+  }, [
+    mobileViewport.dispatchInteraction,
+    mobileViewport.interactionState,
+    mobileViewport.isMobile,
+  ]);
 
   const runPending = useCallback(
     async <T,>(key: string, label: string, action: () => Promise<T>): Promise<T | undefined> => {
