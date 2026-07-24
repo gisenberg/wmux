@@ -71,8 +71,8 @@ import {
   optimisticSplitCreation,
   optimisticTabCreation,
   optimisticWorkspaceCreation,
-  type OptimisticCreation,
 } from "./store/optimistic-creation";
+import { useOptimisticCreations } from "./store/use-optimistic-creations";
 import type {
   AgentActivity,
   BootstrapPayload,
@@ -155,8 +155,12 @@ export function AppShell() {
   const [mountedTabKeys, setMountedTabKeys] = useState<string[]>([]);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<TerminalFocusRequest | null>(null);
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  const [pendingPaneLabels, setPendingPaneLabels] = useState<Map<string, string>>(() => new Map());
-  const optimisticCreations = useRef(new Map<string, OptimisticCreation>());
+  const {
+    begin: beginOptimisticCreation,
+    creations: optimisticCreations,
+    finish: finishOptimisticCreation,
+    pendingPaneLabels,
+  } = useOptimisticCreations(store);
   const pendingActionKeys = useRef(new Set<string>());
   const collapseWriteQueue = useRef<Promise<void>>(Promise.resolve());
   const collapseWriteVersion = useRef(0);
@@ -175,22 +179,6 @@ export function AppShell() {
       applyOptimisticCreations(payload, optimisticCreations.current.values()),
       desiredCollapsedWorkspaceIds.current,
     ), []);
-
-  const beginOptimisticCreation = useCallback((creation: OptimisticCreation, label: string) => {
-    optimisticCreations.current.set(creation.key, creation);
-    setPendingPaneLabels((current) => new Map(current).set(creation.paneId, label));
-    store.update((current) => current ? applyOptimisticCreations(current, [creation]) : current);
-  }, [store]);
-
-  const finishOptimisticCreation = useCallback((creation: OptimisticCreation) => {
-    optimisticCreations.current.delete(creation.key);
-    setPendingPaneLabels((current) => {
-      if (!current.has(creation.paneId)) return current;
-      const next = new Map(current);
-      next.delete(creation.paneId);
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     if (!mobileViewport.isMobile || sidebarCollapsed) return;
