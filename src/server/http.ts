@@ -3,6 +3,7 @@ import https from "node:https";
 import path from "node:path";
 import type { ViteDevServer } from "vite";
 import type { DelegationConfig } from "../shared/protocol.js";
+import { AgentSessionService } from "./agent-sessions.js";
 import type { AuthConfig } from "./auth.js";
 import {
   EventBroadcastRuntime,
@@ -63,6 +64,7 @@ export const createHttpServer = (
     };
     keybindings?: KeybindingMap;
     repositoryReviews?: RepositoryReviewService;
+    agentSessions?: AgentSessionService;
     delegation?: DelegationConfig;
   },
 ): Promise<WmuxHttpServer> => {
@@ -74,6 +76,9 @@ export const createHttpServer = (
   const currentMachines = typeof machineSource === "function" ? machineSource : () => machineSource;
   const repositoryReviews = options.repositoryReviews
     ?? new RepositoryReviewService(state, machineSource);
+  const agentSessions = options.agentSessions
+    ?? sessions.agentSessions
+    ?? new AgentSessionService(state);
   const root = clientRoot();
   const streamRequests = new StreamRequestStore();
   let vite: ViteDevServer | undefined;
@@ -111,6 +116,7 @@ export const createHttpServer = (
   const serverDeps: ServerDeps = {
     bindHost,
     auth,
+    agentSessions,
     trustedProxies,
     loginAttempts,
     state,

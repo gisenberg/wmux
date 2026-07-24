@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { ServerOptions as HttpsServerOptions } from "node:https";
 import os from "node:os";
+import { AgentSessionService } from "./agent-sessions.js";
 import path from "node:path";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { loadAuthConfig, loadRegistrationAuthConfig, validateAuthCredentialSeparation } from "./auth.js";
@@ -96,6 +97,7 @@ const main = async (): Promise<void> => {
   const settings = new SettingsStore(undefined, {
     terminalFontSize: config.terminalFontSize,
   });
+  const agentSessions = new AgentSessionService(state);
   const sessionManager = new SessionManager(
     state,
     currentMachines,
@@ -106,6 +108,7 @@ const main = async (): Promise<void> => {
     () => terminalThemeEnvironment(settings.snapshot().colorScheme),
     auth.helperToken ?? "",
     auth.browserAuthMode ?? "shared-or-login",
+    agentSessions,
   );
   sessionManagerRef = sessionManager;
   const server = await createHttpServer(host, state, currentMachines, sessionManager, settings, {
@@ -118,6 +121,7 @@ const main = async (): Promise<void> => {
     keybindings: config.keybindings,
     terminalFontFamily: config.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
     delegation: config.delegation,
+    agentSessions,
   });
   // Persist the helper callback URL next to ~/.wmux/token: helpers and agent hooks
   // in existing durable panes read this before their stale inherited env.

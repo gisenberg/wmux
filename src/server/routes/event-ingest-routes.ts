@@ -55,7 +55,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as AgentEventPostBody;
-      const result = deps.state.recordAgentEvent({
+      const result = deps.agentSessions.recordAgentEvent({
         runId: body.runId,
         workspaceId: body.workspaceId,
         tabId: body.tabId,
@@ -83,7 +83,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("delegation status route matched without captures");
-      const delegation = deps.state.delegationForRun(match[1]);
+      const delegation = deps.agentSessions.delegationForRun(match[1]);
       if (!delegation) {
         sendJson(404, { error: "delegation_not_found" });
         return;

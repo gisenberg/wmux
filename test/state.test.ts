@@ -3,11 +3,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { AgentSessionService } from "../src/server/agent-sessions.js";
 import { StateIdConflictError, StateStore, WorkspaceDepthError } from "../src/server/state.js";
 import { CURRENT_STATE_SCHEMA_VERSION, parsePersistedState } from "../src/server/state-schema.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+const agentServices = new WeakMap<StateStore, AgentSessionService>();
+const agentsFor = (state: StateStore): AgentSessionService => {
+  const existing = agentServices.get(state);
+  if (existing) return existing;
+  const service = new AgentSessionService(state);
+  agentServices.set(state, service);
+  return service;
+};
 
 const withTempState = (run: (filePath: string, dir: string) => void): void => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-state-"));
@@ -167,7 +176,7 @@ test("version 2 state migrates to delegation-aware schema", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-version-2",
       agent: "codex",
@@ -182,7 +191,7 @@ test("version 2 state migrates to delegation-aware schema", () => {
 
     const migrated = new StateStore(machines, filePath);
     assert.equal(migrated.snapshot().schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
-    assert.equal(migrated.delegationForRun("run-version-2")?.result, "Recovered while migrating");
+    assert.equal(agentsFor(migrated).delegationForRun("run-version-2")?.result, "Recovered while migrating");
     assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
   });
 });
@@ -467,7 +476,7 @@ test("agent messages are sanitized and persist across restart", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    const result = store.recordAgentEvent({
+    const result = agentsFor(store).recordAgentEvent({
       paneId,
       agent: "codex",
       status: "completed",
@@ -489,12 +498,12 @@ test("agent titles update auto-owned workspaces but preserve user-owned titles",
     const workspace = store.snapshot().workspaces[0];
     const paneId = workspace.tabs[0].panes[0].id;
 
-    store.recordAgentEvent({ paneId, agent: "opencode", status: "running", title: "OpenCode title" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "opencode", status: "running", title: "OpenCode title" });
     assert.equal(store.snapshot().workspaces[0].name, "OpenCode title");
     assert.equal(store.snapshot().workspaces[0].nameSource, "auto");
 
     store.setWorkspaceTitle(workspace.id, "Manual wmux title");
-    store.recordAgentEvent({ paneId, agent: "opencode", status: "running", title: "Later OpenCode title" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "opencode", status: "running", title: "Later OpenCode title" });
     assert.equal(store.snapshot().workspaces[0].name, "Manual wmux title");
     assert.equal(store.snapshot().workspaces[0].nameSource, "user");
   });
@@ -505,7 +514,7 @@ test("delegation results retain more detail than browser activity", () => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
     const message = "result ".repeat(3_000);
-    const result = store.recordAgentEvent({
+    const result = agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-long-result",
       agent: "codex",
@@ -515,7 +524,7 @@ test("delegation results retain more detail than browser activity", () => {
     });
 
     assert.equal(result.agentEvent.message?.length, 12_000);
-    assert.equal(store.delegationForRun("run-long-result")?.result, message.trim());
+    assert.equal(agentsFor(store).delegationForRun("run-long-result")?.result, message.trim());
   });
 });
 
@@ -523,7 +532,7 @@ test("delegation lifecycle records remain queryable by run id after restart", ()
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-durable-1",
       agent: "codex",
@@ -535,10 +544,10 @@ test("delegation lifecycle records remain queryable by run id after restart", ()
     store.flush();
 
     const reloaded = new StateStore(machines, filePath);
-    const delegation = reloaded.delegationForRun("run-durable-1");
+    const delegation = agentsFor(reloaded).delegationForRun("run-durable-1");
     assert.equal(delegation?.state, "completed");
     assert.equal(delegation?.result, "Review complete.");
-    assert.equal(reloaded.delegationForRun("missing"), undefined);
+    assert.equal(agentsFor(reloaded).delegationForRun("missing"), undefined);
   });
 });
 
@@ -547,7 +556,7 @@ test("delegation records survive workspace removal", () => {
     const store = new StateStore(machines, filePath);
     const workspace = store.createWorkspace("local");
     const paneId = workspace.tabs[0].panes[0].id;
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-closed-workspace",
       agent: "codex",
@@ -558,9 +567,13 @@ test("delegation records survive workspace removal", () => {
 
     assert.ok(store.removeWorkspace(workspace.id).length > 0);
     assert.equal(store.snapshot().agentEvents.some((event) => event.runId === "run-closed-workspace"), false);
-    assert.equal(store.delegationForRun("run-closed-workspace")?.result, "Still queryable");
+    assert.equal(agentsFor(store).delegationForRun("run-closed-workspace")?.result, "Still queryable");
     store.flush();
-    assert.equal(new StateStore(machines, filePath).delegationForRun("run-closed-workspace")?.result, "Still queryable");
+    assert.equal(
+      agentsFor(new StateStore(machines, filePath))
+        .delegationForRun("run-closed-workspace")?.result,
+      "Still queryable",
+    );
   });
 });
 
@@ -568,8 +581,8 @@ test("delegation records distinguish observer errors from agent outcomes", () =>
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, runId: "run-observer", agent: "codex", status: "completed", summary: "Done", message: "Agent result" });
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-observer", agent: "codex", status: "completed", summary: "Done", message: "Agent result" });
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-observer",
       agent: "codex",
@@ -578,13 +591,13 @@ test("delegation records distinguish observer errors from agent outcomes", () =>
       message: "Replay unavailable",
     });
 
-    const delegation = store.delegationForRun("run-observer");
+    const delegation = agentsFor(store).delegationForRun("run-observer");
     assert.equal(delegation?.state, "completed");
     assert.equal(delegation?.result, "Agent result");
     assert.equal(delegation?.observerError, "Replay unavailable");
 
-    store.recordAgentEvent({ paneId, runId: "run-late-result", agent: "codex", status: "running", summary: "Working" });
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-late-result", agent: "codex", status: "running", summary: "Working" });
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-late-result",
       agent: "codex",
@@ -592,8 +605,8 @@ test("delegation records distinguish observer errors from agent outcomes", () =>
       summary: "Controller lost contact",
       message: "Status endpoint unavailable",
     });
-    store.recordAgentEvent({ paneId, runId: "run-late-result", agent: "codex", status: "completed", summary: "Done", message: "Late result" });
-    const lateResult = store.delegationForRun("run-late-result");
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-late-result", agent: "codex", status: "completed", summary: "Done", message: "Late result" });
+    const lateResult = agentsFor(store).delegationForRun("run-late-result");
     assert.equal(lateResult?.state, "completed");
     assert.equal(lateResult?.result, "Late result");
     assert.equal(lateResult?.observerError, "Status endpoint unavailable");
@@ -609,8 +622,8 @@ test("detached delegations reconcile delayed success and failure after controlle
     ];
     for (const [index, runId] of ["run-delayed-success", "run-delayed-failure"].entries()) {
       const paneId = paneIds[index];
-      store.recordAgentEvent({ paneId, runId, agent: "codex", status: "running", summary: "Working" });
-      store.recordAgentEvent({
+      agentsFor(store).recordAgentEvent({ paneId, runId, agent: "codex", status: "running", summary: "Working" });
+      agentsFor(store).recordAgentEvent({
         paneId,
         runId,
         agent: "codex",
@@ -618,13 +631,13 @@ test("detached delegations reconcile delayed success and failure after controlle
         summary: "Controller wait expired",
         message: "Watcher detached",
       });
-      store.recordAgentEvent({ paneId, runId, agent: "codex", status: "waiting", summary: "Worker may still be running" });
-      assert.equal(store.delegationForRun(runId)?.state, "waiting");
+      agentsFor(store).recordAgentEvent({ paneId, runId, agent: "codex", status: "waiting", summary: "Worker may still be running" });
+      assert.equal(agentsFor(store).delegationForRun(runId)?.state, "waiting");
     }
     store.flush();
 
     const recovered = new StateStore(machines, filePath);
-    recovered.recordAgentEvent({
+    agentsFor(recovered).recordAgentEvent({
       paneId: paneIds[0],
       runId: "run-delayed-success",
       agent: "codex",
@@ -632,7 +645,7 @@ test("detached delegations reconcile delayed success and failure after controlle
       summary: "Completed later",
       message: "Late success",
     });
-    recovered.recordAgentEvent({
+    agentsFor(recovered).recordAgentEvent({
       paneId: paneIds[1],
       runId: "run-delayed-failure",
       agent: "codex",
@@ -641,10 +654,10 @@ test("detached delegations reconcile delayed success and failure after controlle
       message: "Late worker failure",
     });
 
-    assert.equal(recovered.delegationForRun("run-delayed-success")?.state, "completed");
-    assert.equal(recovered.delegationForRun("run-delayed-success")?.result, "Late success");
-    assert.equal(recovered.delegationForRun("run-delayed-failure")?.state, "failed");
-    assert.equal(recovered.delegationForRun("run-delayed-failure")?.error, "Late worker failure");
+    assert.equal(agentsFor(recovered).delegationForRun("run-delayed-success")?.state, "completed");
+    assert.equal(agentsFor(recovered).delegationForRun("run-delayed-success")?.result, "Late success");
+    assert.equal(agentsFor(recovered).delegationForRun("run-delayed-failure")?.state, "failed");
+    assert.equal(agentsFor(recovered).delegationForRun("run-delayed-failure")?.error, "Late worker failure");
     assert.equal(
       recovered.snapshot().notifications.filter((notification) => notification.subtitle === "completed").length,
       1,
@@ -660,8 +673,8 @@ test("delegation terminal outcomes and notifications are exact-once", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, runId: "run-exact-success", agent: "codex", status: "running", summary: "Working" });
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-exact-success", agent: "codex", status: "running", summary: "Working" });
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-exact-success",
       agent: "codex",
@@ -669,7 +682,7 @@ test("delegation terminal outcomes and notifications are exact-once", () => {
       summary: "Completed once",
       message: "First result",
     });
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-exact-success",
       agent: "codex",
@@ -677,7 +690,7 @@ test("delegation terminal outcomes and notifications are exact-once", () => {
       summary: "Duplicate completion",
       message: "Duplicate result",
     });
-    store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({
       paneId,
       runId: "run-exact-success",
       agent: "codex",
@@ -686,7 +699,7 @@ test("delegation terminal outcomes and notifications are exact-once", () => {
       message: "Late failure",
     });
 
-    const completed = store.delegationForRun("run-exact-success");
+    const completed = agentsFor(store).delegationForRun("run-exact-success");
     assert.equal(completed?.state, "completed");
     assert.equal(completed?.result, "First result");
     assert.equal(store.snapshot().notifications.filter((note) => note.paneId === paneId).length, 1);
@@ -697,9 +710,9 @@ test("delegation terminal outcomes and notifications are exact-once", () => {
     );
     assert.equal(store.snapshot().workspaces[0].descriptor, "Completed once");
 
-    store.recordAgentEvent({ paneId, runId: "run-exact-failure", agent: "codex", status: "failed", summary: "Failed once", message: "First failure" });
-    store.recordAgentEvent({ paneId, runId: "run-exact-failure", agent: "codex", status: "completed", summary: "Late success", message: "Late result" });
-    const failed = store.delegationForRun("run-exact-failure");
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-exact-failure", agent: "codex", status: "failed", summary: "Failed once", message: "First failure" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-exact-failure", agent: "codex", status: "completed", summary: "Late success", message: "Late result" });
+    const failed = agentsFor(store).delegationForRun("run-exact-failure");
     assert.equal(failed?.state, "failed");
     assert.equal(failed?.error, "First failure");
   });
@@ -709,11 +722,11 @@ test("late active events cannot regress a terminal delegation", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "completed", summary: "Done", message: "Final result" });
-    store.recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "running", summary: "Late start hook" });
-    store.recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "updated", summary: "Late notification" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "completed", summary: "Done", message: "Final result" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "running", summary: "Late start hook" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-terminal", agent: "codex", status: "updated", summary: "Late notification" });
 
-    const delegation = store.delegationForRun("run-terminal");
+    const delegation = agentsFor(store).delegationForRun("run-terminal");
     assert.equal(delegation?.state, "completed");
     assert.equal(delegation?.result, "Final result");
   });
@@ -723,13 +736,13 @@ test("a new run interrupts the previous delegation without interrupting duplicat
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, runId: "run-first", agent: "codex", status: "running", summary: "Starting" });
-    store.recordAgentEvent({ paneId, runId: "run-first", agent: "codex", status: "running", summary: "Still running" });
-    assert.equal(store.delegationForRun("run-first")?.state, "running");
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-first", agent: "codex", status: "running", summary: "Starting" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-first", agent: "codex", status: "running", summary: "Still running" });
+    assert.equal(agentsFor(store).delegationForRun("run-first")?.state, "running");
 
-    store.recordAgentEvent({ paneId, runId: "run-second", agent: "codex", status: "running", summary: "New work" });
-    assert.equal(store.delegationForRun("run-first")?.state, "interrupted");
-    assert.equal(store.delegationForRun("run-second")?.state, "running");
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-second", agent: "codex", status: "running", summary: "New work" });
+    assert.equal(agentsFor(store).delegationForRun("run-first")?.state, "interrupted");
+    assert.equal(agentsFor(store).delegationForRun("run-second")?.state, "running");
   });
 });
 
@@ -737,9 +750,9 @@ test("runless hooks inherit the current delegation through terminal completion",
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, runId: "run-durable", agent: "codex", status: "running", summary: "Starting" });
-    const hook = store.recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Prompt submitted" });
-    const stop = store.recordAgentEvent({
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-durable", agent: "codex", status: "running", summary: "Starting" });
+    const hook = agentsFor(store).recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Prompt submitted" });
+    const stop = agentsFor(store).recordAgentEvent({
       paneId,
       agent: "codex",
       status: "completed",
@@ -749,9 +762,9 @@ test("runless hooks inherit the current delegation through terminal completion",
 
     assert.equal(hook.agentEvent.runId, "run-durable");
     assert.equal(stop.agentEvent.runId, "run-durable");
-    assert.equal(store.delegationForRun("run-durable")?.state, "completed");
-    assert.equal(store.delegationForRun("run-durable")?.result, "Finished work");
-    assert.equal(store.interruptAgentForPane(paneId), false);
+    assert.equal(agentsFor(store).delegationForRun("run-durable")?.state, "completed");
+    assert.equal(agentsFor(store).delegationForRun("run-durable")?.result, "Finished work");
+    assert.equal(agentsFor(store).interruptAgentForPane(paneId), false);
   });
 });
 
@@ -759,8 +772,8 @@ test("expired terminal delegations are pruned while active delegations remain", 
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, runId: "run-expired", agent: "codex", status: "completed", summary: "Old" });
-    store.recordAgentEvent({ paneId, runId: "run-active", agent: "codex", status: "running", summary: "Active" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-expired", agent: "codex", status: "completed", summary: "Old" });
+    agentsFor(store).recordAgentEvent({ paneId, runId: "run-active", agent: "codex", status: "running", summary: "Active" });
     store.flush();
 
     const persisted = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
@@ -770,8 +783,8 @@ test("expired terminal delegations are pruned while active delegations remain", 
     fs.writeFileSync(filePath, JSON.stringify(persisted));
 
     const reloaded = new StateStore(machines, filePath);
-    assert.equal(reloaded.delegationForRun("run-expired"), undefined);
-    assert.equal(reloaded.delegationForRun("run-active")?.state, "running");
+    assert.equal(agentsFor(reloaded).delegationForRun("run-expired"), undefined);
+    assert.equal(agentsFor(reloaded).delegationForRun("run-active")?.state, "running");
   });
 });
 
@@ -779,13 +792,13 @@ test("terminal interrupts clear the latest running agent event", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Working" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Working" });
 
-    assert.equal(store.interruptAgentForPane(paneId), true);
+    assert.equal(agentsFor(store).interruptAgentForPane(paneId), true);
     const latest = store.snapshot().agentEvents[0];
     assert.equal(latest.status, "interrupted");
     assert.equal(latest.summary, "codex interrupted");
-    assert.equal(store.interruptAgentForPane(paneId), false);
+    assert.equal(agentsFor(store).interruptAgentForPane(paneId), false);
   });
 });
 
@@ -793,13 +806,13 @@ test("waiting agent events can be interrupted and resume events reconcile them",
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, agent: "opencode", status: "waiting", summary: "Waiting for input" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "opencode", status: "waiting", summary: "Waiting for input" });
 
-    assert.equal(store.interruptAgentForPane(paneId), true);
+    assert.equal(agentsFor(store).interruptAgentForPane(paneId), true);
     assert.equal(store.snapshot().agentEvents[0].status, "interrupted");
 
-    store.recordAgentEvent({ paneId, agent: "opencode", status: "waiting", summary: "Waiting for input" });
-    store.recordAgentEvent({ paneId, agent: "opencode", status: "running", summary: "Running" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "opencode", status: "waiting", summary: "Waiting for input" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "opencode", status: "running", summary: "Running" });
 
     const [current, previous] = store.snapshot().agentEvents;
     assert.equal(current.status, "running");
@@ -812,8 +825,8 @@ test("a new running event reconciles a prior turn without a stop hook", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
-    store.recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "First turn" });
-    store.recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Second turn" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "First turn" });
+    agentsFor(store).recordAgentEvent({ paneId, agent: "codex", status: "running", summary: "Second turn" });
 
     const [current, previous] = store.snapshot().agentEvents;
     assert.equal(current.status, "running");
