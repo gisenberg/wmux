@@ -1,5 +1,13 @@
 import { routeTerminalFontFamily, expect, test } from "./fixtures";
 
+const waitForSimulatedTerminalRoundTrip = async (
+  page: import("@playwright/test").Page,
+  milliseconds = 350,
+): Promise<void> => {
+  // These tests deliberately delay external PTY WebSocket frames, so the fixed wait is the condition under test.
+  await page.waitForTimeout(milliseconds);
+};
+
 test("uses a configured shortcut while preserving defaults for omitted actions", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop keyboard coverage");
 
@@ -66,6 +74,7 @@ test("registers and loads the bundled Meslo terminal font", async ({ page }, tes
 test("does not block terminal startup on slow bundled fonts", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop Chromium font coverage");
   await page.route("**/fonts/meslo-v3.4.0/**", async (route) => {
+    // This artificial asset delay verifies that terminal startup does not wait for an external font response.
     await new Promise((resolve) => setTimeout(resolve, 4_000));
     await route.continue();
   });
@@ -195,6 +204,7 @@ test("predicts bounded shell and alternate-screen input locally", async ({
       } catch {
         // Forward non-JSON frames without delay.
       }
+      // The delayed external terminal frame is required to make prediction visible before authoritative echo.
       setTimeout(() => browserSocket.send(message), delay);
     });
   });
@@ -210,9 +220,9 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     const textarea = activePane.locator(".terminal-host textarea");
     await textarea.evaluate((element: HTMLTextAreaElement) => element.focus());
-    await page.waitForTimeout(400);
+    await waitForSimulatedTerminalRoundTrip(page, 400);
     await page.keyboard.type("a");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
 
     await page.keyboard.type("x");
     const predictionCanvas = activePane.locator(".terminal-input-prediction-canvas");
@@ -226,25 +236,25 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await expect(predictionCanvas).not.toHaveAttribute("data-active", "true", { timeout: 1_000 });
 
     await page.keyboard.press("Backspace");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
     await page.keyboard.type("PS1=$'\\e[30;46mP>' bash --noprofile --norc -i");
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(600);
+    await waitForSimulatedTerminalRoundTrip(page, 600);
     await page.keyboard.type("a");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
     await page.keyboard.type("x");
     await expect(predictionCanvas).toHaveAttribute("data-active", "true");
     await page.keyboard.press("Control+C");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
     await page.keyboard.type("exit");
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(500);
+    await waitForSimulatedTerminalRoundTrip(page, 500);
     await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[HREADY\\r\\n'");
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(600);
+    await waitForSimulatedTerminalRoundTrip(page, 600);
     expect(sawAlternateScreen).toBe(true);
     await page.keyboard.type("a");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
 
     await page.keyboard.type("z");
     await expect(predictionCanvas).toHaveAttribute("data-active", "true");
@@ -254,12 +264,12 @@ test("predicts bounded shell and alternate-screen input locally", async ({
     await page.keyboard.press("Backspace");
     await expect.poll(() => predictionCanvas.getAttribute("data-prediction-cursor"))
       .toBe(JSON.stringify({ col: predictedZ.col, row: predictedZ.row }));
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
     await page.keyboard.press("Control+C");
-    await page.waitForTimeout(300);
+    await waitForSimulatedTerminalRoundTrip(page, 300);
     await page.keyboard.type("printf '\\033[?1049l'");
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
 
     await page.keyboard.press("Control+K");
     const palette = page.getByRole("dialog", { name: "Command palette" });
@@ -373,6 +383,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
     await page.routeWebSocket(/\/ws\/panes\//, (browserSocket) => {
       const serverSocket = browserSocket.connectToServer();
       browserSocket.onMessage((message) => serverSocket.send(message));
+      // The delayed external terminal frame is required to make prediction visible before authoritative echo.
       serverSocket.onMessage((message) => setTimeout(() => browserSocket.send(message), 250));
     });
     await page.reload();
@@ -380,7 +391,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
     await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     await activePane.locator(".terminal-host textarea").evaluate((element: HTMLTextAreaElement) => element.focus());
     await page.keyboard.type("a");
-    await page.waitForTimeout(350);
+    await waitForSimulatedTerminalRoundTrip(page);
     await page.keyboard.type("x");
     await expect(activePane.locator(".terminal-input-prediction-canvas")).toHaveAttribute("data-active", "true");
   } finally {
@@ -498,7 +509,7 @@ test("does not forward a primary drag from the hidden terminal input as PTY mous
     data: { data: "printf '\\033[?1000h\\033[?1002h\\033[?1006h'\r", cols: 100, rows: 30 },
   });
   expect(enableMouse.ok()).toBeTruthy();
-  await page.waitForTimeout(200);
+  await waitForSimulatedTerminalRoundTrip(page, 200);
   await page.evaluate(() => {
     (window as unknown as { __wmuxSentSocketMessages: string[] }).__wmuxSentSocketMessages.length = 0;
   });

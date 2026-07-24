@@ -1,5 +1,13 @@
 import { createNestedWorkspacePair, expect, test } from "./fixtures";
 
+const waitForLifeFrameWindow = async (
+  page: import("@playwright/test").Page,
+  milliseconds: number,
+): Promise<void> => {
+  // The fixed interval spans the external animation clock so the test can prove that hidden rendering stays paused.
+  await page.waitForTimeout(milliseconds);
+};
+
 test("legacy workspace tree preserves nested indentation and agent origin", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "legacy desktop tree coverage");
   const { child, root } = await createNestedWorkspacePair(request);
@@ -53,9 +61,9 @@ test("idle Life field stays bounded and pauses when it leaves the viewport", asy
     await canvas.evaluate((element) => {
       element.closest<HTMLElement>(".empty-workspace-view")!.style.display = "none";
     });
-    await page.waitForTimeout(180);
+    await waitForLifeFrameWindow(page, 180);
     const pausedAt = Number(await canvas.getAttribute("data-render-frame"));
-    await page.waitForTimeout(300);
+    await waitForLifeFrameWindow(page, 300);
     expect(Number(await canvas.getAttribute("data-render-frame"))).toBe(pausedAt);
 
     await canvas.evaluate((element) => {
