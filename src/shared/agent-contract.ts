@@ -15,6 +15,8 @@ export const AGENT_CONTRACT_LIMITS = {
   maxLine: 1_100_000,
   maxPrompt: 128 * 1024,
   maxText: 64_000,
+  terminationGraceSeconds: 2,
+  helpProbeTimeoutSeconds: 5,
   maxHelpOutput: 256 * 1024,
   maxBlankRequestLines: 8,
   maxRunId: 128,

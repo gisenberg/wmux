@@ -12,25 +12,36 @@ import sys
 import tempfile
 import time
 
-MAX_LINE = 1_100_000
-MAX_PROMPT = 128 * 1024
-MAX_TEXT = 64_000
-TERMINATION_GRACE = 2.0
-HELP_PROBE_TIMEOUT = 5.0
-MAX_HELP_OUTPUT = 256 * 1024
-MAX_BLANK_REQUEST_LINES = 8
-RUNTIMES = {"opencode", "codex", "claude"}
-SANDBOX_MODES = {"read-only", "workspace-write", "danger-full-access"}
-RESULT_FORMATS = {"outcome-v1"}
-OUTCOME_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "outcome": {"type": "string", "enum": ["completed", "blocked", "failed"]},
-        "summary": {"type": "string"},
-    },
-    "required": ["outcome", "summary"],
-    "additionalProperties": False,
-}
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from wmux_agent_contract import (
+    AGENT_DONE,
+    AGENT_READY,
+    AGENT_RESULT,
+    AGENT_TUI_ACK,
+    AGENT_TUI_EXIT,
+    AGENT_TUI_LAUNCH,
+    AGENT_TUI_READY,
+    AGENT_TUI_RELEASE,
+    HELP_PROBE_TIMEOUT,
+    MAX_BLANK_REQUEST_LINES,
+    MAX_DIRECTORY,
+    MAX_HELP_OUTPUT,
+    MAX_LINE,
+    MAX_OPTION_TEXT,
+    MAX_PROMPT,
+    MAX_RUN_ID,
+    MAX_TEXT,
+    OUTCOME_SCHEMA,
+    RESULT_FORMATS,
+    RUNTIMES,
+    SANDBOX_MODES,
+    TERMINATION_GRACE,
+)
+
+RUN_ID_RE = r"[A-Za-z0-9._-]{1,%d}" % MAX_RUN_ID
 
 
 def bounded(value):
@@ -52,8 +63,8 @@ def emit(kind, value):
 
 
 def fail(run_id, message, code=2):
-    emit("WMUX_AGENT_RESULT", {"runId": run_id, "ok": False, "error": bounded(message)})
-    print("WMUX_AGENT_DONE %s %d" % (run_id, code), flush=True)
+    emit(AGENT_RESULT, {"runId": run_id, "ok": False, "error": bounded(message)})
+    print("%s %s %d" % (AGENT_DONE, run_id, code), flush=True)
     return code
 
 
@@ -69,7 +80,7 @@ def read_request_line():
     raise ValueError("request must be Base64 JSON")
 
 
-def request_from_stdin(marker="WMUX_AGENT_READY"):
+def request_from_stdin(marker=AGENT_READY):
     tty_state = None
     if sys.stdin.isatty() and os.name == "nt":
         import msvcrt
@@ -121,7 +132,7 @@ def request_from_stdin(marker="WMUX_AGENT_READY"):
 def validate(request, tui=False):
     run_id, prompt, directory = (request.get(key) for key in ("runId", "prompt", "directory"))
     runtime = request.get("runtime") or os.environ.get("WMUX_AGENT_RUNTIME_DEFAULT")
-    valid_id = isinstance(run_id, str) and 0 < len(run_id) <= 128 and all(
+    valid_id = isinstance(run_id, str) and 0 < len(run_id) <= MAX_RUN_ID and all(
         char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for char in run_id
     )
     if not valid_id:
@@ -130,7 +141,7 @@ def validate(request, tui=False):
         raise ValueError("runtime must be opencode, codex, or claude")
     if not tui and (not isinstance(prompt, str) or not prompt or len(prompt.encode()) > MAX_PROMPT):
         raise ValueError("invalid prompt")
-    if not isinstance(directory, str) or len(directory) > 4096 or "\x00" in directory:
+    if not isinstance(directory, str) or len(directory) > MAX_DIRECTORY or "\x00" in directory:
         raise ValueError("invalid directory")
     if tui and not directory.startswith("/"):
         raise ValueError("invalid directory")
@@ -138,7 +149,7 @@ def validate(request, tui=False):
     if not os.path.isdir(directory):
         raise ValueError("directory does not exist")
     for key in ("agent", "model", "title"):
-        if key in request and (not isinstance(request[key], str) or len(request[key]) > 512 or "\x00" in request[key]):
+        if key in request and (not isinstance(request[key], str) or len(request[key]) > MAX_OPTION_TEXT or "\x00" in request[key]):
             raise ValueError("invalid %s" % key)
     for key in ("unattended", "writeAccess"):
         if key in request and not isinstance(request[key], bool):
@@ -193,9 +204,9 @@ def tui_command_for(request, runtime):
 def tui_main(expected_run_id):
     run_id = expected_run_id or "unknown"
     try:
-        request = request_from_stdin("WMUX_AGENT_TUI_READY %s" % run_id)
+        request = request_from_stdin("%s %s" % (AGENT_TUI_READY, run_id))
         candidate = request.get("runId")
-        if not expected_run_id and isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,128}", candidate):
+        if not expected_run_id and isinstance(candidate, str) and re.fullmatch(RUN_ID_RE, candidate):
             run_id = candidate
         request_run_id, runtime, _prompt, directory = validate(request, tui=True)
         if expected_run_id and request_run_id != expected_run_id:
@@ -207,9 +218,9 @@ def tui_main(expected_run_id):
     except (OSError, ValueError) as error:
         return fail(run_id, str(error))
 
-    ack = "WMUX_AGENT_TUI_ACK %s" % run_id
+    ack = "%s %s" % (AGENT_TUI_ACK, run_id)
     try:
-        received = control_line("WMUX_AGENT_TUI_LAUNCH %s" % run_id)
+        received = control_line("%s %s" % (AGENT_TUI_LAUNCH, run_id))
         if received != ack:
             code = fail(run_id, "invalid interactive controller acknowledgement")
             quarantine_tui(run_id)
@@ -221,7 +232,7 @@ def tui_main(expected_run_id):
         code = fail(run_id, str(error), 127)
         quarantine_tui(run_id)
         return code
-    print("WMUX_AGENT_TUI_EXIT %s %d" % (run_id, code), flush=True)
+    print("%s %s %d" % (AGENT_TUI_EXIT, run_id, code), flush=True)
     quarantine_tui(run_id)
     return code
 
@@ -371,7 +382,7 @@ def supervise_tui(argv, directory, env):
 
 
 def quarantine_tui(run_id):
-    release = ("WMUX_AGENT_TUI_RELEASE %s" % run_id).encode("ascii")
+    release = ("%s %s" % (AGENT_TUI_RELEASE, run_id)).encode("ascii")
     tty_state = None
     if sys.stdin.isatty():
         import termios
@@ -383,7 +394,7 @@ def quarantine_tui(run_id):
     try:
         print(
             "Interactive runtime exited; press Ctrl-C to return to the shell "
-            "or enter WMUX_AGENT_TUI_RELEASE %s." % run_id,
+            "or enter %s %s." % (AGENT_TUI_RELEASE, run_id),
             flush=True,
         )
         while True:
@@ -571,23 +582,23 @@ def parse_structured_outcome(value):
 def main():
     if len(sys.argv) in {2, 3} and sys.argv[1] == "tui":
         expected = sys.argv[2] if len(sys.argv) == 3 else ""
-        if expected and not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", expected):
+        if expected and not re.fullmatch(RUN_ID_RE, expected):
             return fail("unknown", "invalid TUI runId")
         return tui_main(expected)
     expected_run_id = ""
     if len(sys.argv) == 3 and sys.argv[1] == "request":
         expected_run_id = sys.argv[2]
-        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", expected_run_id):
+        if not re.fullmatch(RUN_ID_RE, expected_run_id):
             return fail("unknown", "invalid request runId")
     elif len(sys.argv) != 1:
         return fail("unknown", "usage: wmux-agent-run [request RUN_ID|tui RUN_ID]")
     run_id = expected_run_id or "unknown"
     schema_path = None
     try:
-        marker = "WMUX_AGENT_READY %s" % expected_run_id if expected_run_id else "WMUX_AGENT_READY"
+        marker = "%s %s" % (AGENT_READY, expected_run_id) if expected_run_id else AGENT_READY
         request = request_from_stdin(marker)
         candidate = request.get("runId")
-        if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,128}", candidate):
+        if isinstance(candidate, str) and re.fullmatch(RUN_ID_RE, candidate):
             run_id = candidate
         if expected_run_id and candidate != expected_run_id:
             raise ValueError("request runId does not match the launched helper")
@@ -705,8 +716,8 @@ def main():
     }
     if request.get("resultFormat") == "outcome-v1":
         payload["outcome"] = outcome
-    emit("WMUX_AGENT_RESULT", payload)
-    print("WMUX_AGENT_DONE %s %d" % (run_id, code), flush=True)
+    emit(AGENT_RESULT, payload)
+    print("%s %s %d" % (AGENT_DONE, run_id, code), flush=True)
     return code
 
 

@@ -16,6 +16,13 @@ const run = (command, args, env = process.env) => {
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
+run(process.execPath, [
+  "--import",
+  "tsx",
+  "scripts/generate-agent-contract.mjs",
+  "--check",
+]);
+
 const python = [
   { command: "python3", args: [] },
   { command: "python", args: [] },
@@ -33,6 +40,7 @@ run(python.command, [
   "scripts/wmux-agent-event",
   "scripts/wmux-agent-profile",
   "scripts/wmux-agent-run",
+  "scripts/wmux_agent_contract.py",
   "scripts/wmux-copy",
   "scripts/wmux-run",
   "scripts/wmux-opencode-run",
