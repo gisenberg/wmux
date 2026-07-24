@@ -7,7 +7,7 @@ import {
   DurableMultiplexerBackend,
   durableMultiplexerCapabilities,
 } from "./durable-multiplexer.js";
-import { RawPtyBackend, RAW_PTY_CAPABILITIES } from "./raw-pty.js";
+import { RawPtyBackend, rawPtyCapabilities } from "./raw-pty.js";
 import { WindowsAgentBackend, WINDOWS_AGENT_CAPABILITIES } from "./windows-agent-backend.js";
 
 export const isDurableMultiplexerMachine = (machine: MachineConfig): boolean => {
@@ -41,7 +41,7 @@ export const sessionBackendCapabilitiesForMachine = (machine: MachineConfig): Ba
     ? WINDOWS_AGENT_CAPABILITIES
     : isDurableMultiplexerMachine(machine)
       ? durableMultiplexerCapabilities(machine)
-      : RAW_PTY_CAPABILITIES;
+      : rawPtyCapabilities(machine);
 
 export type {
   BackendCapabilities,

@@ -13,26 +13,30 @@ import type {
 } from "./backend.js";
 import type { MachineConfig } from "../types.js";
 
-export const RAW_PTY_CAPABILITIES: BackendCapabilities = {
+export const rawPtyCapabilities = (machine: MachineConfig): BackendCapabilities => ({
   transport: "pty",
   restartDurable: false,
-  supportsFileStaging: false,
+  supportsFileStaging:
+    !machine.command?.length
+    && (machine.kind === "local" || machine.kind === "ssh" || machine.kind === "powershell-ssh"),
   supportsCwdReport: true,
   replay: true,
   resize: true,
   cwd: "osc7",
   agentOwned: false,
   refreshClient: false,
-};
+});
 
 export class RawPtyBackend implements SessionBackend {
   readonly id: SessionBackend["id"] = "raw-pty";
-  readonly capabilities = RAW_PTY_CAPABILITIES;
+  readonly capabilities: BackendCapabilities;
 
   constructor(
     readonly machine: MachineConfig,
     protected readonly pasteImages: PasteImageStager,
-  ) {}
+  ) {
+    this.capabilities = rawPtyCapabilities(machine);
+  }
 
   spawn(spec: BackendSpawnSpec): BackendSession {
     return new PtySession(spec.pane, this.machine, spec.cols, spec.rows, spec.env);
@@ -60,8 +64,11 @@ export class RawPtyBackend implements SessionBackend {
     return session.attachReplay;
   }
 
-  async stageFile(_paneId: string, _data: Buffer, _metadata: StageFileMetadata): Promise<StagedPasteImage> {
-    throw new PasteImageStageError(409, "paste_image_backend_unsupported");
+  async stageFile(paneId: string, data: Buffer, _metadata: StageFileMetadata): Promise<StagedPasteImage> {
+    if (!this.capabilities.supportsFileStaging) {
+      throw new PasteImageStageError(409, "paste_image_backend_unsupported");
+    }
+    return this.pasteImages.stage(paneId, structuredClone(this.machine), data);
   }
 
   detach(session: BackendSession): void {

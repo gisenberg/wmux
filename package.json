@@ -20,7 +20,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
     "audit:sessions": "node scripts/wmux-session-audit",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts test/backend-conformance/*.test.ts",
     "test:e2e": "playwright test && playwright test --config=playwright.auth.config.ts",
     "test:e2e:chromium": "playwright test --project=chromium --project=mobile-chromium",
     "test:e2e:auth": "playwright test --config=playwright.auth.config.ts",
