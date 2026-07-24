@@ -63,7 +63,7 @@ export function MobilePasteDialog({
           placeholder="Paste text here"
           autoComplete="off"
           autoCorrect="off"
-          autoCapitalize="none"
+          autoCapitalize="off"
           spellCheck={false}
           onChange={(event) => setText(event.target.value)}
         />

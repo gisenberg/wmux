@@ -193,7 +193,7 @@ export function RetroGraphicalBootScreen({
             aria-label="Authentication input"
             autoComplete="off"
             autoCorrect="off"
-            autoCapitalize="none"
+            autoCapitalize="off"
             spellCheck={false}
             enterKeyHint="next"
             onInput={(event) => {

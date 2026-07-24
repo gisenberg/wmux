@@ -16,7 +16,7 @@ export const configureTerminalInput = (terminal: Terminal): void => {
   if (!textarea) return;
   textarea.setAttribute("autocomplete", "off");
   textarea.setAttribute("autocorrect", "off");
-  textarea.setAttribute("autocapitalize", "none");
+  textarea.setAttribute("autocapitalize", "off");
   textarea.setAttribute("spellcheck", "false");
   textarea.setAttribute("enterkeyhint", "enter");
   textarea.setAttribute("aria-autocomplete", "none");

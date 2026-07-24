@@ -103,7 +103,7 @@ export function CommandPalette({
             placeholder="Search commands, workspaces, tabs, hosts"
             autoComplete="off"
             autoCorrect="off"
-            autoCapitalize="none"
+            autoCapitalize="off"
             spellCheck={false}
             onChange={(event) => onQueryChange(event.target.value)}
           />
@@ -161,4 +161,3 @@ const filterCommands = (commands: PaletteCommand[], query: string): PaletteComma
 };
 
 const modulo = (value: number, length: number): number => ((value % length) + length) % length;
-

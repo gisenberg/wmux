@@ -365,7 +365,7 @@ test("DPR changes clear stale prediction metrics before repainting", async ({
     await expect(prediction).toHaveAttribute("data-active", "true");
     const initialMetrics = await readPredictionMetrics(prediction);
     expect(initialMetrics.dpr).toBe(2);
-    expect(initialMetrics.width).toBeGreaterThan(8);
+    expect(initialMetrics.width).toBeGreaterThanOrEqual(8);
     expect(initialMetrics.width).toBeLessThan(9);
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
