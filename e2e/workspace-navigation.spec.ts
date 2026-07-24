@@ -581,6 +581,11 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
 
 test("mobile chat restores durable timeline history without terminal replay", async ({ page, request }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only timeline coverage");
+  const sessionSuffix = testInfo.project.name.replaceAll(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const runId = `mobile-timeline-turn-${sessionSuffix}`;
+  const sessionId = `mobile-timeline-session-${sessionSuffix}`;
+  const prompt = `Timeline-only ${testInfo.project.name} prompt after the terminal replay boundary.`;
+  const outcome = `Timeline-only ${testInfo.project.name} response restored from durable storage.`;
 
   const bootstrapResponse = await request.get("/api/bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
@@ -606,13 +611,13 @@ test("mobile chat restores durable timeline history without terminal replay", as
       workspaceId: workspace?.id,
       tabId: tab?.id,
       paneId: tab?.activePaneId,
-      runId: "mobile-timeline-turn",
-      sessionId: "mobile-timeline-session",
+      runId,
+      sessionId,
       agent: "codex",
       status: "running",
       title: "Durable mobile history",
       summary: "Timeline turn running",
-      prompt: "Timeline-only prompt after the terminal replay boundary.",
+      prompt,
     },
   });
   expect(running.ok()).toBeTruthy();
@@ -621,13 +626,13 @@ test("mobile chat restores durable timeline history without terminal replay", as
       workspaceId: workspace?.id,
       tabId: tab?.id,
       paneId: tab?.activePaneId,
-      runId: "mobile-timeline-turn",
-      sessionId: "mobile-timeline-session",
+      runId,
+      sessionId,
       agent: "codex",
       status: "completed",
       title: "Durable mobile history",
       summary: "Timeline turn completed",
-      message: "Timeline-only response restored from durable storage.",
+      message: outcome,
     },
   });
   expect(completed.ok()).toBeTruthy();
@@ -637,15 +642,11 @@ test("mobile chat restores durable timeline history without terminal replay", as
     window.sessionStorage.removeItem("wmux.mobileSurfaceModes");
   });
   await page.reload();
-  await expect(
-    page.getByText("Timeline-only prompt after the terminal replay boundary."),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Timeline-only response restored from durable storage."),
-  ).toBeVisible();
+  await expect(page.getByText(prompt)).toBeVisible();
+  await expect(page.getByText(outcome)).toBeVisible();
 
   const timelineResponse = await request.get(
-    "/api/agent-sessions/mobile-timeline-session",
+    `/api/agent-sessions/${sessionId}`,
   );
   expect(timelineResponse.ok()).toBeTruthy();
   const timeline = await timelineResponse.json() as {
