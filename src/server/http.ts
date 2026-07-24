@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import http from "node:http";
 import https from "node:https";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
@@ -63,6 +62,7 @@ import {
 import { authRoutes } from "./routes/auth-routes.js";
 import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
 import { eventIngestRoutes } from "./routes/event-ingest-routes.js";
+import { mediaRoutes } from "./routes/media-routes.js";
 import { registryRoutes } from "./routes/registry-routes.js";
 import { workspaceRoutes } from "./routes/workspace-routes.js";
 import {
@@ -75,13 +75,13 @@ const apiRoutes = [
   ...authRoutes,
   ...bootstrapRoutes,
   ...eventIngestRoutes,
+  ...mediaRoutes,
   ...registryRoutes,
   ...workspaceRoutes,
 ] as const;
 
 // Default cap for JSON control endpoints; upload endpoints pass a larger cap.
 const MAX_JSON_BODY = 1024 * 1024;
-const MAX_UPLOAD_BODY = 12 * 1024 * 1024;
 
 export const HEALTH_EPOCH_PROCESS_STRIDE = 1024;
 export const healthEpochForProcessStart = (startedAtMs: number): number => {
@@ -540,131 +540,6 @@ export const createHttpServer = (
         return;
       }
 
-      if (url.pathname === "/api/media" && request.method === "POST") {
-        const body = (await readBody(request, MAX_UPLOAD_BODY)) as {
-          workspaceId?: string;
-          tabId?: string;
-          paneId?: string;
-          name?: string;
-          mimeType?: string;
-          data?: string;
-        };
-        if (!body.data) {
-          sendJson(response, 400, { error: "missing_media_data" });
-          return;
-        }
-        if (!isBase64Data(body.data.replace(/\s+/g, ""))) {
-          sendJson(response, 400, { error: "invalid_media_data" });
-          return;
-        }
-        const media = state.createMedia({
-          workspaceId: body.workspaceId,
-          tabId: body.tabId,
-          paneId: body.paneId,
-          name: body.name ?? "media",
-          mimeType: body.mimeType ?? "application/octet-stream",
-          data: body.data,
-        });
-        sendJson(response, 201, { media });
-        return;
-      }
-
-      if (url.pathname === "/api/clipboard" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          workspaceId?: string;
-          tabId?: string;
-          paneId?: string;
-          text?: string;
-        };
-        if (typeof body.text !== "string" || body.text.length === 0) {
-          sendJson(response, 400, { error: "missing_clipboard_text" });
-          return;
-        }
-        const clipboard = state.createClipboard({
-          workspaceId: body.workspaceId,
-          tabId: body.tabId,
-          paneId: body.paneId,
-          text: body.text,
-        });
-        sendJson(response, 201, { clipboard });
-        return;
-      }
-
-      const panePasteImages = url.pathname.match(/^\/api\/panes\/([^/]+)\/paste-images$/);
-      if (panePasteImages && request.method === "POST") {
-        const paneId = decodeURIComponent(panePasteImages[1]);
-        if (!sessions.hasLivePaneSession(paneId)) {
-          sendJson(response, state.findPane(paneId) ? 409 : 404, {
-            error: state.findPane(paneId) ? "paste_image_pane_not_live" : "pane_not_found",
-          });
-          return;
-        }
-        if ((request.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase() !== "application/octet-stream") {
-          throw new HttpError(415, "paste_image_content_type_required");
-        }
-        const staged = await sessions.stagePasteImage(paneId, await readBinaryBody(request));
-        sendJson(response, 201, {
-          stageId: staged.stageId,
-          targetPath: staged.targetPath,
-          mimeType: staged.mimeType,
-          bytes: staged.bytes,
-          expiresAt: staged.expiresAt,
-        });
-        return;
-      }
-
-      const panePasteImage = url.pathname.match(/^\/api\/panes\/([^/]+)\/paste-images\/([^/]+)$/);
-      if (panePasteImage && request.method === "DELETE") {
-        const removed = await sessions.discardPasteImage(
-          decodeURIComponent(panePasteImage[1]),
-          decodeURIComponent(panePasteImage[2]),
-        );
-        sendJson(response, removed ? 200 : 404, { removed });
-        return;
-      }
-
-      const paneAttachment = url.pathname.match(/^\/api\/panes\/([^/]+)\/attachments$/);
-      if (paneAttachment && request.method === "POST") {
-        const paneId = decodeURIComponent(paneAttachment[1]);
-        if (!state.findPane(paneId)) {
-          sendJson(response, 404, { error: "pane_not_found" });
-          return;
-        }
-        const body = (await readBody(request, MAX_UPLOAD_BODY)) as { name?: unknown; mimeType?: unknown; data?: unknown };
-        if (typeof body.data !== "string" || !body.data.trim()) {
-          sendJson(response, 400, { error: "missing_attachment_data" });
-          return;
-        }
-        const mimeType = typeof body.mimeType === "string" ? body.mimeType.trim().toLowerCase() : "";
-        const extension = attachmentExtensionForMimeType(mimeType);
-        if (!extension) {
-          sendJson(response, 400, { error: "unsupported_attachment_type" });
-          return;
-        }
-        const encodedData = body.data.replace(/\s+/g, "");
-        if (!isBase64Data(encodedData)) {
-          sendJson(response, 400, { error: "invalid_attachment_data" });
-          return;
-        }
-        const buffer = Buffer.from(encodedData, "base64");
-        if (buffer.length === 0) {
-          sendJson(response, 400, { error: "empty_attachment" });
-          return;
-        }
-        if (buffer.length > maxAttachmentBytes) {
-          sendJson(response, 413, { error: "attachment_too_large" });
-          return;
-        }
-        const attachment = savePaneAttachment(paneId, {
-          name: typeof body.name === "string" ? body.name : undefined,
-          mimeType,
-          extension,
-          buffer,
-        });
-        sendJson(response, 201, { attachment });
-        return;
-      }
-
       const paneReview = url.pathname.match(/^\/api\/panes\/([^/]+)\/reviews$/);
       if (paneReview && request.method === "POST") {
         let paneId: string;
@@ -705,13 +580,6 @@ export const createHttpServer = (
       }
 
       if (request.method === "GET") {
-        const attachment = url.pathname.match(/^\/api\/attachments\/([^/]+)\/([^/]+)$/);
-        if (attachment) {
-          if (servePaneAttachment(decodeURIComponent(attachment[1]), decodeURIComponent(attachment[2]), response)) return;
-          sendJson(response, 404, { error: "attachment_not_found" });
-          return;
-        }
-
         if (vite && await serveViteRequest(vite, request, response, url, root)) return;
 
         const filePath =
@@ -986,108 +854,6 @@ const cwdForSourcePane = async (
   const cwd = machine ? await readDurableSessionCwd(machine, sourcePane.id) : undefined;
   if (cwd && cwd !== sourcePane.cwd) state.updatePane(sourcePane.id, { cwd });
   return cwd ?? sourcePane.cwd;
-};
-
-const maxAttachmentBytes = 8 * 1024 * 1024;
-
-const attachmentExtensions: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/jpg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "image/avif": "avif",
-  "image/bmp": "bmp",
-  "image/heic": "heic",
-  "image/heif": "heif",
-};
-
-interface SavedPaneAttachment {
-  id: string;
-  paneId: string;
-  name: string;
-  mimeType: string;
-  bytes: number;
-  url: string;
-  createdAt: string;
-}
-
-const attachmentRoot = (): string =>
-  path.resolve(process.env.WMUX_ATTACHMENT_DIR ?? path.join(os.homedir(), ".wmux", "attachments"));
-
-const attachmentExtensionForMimeType = (mimeType: string): string | null =>
-  attachmentExtensions[mimeType.toLowerCase()] ?? null;
-
-const isBase64Data = (value: string): boolean =>
-  value.length % 4 !== 1 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
-
-const savePaneAttachment = (
-  paneId: string,
-  input: { name?: string; mimeType: string; extension: string; buffer: Buffer },
-): SavedPaneAttachment => {
-  const paneSegment = safePathSegment(paneId, "pane");
-  const id = `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  const displayName = safeDisplayName(input.name, `pasted-image.${input.extension}`);
-  const baseName = safeFileBaseName(displayName, "pasted-image");
-  const fileName = `${id}-${baseName}.${input.extension}`;
-  const paneDirectory = path.join(attachmentRoot(), paneSegment);
-  fs.mkdirSync(paneDirectory, { recursive: true });
-  fs.writeFileSync(path.join(paneDirectory, fileName), input.buffer, { flag: "wx" });
-  return {
-    id,
-    paneId,
-    name: displayName,
-    mimeType: input.mimeType,
-    bytes: input.buffer.length,
-    url: `/api/attachments/${encodeURIComponent(paneSegment)}/${encodeURIComponent(fileName)}`,
-    createdAt: new Date().toISOString(),
-  };
-};
-
-const servePaneAttachment = (paneSegment: string, fileName: string, response: http.ServerResponse): boolean => {
-  if (safePathSegment(paneSegment, "") !== paneSegment || path.basename(fileName) !== fileName) return false;
-  if (!/^[A-Za-z0-9._-]+$/.test(fileName)) return false;
-  const paneDirectory = path.resolve(attachmentRoot(), paneSegment);
-  const filePath = path.resolve(paneDirectory, fileName);
-  if (!filePath.startsWith(`${paneDirectory}${path.sep}`)) return false;
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
-  const stat = fs.statSync(filePath);
-  response.writeHead(200, {
-    "content-type": attachmentContentType(fileName),
-    "content-length": String(stat.size),
-    "cache-control": "private, max-age=86400",
-    "x-content-type-options": "nosniff",
-  });
-  fs.createReadStream(filePath).pipe(response);
-  return true;
-};
-
-const safeDisplayName = (name: string | undefined, fallback: string): string => {
-  const trimmed = (name ?? "").trim();
-  const baseName = trimmed ? path.basename(trimmed) : fallback;
-  return baseName.replace(/[^\w .()[\]-]+/g, "-").replace(/\s+/g, " ").slice(0, 120) || fallback;
-};
-
-const safeFileBaseName = (name: string, fallback: string): string => {
-  const withoutExtension = name.replace(/\.[^.]+$/, "");
-  return safePathSegment(withoutExtension, fallback).slice(0, 80);
-};
-
-const safePathSegment = (value: string, fallback: string): string => {
-  const safe = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe || fallback;
-};
-
-const attachmentContentType = (filePath: string): string => {
-  if (filePath.endsWith(".png")) return "image/png";
-  if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) return "image/jpeg";
-  if (filePath.endsWith(".gif")) return "image/gif";
-  if (filePath.endsWith(".webp")) return "image/webp";
-  if (filePath.endsWith(".avif")) return "image/avif";
-  if (filePath.endsWith(".bmp")) return "image/bmp";
-  if (filePath.endsWith(".heic")) return "image/heic";
-  if (filePath.endsWith(".heif")) return "image/heif";
-  return "application/octet-stream";
 };
 
 const contentType = (filePath: string): string => {
