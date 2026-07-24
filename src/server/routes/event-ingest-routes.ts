@@ -1,3 +1,7 @@
+import type {
+  AgentEventPostBody,
+  RunEventPostBody,
+} from "../../shared/agent-contract.js";
 import {
   type ApiRoute,
   routePolicy,
@@ -50,18 +54,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
       ["automation", "helper"],
     ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
-      const body = (await readJsonBody()) as {
-        runId?: string;
-        workspaceId?: string;
-        tabId?: string;
-        paneId?: string;
-        agent?: string;
-        status?: string;
-        title?: string;
-        summary?: string;
-        message?: string;
-        body?: string;
-      };
+      const body = (await readJsonBody()) as AgentEventPostBody;
       const result = deps.state.recordAgentEvent({
         runId: body.runId,
         workspaceId: body.workspaceId,
@@ -110,17 +103,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
       ["helper"],
     ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
-      const body = (await readJsonBody()) as {
-        workspaceId?: string;
-        tabId?: string;
-        paneId?: string;
-        runId?: string;
-        command?: string;
-        status?: "started" | "completed" | "failed";
-        exitCode?: number | null;
-        startedAt?: string;
-        completedAt?: string;
-      };
+      const body = (await readJsonBody()) as RunEventPostBody;
       if (
         body.status
         && !["started", "completed", "failed"].includes(body.status)
