@@ -64,6 +64,7 @@ import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
 import { eventIngestRoutes } from "./routes/event-ingest-routes.js";
 import { mediaRoutes } from "./routes/media-routes.js";
 import { registryRoutes } from "./routes/registry-routes.js";
+import { repositoryRoutes } from "./routes/repository-routes.js";
 import { streamRoutes } from "./routes/stream-routes.js";
 import { workspaceRoutes } from "./routes/workspace-routes.js";
 import {
@@ -78,6 +79,7 @@ const apiRoutes = [
   ...eventIngestRoutes,
   ...mediaRoutes,
   ...registryRoutes,
+  ...repositoryRoutes,
   ...streamRoutes,
   ...workspaceRoutes,
 ] as const;
@@ -486,45 +488,6 @@ export const createHttpServer = (
           readJsonBody: (maxBytes) => readBody(request, maxBytes),
           readBinaryBody: (maxBytes) => readBinaryBody(request, maxBytes),
         });
-        return;
-      }
-
-      const paneReview = url.pathname.match(/^\/api\/panes\/([^/]+)\/reviews$/);
-      if (paneReview && request.method === "POST") {
-        let paneId: string;
-        try {
-          paneId = decodeURIComponent(paneReview[1]);
-        } catch {
-          throw new HttpError(400, "invalid_pane_id");
-        }
-        const body = await readBody(request);
-        if (
-          typeof body !== "object"
-          || body === null
-          || Array.isArray(body)
-          || Object.keys(body).length !== 1
-          || !("kind" in body)
-          || body.kind !== "working-tree"
-        ) {
-          throw new HttpError(400, "invalid_repository_review_request");
-        }
-        const abortController = new AbortController();
-        const abort = (): void => abortController.abort();
-        const abortOnClose = (): void => {
-          if (!response.writableEnded) abort();
-        };
-        request.once("aborted", abort);
-        response.once("close", abortOnClose);
-        try {
-          const snapshot = await repositoryReviews.workingTreeSnapshot(
-            paneId,
-            abortController.signal,
-          );
-          sendJson(response, 201, { snapshot }, { "cache-control": "no-store" });
-        } finally {
-          request.removeListener("aborted", abort);
-          response.removeListener("close", abortOnClose);
-        }
         return;
       }
 
