@@ -3,6 +3,15 @@ import { spawn } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import {
+  WINDOWS_AGENT_LONG_POLL,
+  WINDOWS_AGENT_PATHS,
+  type WindowsAgentHealth,
+  type WindowsAgentOutputResponse as AgentOutputResponse,
+  type WindowsAgentPasteImageResponse,
+  type WindowsAgentSessionListResponse as AgentSessionListResponse,
+  type WindowsAgentSessionResponse as AgentSessionResponse,
+} from "../shared/windows-agent-protocol.js";
 import type { MachineConfig, PaneStartupPhase, PaneState } from "./types.js";
 import {
   buildWindowsHelperBundle,
@@ -23,74 +32,10 @@ interface AgentEvents {
   exit: [number | null];
 }
 
-interface AgentSessionResponse {
-  id: string;
-  pid?: number;
-  status?: string;
-  exitCode?: number | null;
-  cwd?: string;
-  base?: number;
-  cursor?: number;
-  cols?: number;
-  rows?: number;
-}
-
-interface AgentSessionListResponse {
-  sessions?: AgentSessionResponse[];
-}
-
-interface AgentResizeEvent {
-  cursor: number;
-  cols: number;
-  rows: number;
-}
-
-interface AgentOutputResponse {
-  base?: number;
-  startCursor?: number;
-  cursor?: number;
-  cols?: number;
-  rows?: number;
-  resizes?: AgentResizeEvent[];
-  dataBase64?: string;
-  exited?: boolean;
-  exitCode?: number | null;
-  cwd?: string;
-}
-
-export interface WindowsAgentHeartbeatHealth {
-  owner?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-  intervalSeconds?: number;
-  lastAttemptAt?: string | null;
-  lastSuccessAt?: string | null;
-  lastFailureAt?: string | null;
-  consecutiveFailures?: number;
-  lastError?: string | null;
-}
-
-export interface WindowsAgentHealth {
-  ok?: boolean;
-  releaseVersion?: string;
-  protocolVersion?: number;
-  /** Transition alias returned by agents released before structured version fields. */
-  version?: string;
-  machine?: string;
-  pid?: number;
-  sessions?: number;
-  activeSessions?: number;
-  draining?: boolean;
-  updatePending?: boolean;
-  restartWhenIdle?: boolean;
-  backend?: string;
-  processTree?: string;
-  helperBundleVersion?: string;
-  conptyAvailable?: boolean;
-  pywinptyAvailable?: boolean;
-  capabilities?: string[];
-  heartbeat?: WindowsAgentHeartbeatHealth;
-}
+export type {
+  WindowsAgentHealth,
+  WindowsAgentHeartbeatHealth,
+} from "../shared/windows-agent-protocol.js";
 
 export type WindowsAgentUpdateActivator = (machine: MachineConfig, port?: number) => Promise<number | void>;
 
@@ -112,15 +57,15 @@ export const shouldUseWindowsAgent = (machine: MachineConfig): boolean =>
 export const deleteWindowsAgentSession = (machine: MachineConfig, paneId: string): void => {
   const url = windowsAgentUrl(machine);
   if (!url) return;
-  void requestJson("DELETE", `${url}/sessions/${encodeURIComponent(paneId)}`, undefined, 5000, authHeaders(machine))
+  void requestJson(
+    "DELETE",
+    `${url}${WINDOWS_AGENT_PATHS.session(paneId)}`,
+    undefined,
+    5000,
+    authHeaders(machine),
+  )
     .catch((error) => console.warn(`wmux: Windows agent delete failed for ${paneId}: ${formatError(error)}`));
 };
-
-interface WindowsAgentPasteImageResponse {
-  stageId: string;
-  targetPath: string;
-  bytes: number;
-}
 
 export class WindowsAgentPasteImageUnsupportedError extends Error {}
 
@@ -133,13 +78,19 @@ export const stageWindowsAgentPasteImage = async (
 ): Promise<string> => {
   const url = windowsAgentUrl(machine);
   if (!url) throw new Error("missing Windows agent URL");
-  const health = await requestJson<WindowsAgentHealth>("GET", `${url}/health`, undefined, 3000, authHeaders(machine));
+  const health = await requestJson<WindowsAgentHealth>(
+    "GET",
+    `${url}${WINDOWS_AGENT_PATHS.health}`,
+    undefined,
+    3000,
+    authHeaders(machine),
+  );
   if ((health.protocolVersion ?? 0) < 4 || !health.capabilities?.includes("paste-images-v1")) {
     throw new WindowsAgentPasteImageUnsupportedError("Windows agent does not support paste image staging");
   }
   const response = await requestBinary<WindowsAgentPasteImageResponse>(
     "POST",
-    `${url}/sessions/${encodeURIComponent(paneId)}/paste-images/${encodeURIComponent(stageId)}?extension=${encodeURIComponent(extension)}`,
+    `${url}${WINDOWS_AGENT_PATHS.pasteImage(paneId, stageId, extension)}`,
     data,
     15_000,
     authHeaders(machine),
@@ -161,7 +112,7 @@ export const deleteWindowsAgentPasteImage = async (
   if (!url) return;
   await requestJson(
     "DELETE",
-    `${url}/sessions/${encodeURIComponent(paneId)}/paste-images/${encodeURIComponent(stageId)}`,
+    `${url}${WINDOWS_AGENT_PATHS.pasteImage(paneId, stageId)}`,
     undefined,
     5000,
     authHeaders(machine),
@@ -179,7 +130,13 @@ export const probeWindowsAgent = async (
   if (!url) return { reachable: false, reason: "missing Windows agent URL" };
   const probe = async (candidateUrl: string) => {
     try {
-      const health = await requestJson<WindowsAgentHealth>("GET", `${candidateUrl}/health`, undefined, timeoutMs, authHeaders(machine));
+      const health = await requestJson<WindowsAgentHealth>(
+        "GET",
+        `${candidateUrl}${WINDOWS_AGENT_PATHS.health}`,
+        undefined,
+        timeoutMs,
+        authHeaders(machine),
+      );
       return { reachable: health.ok === true, health, url: candidateUrl, reason: health.ok === true ? undefined : "agent health check failed" };
     } catch (error) {
       return { reachable: false, url: candidateUrl, reason: error instanceof Error ? error.message : "agent health check failed" };
@@ -284,7 +241,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     }
     this.inputQueue = this.inputQueue.then(async () => {
       if (this.exited || this.stopped) return;
-      await this.post(`/sessions/${encodeURIComponent(this.pane.id)}/input`, {
+      await this.post(WINDOWS_AGENT_PATHS.input(this.pane.id), {
         dataBase64: Buffer.from(data, "utf8").toString("base64"),
         terminalResponse,
       });
@@ -299,7 +256,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     }
     if (sameSize(this.checkpoint.dimensions, cols, rows)) return;
     this.checkpoint.reframe(cols, rows);
-    void this.post(`/sessions/${encodeURIComponent(this.pane.id)}/resize`, { cols, rows })
+    void this.post(WINDOWS_AGENT_PATHS.resize(this.pane.id), { cols, rows })
       .catch((error) => this.reportTransportFailure("resize", error));
     const snapshot = this.checkpoint.snapshot();
     if (snapshot) this.emit("output", snapshot);
@@ -308,7 +265,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   kill(): void {
     if (this.stopped) return;
     this.detach();
-    void this.delete(`/sessions/${encodeURIComponent(this.pane.id)}`)
+    void this.delete(WINDOWS_AGENT_PATHS.session(this.pane.id))
       .catch((error) => this.reportTransportFailure("delete", error, false));
   }
 
@@ -336,7 +293,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       if (!await this.ensureCurrentAgent(helperBundle)) return;
       this.reportPhase("creating-session", `Opening PowerShell on ${this.machine.name}…`);
       const response = await this.post<AgentSessionResponse>(
-        `/sessions/${encodeURIComponent(this.pane.id)}`,
+        WINDOWS_AGENT_PATHS.session(this.pane.id),
         {
           cols: this.cols,
           rows: this.rows,
@@ -370,7 +327,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.pendingResize = undefined;
       if (pendingResize && !sameSize(this.checkpoint.dimensions, pendingResize.cols, pendingResize.rows)) {
         this.checkpoint.reframe(pendingResize.cols, pendingResize.rows);
-        await this.post(`/sessions/${encodeURIComponent(this.pane.id)}/resize`, pendingResize);
+        await this.post(WINDOWS_AGENT_PATHS.resize(this.pane.id), pendingResize);
       }
       const pendingInput = this.pendingInput;
       this.pendingInput = [];
@@ -396,8 +353,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     let health: WindowsAgentHealth;
     let sessions: AgentSessionResponse[];
     try {
-      health = await this.get<WindowsAgentHealth>("/health", 1500);
-      const listed = await this.get<AgentSessionListResponse>("/sessions", 3000);
+      health = await this.get<WindowsAgentHealth>(WINDOWS_AGENT_PATHS.health, 1500);
+      const listed = await this.get<AgentSessionListResponse>(WINDOWS_AGENT_PATHS.sessions, 3000);
       sessions = listed.sessions ?? [];
     } catch {
       // Health/listing are update-control capabilities, not prerequisites for
@@ -448,7 +405,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     // staging or creating this pane; the current service helper will re-arm a
     // compatibility watcher after the new session exists.
     if (health.draining && activeSessions > 0) {
-      await this.delete("/drain");
+      await this.delete(WINDOWS_AGENT_PATHS.drain);
       health.draining = false;
     }
 
@@ -459,7 +416,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         this.reportPhase("staging-helpers", "Staging current Windows helpers…");
         const stagingId = `__wmux_update_${this.pane.id}_${Date.now().toString(36)}`;
         try {
-          await this.post(`/sessions/${encodeURIComponent(stagingId)}`, {
+          await this.post(WINDOWS_AGENT_PATHS.session(stagingId), {
             cols: 80,
             rows: 24,
             shell: this.machine.shell || "",
@@ -467,7 +424,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
             env: { WMUX_MACHINE_ID: this.machine.id, WMUX_MACHINE_NAME: this.machine.name },
           });
         } finally {
-          await this.delete(`/sessions/${encodeURIComponent(stagingId)}`).catch(() => undefined);
+          await this.delete(WINDOWS_AGENT_PATHS.session(stagingId)).catch(() => undefined);
         }
       }
     }
@@ -497,7 +454,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         try {
           current = await requestJson<WindowsAgentHealth>(
             "GET",
-            `${activatedUrl}/health`,
+            `${activatedUrl}${WINDOWS_AGENT_PATHS.health}`,
             undefined,
             3000,
             authHeaders(this.machine),
@@ -535,7 +492,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     while (!this.stopped && Date.now() < updateDeadline) {
       await delay(Math.min(500, Math.max(1, updateDeadline - Date.now())));
       try {
-        const current = await this.get<WindowsAgentHealth>("/health", 1500);
+        const current = await this.get<WindowsAgentHealth>(WINDOWS_AGENT_PATHS.health, 1500);
         const currentRelease = current.releaseVersion ?? current.version;
         const currentProtocol = current.protocolVersion ?? 0;
         const currentHelpers = current.helperBundleVersion === helperBundle.bundleVersion;
@@ -579,7 +536,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     try {
       return await requestJson<WindowsAgentHealth>(
         "GET",
-        `${this.urlForAgentPort(port)}/health`,
+        `${this.urlForAgentPort(port)}${WINDOWS_AGENT_PATHS.health}`,
         undefined,
         timeoutMs,
         authHeaders(this.machine),
@@ -648,7 +605,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     while (!this.stopped && !this.exited && this.cursor < targetCursor) {
       const before = this.cursor;
       const response = await this.get<AgentOutputResponse>(
-        `/sessions/${encodeURIComponent(this.pane.id)}/output?cursor=${this.cursor}&timeoutMs=0`,
+        WINDOWS_AGENT_PATHS.output(this.pane.id, this.cursor, 0),
         5000,
       );
       this.applyOutputResponse(response, false);
@@ -664,8 +621,12 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       }
       try {
         const response = await this.get<AgentOutputResponse>(
-          `/sessions/${encodeURIComponent(this.pane.id)}/output?cursor=${this.cursor}&timeoutMs=15000`,
-          20_000,
+          WINDOWS_AGENT_PATHS.output(
+            this.pane.id,
+            this.cursor,
+            WINDOWS_AGENT_LONG_POLL.defaultTimeoutMs,
+          ),
+          WINDOWS_AGENT_LONG_POLL.requestTimeoutMs,
         );
         this.applyOutputResponse(response, true);
         // Agent versions before 0.5 report the session's startup cwd forever.

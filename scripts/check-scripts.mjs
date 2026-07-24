@@ -46,6 +46,7 @@ run(python.command, [
   "scripts/wmux-opencode-run",
   "scripts/wmux-stream-agent",
   "scripts/wmux-windows-agent",
+  "scripts/windows/wmux_windows_agent_protocol.py",
   "skills/wmux/scripts/wmuxctl.py",
   "test/windows-agent-drain-smoke.py",
 ], {
