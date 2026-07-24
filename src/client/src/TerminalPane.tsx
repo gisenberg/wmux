@@ -47,6 +47,7 @@ import {
   type TerminalPredictionScreen,
 } from "./terminal-input-prediction";
 import { TerminalPredictionRenderer } from "./terminal-prediction-renderer";
+import { terminalRendererDevicePixelRatio } from "./terminal-render-scale";
 import {
   classifyTerminalLatencyInput,
   normalizeDomEventTimestamp,
@@ -487,7 +488,7 @@ export const TerminalPane = memo(function TerminalPane({
       const renderer = predictionRenderer;
       const metrics = term.renderer?.getMetrics();
       const cursor = term.wasmTerm?.getCursor();
-      const currentDevicePixelRatio = window.devicePixelRatio || 1;
+      const currentDevicePixelRatio = terminalRendererDevicePixelRatio(window.devicePixelRatio);
       if (
         !renderer
         || !metrics
@@ -1183,6 +1184,8 @@ export const TerminalPane = memo(function TerminalPane({
         touchHostShell.addEventListener("pointercancel", touchPointerCancelListener);
       }
       term.open(containerRef.current);
+      rendererDevicePixelRatio = terminalRendererDevicePixelRatio(window.devicePixelRatio);
+      term.setDevicePixelRatio(rendererDevicePixelRatio);
       if (predictionCanvasRef.current) {
         predictionRenderer = new TerminalPredictionRenderer(predictionCanvasRef.current);
       }
@@ -1227,7 +1230,7 @@ export const TerminalPane = memo(function TerminalPane({
       renderDisposable = term.onRender(() => {
         terminalLatency.recordRender(pane.id, performance.now());
         verifyPredictionProbe(term);
-        if (rendererDevicePixelRatio === (window.devicePixelRatio || 1)) {
+        if (rendererDevicePixelRatio === terminalRendererDevicePixelRatio(window.devicePixelRatio)) {
           predictionMetricsStale = false;
         }
         refreshMetrics(term);
@@ -1437,7 +1440,7 @@ export const TerminalPane = memo(function TerminalPane({
       document.addEventListener("visibilitychange", visibilityChangeListener);
 
       const refreshRendererDeviceScale = () => {
-        const nextDevicePixelRatio = window.devicePixelRatio || 1;
+        const nextDevicePixelRatio = terminalRendererDevicePixelRatio(window.devicePixelRatio);
         if (
           nextDevicePixelRatio === rendererDevicePixelRatio
           && !predictionMetricsStale
@@ -1461,7 +1464,7 @@ export const TerminalPane = memo(function TerminalPane({
         };
         deviceScaleQuery.addEventListener("change", deviceScaleQueryListener);
       };
-      rendererDevicePixelRatio = window.devicePixelRatio || 1;
+      rendererDevicePixelRatio = terminalRendererDevicePixelRatio(window.devicePixelRatio);
       predictionMetricsStale = false;
       windowScaleListener = refreshRendererDeviceScale;
       window.addEventListener("resize", windowScaleListener);
