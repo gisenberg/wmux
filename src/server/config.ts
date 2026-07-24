@@ -107,6 +107,7 @@ const delegationWaitTimeoutSchema = z.number()
   .max(MAX_DELEGATION_WAIT_TIMEOUT_SECONDS);
 
 const delegationSchema = z.object({
+  preferHeadless: z.boolean().optional(),
   waitTimeoutSeconds: z.object({
     review: delegationWaitTimeoutSchema.optional(),
     change: delegationWaitTimeoutSchema.optional(),
@@ -143,7 +144,9 @@ export interface AppConfig {
 
 const resolveDelegationConfig = (
   configured?: Partial<Record<DelegationMode, number>>,
+  preferHeadless = false,
 ): DelegationConfig => ({
+  preferHeadless,
   waitTimeoutSeconds: {
     ...DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS,
     ...configured,
@@ -172,7 +175,10 @@ export const loadConfig = (): AppConfig => {
       keybindings,
       terminalFontFamily: parsed.terminalFontFamily,
       terminalFontSize: parsed.terminalFontSize,
-      delegation: resolveDelegationConfig(parsed.delegation?.waitTimeoutSeconds),
+      delegation: resolveDelegationConfig(
+        parsed.delegation?.waitTimeoutSeconds,
+        parsed.delegation?.preferHeadless,
+      ),
     };
   }
   if (process.env.WMUX_CONFIG_PATH) {

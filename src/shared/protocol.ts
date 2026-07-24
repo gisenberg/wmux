@@ -42,6 +42,7 @@ export const DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS: Record<DelegationMode, num
 };
 
 export interface DelegationConfig {
+  preferHeadless: boolean;
   waitTimeoutSeconds: Record<DelegationMode, number>;
   waitTimeoutBoundsSeconds: {
     min: number;

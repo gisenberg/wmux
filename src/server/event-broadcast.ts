@@ -125,6 +125,7 @@ export class EventBroadcastRuntime {
       delegations: snapshot.delegations,
       runs: snapshot.runs,
       delegation: this.options.delegation ?? {
+        preferHeadless: false,
         waitTimeoutSeconds: DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS,
         waitTimeoutBoundsSeconds: {
           min: MIN_DELEGATION_WAIT_TIMEOUT_SECONDS,

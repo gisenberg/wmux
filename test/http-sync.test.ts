@@ -216,6 +216,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
   const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
     auth: { enabled: true, token: "delegation-test-token", loginEnabled: false, sessionSecret: "test" },
     delegation: {
+      preferHeadless: false,
       waitTimeoutSeconds: { review: 900, change: 7_200, deploy: 10_800 },
       waitTimeoutBoundsSeconds: { min: 0.1, max: 14_400 },
     },
