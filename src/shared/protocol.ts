@@ -397,6 +397,7 @@ export const MIN_TERMINAL_FONT_SIZE = 10;
 export const MAX_TERMINAL_FONT_SIZE = 24;
 
 export interface BootstrapPayload {
+  eventRevision: number;
   revision: number;
   workspaceTreeRevision: number;
   healthEpoch: number;
@@ -414,6 +415,37 @@ export interface BootstrapPayload {
   keybindings: KeybindingMap;
   settingsDefaults: WmuxSettings;
   streams: StreamStatus[];
+}
+
+export interface EventCollectionDelta<T> {
+  upserted: T[];
+  removedIds: string[];
+  order?: string[];
+}
+
+export interface EventWorkspaceDelta {
+  items?: EventCollectionDelta<Workspace>;
+  activeWorkspaceId?: string;
+  workspaceTreeRevision?: number;
+}
+
+export interface EventDelegationDelta {
+  events?: EventCollectionDelta<AgentActivity>;
+  delegations?: EventCollectionDelta<DelegationRecord>;
+  timelines?: EventCollectionDelta<AgentSessionTimeline>;
+}
+
+export interface EventStateDelta {
+  type: "delta";
+  baseEventRevision: number;
+  eventRevision: number;
+  revision: number;
+  healthEpoch: number;
+  workspaces?: EventWorkspaceDelta;
+  notifications?: EventCollectionDelta<TerminalNotification>;
+  agents?: EventDelegationDelta;
+  runs?: EventCollectionDelta<TerminalRun>;
+  settings?: WmuxSettings;
 }
 
 export interface DurableSessionAuditRow {
@@ -513,6 +545,7 @@ export type EventClientMessage =
 export type EventServerMessage =
   | { type: "ready" }
   | { type: "snapshot"; reason: string; revision: number; state: BootstrapPayload }
+  | EventStateDelta
   | { type: "health"; revision: number; healthEpoch: number; machines?: MachineStatus[]; streams?: StreamStatus[] }
   | { type: "notification"; notification: TerminalNotification }
   | { type: "media"; media: TerminalMedia }

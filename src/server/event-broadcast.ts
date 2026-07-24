@@ -12,7 +12,14 @@ import type { AgentSessionService } from "./agent-sessions.js";
 import type { SettingsStore } from "./settings.js";
 import type { StreamRequestStore } from "./streams.js";
 import type {
+  AgentActivity,
+  AgentSessionTimeline,
+  BootstrapPayload,
+  DelegationRecord,
+  EventCollectionDelta,
+  EventDelegationDelta,
   EventServerMessage,
+  EventWorkspaceDelta,
   KeybindingMap,
   MachineConfig,
   MachineStatus,
@@ -20,6 +27,8 @@ import type {
   TerminalClipboard,
   TerminalMedia,
   TerminalNotification,
+  TerminalRun,
+  Workspace,
 } from "./types.js";
 
 export const HEALTH_EPOCH_PROCESS_STRIDE = 1024;
@@ -73,6 +82,36 @@ const samePublicHealth = <T extends { checkedAt: string }>(
   JSON.stringify(previous.map(({ checkedAt: _checkedAt, ...status }) => status))
   === JSON.stringify(next.map(({ checkedAt: _checkedAt, ...status }) => status));
 
+const sameValue = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
+const collectionDelta = <T>(
+  previous: T[],
+  next: T[],
+  idOf: (item: T) => string,
+): EventCollectionDelta<T> | undefined => {
+  const previousById = new Map(previous.map((item) => [idOf(item), item]));
+  const nextById = new Map(next.map((item) => [idOf(item), item]));
+  const upserted = next.filter((item) => {
+    const previousItem = previousById.get(idOf(item));
+    return previousItem === undefined || !sameValue(previousItem, item);
+  });
+  const removedIds = previous
+    .map(idOf)
+    .filter((id) => !nextById.has(id));
+  const previousOrder = previous.map(idOf);
+  const nextOrder = next.map(idOf);
+  const orderChanged = !sameValue(previousOrder, nextOrder);
+  if (upserted.length === 0 && removedIds.length === 0 && !orderChanged) {
+    return undefined;
+  }
+  return {
+    upserted,
+    removedIds,
+    ...(orderChanged ? { order: nextOrder } : {}),
+  };
+};
+
 export class EventBroadcastRuntime {
   private readonly eventSockets = new Set<WebSocket>();
   private machineStatuses: MachineStatus[] = [];
@@ -85,10 +124,13 @@ export class EventBroadcastRuntime {
   private machinePublishRequested = false;
   private streamPublishRequested = false;
   private healthEpoch = PROCESS_HEALTH_EPOCH_BASE;
+  private eventRevision = 0;
+  private lastPayload: BootstrapPayload;
   private readonly machineHealthTimer: NodeJS.Timeout;
   private readonly streamHealthTimer: NodeJS.Timeout;
 
   constructor(private readonly options: EventBroadcastOptions) {
+    this.lastPayload = this.currentPayload();
     options.state.on("change", this.onStateChange);
     options.agentSessions.timelines.on("change", this.onTimelineChange);
     options.settings.on("change", this.onSettingsChange);
@@ -121,6 +163,7 @@ export class EventBroadcastRuntime {
         workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id))),
     );
     return {
+      eventRevision: this.eventRevision,
       revision: snapshot.revision,
       workspaceTreeRevision: snapshot.workspaceTreeRevision,
       healthEpoch: this.healthEpoch,
@@ -156,7 +199,9 @@ export class EventBroadcastRuntime {
       this.refreshMachineStatuses(false),
       this.refreshStreamStatuses(false),
     ]);
-    return this.currentPayload();
+    const payload = this.currentPayload();
+    this.lastPayload = payload;
+    return payload;
   };
 
   readonly refreshMachineStatuses = async (
@@ -352,8 +397,9 @@ export class EventBroadcastRuntime {
   }
 
   private broadcastSnapshot(reason: string): void {
-    if (this.eventSockets.size === 0) return;
+    this.eventRevision += 1;
     const snapshot = this.currentPayload();
+    this.lastPayload = snapshot;
     this.broadcastEventMessage({
       type: "snapshot",
       reason,
@@ -366,6 +412,7 @@ export class EventBroadcastRuntime {
     delta: { machines?: MachineStatus[]; streams?: StreamStatus[] },
   ): void {
     this.healthEpoch = nextHealthEpoch(this.healthEpoch);
+    this.lastPayload = this.currentPayload();
     this.broadcastEventMessage({
       type: "health",
       revision: this.options.state.snapshot().revision,
@@ -374,16 +421,115 @@ export class EventBroadcastRuntime {
     });
   }
 
+  private publishStateDelta(): void {
+    const previous = this.lastPayload;
+    const next = this.currentPayload();
+    const workspaceItems = collectionDelta<Workspace>(
+      previous.workspaces,
+      next.workspaces,
+      (workspace) => workspace.id,
+    );
+    const workspaces: EventWorkspaceDelta | undefined = workspaceItems
+      || previous.activeWorkspaceId !== next.activeWorkspaceId
+      || previous.workspaceTreeRevision !== next.workspaceTreeRevision
+      ? {
+          ...(workspaceItems ? { items: workspaceItems } : {}),
+          ...(previous.activeWorkspaceId !== next.activeWorkspaceId
+            ? { activeWorkspaceId: next.activeWorkspaceId }
+            : {}),
+          ...(previous.workspaceTreeRevision !== next.workspaceTreeRevision
+            ? { workspaceTreeRevision: next.workspaceTreeRevision }
+            : {}),
+        }
+      : undefined;
+    const events = collectionDelta<AgentActivity>(
+      previous.agentEvents,
+      next.agentEvents,
+      (event) => event.id,
+    );
+    const delegations = collectionDelta<DelegationRecord>(
+      previous.delegations,
+      next.delegations,
+      (delegation) => delegation.runId,
+    );
+    const timelines = collectionDelta<AgentSessionTimeline>(
+      previous.agentTimelines,
+      next.agentTimelines,
+      (timeline) => timeline.id,
+    );
+    const agents: EventDelegationDelta | undefined =
+      events || delegations || timelines
+        ? {
+            ...(events ? { events } : {}),
+            ...(delegations ? { delegations } : {}),
+            ...(timelines ? { timelines } : {}),
+          }
+        : undefined;
+    const notifications = collectionDelta(
+      previous.notifications,
+      next.notifications,
+      (notification) => notification.id,
+    );
+    const runs = collectionDelta<TerminalRun>(
+      previous.runs,
+      next.runs,
+      (run) => run.id,
+    );
+    const settings = sameValue(previous.settings, next.settings)
+      ? undefined
+      : next.settings;
+    const unconvertedChanged = !sameValue(previous.machines, next.machines)
+      || !sameValue(previous.delegation, next.delegation)
+      || previous.terminalFontFamily !== next.terminalFontFamily
+      || !sameValue(previous.keybindings, next.keybindings)
+      || !sameValue(previous.settingsDefaults, next.settingsDefaults)
+      || !sameValue(previous.streams, next.streams)
+      || previous.healthEpoch !== next.healthEpoch;
+    if (unconvertedChanged) {
+      this.broadcastSnapshot("domain-resync");
+      return;
+    }
+    const stateRevisionChanged = previous.revision !== next.revision;
+    if (
+      !stateRevisionChanged
+      && !workspaces
+      && !notifications
+      && !agents
+      && !runs
+      && !settings
+    ) {
+      return;
+    }
+    const baseEventRevision = this.eventRevision;
+    this.eventRevision += 1;
+    this.lastPayload = {
+      ...next,
+      eventRevision: this.eventRevision,
+    };
+    this.broadcastEventMessage({
+      type: "delta",
+      baseEventRevision,
+      eventRevision: this.eventRevision,
+      revision: next.revision,
+      healthEpoch: next.healthEpoch,
+      ...(workspaces ? { workspaces } : {}),
+      ...(notifications ? { notifications } : {}),
+      ...(agents ? { agents } : {}),
+      ...(runs ? { runs } : {}),
+      ...(settings ? { settings } : {}),
+    });
+  }
+
   private readonly onStateChange = (): void => {
-    this.broadcastSnapshot("state");
+    this.publishStateDelta();
   };
 
   private readonly onSettingsChange = (): void => {
-    this.broadcastSnapshot("settings");
+    this.publishStateDelta();
   };
 
   private readonly onTimelineChange = (): void => {
-    this.broadcastSnapshot("agent-timeline");
+    this.publishStateDelta();
   };
 
   private readonly onNotification = (

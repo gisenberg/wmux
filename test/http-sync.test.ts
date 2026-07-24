@@ -18,7 +18,13 @@ import {
 import type { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
-import type { BootstrapPayload, MachineConfig, MachineStatus, StreamStatus } from "../src/server/types.js";
+import type {
+  BootstrapPayload,
+  EventStateDelta,
+  MachineConfig,
+  MachineStatus,
+  StreamStatus,
+} from "../src/server/types.js";
 
 const agentsFor = (state: StateStore): AgentSessionService =>
   new AgentSessionService(state);
@@ -285,7 +291,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
   }
 });
 
-test("mutations use cached health and publish revisioned WebSocket snapshots", async () => {
+test("mutations use cached health and publish revisioned WebSocket deltas", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-sync-"));
   const healthDelayMs = 600;
   const healthServer = http.createServer((_request, response) => {
@@ -304,6 +310,8 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     },
   ];
   const state = new StateStore(machines, path.join(dir, "state.json"));
+  const untouchedWorkspace = state.snapshot().workspaces[0];
+  state.createWorkspace("local");
   const settings = new SettingsStore(path.join(dir, "settings.json"), {
     terminalFontSize: 16,
   });
@@ -343,18 +351,24 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
     secondWs = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
     await Promise.all([once(ws, "open"), once(secondWs, "open")]);
-    const snapshotPromise = nextSocketMessage<{
-      type: "snapshot";
-      reason: string;
-      revision: number;
-      state: BootstrapPayload;
-    }>(ws, (message) => Boolean(message && typeof message === "object" && "type" in message && message.type === "snapshot"));
-    const secondSnapshotPromise = nextSocketMessage<{
-      type: "snapshot";
-      reason: string;
-      revision: number;
-      state: BootstrapPayload;
-    }>(secondWs, (message) => Boolean(message && typeof message === "object" && "type" in message && message.type === "snapshot"));
+    const deltaPromise = nextSocketMessage<EventStateDelta>(
+      ws,
+      (message) => Boolean(
+        message
+        && typeof message === "object"
+        && "type" in message
+        && message.type === "delta"
+      ),
+    );
+    const secondDeltaPromise = nextSocketMessage<EventStateDelta>(
+      secondWs,
+      (message) => Boolean(
+        message
+        && typeof message === "object"
+        && "type" in message
+        && message.type === "delta"
+      ),
+    );
 
     const originalSnapshot = state.snapshot.bind(state);
     let snapshotCalls = 0;
@@ -376,14 +390,20 @@ test("mutations use cached health and publish revisioned WebSocket snapshots", a
     assert.ok(mutationMs < bootstrapMs / 2, `mutation ${mutationMs.toFixed(1)}ms should not wait for health`);
     assert.ok(mutation.state.revision > bootstrap.revision);
 
-    const socketSnapshot = await snapshotPromise;
-    const secondSocketSnapshot = await secondSnapshotPromise;
-    assert.equal(socketSnapshot.reason, "state");
-    assert.equal(socketSnapshot.revision, mutation.state.revision);
-    assert.equal(socketSnapshot.state.workspaces[0].name, "Fast rename");
-    assert.equal(socketSnapshot.state.streams[0].checkedAt, bootstrap.streams[0].checkedAt);
-    assert.equal(secondSocketSnapshot.revision, socketSnapshot.revision);
-    assert.equal(snapshotCalls, 2, "one shared event snapshot plus one HTTP response snapshot");
+    const socketDelta = await deltaPromise;
+    const secondSocketDelta = await secondDeltaPromise;
+    assert.equal(socketDelta.revision, mutation.state.revision);
+    assert.equal(socketDelta.healthEpoch, mutation.state.healthEpoch);
+    assert.equal(socketDelta.eventRevision, socketDelta.baseEventRevision + 1);
+    assert.equal(socketDelta.workspaces?.items?.upserted[0]?.name, "Fast rename");
+    assert.equal(socketDelta.workspaces?.items?.upserted.length, 1);
+    assert.equal(
+      JSON.stringify(socketDelta).includes(untouchedWorkspace.id),
+      false,
+      "a one-workspace change must not transfer the full workspace tree",
+    );
+    assert.equal(secondSocketDelta.eventRevision, socketDelta.eventRevision);
+    assert.equal(snapshotCalls, 2, "one shared event delta plus one HTTP response snapshot");
   } finally {
     ws?.terminate();
     secondWs?.terminate();

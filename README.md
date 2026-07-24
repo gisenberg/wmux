@@ -58,6 +58,9 @@ kill a pane, while explicitly closing a pane, tab, or workspace does. Execution
 and capture remain on the target machine; the viewing browser does not provide
 the terminal process or screen pixels.
 
+The event WebSocket sends ordered, revision-numbered domain deltas for ordinary state changes.
+Clients fetch a full bootstrap snapshot only for initial load, reconnect recovery, an event revision gap, or a domain that has not been converted to deltas.
+
 ## Quick Start
 
 Server requirements: Linux or macOS, Node.js 22+, npm, and `/bin/sh` with a

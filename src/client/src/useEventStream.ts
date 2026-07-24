@@ -16,6 +16,7 @@ interface UseEventStreamCallbacks {
   // Receives either a revisioned socket snapshot or a recovery bootstrap.
   onResync: (payload: BootstrapPayload) => void;
   onHealth: (delta: Extract<EventServerMessage, { type: "health" }>) => void;
+  onDelta: (delta: Extract<EventServerMessage, { type: "delta" }>) => void;
   onAuthRequired: () => void;
   enabled?: boolean;
 }
@@ -40,8 +41,8 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
     let resyncTimer: number | undefined;
     let resyncAttempts = 0;
     let socket: WebSocket | null = null;
-    // Coalesce recovery bootstraps when a socket connects or a legacy server
-    // emits state-only events. Current servers send complete typed snapshots.
+    // Coalesce recovery bootstraps when a socket connects, a delta gap is
+    // detected, or a legacy server emits state-only events.
     const scheduleResync = (delayMs = 60) => {
       if (resyncTimer) {
         if (delayMs > 0) return;
@@ -101,6 +102,7 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
         if (message.type === "snapshot" && message.state) {
           callbacksRef.current.onResync(message.state);
         }
+        if (message.type === "delta") callbacksRef.current.onDelta(message);
         if (message.type === "health") callbacksRef.current.onHealth(message);
         if (message.type === "state") {
           scheduleResync(0);

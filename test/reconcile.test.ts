@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  applyEventDelta,
   applyHealthDelta,
+  bootstrapSatisfiesEventDelta,
   bootstrapSatisfiesHealthDelta,
+  eventDeltaRequiresResync,
   healthDeltaRequiresResync,
   isIncomingRevisionNewer,
   isIncomingRevisionStale,
   reconcile,
   reconcileIncomingRevision,
 } from "../src/client/src/reconcile.js";
+import type { BootstrapPayload, EventStateDelta } from "../src/shared/protocol.js";
 
 test("returns the previous reference when content is deep-equal", () => {
   const prev = { workspaces: [{ id: "a", tabs: [{ id: "t", panes: [] }] }], count: 1 };
@@ -66,6 +70,20 @@ test("orders snapshots by persisted revision then health epoch", () => {
   assert.equal(isIncomingRevisionStale({ revision: 12, healthEpoch: 4 }, { revision: 11, healthEpoch: 99 }), true);
   assert.equal(isIncomingRevisionStale({ revision: 12, healthEpoch: 4 }, { revision: 12, healthEpoch: 3 }), true);
   assert.equal(isIncomingRevisionStale({ revision: 12, healthEpoch: 4 }, { revision: 12, healthEpoch: 4 }), false);
+  assert.equal(
+    isIncomingRevisionStale(
+      { revision: 12, healthEpoch: 4, eventRevision: 9 },
+      { revision: 12, healthEpoch: 4, eventRevision: 8 },
+    ),
+    true,
+  );
+  assert.equal(
+    isIncomingRevisionStale(
+      { revision: 12, healthEpoch: 4, eventRevision: 9 },
+      { revision: 12, healthEpoch: 5, eventRevision: 0 },
+    ),
+    false,
+  );
   assert.equal(isIncomingRevisionStale({ revision: 12, healthEpoch: 4 }, { revision: 13, healthEpoch: 0 }), false);
   assert.equal(isIncomingRevisionStale(null, { revision: 1, healthEpoch: 0 }), false);
   // A reconnect bootstrap from before the accepted health delta must not regress it.
@@ -112,6 +130,77 @@ test("applies only newer compatible health deltas without rebuilding unrelated s
   assert.notEqual(updated, current);
   assert.equal(updated?.workspaces, current.workspaces);
   assert.deepEqual(updated?.machines, [{ id: "a", reachable: true }]);
+});
+
+test("event deltas update one domain while preserving unrelated store identity", () => {
+  const current = {
+    eventRevision: 4,
+    revision: 7,
+    workspaceTreeRevision: 2,
+    healthEpoch: 3,
+    workspaces: [
+      { id: "workspace-a", name: "A" },
+      { id: "workspace-b", name: "B" },
+    ],
+    activeWorkspaceId: "workspace-a",
+    notifications: [],
+    agentEvents: [],
+    delegations: [],
+    agentTimelines: [],
+    runs: [],
+    settings: { terminalFontSize: 14 },
+    machines: [],
+    streams: [],
+  } as unknown as BootstrapPayload;
+  const delta: EventStateDelta = {
+    type: "delta",
+    baseEventRevision: 4,
+    eventRevision: 5,
+    revision: 8,
+    healthEpoch: 3,
+    workspaces: {
+      items: {
+        upserted: [{ ...current.workspaces[0], name: "Renamed" }],
+        removedIds: [],
+      },
+    },
+  };
+  const updated = applyEventDelta(current, delta);
+  assert.notEqual(updated, current);
+  assert.equal(updated?.eventRevision, 5);
+  assert.equal(updated?.workspaces[0].name, "Renamed");
+  assert.equal(updated?.workspaces[1], current.workspaces[1]);
+  assert.equal(updated?.notifications, current.notifications);
+});
+
+test("event revision gaps require snapshot resync and stale deltas stay ignored", () => {
+  const current = { eventRevision: 7 } as BootstrapPayload;
+  const gap = {
+    type: "delta",
+    baseEventRevision: 8,
+    eventRevision: 9,
+    revision: 12,
+    healthEpoch: 3,
+  } satisfies EventStateDelta;
+  assert.equal(eventDeltaRequiresResync(current, gap), true);
+  assert.equal(eventDeltaRequiresResync(current, {
+    ...gap,
+    baseEventRevision: 7,
+    eventRevision: 8,
+  }), false);
+  assert.equal(eventDeltaRequiresResync(current, {
+    ...gap,
+    baseEventRevision: 5,
+    eventRevision: 6,
+  }), false);
+  assert.equal(
+    bootstrapSatisfiesEventDelta(gap, { eventRevision: 8, healthEpoch: 3 }),
+    false,
+  );
+  assert.equal(
+    bootstrapSatisfiesEventDelta(gap, { eventRevision: 0, healthEpoch: 4 }),
+    true,
+  );
 });
 
 test("revision-aware reconciliation keeps newer state and accepts current snapshots", () => {

@@ -138,6 +138,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - The host filter in the workspace rail narrows navigation. The target host for creating new workspaces/tabs is controlled by explicit host selection. Splits default to the host of the pane being split.
 - Mobile layout uses the VisualViewport API plus `--wmux-viewport-height`. When the software keyboard is open, hide chrome by collapsing dimensions while keeping terminal components mounted.
 - Browser wake and network transitions can briefly fail `/api/bootstrap` after the event socket reconnects. Keep an already-loaded workspace mounted, retry bootstrap/resync with bounded backoff, and reserve the login surface for explicit authentication failures; do not promote a transient fetch failure to a permanent fatal overlay.
+- The event socket publishes ordered domain deltas for workspaces, delegations/timelines, notifications, runs, and settings. Keep `eventRevision` gap detection and bootstrap resync intact, preserve collection ordering explicitly, and do not regress ordinary state changes to full bootstrap broadcasts.
 - The mobile sidebar is a drawer and should default collapsed on narrow viewports.
 - On mobile, split panes collapse to the active pane instead of trying to show every split at once.
 - On mobile, touch swipes over the terminal scroll Ghostty scrollback and become wheel input while an application has terminal mouse tracking enabled; a tap still focuses the terminal and opens the keyboard.

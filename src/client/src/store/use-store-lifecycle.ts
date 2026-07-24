@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { api, UnauthorizedError } from "../api";
 import { useEventStream } from "../useEventStream";
-import type { BootstrapPayload } from "../types";
+import type { BootstrapPayload, EventServerMessage } from "../types";
 import type { AppStore } from "./core";
 import {
+  applyEventDelta,
   applyHealthDelta,
+  bootstrapSatisfiesEventDelta,
   bootstrapSatisfiesHealthDelta,
+  eventDeltaRequiresResync,
   healthDeltaRequiresResync,
   isIncomingRevisionNewer,
   reconcileIncomingRevision,
@@ -32,6 +35,10 @@ export const useStoreLifecycle = ({
   const loadRef = useRef<() => Promise<void>>(async () => undefined);
   const refreshRef = useRef<(payload?: BootstrapPayload) => Promise<void>>(async () => undefined);
   const pendingHealthResync = useRef<Pick<BootstrapPayload, "revision" | "healthEpoch"> | null>(null);
+  const pendingEventResync = useRef<Pick<
+    Extract<EventServerMessage, { type: "delta" }>,
+    "eventRevision" | "healthEpoch"
+  > | null>(null);
 
   const load = useCallback(async () => {
     const currentRequestId = ++requestId.current;
@@ -41,11 +48,16 @@ export const useStoreLifecycle = ({
       const payload = await api.bootstrap();
       const routed = rebaseIncomingState(activateRouteTarget(payload));
       if (currentRequestId !== requestId.current) return;
+      if (!bootstrapSatisfiesEventDelta(pendingEventResync.current, routed)) {
+        void loadRef.current();
+        return;
+      }
       if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, routed)) {
         void loadRef.current();
         return;
       }
       pendingHealthResync.current = null;
+      pendingEventResync.current = null;
       retryAttempt.current = 0;
       setLoadError(null);
       setAuthRequired(false);
@@ -87,9 +99,35 @@ export const useStoreLifecycle = ({
   const eventStream = useEventStream({
     enabled: !authRequired,
     onResync: (payload) => {
+      if (!bootstrapSatisfiesEventDelta(pendingEventResync.current, payload)) return;
       if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, payload)) return;
+      pendingEventResync.current = null;
       pendingHealthResync.current = null;
       void refreshRef.current(payload);
+    },
+    onDelta: (delta) => {
+      const current = store.get();
+      if (eventDeltaRequiresResync(current, delta)) {
+        const pending = pendingEventResync.current;
+        if (
+          !pending
+          || delta.healthEpoch > pending.healthEpoch
+          || (
+            delta.healthEpoch === pending.healthEpoch
+            && delta.eventRevision > pending.eventRevision
+          )
+        ) {
+          pendingEventResync.current = delta;
+        }
+        void loadRef.current();
+        return;
+      }
+      store.update((snapshot) => {
+        const applied = applyEventDelta(snapshot, delta);
+        return applied
+          ? rebaseIncomingState(activateRouteTarget(applied))
+          : null;
+      });
     },
     onHealth: (delta) => {
       const current = store.get();
