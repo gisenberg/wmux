@@ -54,6 +54,17 @@ export const isEditableViewportTarget = (target: Element | null): boolean => {
   return target.isContentEditable;
 };
 
+export const shouldEnterMobileKeyboardOpening = (
+  editableFocused: boolean,
+  terminalBridgeFocused: boolean,
+): boolean => editableFocused && !terminalBridgeFocused;
+
+export const isImmediateMobileKeyboardTarget = (target: Element | null): boolean =>
+  shouldEnterMobileKeyboardOpening(
+    isEditableViewportTarget(target),
+    Boolean(target?.closest(".terminal-host")),
+  );
+
 export interface MobileViewportState {
   isMobile: boolean;
   keyboardOpen: boolean;
@@ -155,7 +166,7 @@ export const useMobileViewportState = (): MobileViewportState => {
     const updateViewport = () => update(false);
     const resetForOrientation = () => update(true);
     const updateForFocusIn = (event: FocusEvent) => {
-      if (isEditableViewportTarget(event.target instanceof Element ? event.target : null)) {
+      if (isImmediateMobileKeyboardTarget(event.target instanceof Element ? event.target : null)) {
         dispatchInteraction("editable-focused");
       }
       update(false);
