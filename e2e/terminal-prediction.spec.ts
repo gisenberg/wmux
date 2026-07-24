@@ -363,6 +363,10 @@ test("DPR changes clear stale prediction metrics before repainting", async ({
     await armTerminalPrediction(page, prediction);
     await page.keyboard.type("x");
     await expect(prediction).toHaveAttribute("data-active", "true");
+    const initialMetrics = await readPredictionMetrics(prediction);
+    expect(initialMetrics.dpr).toBe(2);
+    expect(initialMetrics.width).toBeGreaterThanOrEqual(8);
+    expect(initialMetrics.width).toBeLessThan(9);
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -373,7 +377,7 @@ test("DPR changes clear stale prediction metrics before repainting", async ({
     await expect.poll(() => page.evaluate(() => window.devicePixelRatio)).toBe(1.5);
     await armTerminalPrediction(page, prediction);
     await page.keyboard.type("x");
-    await expect(prediction).toHaveAttribute("data-device-pixel-ratio", "1.5");
+    await expect(prediction).toHaveAttribute("data-device-pixel-ratio", "2");
     const metrics = await readPredictionMetrics(prediction);
     const backingScale = await prediction.evaluate((canvas, metrics) => ({
       x: (canvas as HTMLCanvasElement).width / (parseFloat((canvas as HTMLCanvasElement).style.width) || 1),

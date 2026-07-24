@@ -518,7 +518,7 @@ export function MobileAgentSurface({
             rows={1}
             autoComplete="off"
             autoCorrect="off"
-            autoCapitalize="none"
+            autoCapitalize="off"
             spellCheck={false}
             onChange={(event) => setDraft(event.target.value)}
             onPaste={handlePaste}

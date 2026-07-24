@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   mobileKeyboardLikelyOpen,
   mobileViewportShapeChanged,
+  shouldEnterMobileKeyboardOpening,
   type MobileViewportBaseline,
 } from "../src/client/src/mobile-viewport";
 
@@ -79,4 +80,10 @@ test("orientation and responsive resizes are not mistaken for the keyboard", () 
     viewportWidth: 320,
     editableFocused: true,
   }, portrait), false);
+});
+
+test("terminal bridge focus waits for viewport evidence before collapsing chrome", () => {
+  assert.equal(shouldEnterMobileKeyboardOpening(true, true), false);
+  assert.equal(shouldEnterMobileKeyboardOpening(true, false), true);
+  assert.equal(shouldEnterMobileKeyboardOpening(false, false), false);
 });

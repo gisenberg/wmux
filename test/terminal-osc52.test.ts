@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_OSC52_DECODED_BYTES, Osc52Parser } from "../src/client/src/terminal-osc52.ts";
+import {
+  MAX_OSC52_DECODED_BYTES,
+  Osc52ClipboardController,
+  Osc52Parser,
+} from "../src/client/src/terminal-osc52.ts";
 
 const osc = (body: string, terminator = "\x07") => `\x1b]52;${body}${terminator}`;
 const collect = (chunks: string[]) => {
@@ -55,4 +59,66 @@ test("reset prevents a replay OSC 52 fragment from completing in live output", (
   assert.deepEqual(parser.push("replay\x1b]52;c;aGVsbG8="), { text: "replay", writes: [] });
   parser.reset();
   assert.deepEqual(parser.push("\x07live"), { text: "\x07live", writes: [] });
+});
+
+test("OSC 52 clipboard wiring owns immediate, pending, and explicit writes", async () => {
+  let immediate = true;
+  let now = 2_000;
+  let nextTimer = 0;
+  const timers = new Map<number, () => void>();
+  const writes: string[] = [];
+  const pending: boolean[] = [];
+  const controller = new Osc52ClipboardController({
+    pendingMs: 60_000,
+    isImmediateWriteAllowed: () => immediate,
+    writeClipboard: async (text) => {
+      writes.push(text);
+    },
+    onPendingChange: (value) => pending.push(value),
+    now: () => now,
+    setTimer: (callback) => {
+      timers.set(++nextTimer, callback);
+      return nextTimer;
+    },
+    clearTimer: (timer) => {
+      timers.delete(timer);
+    },
+  });
+
+  assert.equal(controller.push(osc("c;b25l")).text, "");
+  await Promise.resolve();
+  assert.deepEqual(writes, ["one"]);
+  assert.equal(pending.at(-1), false);
+
+  immediate = false;
+  now += 2_000;
+  controller.push(osc("c;dHdv"));
+  assert.equal(pending.at(-1), true);
+  controller.copyPending();
+  await Promise.resolve();
+  assert.deepEqual(writes, ["one", "two"]);
+  assert.equal(pending.at(-1), false);
+  controller.dispose();
+});
+
+test("OSC 52 replay filtering never writes or retains clipboard data", () => {
+  const writes: string[] = [];
+  const pending: boolean[] = [];
+  const controller = new Osc52ClipboardController({
+    pendingMs: 60_000,
+    isImmediateWriteAllowed: () => true,
+    writeClipboard: async (text) => {
+      writes.push(text);
+    },
+    onPendingChange: (value) => pending.push(value),
+    now: () => 2_000,
+    setTimer: () => 1,
+    clearTimer: () => undefined,
+  });
+  assert.deepEqual(controller.push(`before${osc("c;c2VjcmV0")}after`, false), {
+    text: "beforeafter",
+    writes: [{ text: "secret" }],
+  });
+  assert.deepEqual(writes, []);
+  assert.deepEqual(pending, []);
 });

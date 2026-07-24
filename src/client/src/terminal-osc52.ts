@@ -7,6 +7,22 @@ export interface Osc52Result {
   writes: Osc52Write[];
 }
 
+export interface Osc52ClipboardControllerOptions {
+  pendingMs: number;
+  isImmediateWriteAllowed: () => boolean;
+  writeClipboard: (text: string) => Promise<void>;
+  onPendingChange: (pending: boolean) => void;
+  now?: () => number;
+  setTimer?: (callback: () => void, delay: number) => number;
+  clearTimer?: (timer: number) => void;
+}
+
+interface Osc52ClipboardRequest {
+  text: string;
+  generation: number;
+  expiresAt: number;
+}
+
 const PREFIX = "\x1b]52;";
 export const MAX_OSC52_DECODED_BYTES = 1024 * 1024;
 // Four base64 characters encode three bytes; this also bounds an unterminated
@@ -89,6 +105,92 @@ export class Osc52Parser {
     this.inOsc = false;
     this.body = "";
     this.discarded = false;
+  }
+}
+
+export class Osc52ClipboardController {
+  private readonly parser = new Osc52Parser();
+  private readonly now: () => number;
+  private readonly setTimer: (callback: () => void, delay: number) => number;
+  private readonly clearTimer: (timer: number) => void;
+  private pending: Osc52ClipboardRequest | undefined;
+  private pendingTimer: number | undefined;
+  private generation = 0;
+  private lastWriteAt = 0;
+
+  constructor(private readonly options: Osc52ClipboardControllerOptions) {
+    this.now = options.now ?? Date.now;
+    this.setTimer = options.setTimer ?? ((callback, delay) => window.setTimeout(callback, delay));
+    this.clearTimer = options.clearTimer ?? ((timer) => window.clearTimeout(timer));
+  }
+
+  push(chunk: string, allowWrites = true): Osc52Result {
+    const result = this.parser.push(chunk);
+    if (allowWrites) {
+      for (const write of result.writes) this.tryWrite(this.nextRequest(write.text));
+    }
+    return result;
+  }
+
+  resetParser(): void {
+    this.parser.reset();
+  }
+
+  clearPending(): void {
+    if (this.pendingTimer !== undefined) this.clearTimer(this.pendingTimer);
+    this.pendingTimer = undefined;
+    this.pending = undefined;
+    this.options.onPendingChange(false);
+  }
+
+  copyPending(): void {
+    const request = this.pending;
+    if (!request || request.expiresAt < this.now()) {
+      this.clearPending();
+      return;
+    }
+    void this.options.writeClipboard(request.text).then(() => {
+      if (this.pending?.generation === request.generation) this.clearPending();
+    });
+  }
+
+  dispose(): void {
+    this.resetParser();
+    this.clearPending();
+  }
+
+  private nextRequest(text: string): Osc52ClipboardRequest {
+    return {
+      text,
+      generation: ++this.generation,
+      expiresAt: this.now() + this.options.pendingMs,
+    };
+  }
+
+  private retain(request: Osc52ClipboardRequest): void {
+    if (this.pendingTimer !== undefined) this.clearTimer(this.pendingTimer);
+    this.pending = request;
+    this.options.onPendingChange(true);
+    this.pendingTimer = this.setTimer(() => {
+      if (this.pending?.generation === request.generation) this.clearPending();
+    }, this.options.pendingMs);
+  }
+
+  private tryWrite(request: Osc52ClipboardRequest): void {
+    const now = this.now();
+    if (!this.options.isImmediateWriteAllowed() || now - this.lastWriteAt < 1000) {
+      this.retain(request);
+      return;
+    }
+    this.lastWriteAt = now;
+    void this.options.writeClipboard(request.text).then(
+      () => {
+        if (!this.pending || this.pending.generation <= request.generation) this.clearPending();
+      },
+      () => {
+        if (!this.pending || this.pending.generation <= request.generation) this.retain(request);
+      },
+    );
   }
 }
 
