@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  HTTP_ROUTE_POLICIES,
   authorizeHttpPrincipal,
   authorizeWebSocketPrincipal,
-  classifyHttpRoute,
-  classifyWebSocket,
 } from "../src/server/auth-policy.js";
 import type { AuthConfig, AuthPrincipal } from "../src/server/auth.js";
+import {
+  HTTP_ROUTE_POLICIES,
+  classifyHttpRoute,
+} from "../src/server/routes/index.js";
+import { classifyWebSocket } from "../src/server/websocket-route.js";
 
 const auth: AuthConfig = {
   enabled: true,

@@ -22,6 +22,28 @@ All `/api/*` endpoints except `/api/health`, `/api/auth-info`, and `/api/login` 
 
 Never print or commit the token. Prefer environment variables or local token files.
 
+## Declarative Route Contract
+
+HTTP routes are declared under `src/server/routes/`.
+Each entry owns a stable route id, an exact method/path matcher, its request-body limit, its authorization policy, and its handler.
+The current route ids are:
+
+- Service and browser state: `health`, `auth-info`, `login`, `auth-session`, `bootstrap`, `settings`, `doctor`, `session-audit`, `session-cleanup`, and `agent-profile`.
+- Workspace lifecycle: `workspace-create`, `workspace-reorder`, `workspace-notifications-read`, `workspace-close`, `workspace-title`, `workspace-auto-title`, `tab-create`, `tab-close`, `tab-title`, `pane-split`, `split-ratio`, `pane-input`, `pane-notifications-read`, and `pane-close`.
+- Events and review: `notification-create`, `notification-read`, `agent-event`, `delegation-status`, `run-event`, and `pane-review-create`.
+- Media and streams: `media`, `clipboard`, `pane-paste-image-stage`, `pane-paste-image-delete`, `pane-attachment-create`, `attachment-read`, `streams`, `stream-request-status`, `stream-request`, and `stream-release`.
+- Dynamic hosts and Windows bootstrap: `registry-list`, `registry-register`, `registry-delete`, `windows-bootstrap`, and `windows-helpers`.
+
+Clients still call the documented HTTP paths.
+Route ids are internal audit and test identities, not alternate URLs.
+
+## Delegation Runtime Selection
+
+The startup-loaded `delegation.preferHeadless` setting defaults to `false`.
+When enabled, non-interactive delegation prefers a runtime's structured/headless adapter where available.
+Interactive `wmuxctl tui` and other explicitly interactive work always use the terminal-attached adapter.
+The setting is returned by `/api/bootstrap` with `delegation.waitTimeoutSeconds`; restart wmux after changing either value.
+
 ## Machine Discovery
 
 Never assume example IDs are present. Read `/api/bootstrap` before acting and

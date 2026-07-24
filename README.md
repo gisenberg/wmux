@@ -42,10 +42,13 @@ The desktop view and both mobile surfaces show the same live Codex workspace.
 | Component | Responsibility |
 | --- | --- |
 | Browser client | React chrome, `ghostty-web` terminals, mobile controls, media, text/image clipboard handling, and stream views |
+| HTTP transport | Declarative route table with stable route ids, exact method/path matching, body limits, authorization policy, request dispatch, static delivery, event publication, and WebSocket upgrades |
 | Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
-| Session manager | One live client per pane, pinned backend snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and backend lifecycle |
+| Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
+| Session manager | One live client per pane, pinned backend snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
-| Execution backends | Local PTYs, SSH with `tmux`/`screen` and per-pane control sockets, PowerShell over SSH, and the experimental Windows agent, which owns pane processes, replay, and dynamic-registration heartbeat |
+| Execution backends | Raw PTY, durable `tmux`/`screen`, and Windows agent adapters; the Windows agent owns pane processes, replay, and dynamic-registration heartbeat |
+| Shared contracts | TypeScript browser/server protocol plus generated Python delegation and Windows-agent constants checked by `npm run check:contracts` |
 | Persistent state | Workspace layout, delegation outcomes, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
 | Optional streaming | Machine-local MediaMTX capture or a Moonlight/Sunshine gateway, requested by the browser |
 
@@ -159,6 +162,7 @@ cp wmux.config.example.json wmux.config.json
   "terminalFontFamily": "\"MesloLGM Nerd Font\"",
   "terminalFontSize": 15,
   "delegation": {
+    "preferHeadless": false,
     "waitTimeoutSeconds": {
       "review": 1800,
       "change": 7200,
@@ -199,6 +203,8 @@ cp wmux.config.example.json wmux.config.json
   Values must be from 0.1 through 14,400 seconds.
   Existing configs that omit this object receive the mode defaults.
   Restart wmux after changing these startup-loaded values so `/api/bootstrap` publishes them to the CLI and generated plugin.
+- `delegation.preferHeadless` opts non-interactive delegation into runtime-specific structured/headless adapters when one is available.
+  It defaults to `false`, and interactive TUI work always remains terminal-attached.
 - wmux adds the local machine unless `"localMachine": false` is set.
 - `kind: "local"` always executes on the current wmux server. Its display
   name does not make it a remote target, and its `cwd` must exist on that
