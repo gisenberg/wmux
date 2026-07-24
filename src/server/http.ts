@@ -62,6 +62,7 @@ import {
 } from "./paste-image-staging.js";
 import { authRoutes } from "./routes/auth-routes.js";
 import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
+import { eventIngestRoutes } from "./routes/event-ingest-routes.js";
 import { registryRoutes } from "./routes/registry-routes.js";
 import { workspaceRoutes } from "./routes/workspace-routes.js";
 import {
@@ -73,6 +74,7 @@ import {
 const apiRoutes = [
   ...authRoutes,
   ...bootstrapRoutes,
+  ...eventIngestRoutes,
   ...registryRoutes,
   ...workspaceRoutes,
 ] as const;
@@ -538,99 +540,6 @@ export const createHttpServer = (
         return;
       }
 
-      if (url.pathname === "/api/notifications" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          workspaceId?: string;
-          tabId?: string;
-          paneId?: string;
-          title?: string;
-          subtitle?: string;
-          body?: string;
-        };
-        const notification = state.createNotification({
-          workspaceId: body.workspaceId,
-          tabId: body.tabId,
-          paneId: body.paneId,
-          title: body.title ?? "wmux",
-          subtitle: body.subtitle,
-          body: body.body,
-        });
-        sendJson(response, 201, { notification, state: currentPayload() });
-        return;
-      }
-
-      if (url.pathname === "/api/agent-events" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          runId?: string;
-          workspaceId?: string;
-          tabId?: string;
-          paneId?: string;
-          agent?: string;
-          status?: string;
-          title?: string;
-          summary?: string;
-          message?: string;
-          body?: string;
-        };
-        const result = state.recordAgentEvent({
-          runId: body.runId,
-          workspaceId: body.workspaceId,
-          tabId: body.tabId,
-          paneId: body.paneId,
-          agent: body.agent,
-          status: body.status,
-          title: body.title,
-          summary: body.summary,
-          message: body.message,
-          body: body.body,
-        });
-        sendJson(response, 201, { ...result, state: currentPayload() });
-        return;
-      }
-
-      const delegationStatusMatch = url.pathname.match(/^\/api\/delegations\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/);
-      if (delegationStatusMatch && request.method === "GET") {
-        const runId = delegationStatusMatch[1];
-        const delegation = state.delegationForRun(runId);
-        if (!delegation) {
-          sendJson(response, 404, { error: "delegation_not_found" });
-          return;
-        }
-        sendJson(response, 200, { delegation });
-        return;
-      }
-
-      if (url.pathname === "/api/run-events" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          workspaceId?: string;
-          tabId?: string;
-          paneId?: string;
-          runId?: string;
-          command?: string;
-          status?: "started" | "completed" | "failed";
-          exitCode?: number | null;
-          startedAt?: string;
-          completedAt?: string;
-        };
-        if (body.status && !["started", "completed", "failed"].includes(body.status)) {
-          sendJson(response, 400, { error: "invalid_run_status" });
-          return;
-        }
-        const run = state.recordRunEvent({
-          workspaceId: body.workspaceId,
-          tabId: body.tabId,
-          paneId: body.paneId,
-          runId: body.runId,
-          command: body.command,
-          status: body.status,
-          exitCode: body.exitCode,
-          startedAt: body.startedAt,
-          completedAt: body.completedAt,
-        });
-        sendJson(response, 201, { run, state: currentPayload() });
-        return;
-      }
-
       if (url.pathname === "/api/media" && request.method === "POST") {
         const body = (await readBody(request, MAX_UPLOAD_BODY)) as {
           workspaceId?: string;
@@ -753,13 +662,6 @@ export const createHttpServer = (
           buffer,
         });
         sendJson(response, 201, { attachment });
-        return;
-      }
-
-      const readNotification = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
-      if (readNotification && request.method === "POST") {
-        state.markNotificationRead(readNotification[1]);
-        sendJson(response, 200, currentPayload());
         return;
       }
 
