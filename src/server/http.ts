@@ -19,13 +19,12 @@ import { readAgentProfileBundle } from "./agent-profile.js";
 import {
   authenticateRequest,
   type AuthConfig,
-  issueSessionToken,
   requestBearerToken,
   requestToken,
   registeredHostPrincipal,
   registrationPrincipal,
-  verifyCredentials,
 } from "./auth.js";
+import type { AuthPrincipal } from "./auth.js";
 import {
   authorizeHttpPrincipal,
   authorizeWebSocketPrincipal,
@@ -38,7 +37,7 @@ import { HostRegistryError, type HostRegistry } from "./host-registry.js";
 import { LoginAttemptThrottle } from "./login-throttle.js";
 import { readDurableSessionCwd } from "./durable-session.js";
 import { resolveMachineStatuses } from "./machines.js";
-import { normalizeIpAddress, observedClientAddress } from "./proxy-address.js";
+import { observedClientAddress } from "./proxy-address.js";
 import { RepositoryReviewError, RepositoryReviewService } from "./repository-review.js";
 import { auditDurableSessions, cleanupDurableSession } from "./session-audit.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
@@ -72,6 +71,11 @@ import {
   MAX_PASTE_IMAGE_BYTES,
   PasteImageStageError,
 } from "./paste-image-staging.js";
+import { authRoutes } from "./routes/auth-routes.js";
+import {
+  matchApiRoute,
+  type ServerDeps,
+} from "./routes/route.js";
 
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string) {
@@ -98,10 +102,6 @@ export const nextHealthEpoch = (current: number): number => {
 // A later process must sort after same-revision state from an earlier process;
 // the stride reserves room for ordinary in-process health increments.
 export const PROCESS_HEALTH_EPOCH_BASE = healthEpochForProcessStart(Date.now());
-
-// Lifetime of a login-issued session token. Long enough to be convenient on a
-// trusted network; a restart with a rotated secret invalidates all sessions.
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const readBody = async (request: http.IncomingMessage, maxBytes = MAX_JSON_BODY): Promise<unknown> => {
   const chunks: Buffer[] = [];
@@ -375,6 +375,31 @@ export const createHttpServer = (
     await Promise.all([refreshMachineStatuses(false), refreshStreamStatuses(false)]);
     return currentPayload();
   };
+  const serverDeps: ServerDeps = {
+    bindHost,
+    auth,
+    trustedProxies,
+    loginAttempts,
+    state,
+    sessions,
+    settings,
+    hostRegistry,
+    streamRequests,
+    repositoryReviews,
+    currentMachines,
+    currentPayload,
+    bootstrapFresh,
+    refreshMachineStatuses,
+    refreshStreamStatuses,
+    getMachineStatuses: () => machineStatuses,
+    getStreamStatuses: () => streamStatuses,
+    markStreamMutation: () => {
+      streamMutationRevision += 1;
+    },
+    resolveMachineId,
+    cwdForSourcePane: (machines, sourcePane, targetMachineId) =>
+      cwdForSourcePane(state, machines, sourcePane, targetMachineId),
+  };
 
   const onRegistryChange = (): void => {
     state.updateMachines(currentMachines());
@@ -398,10 +423,12 @@ export const createHttpServer = (
     const bundledMesloFont = request.method === "GET" || request.method === "HEAD"
       ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
       : null;
+    const matchedApiRoute = matchApiRoute(authRoutes, request.method, url.pathname);
 
     // Every API method/path is classified before authentication so new routes
     // cannot silently inherit a broad credential's authority.
-    const routePolicy = classifyHttpRoute(request.method, url.pathname);
+    const routePolicy = matchedApiRoute?.route.policy
+      ?? classifyHttpRoute(request.method, url.pathname);
     const registrationPost = routePolicy?.access === "registration";
     const registrationAuth = registrationPrincipal(registrationToken, requestBearerToken(request));
     const helperMatch = url.pathname.match(/^\/api\/helpers\/windows\/([^/]+)(?:\/bootstrap)?$/);
@@ -415,12 +442,13 @@ export const createHttpServer = (
       helperMachine?.source === "registered" &&
       Boolean(hostRegistry?.acceptsBootstrapToken(helperMachine.id, requestToken(request, url))),
     );
+    let principal: AuthPrincipal = { kind: "anonymous" };
     if (url.pathname.startsWith("/api/")) {
       if (!routePolicy) {
         sendJson(response, 401, { error: "unauthorized" });
         return;
       }
-      const principal = registeredHelperPrincipal.kind === "registered-host"
+      principal = registeredHelperPrincipal.kind === "registered-host"
         ? registeredHelperPrincipal
         : registrationPost
           ? registrationAuth
@@ -446,59 +474,19 @@ export const createHttpServer = (
         return;
       }
 
-      if (url.pathname === "/api/health" && request.method === "GET") {
-        sendJson(response, 200, { ok: true });
-        return;
-      }
-
-      if (url.pathname === "/api/auth-info" && request.method === "GET") {
-        // Lets the browser decide whether to show a login form vs. a token hint.
-        sendJson(response, 200, {
-          authEnabled: auth.enabled,
-          loginEnabled: auth.loginEnabled,
-          browserAuthMode: auth.browserAuthMode ?? "shared-or-login",
-        }, { "cache-control": "no-store" });
-        return;
-      }
-
-      if (url.pathname === "/api/login" && request.method === "POST") {
-        if (!auth.enabled || !auth.loginEnabled) {
-          sendJson(response, 404, { error: "login_disabled" }, { "cache-control": "no-store" });
-          return;
-        }
-        const clientAddress = observedClientAddress(request, trustedProxies)
-          ?? normalizeIpAddress(request.socket.remoteAddress)
-          ?? "unknown";
-        const attempt = loginAttempts.attempt(clientAddress);
-        if (!attempt.allowed) {
-          sendJson(
-            response,
-            429,
-            { error: "login_rate_limited", retryAfterMs: attempt.retryAfterMs },
-            {
-              "retry-after": String(Math.max(1, Math.ceil(attempt.retryAfterMs / 1_000))),
-              "cache-control": "no-store",
-            },
-          );
-          return;
-        }
-        const body = (await readBody(request)) as { username?: unknown; password?: unknown };
-        if (typeof body.username !== "string" || typeof body.password !== "string") {
-          sendJson(response, 400, { error: "invalid_credentials_format" }, { "cache-control": "no-store" });
-          return;
-        }
-        if (!await verifyCredentials(auth, body.username, body.password)) {
-          sendJson(response, 401, { error: "invalid_credentials" }, { "cache-control": "no-store" });
-          return;
-        }
-        loginAttempts.reset(clientAddress);
-        const token = issueSessionToken(auth.sessionSecret, SESSION_TTL_MS, Date.now());
-        sendJson(response, 200, { token, expiresInMs: SESSION_TTL_MS }, { "cache-control": "no-store" });
-        return;
-      }
-
-      if (url.pathname === "/api/auth/session" && request.method === "GET") {
-        sendJson(response, 200, { authenticated: true }, { "cache-control": "no-store" });
+      if (matchedApiRoute) {
+        await matchedApiRoute.route.handler({
+          url,
+          request,
+          response,
+          principal,
+          match: matchedApiRoute.match,
+          deps: serverDeps,
+          sendJson: (status, payload, headers) =>
+            sendJson(response, status, payload, headers),
+          readJsonBody: (maxBytes) => readBody(request, maxBytes),
+          readBinaryBody: (maxBytes) => readBinaryBody(request, maxBytes),
+        });
         return;
       }
 
