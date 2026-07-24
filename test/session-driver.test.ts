@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cwdFromDurableSessionOutput } from "../src/server/durable-session.js";
-import { sessionCapabilitiesForMachine, sessionDriverForMachine } from "../src/server/session-driver.js";
+import {
+  sessionBackendCapabilitiesForMachine,
+  sessionBackendKindForMachine,
+} from "../src/server/backends/index.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const machine = (patch: Partial<MachineConfig>): MachineConfig => ({
@@ -12,24 +15,26 @@ const machine = (patch: Partial<MachineConfig>): MachineConfig => ({
 });
 
 test("session drivers describe restart durability by backend", () => {
-  assert.equal(sessionCapabilitiesForMachine(machine({ sessionBackend: "tmux" })).restartDurable, true);
-  assert.equal(sessionCapabilitiesForMachine(machine({ sessionBackend: "pty" })).restartDurable, false);
+  assert.equal(sessionBackendCapabilitiesForMachine(machine({ sessionBackend: "tmux" })).restartDurable, true);
+  assert.equal(sessionBackendCapabilitiesForMachine(machine({ sessionBackend: "pty" })).restartDurable, false);
   assert.equal(
-    sessionCapabilitiesForMachine(machine({ kind: "ssh", host: "example", sessionBackend: "screen" })).transport,
+    sessionBackendCapabilitiesForMachine(machine({ kind: "ssh", host: "example", sessionBackend: "screen" })).transport,
     "ssh-multiplexer",
   );
   assert.equal(
-    sessionCapabilitiesForMachine(machine({ command: ["echo", "hello"], sessionBackend: "tmux" })).restartDurable,
+    sessionBackendCapabilitiesForMachine(machine({ command: ["echo", "hello"], sessionBackend: "tmux" })).restartDurable,
     false,
   );
 });
 
 test("powershell SSH agent sessions use the agent-owned driver", () => {
   const windows = machine({ kind: "powershell-ssh", host: "windows", sessionBackend: "agent" });
-  assert.equal(sessionDriverForMachine(windows).id, "windows-agent");
-  assert.deepEqual(sessionCapabilitiesForMachine(windows), {
+  assert.equal(sessionBackendKindForMachine(windows), "windows-agent");
+  assert.deepEqual(sessionBackendCapabilitiesForMachine(windows), {
     transport: "windows-agent",
     restartDurable: true,
+    supportsFileStaging: true,
+    supportsCwdReport: true,
     replay: true,
     resize: true,
     cwd: "agent",

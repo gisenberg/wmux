@@ -1,5 +1,8 @@
 import type { DurableSessionAudit } from "./session-audit.js";
-import { sessionCapabilitiesForMachine, sessionDriverForMachine } from "./session-driver.js";
+import {
+  sessionBackendCapabilitiesForMachine,
+  sessionBackendKindForMachine,
+} from "./backends/index.js";
 import type { DoctorReport, MachineConfig, MachineStatus, PersistedState } from "./types.js";
 
 export const buildDoctorReport = (
@@ -36,8 +39,8 @@ export const buildDoctorReport = (
             issue: "machine configuration missing",
           };
         }
-        const driver = sessionDriverForMachine(machine);
-        const capabilities = sessionCapabilitiesForMachine(machine);
+        const backendKind = sessionBackendKindForMachine(machine);
+        const capabilities = sessionBackendCapabilitiesForMachine(machine);
         const issue = pane.status === "exited"
           ? `process exited${pane.exitCode === undefined ? "" : ` with code ${pane.exitCode}`}`
           : missingPaneIds.has(pane.id)
@@ -54,7 +57,7 @@ export const buildDoctorReport = (
           machineName: machineStatus?.name ?? machine.name,
           status: pane.status,
           exitCode: pane.exitCode,
-          driver: driver.id,
+          driver: (backendKind === "windows-agent" ? "windows-agent" : "pty") as "windows-agent" | "pty",
           transport: capabilities.transport,
           restartDurable: capabilities.restartDurable,
           replay: capabilities.replay,

@@ -4,7 +4,11 @@ import type { BrowserAuthMode } from "./auth.js";
 import { AgentSessionService } from "./agent-sessions.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
-import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
+import {
+  createSessionBackend,
+  type BackendSession,
+  type SessionBackend,
+} from "./backends/index.js";
 import { streamPathForMachine } from "./streams.js";
 import { resolveHelperUrl } from "./helper-url.js";
 import type { AttachReplay } from "./terminal-checkpoint.js";
@@ -104,12 +108,13 @@ const BACKPRESSURE_HIGH_WATER = 4 * 1024 * 1024;
 const BACKPRESSURE_LOW_WATER = 1 * 1024 * 1024;
 
 export class SessionManager {
-  private sessions = new Map<string, ManagedSession>();
+  private sessions = new Map<string, BackendSession>();
+  private backends = new Map<string, SessionBackend>();
   private sockets = new Map<string, Set<WebSocket>>();
   private outputWatchers = new Map<string, Set<WebSocket>>();
   private resizeOwners = new Map<string, WebSocket>();
   private socketState = new Map<WebSocket, SocketState>();
-  private ignoredSessionExits = new WeakSet<ManagedSession>();
+  private ignoredSessionExits = new WeakSet<BackendSession>();
   private sessionMachines = new Map<string, MachineConfig>();
   private paneInputEpochs = new Map<string, number>();
   private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
@@ -148,12 +153,15 @@ export class SessionManager {
     if (!session || session.isExited || !this.sessionMachines.has(paneId)) {
       throw new PasteImageStageError(409, "paste_image_pane_not_live");
     }
-    if (session.attachReady) await session.attachReady;
+    const liveBackend = this.backends.get(paneId);
+    const attachReady = liveBackend?.attach(session) ?? session.attachReady;
+    if (attachReady) await attachReady;
     const machine = this.sessionMachines.get(paneId);
     if (this.state.findPane(paneId) !== pane || this.sessions.get(paneId) !== session || session.isExited || !machine) {
       throw new PasteImageStageError(409, "paste_image_pane_not_live");
     }
-    const staged = await this.pasteImages.stage(paneId, structuredClone(machine), data);
+    const backend = this.backends.get(paneId) ?? createSessionBackend(machine, this.pasteImages);
+    const staged = await backend.stageFile(paneId, data, { inputEpoch });
     if (
       this.state.findPane(paneId) !== pane
       || this.sessions.get(paneId) !== session
@@ -186,7 +194,7 @@ export class SessionManager {
     const paneSockets = this.sockets.get(paneId);
     paneSockets?.add(socket);
     this.socketState.set(socket, { paneId, ...initialSize });
-    let session: ManagedSession;
+    let session: BackendSession;
     try {
       session = this.ensureSession(pane, initialSize.cols, initialSize.rows);
     } catch (error) {
@@ -211,10 +219,7 @@ export class SessionManager {
         }
         const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
         if (!terminalResponse) this.advancePaneInputEpoch(paneId);
-        if (terminalResponse && session.writeTerminalResponse) {
-          session.writeTerminalResponse(message.data);
-        }
-        else session.write(message.data);
+        this.backends.get(paneId)?.write(session, message.data, terminalResponse);
       }
       if (message.type === "resize") {
         const size = normalizeSize(message.cols, message.rows);
@@ -223,7 +228,7 @@ export class SessionManager {
           this.releaseResizeOwner(paneId, socket);
           return;
         }
-        if (this.resizeOwners.get(paneId) === socket) session.resize(size.cols, size.rows);
+        if (this.resizeOwners.get(paneId) === socket) this.backends.get(paneId)?.resize(session, size.cols, size.rows);
       }
       if (message.type === "activate") {
         const size = normalizeSize(message.cols, message.rows);
@@ -260,8 +265,7 @@ export class SessionManager {
       });
       this.scheduleDurableClientRefresh(pane, socket);
     };
-    if (session.attachReady) void session.attachReady.then(sendReady);
-    else sendReady();
+    void (this.backends.get(paneId)?.attach(session) ?? Promise.resolve()).then(sendReady);
   }
 
   watchOutput(paneId: string, socket: WebSocket, cols = 96, rows = 32): void {
@@ -271,7 +275,7 @@ export class SessionManager {
       return;
     }
     const size = normalizeSize(cols, rows);
-    let session: ManagedSession;
+    let session: BackendSession;
     try {
       session = this.ensureSession(pane, size.cols, size.rows);
     } catch (error) {
@@ -299,8 +303,7 @@ export class SessionManager {
       });
       this.scheduleDurableClientRefresh(pane, socket);
     };
-    if (session.attachReady) void session.attachReady.then(sendReady);
-    else sendReady();
+    void (this.backends.get(paneId)?.attach(session) ?? Promise.resolve()).then(sendReady);
 
     socket.on("close", () => {
       this.outputWatchers.get(paneId)?.delete(socket);
@@ -351,11 +354,11 @@ export class SessionManager {
     const size = normalizeSize(cols, rows);
     const session = this.ensureSession(pane, size.cols, size.rows);
     this.advancePaneInputEpoch(paneId);
-    session.write(data);
+    this.backends.get(paneId)?.write(session, data);
     return true;
   }
 
-  private ensureSession(pane: PaneState, cols: number, rows: number): ManagedSession {
+  private ensureSession(pane: PaneState, cols: number, rows: number): BackendSession {
     const existing = this.sessions.get(pane.id);
     if (existing && !existing.isExited) return existing;
     const previousSessionMachine = this.sessionMachines.get(pane.id);
@@ -367,9 +370,11 @@ export class SessionManager {
     if (machine.source === "registered" && machine.online === false) {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
-    const driver = sessionDriverForMachine(machine);
+    const backend = createSessionBackend(machine, this.pasteImages);
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
-      void sessionDriverForMachine(previousSessionMachine).dispose(previousSessionMachine, pane.id, false);
+      const previousBackend = this.backends.get(pane.id)
+        ?? createSessionBackend(previousSessionMachine, this.pasteImages);
+      void previousBackend.dispose(pane.id, undefined, { kill: false });
     }
     const context = this.state.findPaneContext(pane.id);
     const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
@@ -396,9 +401,10 @@ export class SessionManager {
       WMUX_STREAM_WHIP_URL: `${process.env.WMUX_MEDIAMTX_WEBRTC_ORIGIN ?? `http://${streamHost}:8889`}/${streamPath}/whip`,
       KITTY_WINDOW_ID: `wmux-${pane.id}`,
     };
-    const session = driver.create(pane, machine, cols, rows, sessionEnv);
+    const session = backend.spawn({ pane, cols, rows, env: sessionEnv });
     const startedAt = Date.now();
     this.sessions.set(pane.id, session);
+    this.backends.set(pane.id, backend);
     this.sessionMachines.set(pane.id, structuredClone(machine));
     this.state.updatePane(pane.id, { status: "running", exitCode: undefined, title: pane.title });
     this.schedulePaneCwdRefresh(pane, machine, session);
@@ -441,9 +447,11 @@ export class SessionManager {
       }
 
       const exitedMachine = this.sessionMachines.get(pane.id);
-      if (exitedMachine && sessionDriverForMachine(exitedMachine).capabilities(exitedMachine).agentOwned) {
-        void sessionDriverForMachine(exitedMachine).dispose(exitedMachine, pane.id, false);
+      const exitedBackend = this.backends.get(pane.id);
+      if (exitedBackend?.capabilities.agentOwned) {
+        void exitedBackend.dispose(pane.id, undefined, { kill: false });
       }
+      this.backends.delete(pane.id);
       this.sessionMachines.delete(pane.id);
       this.paneInputEpochs.delete(pane.id);
       if (exitedMachine) void this.pasteImages.cleanupPane(pane.id, exitedMachine);
@@ -460,9 +468,9 @@ export class SessionManager {
     return session;
   }
 
-  private schedulePaneCwdRefresh(pane: PaneState, machine: MachineConfig, session: ManagedSession): void {
-    const driver = sessionDriverForMachine(machine);
-    if (driver.capabilities(machine).cwd !== "multiplexer") return;
+  private schedulePaneCwdRefresh(pane: PaneState, machine: MachineConfig, session: BackendSession): void {
+    const backend = this.backends.get(pane.id);
+    if (!backend || backend.capabilities.cwd !== "multiplexer") return;
 
     let retryIndex = 0;
     const refresh = async (): Promise<void> => {
@@ -470,7 +478,7 @@ export class SessionManager {
       const cwdBeforeRead = this.state.findPane(pane.id)?.cwd;
       let cwd: string | undefined;
       try {
-        cwd = await driver.readCwd(machine, pane.id);
+        cwd = await backend.readCwd(pane.id);
       } catch {
         cwd = undefined;
       }
@@ -522,7 +530,7 @@ export class SessionManager {
   // Flow control: a fast PTY (e.g. `yes`) feeding a slow client would grow the
   // outbound socket buffer without bound. Pause the PTY when any consumer's
   // buffer crosses the high-water mark, and resume once every buffer drains.
-  private applyBackpressure(paneId: string, session: ManagedSession): void {
+  private applyBackpressure(paneId: string, session: BackendSession): void {
     if (this.pausedSessions.has(paneId)) return;
     if (this.maxBufferedFor(paneId) <= BACKPRESSURE_HIGH_WATER) return;
     session.pause();
@@ -551,31 +559,28 @@ export class SessionManager {
     this.pausedSessions.clear();
     for (const session of this.sessions.values()) {
       this.ignoredSessionExits.add(session);
-      if (session.detach) session.detach();
-      else session.kill();
+      this.backends.get(session.pane.id)?.detach(session);
     }
     this.sessions.clear();
+    this.backends.clear();
     this.sessionMachines.clear();
     this.paneInputEpochs.clear();
     this.pasteImages.dispose();
   }
 
-  private replayOutputFor(pane: PaneState, session: ManagedSession): AttachReplay {
-    if (this.shouldUseDurableClientRefresh(pane)) return { data: "", kind: "raw" };
-    return session.attachReplay ?? {
+  private replayOutputFor(pane: PaneState, session: BackendSession): AttachReplay {
+    return this.backends.get(pane.id)?.readReplay(session, false) ?? {
       data: session.replayOutput,
       kind: "raw",
     };
   }
 
-  private outputReplayFor(session: ManagedSession): AttachReplay {
+  private outputReplayFor(session: BackendSession): AttachReplay {
     // Output-only clients cannot perform the browser's durable-client refresh,
     // and textual automation must not receive a screen-shaped checkpoint that
     // can destroy line boundaries used for readiness and completion markers.
-    return {
-      data: session.replayOutput,
-      kind: "raw",
-    };
+    return this.backends.get(session.pane.id)?.readReplay(session, true)
+      ?? { data: session.replayOutput, kind: "raw" };
   }
 
   private scheduleDurableClientRefresh(pane: PaneState, socket: WebSocket): void {
@@ -586,7 +591,7 @@ export class SessionManager {
         if (socket.readyState !== socket.OPEN) return;
         const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
         if (machine && !(machine.source === "registered" && machine.online === false)) {
-          void sessionDriverForMachine(machine).refreshClient(machine, pane.id);
+          void this.backends.get(pane.id)?.refreshClient(pane.id);
         }
       }, delayMs);
       timer.unref?.();
@@ -597,7 +602,8 @@ export class SessionManager {
   private shouldUseDurableClientRefresh(pane: PaneState): boolean {
     const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
     if (!machine || (machine.source === "registered" && machine.online === false)) return false;
-    return sessionDriverForMachine(machine).capabilities(machine).refreshClient;
+    return this.backends.get(pane.id)?.capabilities.refreshClient
+      ?? createSessionBackend(machine, this.pasteImages).capabilities.refreshClient;
   }
 
   private recycleIdleDurableClient(pane: PaneState): boolean {
@@ -607,7 +613,10 @@ export class SessionManager {
     this.ignoredSessionExits.add(existing);
     this.sessions.delete(pane.id);
     this.resizeOwners.delete(pane.id);
-    existing.kill();
+    const backend = this.backends.get(pane.id);
+    if (backend) void backend.dispose(pane.id, existing, { kill: true }).catch(() => undefined);
+    else existing.kill();
+    this.backends.delete(pane.id);
     return true;
   }
 
@@ -618,7 +627,7 @@ export class SessionManager {
   private ensureResizeOwner(
     paneId: string,
     socket: WebSocket,
-    session: ManagedSession,
+    session: BackendSession,
     size: { cols: number; rows: number },
   ): boolean {
     const owner = this.resizeOwners.get(paneId);
@@ -627,33 +636,33 @@ export class SessionManager {
       return owner === socket;
     }
     this.resizeOwners.set(paneId, socket);
-    session.resize(size.cols, size.rows);
+    this.backends.get(paneId)?.resize(session, size.cols, size.rows);
     return true;
   }
 
-  private promoteResizeOwner(paneId: string, socket: WebSocket, session: ManagedSession): void {
+  private promoteResizeOwner(paneId: string, socket: WebSocket, session: BackendSession): void {
     if (this.resizeOwners.get(paneId) === socket) return;
     const state = this.socketState.get(socket);
     if (!state) return;
     this.resizeOwners.set(paneId, socket);
-    session.resize(state.cols, state.rows);
+    this.backends.get(paneId)?.resize(session, state.cols, state.rows);
   }
 
-  private activateResizeOwner(paneId: string, socket: WebSocket, session: ManagedSession): void {
+  private activateResizeOwner(paneId: string, socket: WebSocket, session: BackendSession): void {
     const state = this.socketState.get(socket);
     if (!state) return;
     const owner = this.resizeOwners.get(paneId);
     const paneSockets = this.sockets.get(paneId);
     if (owner && owner !== socket && paneSockets?.has(owner) && owner.readyState === owner.OPEN) return;
     this.resizeOwners.set(paneId, socket);
-    session.resize(state.cols, state.rows);
+    this.backends.get(paneId)?.resize(session, state.cols, state.rows);
   }
 
   private releaseResizeOwner(paneId: string, socket: WebSocket): void {
     if (this.resizeOwners.get(paneId) === socket) this.resizeOwners.delete(paneId);
   }
 
-  private reassignResizeOwner(paneId: string, closedSocket: WebSocket, session: ManagedSession): void {
+  private reassignResizeOwner(paneId: string, closedSocket: WebSocket, session: BackendSession): void {
     if (this.resizeOwners.get(paneId) !== closedSocket) {
       this.deleteEmptySocketSet(paneId);
       return;
@@ -668,7 +677,7 @@ export class SessionManager {
 
     const nextSize = this.socketState.get(nextSocket);
     this.resizeOwners.set(paneId, nextSocket);
-    if (nextSize && !session.isExited) session.resize(nextSize.cols, nextSize.rows);
+    if (nextSize && !session.isExited) this.backends.get(paneId)?.resize(session, nextSize.cols, nextSize.rows);
   }
 
   private deleteEmptySocketSet(paneId: string): void {
@@ -677,16 +686,21 @@ export class SessionManager {
 
   private disposePaneProcess(paneId: string, machineId?: string): void {
     const session = this.sessions.get(paneId);
+    const backend = this.backends.get(paneId);
     const sessionMachine = this.sessionMachines.get(paneId);
     this.sessions.delete(paneId);
+    this.backends.delete(paneId);
     this.sessionMachines.delete(paneId);
     this.paneInputEpochs.delete(paneId);
     this.resizeOwners.delete(paneId);
-    if (session) session.kill();
     const fallbackMachineId = machineId ?? session?.pane.machineId ?? this.state.findPane(paneId)?.machineId;
     const machine = resolveDisposalMachine(sessionMachine, this.currentMachines(), fallbackMachineId);
+    if (backend) {
+      void backend.dispose(paneId, session, { kill: true });
+    } else if (machine) {
+      void createSessionBackend(machine, this.pasteImages).dispose(paneId, undefined, { kill: true });
+    }
     if (machine) {
-      void sessionDriverForMachine(machine).dispose(machine, paneId, Boolean(session));
       void this.pasteImages.cleanupPane(paneId, machine);
     }
     this.broadcast(paneId, { type: "removed", paneId });
