@@ -64,6 +64,7 @@ import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
 import { eventIngestRoutes } from "./routes/event-ingest-routes.js";
 import { mediaRoutes } from "./routes/media-routes.js";
 import { registryRoutes } from "./routes/registry-routes.js";
+import { streamRoutes } from "./routes/stream-routes.js";
 import { workspaceRoutes } from "./routes/workspace-routes.js";
 import {
   HttpError,
@@ -77,6 +78,7 @@ const apiRoutes = [
   ...eventIngestRoutes,
   ...mediaRoutes,
   ...registryRoutes,
+  ...streamRoutes,
   ...workspaceRoutes,
 ] as const;
 
@@ -487,59 +489,6 @@ export const createHttpServer = (
         return;
       }
 
-      if (url.pathname === "/api/streams" && request.method === "GET") {
-        await refreshStreamStatuses(false, true);
-        sendJson(response, 200, { streams: streamStatuses });
-        return;
-      }
-
-      const streamRequestStatus = url.pathname.match(/^\/api\/streams\/([^/]+)\/request$/);
-      if (streamRequestStatus && request.method === "GET") {
-        const machineId = decodeURIComponent(streamRequestStatus[1]);
-        if (!machineExists(machines, machineId)) {
-          sendJson(response, 404, { error: "unknown_machine" });
-          return;
-        }
-        sendJson(response, 200, streamRequests.snapshot(machineId));
-        return;
-      }
-
-      if (streamRequestStatus && request.method === "POST") {
-        const machineId = decodeURIComponent(streamRequestStatus[1]);
-        if (!machineExists(machines, machineId)) {
-          sendJson(response, 404, { error: "unknown_machine" });
-          return;
-        }
-        const body = (await readBody(request)) as { requestId?: string; ttlMs?: number };
-        const requestId = body.requestId?.trim() || cryptoRandomId();
-        const requestStatus = streamRequests.touch(machineId, requestId, body.ttlMs);
-        streamMutationRevision += 1;
-        await refreshStreamStatuses(true, true);
-        sendJson(response, 200, {
-          requestId,
-          ...requestStatus,
-          streams: streamStatuses,
-        });
-        return;
-      }
-
-      const streamRequestRelease = url.pathname.match(/^\/api\/streams\/([^/]+)\/request\/([^/]+)$/);
-      if (streamRequestRelease && request.method === "DELETE") {
-        const machineId = decodeURIComponent(streamRequestRelease[1]);
-        if (!machineExists(machines, machineId)) {
-          sendJson(response, 404, { error: "unknown_machine" });
-          return;
-        }
-        const requestStatus = streamRequests.release(machineId, decodeURIComponent(streamRequestRelease[2]));
-        streamMutationRevision += 1;
-        await refreshStreamStatuses(true, true);
-        sendJson(response, 200, {
-          ...requestStatus,
-          streams: streamStatuses,
-        });
-        return;
-      }
-
       const paneReview = url.pathname.match(/^\/api\/panes\/([^/]+)\/reviews$/);
       if (paneReview && request.method === "POST") {
         let paneId: string;
@@ -816,6 +765,11 @@ const samePublicHealth = <T extends { checkedAt: string }>(previous: T[], next: 
   JSON.stringify(previous.map(({ checkedAt: _checkedAt, ...status }) => status)) ===
   JSON.stringify(next.map(({ checkedAt: _checkedAt, ...status }) => status));
 
+const machineExists = (
+  machines: MachineConfig[],
+  machineId: string,
+): boolean => machines.some((machine) => machine.id === machineId);
+
 const serveViteRequest = async (
   vite: ViteDevServer,
   request: http.IncomingMessage,
@@ -900,12 +854,6 @@ const serveBundledMesloFont = (
   else fs.createReadStream(filePath).pipe(response);
   return true;
 };
-
-const machineExists = (machines: MachineConfig[], machineId: string): boolean =>
-  machines.some((machine) => machine.id === machineId);
-
-const cryptoRandomId = (): string =>
-  `stream-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const parseSocketMessage = (raw: string): EventClientMessage | null => {
   let value: unknown;
