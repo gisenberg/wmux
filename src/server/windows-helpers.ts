@@ -4,6 +4,7 @@ import path from "node:path";
 import { streamPathForMachine } from "./streams.js";
 import { resolveHelperUrl } from "./helper-url.js";
 import type { MachineConfig } from "./types.js";
+import { WINDOWS_AGENT_PROTOCOL_VERSION } from "../shared/windows-agent-protocol.js";
 import { wmuxReleaseVersion } from "./version.js";
 
 const psSingleQuote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
@@ -414,6 +415,10 @@ const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
     content: windowsAgentSource(),
   },
   {
+    name: "wmux_windows_agent_protocol.py",
+    content: localWindowsHelperScript("wmux_windows_agent_protocol.py"),
+  },
+  {
     name: "wmux-windows-agent.cmd",
     content: pythonCmdShim("wmux-windows-agent.py"),
   },
@@ -483,8 +488,7 @@ export const windowsCwdPromptSnippet = (): string => localWindowsHelperScript("w
 export const expectedWindowsAgentReleaseVersion = (): string => wmuxReleaseVersion("win");
 
 export const expectedWindowsAgentProtocolVersion = (): number => {
-  const match = localScript("wmux-windows-agent").match(/^PROTOCOL_VERSION = (\d+)/m);
-  return Number(match?.[1] ?? 0);
+  return WINDOWS_AGENT_PROTOCOL_VERSION;
 };
 
 const windowsAgentSource = (): string =>

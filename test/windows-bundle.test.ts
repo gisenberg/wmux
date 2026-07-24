@@ -223,9 +223,15 @@ test("agent bundle uses the platform release and exposes protocol compatibility 
   assert.ok(agent);
   const content = Buffer.from(agent.dataBase64, "base64").toString("utf8");
   assert.ok(content.includes(`RELEASE_VERSION = "${expectedWindowsAgentReleaseVersion()}"`));
-  assert.ok(content.includes(`PROTOCOL_VERSION = ${expectedWindowsAgentProtocolVersion()}`));
-  assert.ok(content.includes('"paste-images-v1"'));
-  assert.ok(content.includes('"registration-heartbeat-v1"'));
+  assert.ok(content.includes("PROTOCOL_VERSION = WINDOWS_AGENT_PROTOCOL_VERSION"));
+  const protocol = buildWindowsHelperBundle(machine).files.find(
+    (file) => file.name === "wmux_windows_agent_protocol.py",
+  );
+  assert.ok(protocol);
+  const protocolContent = Buffer.from(protocol.dataBase64, "base64").toString("utf8");
+  assert.ok(protocolContent.includes(`WINDOWS_AGENT_PROTOCOL_VERSION = ${expectedWindowsAgentProtocolVersion()}`));
+  assert.ok(protocolContent.includes('"paste-images-v1"'));
+  assert.ok(protocolContent.includes('"registration-heartbeat-v1"'));
   assert.ok(content.includes("MAX_PASTE_IMAGE_BYTES = 8 * 1024 * 1024"));
   assert.ok(!content.includes("__WMUX_WINDOWS_AGENT_RELEASE_VERSION__"));
 });

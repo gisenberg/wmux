@@ -5,8 +5,24 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { windowsAgentUrl } from "../src/server/windows-agent.js";
 import type { MachineConfig } from "../src/server/types.js";
+import {
+  WINDOWS_AGENT_LONG_POLL,
+  WINDOWS_AGENT_PATHS,
+  WINDOWS_AGENT_PROTOCOL_VERSION,
+} from "../src/shared/windows-agent-protocol.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("Windows agent protocol exports stable paths and bounded polling semantics", () => {
+  assert.equal(WINDOWS_AGENT_PROTOCOL_VERSION, 5);
+  assert.equal(WINDOWS_AGENT_PATHS.session("pane one"), "/sessions/pane%20one");
+  assert.equal(
+    WINDOWS_AGENT_PATHS.output("pane one", 42, WINDOWS_AGENT_LONG_POLL.defaultTimeoutMs),
+    "/sessions/pane%20one/output?cursor=42&timeoutMs=15000",
+  );
+  assert.ok(WINDOWS_AGENT_LONG_POLL.requestTimeoutMs > WINDOWS_AGENT_LONG_POLL.defaultTimeoutMs);
+  assert.ok(WINDOWS_AGENT_LONG_POLL.maximumTimeoutMs >= WINDOWS_AGENT_LONG_POLL.defaultTimeoutMs);
+});
 
 test("Windows agent conditionally loads PowerShell profiles for interactive sessions", () => {
   const source = String.raw`
