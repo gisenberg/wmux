@@ -75,10 +75,10 @@ export const registryRoutes: readonly ApiRoute[] = [
     method: "GET",
     pattern: /^\/api\/helpers\/windows\/([^/]+)\/bootstrap$/,
     policy: policyForRoute("windows-bootstrap"),
-    handler: async ({ deps, match, response, sendJson, url }) => {
+    handler: async ({ deps, machines, match, response, sendJson, url }) => {
       if (!match) throw new Error("Windows bootstrap route matched without captures");
       const machineId = decodeURIComponent(match[1]);
-      const machine = deps.currentMachines().find((candidate) => candidate.id === machineId);
+      const machine = machines.find((candidate) => candidate.id === machineId);
       if (!machine) {
         sendJson(404, { error: "unknown_machine" });
         return;
@@ -128,10 +128,10 @@ export const registryRoutes: readonly ApiRoute[] = [
     method: "GET",
     pattern: /^\/api\/helpers\/windows\/([^/]+)$/,
     policy: policyForRoute("windows-helpers"),
-    handler: async ({ deps, match, sendJson }) => {
+    handler: async ({ deps, machines, match, sendJson }) => {
       if (!match) throw new Error("Windows helper route matched without captures");
       const machineId = decodeURIComponent(match[1]);
-      const machine = deps.currentMachines().find((candidate) => candidate.id === machineId);
+      const machine = machines.find((candidate) => candidate.id === machineId);
       if (!machine) {
         sendJson(404, { error: "unknown_machine" });
         return;

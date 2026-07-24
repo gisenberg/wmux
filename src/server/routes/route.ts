@@ -20,6 +20,12 @@ import type {
 
 export type ApiMethod = "GET" | "POST" | "PUT" | "DELETE";
 
+export class HttpError extends Error {
+  constructor(readonly status: number, readonly code: string) {
+    super(code);
+  }
+}
+
 export interface ServerDeps {
   bindHost: string;
   auth: AuthConfig;
@@ -56,6 +62,7 @@ export interface RouteContext {
   request: http.IncomingMessage;
   response: http.ServerResponse;
   principal: AuthPrincipal;
+  machines: MachineConfig[];
   match?: RegExpMatchArray;
   deps: ServerDeps;
   sendJson: (

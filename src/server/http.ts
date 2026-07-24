@@ -49,15 +49,10 @@ import type {
   TerminalClipboard,
   TerminalMedia,
   TerminalNotification,
-  WorkspaceReorderPosition,
 } from "./types.js";
 import {
   StateIdConflictError,
-  WorkspaceDepthError,
-  type SplitCreationIds,
   type StateStore,
-  type TabCreationIds,
-  type WorkspaceCreationIds,
 } from "./state.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsStore } from "./settings.js";
@@ -68,7 +63,9 @@ import {
 import { authRoutes } from "./routes/auth-routes.js";
 import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
 import { registryRoutes } from "./routes/registry-routes.js";
+import { workspaceRoutes } from "./routes/workspace-routes.js";
 import {
+  HttpError,
   matchApiRoute,
   type ServerDeps,
 } from "./routes/route.js";
@@ -77,13 +74,8 @@ const apiRoutes = [
   ...authRoutes,
   ...bootstrapRoutes,
   ...registryRoutes,
+  ...workspaceRoutes,
 ] as const;
-
-class HttpError extends Error {
-  constructor(readonly status: number, readonly code: string) {
-    super(code);
-  }
-}
 
 // Default cap for JSON control endpoints; upload endpoints pass a larger cap.
 const MAX_JSON_BODY = 1024 * 1024;
@@ -482,6 +474,7 @@ export const createHttpServer = (
           request,
           response,
           principal,
+          machines,
           match: matchedApiRoute.match,
           deps: serverDeps,
           sendJson: (status, payload, headers) =>
@@ -542,81 +535,6 @@ export const createHttpServer = (
           ...requestStatus,
           streams: streamStatuses,
         });
-        return;
-      }
-
-      if (url.pathname === "/api/workspaces" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          machineId?: string;
-          sourcePaneId?: string;
-          parentPaneId?: string;
-          createdBy?: "user" | "agent";
-          parentWorkspaceId?: unknown;
-          clientIds?: unknown;
-        };
-        if (body.parentWorkspaceId !== undefined) {
-          sendJson(response, 400, { error: "parent_workspace_id_not_accepted" }); return;
-        }
-        if (body.parentPaneId !== undefined && body.createdBy !== "agent") {
-          sendJson(response, 400, { error: "parent_pane_requires_agent" }); return;
-        }
-        const parentPane = body.parentPaneId ? state.findPane(body.parentPaneId) ?? undefined : undefined;
-        if (body.parentPaneId && (!parentPane || parentPane.status === "exited")) {
-          sendJson(response, 422, { error: "parent_pane_unavailable" }); return;
-        }
-        const machineId = resolveMachineId(machines, body.machineId);
-        const clientIds = parseClientCreationIds(body.clientIds, {
-          workspaceId: "ws",
-          tabId: "tab",
-          paneId: "pane",
-        }) as WorkspaceCreationIds | undefined;
-        const sourcePane = body.sourcePaneId ? state.findPane(body.sourcePaneId) ?? undefined : undefined;
-        const cwdPane = sourcePane ?? parentPane;
-        let workspace;
-        try {
-          workspace = state.createWorkspace(
-            machineId,
-            await cwdForSourcePane(state, machines, cwdPane, machineId),
-            body.createdBy === "agent" ? "agent" : "user",
-            parentPane ? state.findPaneContext(parentPane.id)?.workspace.id : undefined,
-            clientIds,
-          );
-        } catch (error) {
-          if (error instanceof WorkspaceDepthError) { sendJson(response, 422, { error: error.code }); return; }
-          throw error;
-        }
-        sendJson(response, 201, { workspace, state: currentPayload() });
-        return;
-      }
-
-      if (url.pathname === "/api/workspaces/reorder" && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          workspaceId?: unknown;
-          targetWorkspaceId?: unknown;
-          position?: unknown;
-          workspaceTreeRevision?: unknown;
-        };
-        if (
-          typeof body.workspaceId !== "string" ||
-          (body.position !== "out-of" && typeof body.targetWorkspaceId !== "string") ||
-          (body.position === "out-of" && body.targetWorkspaceId !== undefined && typeof body.targetWorkspaceId !== "string") ||
-          (body.position !== "before" && body.position !== "after" && body.position !== "into" && body.position !== "out-of") ||
-          !Number.isInteger(body.workspaceTreeRevision)
-        ) {
-          sendJson(response, 400, { error: "invalid_workspace_reorder" });
-          return;
-        }
-        const reordered = state.reorderWorkspaceResult(
-          body.workspaceId,
-          typeof body.targetWorkspaceId === "string" ? body.targetWorkspaceId : undefined,
-          body.position as WorkspaceReorderPosition,
-          body.workspaceTreeRevision as number,
-        );
-        if (!reordered.ok) {
-          const status = reordered.status === "conflict" ? 409 : reordered.status === "not_found" ? 404 : 422;
-          sendJson(response, status, { error: `workspace_${reordered.status}`, state: currentPayload() }); return;
-        }
-        sendJson(response, 200, { state: currentPayload() });
         return;
       }
 
@@ -845,155 +763,6 @@ export const createHttpServer = (
         return;
       }
 
-      const readWorkspaceNotifications = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/notifications\/read$/);
-      if (readWorkspaceNotifications && request.method === "POST") {
-        state.markWorkspaceNotificationsRead(readWorkspaceNotifications[1]);
-        sendJson(response, 200, currentPayload());
-        return;
-      }
-
-      const closeWorkspace = url.pathname.match(/^\/api\/workspaces\/([^/]+)$/);
-      if (closeWorkspace && request.method === "DELETE") {
-        const removed = sessions.closeWorkspace(closeWorkspace[1]);
-        sendJson(response, removed ? 200 : 409, { removed, state: currentPayload() });
-        return;
-      }
-
-      const workspaceTitle = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/title$/);
-      if (workspaceTitle && request.method === "POST") {
-        const body = (await readBody(request)) as { title?: string; clear?: boolean };
-        const workspace = body.clear
-          ? state.clearWorkspaceTitle(workspaceTitle[1])
-          : state.setWorkspaceTitle(workspaceTitle[1], body.title ?? "");
-        sendJson(response, 200, { workspace, state: currentPayload() });
-        return;
-      }
-
-      const workspaceAutoTitle = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/auto-title$/);
-      if (workspaceAutoTitle && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          title?: string;
-          tabId?: string;
-          descriptor?: string;
-          tabOnlyIfMultiple?: boolean;
-        };
-        const result = state.setAutoTitle({
-          workspaceId: workspaceAutoTitle[1],
-          title: body.title ?? "",
-          tabId: body.tabId,
-          descriptor: body.descriptor,
-          tabOnlyIfMultiple: body.tabOnlyIfMultiple,
-        });
-        sendJson(response, 200, { ...result, state: currentPayload() });
-        return;
-      }
-
-      const tabs = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs$/);
-      if (tabs && request.method === "POST") {
-        const body = (await readBody(request)) as { machineId?: string; sourcePaneId?: string; clientIds?: unknown };
-        const snapshot = state.snapshot();
-        const workspace = snapshot.workspaces.find((candidate) => candidate.id === tabs[1]);
-        const sourcePane = body.sourcePaneId
-          ? workspace?.tabs.flatMap((tab) => tab.panes).find((pane) => pane.id === body.sourcePaneId)
-          : undefined;
-        const machineId = resolveMachineId(machines, body.machineId, workspace?.machineId);
-        const clientIds = parseClientCreationIds(body.clientIds, { tabId: "tab", paneId: "pane" }) as TabCreationIds | undefined;
-        const tab = state.createTab(
-          tabs[1],
-          machineId,
-          await cwdForSourcePane(state, machines, sourcePane, machineId),
-          clientIds,
-        );
-        sendJson(response, 201, { tab, state: currentPayload() });
-        return;
-      }
-
-      const closeTab = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs\/([^/]+)$/);
-      if (closeTab && request.method === "DELETE") {
-        const removed = sessions.closeTab(closeTab[1], closeTab[2]);
-        sendJson(response, removed ? 200 : 409, { removed, state: currentPayload() });
-        return;
-      }
-
-      const tabTitle = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/tabs\/([^/]+)\/title$/);
-      if (tabTitle && request.method === "POST") {
-        const body = (await readBody(request)) as { title?: string };
-        const tab = state.setTabTitle(tabTitle[1], tabTitle[2], body.title ?? "");
-        sendJson(response, 200, { tab, state: currentPayload() });
-        return;
-      }
-
-      const split = url.pathname.match(/^\/api\/tabs\/([^/]+)\/split$/);
-      if (split && request.method === "POST") {
-        const body = (await readBody(request)) as {
-          paneId?: string;
-          direction?: "horizontal" | "vertical";
-          machineId?: string;
-          clientIds?: unknown;
-        };
-        if (!body.paneId || (body.direction !== "horizontal" && body.direction !== "vertical")) {
-          sendJson(response, 400, { error: "invalid_split" });
-          return;
-        }
-        const snapshot = state.snapshot();
-        const targetTab = snapshot.workspaces
-          .flatMap((workspace) => workspace.tabs)
-          .find((tab) => tab.id === split[1]);
-        if (!targetTab) throw new HttpError(404, "tab_not_found");
-        const sourcePane = targetTab.panes.find((pane) => pane.id === body.paneId);
-        if (!sourcePane) throw new HttpError(404, "pane_not_found");
-        const machineId = resolveMachineId(machines, body.machineId, sourcePane.machineId);
-        const clientIds = parseClientCreationIds(body.clientIds, { paneId: "pane" }) as SplitCreationIds | undefined;
-        const tab = state.splitPane(
-          split[1],
-          body.paneId,
-          body.direction,
-          machineId,
-          await cwdForSourcePane(state, machines, sourcePane, machineId),
-          clientIds,
-        );
-        sendJson(response, 201, { tab, state: currentPayload() });
-        return;
-      }
-
-      const splitRatio = url.pathname.match(/^\/api\/tabs\/([^/]+)\/split-ratio$/);
-      if (splitRatio && request.method === "POST") {
-        const body = (await readBody(request)) as { path?: string; ratio?: number };
-        const ratio = body.ratio;
-        if (typeof body.path !== "string" || typeof ratio !== "number" || !Number.isFinite(ratio)) {
-          sendJson(response, 400, { error: "invalid_split_ratio" });
-          return;
-        }
-        const tab = state.setSplitRatio(splitRatio[1], body.path, ratio);
-        sendJson(response, 200, { tab, state: currentPayload() });
-        return;
-      }
-
-      const paneInput = url.pathname.match(/^\/api\/panes\/([^/]+)\/input$/);
-      if (paneInput && request.method === "POST") {
-        const body = (await readBody(request)) as { data?: unknown; cols?: unknown; rows?: unknown };
-        if (typeof body.data !== "string") {
-          sendJson(response, 400, { error: "invalid_input" });
-          return;
-        }
-        if (body.data.length > 256 * 1024) {
-          sendJson(response, 413, { error: "input_too_large" });
-          return;
-        }
-        const written = sessions.writePane(
-          decodeURIComponent(paneInput[1]),
-          body.data,
-          typeof body.cols === "number" ? body.cols : undefined,
-          typeof body.rows === "number" ? body.rows : undefined,
-        );
-        if (!written) {
-          sendJson(response, 404, { error: "pane_not_found" });
-          return;
-        }
-        sendJson(response, 200, currentPayload());
-        return;
-      }
-
       const paneReview = url.pathname.match(/^\/api\/panes\/([^/]+)\/reviews$/);
       if (paneReview && request.method === "POST") {
         let paneId: string;
@@ -1030,20 +799,6 @@ export const createHttpServer = (
           request.removeListener("aborted", abort);
           response.removeListener("close", abortOnClose);
         }
-        return;
-      }
-
-      const readPaneNotifications = url.pathname.match(/^\/api\/panes\/([^/]+)\/notifications\/read$/);
-      if (readPaneNotifications && request.method === "POST") {
-        state.markPaneNotificationsRead(decodeURIComponent(readPaneNotifications[1]));
-        sendJson(response, 200, currentPayload());
-        return;
-      }
-
-      const closePane = url.pathname.match(/^\/api\/tabs\/([^/]+)\/panes\/([^/]+)$/);
-      if (closePane && request.method === "DELETE") {
-        const removed = sessions.closePane(closePane[2]);
-        sendJson(response, removed ? 200 : 409, { removed, state: currentPayload() });
         return;
       }
 
@@ -1329,30 +1084,6 @@ const cwdForSourcePane = async (
   const cwd = machine ? await readDurableSessionCwd(machine, sourcePane.id) : undefined;
   if (cwd && cwd !== sourcePane.cwd) state.updatePane(sourcePane.id, { cwd });
   return cwd ?? sourcePane.cwd;
-};
-
-const clientIdPattern = (prefix: string): RegExp => new RegExp(`^${prefix}_[0-9a-f]{16,64}$`);
-
-const parseClientCreationIds = (
-  value: unknown,
-  fields: Record<string, string>,
-): Record<string, string> | undefined => {
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "invalid_client_ids");
-  }
-  const record = value as Record<string, unknown>;
-  const expectedKeys = Object.keys(fields);
-  if (Object.keys(record).length !== expectedKeys.length) throw new HttpError(400, "invalid_client_ids");
-  const result: Record<string, string> = {};
-  for (const key of expectedKeys) {
-    const id = record[key];
-    if (typeof id !== "string" || !clientIdPattern(fields[key]).test(id)) {
-      throw new HttpError(400, "invalid_client_ids");
-    }
-    result[key] = id;
-  }
-  return result;
 };
 
 const maxAttachmentBytes = 8 * 1024 * 1024;
