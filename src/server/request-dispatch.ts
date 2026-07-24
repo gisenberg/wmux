@@ -11,7 +11,6 @@ import {
 } from "./auth.js";
 import {
   authorizeHttpPrincipal,
-  classifyHttpRoute,
 } from "./auth-policy.js";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import { HostRegistryError, type HostRegistry } from "./host-registry.js";
@@ -20,7 +19,10 @@ import {
   PasteImageStageError,
 } from "./paste-image-staging.js";
 import { RepositoryReviewError } from "./repository-review.js";
-import { apiRoutes } from "./routes/index.js";
+import {
+  apiRoutes,
+  classifyHttpRoute,
+} from "./routes/index.js";
 import {
   HttpError,
   matchApiRoute,

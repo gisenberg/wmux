@@ -1,25 +1,6 @@
 import type { AuthConfig, AuthPrincipal } from "./auth.js";
-import { apiRoutes } from "./routes/index.js";
-
-type ScopedPrincipal = "automation" | "helper";
-export type RouteAccess = "public" | "normal" | "registration";
-
-export interface HttpRoutePolicy {
-  id: string;
-  method: string;
-  pattern: RegExp;
-  access: RouteAccess;
-  scoped?: readonly ScopedPrincipal[];
-  browserSessionOnly?: boolean;
-  browserDenied?: boolean;
-  registeredHost?: boolean;
-}
-
-export const HTTP_ROUTE_POLICIES: readonly HttpRoutePolicy[] =
-  apiRoutes.map((route) => route.policy);
-
-export const classifyHttpRoute = (method: string | undefined, pathname: string): HttpRoutePolicy | undefined =>
-  HTTP_ROUTE_POLICIES.find((candidate) => candidate.method === method && candidate.pattern.test(pathname));
+import type { HttpRoutePolicy } from "./routes/route.js";
+import type { WebSocketClass } from "./websocket-route.js";
 
 export const authorizeHttpPrincipal = (
   auth: AuthConfig,
@@ -35,15 +16,6 @@ export const authorizeHttpPrincipal = (
   if (principal.kind === "legacy-shared") return (auth.browserAuthMode ?? "shared-or-login") === "shared-or-login";
   return (principal.kind === "automation" || principal.kind === "helper")
     && Boolean(policy.scoped?.includes(principal.kind));
-};
-
-export type WebSocketClass = "events" | "pane-output" | "pane-interactive";
-
-export const classifyWebSocket = (pathname: string): WebSocketClass | undefined => {
-  if (pathname === "/ws/events") return "events";
-  if (/^\/ws\/panes\/[^/]+\/output$/.test(pathname)) return "pane-output";
-  if (/^\/ws\/panes\/[^/]+$/.test(pathname)) return "pane-interactive";
-  return undefined;
 };
 
 export const authorizeWebSocketPrincipal = (

@@ -1,7 +1,6 @@
 import type http from "node:http";
 import type { AgentSessionService } from "../agent-sessions.js";
 import type { AuthConfig, AuthPrincipal } from "../auth.js";
-import type { HttpRoutePolicy } from "../auth-policy.js";
 import type { HostRegistry } from "../host-registry.js";
 import type { LoginAttemptThrottle } from "../login-throttle.js";
 import type { RepositoryReviewService } from "../repository-review.js";
@@ -17,6 +16,19 @@ import type {
 } from "../types.js";
 
 export type ApiMethod = "GET" | "POST" | "PUT" | "DELETE";
+type ScopedPrincipal = "automation" | "helper";
+export type RouteAccess = "public" | "normal" | "registration";
+
+export interface HttpRoutePolicy {
+  id: string;
+  method: string;
+  pattern: RegExp;
+  access: RouteAccess;
+  scoped?: readonly ScopedPrincipal[];
+  browserSessionOnly?: boolean;
+  browserDenied?: boolean;
+  registeredHost?: boolean;
+}
 
 export class HttpError extends Error {
   constructor(readonly status: number, readonly code: string) {

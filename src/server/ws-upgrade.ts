@@ -4,7 +4,6 @@ import { WebSocketServer } from "ws";
 import { authenticateRequest, type AuthConfig } from "./auth.js";
 import {
   authorizeWebSocketPrincipal,
-  classifyWebSocket,
 } from "./auth-policy.js";
 import { isAllowedOrigin, isAllowedRequestHost } from "./bind.js";
 import type { EventBroadcastRuntime } from "./event-broadcast.js";
@@ -14,6 +13,7 @@ import type {
   EventClientMessage,
   MachineConfig,
 } from "./types.js";
+import { classifyWebSocket } from "./websocket-route.js";
 
 interface WebSocketUpgradeOptions {
   server: http.Server | https.Server;
