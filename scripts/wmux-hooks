@@ -71,6 +71,7 @@ If it is not on \`PATH\`, invoke ${JSON.stringify(path.join(scriptDir, "wmuxctl"
 3. Omit \`--write-access\` for Codex read-only or Claude plan mode. Add it only when edits are intended.
 4. Add \`--unattended\` only when the user explicitly authorized unattended approvals. Write access alone does not bypass approval prompts.
 5. Delegations stay open by default. Use \`--close-on-success\` only for disposable successful work, and report the returned direct URL for anything left open.
+6. Review waits default to 30 minutes and change/deploy waits default to two hours. A wait timeout detaches the controller without stopping the worker; reconcile the returned run ID before retrying.
 
 Never put a long or sensitive prompt directly in shell arguments. Do not close failed, stopped, or timed-out workspaces; leave them visible for inspection.
 `;
@@ -138,10 +139,14 @@ const MAX_OUTPUT = 128 * 1024
 const MAX_CHANNEL = 512 * 1024
 const INPUT_DELAY_MS = 100
 const REQUEST_TIMEOUT_MS = 10_000
+const MIN_WAIT_TIMEOUT_SECONDS = 0.1
+const MAX_WAIT_TIMEOUT_SECONDS = 14_400
+const DEFAULT_WAIT_TIMEOUT_SECONDS = { review: 1_800, change: 7_200, deploy: 7_200 } as const
 
 class DelegationTimeoutError extends Error {}
 class DelegationAbortError extends Error {}
 class DelegationProtocolError extends Error {}
+class DelegationObservationError extends Error {}
 
 const utf8Prefix = (value: unknown, limit = MAX_OUTPUT) => {
   if (typeof value !== "string") return ""
@@ -313,6 +318,32 @@ const extractResult = (output: string, runId: string) => {
   }
   if (!payload || exitCode === undefined) throw new DelegationProtocolError("delegated result was incomplete")
   return { payload, exitCode }
+}
+
+const terminalDelegationStates = new Set([
+  "completed",
+  "failed",
+  "error",
+  "cancelled",
+  "stopped",
+  "timed_out",
+  "interrupted",
+])
+
+const durableResult = (delegation: any) => {
+  const state = delegation?.state
+  if (!terminalDelegationStates.has(state)) return undefined
+  const ok = state === "completed"
+  const detail = cleanMessage(ok
+    ? delegation?.result
+    : delegation?.error || delegation?.summary)
+  return {
+    ok,
+    detail,
+    exitCode: ok ? 0 : 1,
+    recovered: true,
+    state,
+  }
 }
 
 type ChannelWaiter = {
@@ -514,21 +545,26 @@ const taskOutput = (
   ok: boolean,
   workspaceClosed = false,
   closeWarning = "",
-) => [
+) => {
+  const tag = state === "waiting" ? "task_pending" : ok ? "task_result" : "task_error"
+  return [
   "OpenCode delegation " + state + ".",
   "State: " + state,
   "Run ID: " + ids.runId,
   "Machine: " + ids.machine,
+  "Mode: " + ids.mode,
+  "Controller wait seconds: " + ids.waitTimeoutSeconds,
   "Workspace ID: " + ids.workspaceId,
   "Tab ID: " + ids.tabId,
   "Pane ID: " + ids.paneId,
   workspaceClosed ? "Workspace closed: true" : "URL: " + ids.url,
   workspaceClosed ? "URL: unavailable (workspace closed)" : "Workspace closed: false",
   ...(closeWarning ? ["Close warning: " + utf8Prefix(closeWarning, 500)] : []),
-  ok ? "<task_result>" : "<task_error>",
+  "<" + tag + ">",
   detail,
-  ok ? "</task_result>" : "</task_error>",
-].join("\n")
+  "</" + tag + ">",
+  ].join("\n")
+}
 
 const closeOutput = (state: string, workspaceId: string, closed: boolean, message: string) => [
   "wmux workspace close result.",
@@ -575,13 +611,14 @@ const closeWorkspaceTool = tool({
 })
 
 const delegate = tool({
-  description: "Delegate an OpenCode task to a visible durable POSIX wmux pane.",
+  description: "Delegate an OpenCode task to a visible durable POSIX wmux pane. The timeout bounds controller waiting only and never kills the worker.",
   args: {
     machine: tool.schema.string(),
     directory: tool.schema.string(),
     prompt: tool.schema.string(),
     agent: tool.schema.string().optional(),
     title: tool.schema.string().optional(),
+    mode: tool.schema.string().optional(),
     timeout_seconds: tool.schema.number().optional(),
     auto_approve: tool.schema.boolean().optional(),
     close_on_success: tool.schema.boolean().optional(),
@@ -592,9 +629,18 @@ const delegate = tool({
     if (typeof args.prompt !== "string" || !args.prompt || Buffer.byteLength(args.prompt) > MAX_PROMPT) throw new Error("invalid delegation prompt")
     if (args.agent !== undefined && (typeof args.agent !== "string" || args.agent.length > 512 || args.agent.includes("\0"))) throw new Error("invalid delegation agent")
     if (args.title !== undefined && (typeof args.title !== "string" || args.title.length > 512 || args.title.includes("\0"))) throw new Error("invalid delegation title")
+    const mode = args.mode ?? "change"
+    if (mode !== "change" && mode !== "deploy") throw new Error("mode must be change or deploy")
     if (args.close_on_success !== undefined && typeof args.close_on_success !== "boolean") throw new Error("invalid close_on_success")
-    const timeoutSeconds = args.timeout_seconds ?? 900
-    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 30 || timeoutSeconds > 3600) throw new Error("timeout_seconds must be 30..3600")
+    if (
+      args.timeout_seconds !== undefined
+      && (
+        typeof args.timeout_seconds !== "number"
+        || !Number.isFinite(args.timeout_seconds)
+        || args.timeout_seconds < MIN_WAIT_TIMEOUT_SECONDS
+        || args.timeout_seconds > MAX_WAIT_TIMEOUT_SECONDS
+      )
+    ) throw new Error("timeout_seconds must be 0.1..14400")
     if (context.abort.aborted) throw new DelegationAbortError("delegation aborted")
 
     try {
@@ -602,7 +648,12 @@ const delegate = tool({
         permission: "wmux_delegate",
         patterns: [args.machine, args.directory],
         always: ["*"],
-        metadata: { machine: args.machine, directory: args.directory, closeOnSuccess: args.close_on_success === true },
+        metadata: {
+          machine: args.machine,
+          directory: args.directory,
+          mode,
+          closeOnSuccess: args.close_on_success === true,
+        },
       }))
     } catch {
       if (context.abort.aborted) throw new DelegationAbortError("delegation aborted")
@@ -619,6 +670,15 @@ const delegate = tool({
       && (candidate.kind === "local" || candidate.kind === "ssh"),
     )
     if (!machine) throw new Error("machine is not a reachable POSIX local/ssh target")
+    const configuredTimeout = bootstrap?.delegation?.waitTimeoutSeconds?.[mode]
+    const timeoutSeconds = args.timeout_seconds ?? (
+      typeof configuredTimeout === "number"
+      && Number.isFinite(configuredTimeout)
+      && configuredTimeout >= MIN_WAIT_TIMEOUT_SECONDS
+      && configuredTimeout <= MAX_WAIT_TIMEOUT_SECONDS
+        ? configuredTimeout
+        : DEFAULT_WAIT_TIMEOUT_SECONDS[mode]
+    )
 
     const made: any = await requestJson(url, token, "/api/workspaces", {
       method: "POST",
@@ -641,12 +701,23 @@ const delegate = tool({
     const directUrl = joinUrl(url, "workspaces/" + encodeURIComponent(workspace.id) + "/tabs/" + encodeURIComponent(tab.id))
     const secrets = [args.prompt, token]
     const title = cleanLine(redact(args.title, secrets), 80) || "OpenCode delegation"
-    const ids = { runId, machine: args.machine, workspaceId: workspace.id, tabId: tab.id, paneId: pane.id, url: directUrl }
+    const ids = {
+      runId,
+      machine: args.machine,
+      mode,
+      waitTimeoutSeconds: String(timeoutSeconds),
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      paneId: pane.id,
+      url: directUrl,
+    }
     let channel: PaneChannel | undefined
+    let workerSubmitted = false
     const postLifecycle = (status: string, summary: string, message = "", signal?: AbortSignal) => requestJson(url, token, "/api/agent-events", {
       method: "POST",
       body: JSON.stringify({
         agent: "opencode",
+        runId,
         status,
         title,
         summary: cleanLine(summary, 500),
@@ -659,7 +730,18 @@ const delegate = tool({
     })
 
     try {
-      context.metadata({ title, metadata: { runId, workspaceId: workspace.id, tabId: tab.id, paneId: pane.id, url: directUrl } })
+      context.metadata({
+        title,
+        metadata: {
+          runId,
+          workspaceId: workspace.id,
+          tabId: tab.id,
+          paneId: pane.id,
+          url: directUrl,
+          mode,
+          waitTimeoutSeconds: timeoutSeconds,
+        },
+      })
       await requestJson(url, token, "/api/workspaces/" + encodeURIComponent(workspace.id) + "/title", {
         method: "POST",
         body: JSON.stringify({ title }),
@@ -690,13 +772,60 @@ const delegate = tool({
         writeAccess: true,
       })).toString("base64")
       const resultCheckpoint = channel.checkpoint()
+      workerSubmitted = true
       await sendLine(channel, encoded, context.abort)
-      const output = await channel.waitFor((value) => hasDoneMarker(value, runId), remaining(), context.abort, resultCheckpoint)
-      const { payload, exitCode } = extractResult(output, runId)
-      const ok = exitCode === 0 && payload.ok === true
+      let observed: {
+        ok: boolean
+        detail: string
+        exitCode: number
+        recovered: boolean
+        state: string
+      } | undefined
+      while (!observed) {
+        try {
+          const status: any = await requestJson(
+            url,
+            token,
+            "/api/delegations/" + encodeURIComponent(runId),
+            { signal: context.abort },
+          )
+          observed = durableResult(status?.delegation)
+        } catch (error) {
+          if (error instanceof DelegationAbortError) throw error
+        }
+        if (observed) break
+        let output = ""
+        const paneWaitMilliseconds = Math.min(1_000, remaining())
+        try {
+          output = await channel.waitFor(
+            (value) => hasDoneMarker(value, runId),
+            paneWaitMilliseconds,
+            context.abort,
+            resultCheckpoint,
+          )
+        } catch (error) {
+          if (error instanceof DelegationTimeoutError) continue
+          if (error instanceof DelegationAbortError) throw error
+          throw new DelegationObservationError(
+            error instanceof Error ? error.message : "wmux pane output became unavailable",
+          )
+        }
+        const { payload, exitCode } = extractResult(output, runId)
+        const ok = exitCode === 0 && payload.ok === true
+        observed = {
+          ok,
+          detail: cleanMessage(ok ? payload.result : (payload.error || payload.result)),
+          exitCode,
+          recovered: false,
+          state: ok ? "completed" : "failed",
+        }
+      }
+      const { ok, exitCode } = observed
       const fallback = ok ? "Delegated task completed without text output." : "Delegated task failed with exit code " + exitCode + "."
-      const detail = redact(ok ? payload.result : (payload.error || payload.result), secrets) || fallback
-      await postLifecycle(ok ? "completed" : "failed", ok ? "OpenCode delegation completed" : "OpenCode delegation failed", detail, context.abort)
+      const detail = redact(observed.detail, secrets) || fallback
+      if (!observed.recovered) {
+        await postLifecycle(ok ? "completed" : "failed", ok ? "OpenCode delegation completed" : "OpenCode delegation failed", detail, context.abort)
+      }
       if (!ok || args.close_on_success !== true) return taskOutput(ok ? "completed" : "failed", ids, detail, ok)
       try {
         await deleteWorkspace(url, token, workspace.id, context.abort)
@@ -714,6 +843,21 @@ const delegate = tool({
     } catch (error) {
       const aborted = error instanceof DelegationAbortError || context.abort.aborted
       const timedOut = error instanceof DelegationTimeoutError
+      const observationLost = !aborted && workerSubmitted && (
+        timedOut
+        || error instanceof DelegationObservationError
+        || error instanceof DelegationProtocolError
+      )
+      if (observationLost) {
+        const detail = timedOut
+          ? "Controller wait timed out; the delegated worker may still be running."
+          : error instanceof Error
+            ? error.message
+            : "Controller lost pane output; the delegated worker may still be running."
+        await postLifecycle("observer_error", "Lost contact with OpenCode delegation", detail).catch(() => {})
+        await postLifecycle("waiting", "OpenCode delegation detached; worker may still be running").catch(() => {})
+        return taskOutput("waiting", ids, redact(detail, secrets), false)
+      }
       if (channel) channel.interrupt()
       const state = timedOut ? "timed_out" : aborted ? "stopped" : "failed"
       const status = timedOut || aborted ? "stopped" : "failed"

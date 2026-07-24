@@ -71,6 +71,28 @@ test("wmuxctl rejects Codex-only delegation options for other runtimes", async (
   }
 });
 
+test("wmuxctl validates delegation wait overrides before dispatch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-timeout-bounds-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "bounded timeout");
+  try {
+    for (const timeout of ["0.01", "14401", "nan", "inf"]) {
+      await assert.rejects(
+        cli("http://127.0.0.1:1", [
+          "delegate", "codex", "local", "--directory", root,
+          "--prompt-file", promptPath, "--timeout", timeout,
+        ]),
+        (error: NodeJS.ErrnoException & { stderr?: string }) => {
+          assert.match(error.stderr ?? "", /--timeout must be between 0.1 and 14400 seconds/);
+          return true;
+        },
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 const cliProcess = async (
   url: string,
   args: string[],
@@ -681,6 +703,8 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     ], { WMUX_PANE_ID: "pane_parent" });
     const result = JSON.parse(delegated.stdout);
     assert.equal(result.state, "completed");
+    assert.equal(result.mode, "change");
+    assert.equal(result.waitTimeoutSeconds, 7_200);
     assert.equal(result.result, "review complete");
     assert.equal(result.closed, true);
     assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
@@ -1310,13 +1334,14 @@ test("wmuxctl delegate finishes from lifecycle status when terminal replay has n
   }
 });
 
-test("wmuxctl delegate records observer failure without replacing the agent outcome", async () => {
+test("wmuxctl delegate records observer detachment without replacing the agent outcome", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-observer-error-"));
   const promptPath = path.join(root, "prompt.md");
   fs.writeFileSync(promptPath, "observer failure task");
   const lifecycle: Array<Record<string, unknown>> = [];
   let runId = "";
   let upgradeCount = 0;
+  let interrupted = false;
   const workspace = {
     id: "ws_observer_error",
     machineId: "linux-box",
@@ -1365,6 +1390,8 @@ test("wmuxctl delegate records observer failure without replacing the agent outc
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         if (typeof body.data === "string" && body.data.startsWith("wmux-agent-run request ")) {
           runId = body.data.slice("wmux-agent-run request ".length);
+        } else if (body.data === "\u0003") {
+          interrupted = true;
         } else if (typeof body.data === "string" && body.data !== "\r" && body.data !== "\u0003") {
           runId = JSON.parse(Buffer.from(body.data, "base64").toString("utf8")).runId;
         }
@@ -1406,13 +1433,16 @@ test("wmuxctl delegate records observer failure without replacing the agent outc
       ]),
       (error: { stdout?: string }) => {
         const result = JSON.parse(error.stdout ?? "{}");
-        assert.equal(result.state, "failed");
+        assert.equal(result.state, "waiting");
         assert.equal(result.failureKind, "observer");
+        assert.equal(result.closed, false);
         return true;
       },
     );
-    assert.deepEqual(lifecycle.map((event) => event.status), ["running", "observer_error"]);
+    assert.deepEqual(lifecycle.map((event) => event.status), ["running", "observer_error", "waiting"]);
     assert.equal(lifecycle[1].runId, runId);
+    assert.equal(lifecycle[2].runId, runId);
+    assert.equal(interrupted, false);
   } finally {
     await close(server);
     fs.rmSync(root, { recursive: true, force: true });

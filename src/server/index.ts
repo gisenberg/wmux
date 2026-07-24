@@ -117,6 +117,7 @@ const main = async (): Promise<void> => {
     trustedProxies,
     keybindings: config.keybindings,
     terminalFontFamily: config.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
+    delegation: config.delegation,
   });
   // Persist the helper callback URL next to ~/.wmux/token: helpers and agent hooks
   // in existing durable panes read this before their stale inherited env.

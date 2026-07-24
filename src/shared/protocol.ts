@@ -31,6 +31,23 @@ export const TERMINAL_COLOR_SCHEME_MODES: Record<TerminalColorSchemeId, Terminal
 export type InactiveTabStreaming = "suspend" | "live";
 export type TuiFrameRate = 15 | 30 | 60;
 export type TerminalScrollMode = "batched" | "immediate";
+export type DelegationMode = "review" | "change" | "deploy";
+
+export const MIN_DELEGATION_WAIT_TIMEOUT_SECONDS = 0.1;
+export const MAX_DELEGATION_WAIT_TIMEOUT_SECONDS = 14_400;
+export const DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS: Record<DelegationMode, number> = {
+  review: 1_800,
+  change: 7_200,
+  deploy: 7_200,
+};
+
+export interface DelegationConfig {
+  waitTimeoutSeconds: Record<DelegationMode, number>;
+  waitTimeoutBoundsSeconds: {
+    min: number;
+    max: number;
+  };
+}
 
 /** Browser-safe stream configuration. Server-only credentials never cross this boundary. */
 export interface MachineStreamConfig {
@@ -165,6 +182,33 @@ export interface AgentActivity {
   createdAt: string;
 }
 
+export type DelegationState =
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "error"
+  | "cancelled"
+  | "stopped"
+  | "timed_out"
+  | "interrupted";
+
+export interface DelegationRecord {
+  runId: string;
+  state: DelegationState;
+  runtime: string;
+  title: string;
+  summary: string;
+  result: string;
+  error: string;
+  observerError?: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TerminalRun {
   id: string;
   workspaceId: string;
@@ -223,7 +267,9 @@ export interface BootstrapPayload {
   activeWorkspaceId: string;
   notifications: TerminalNotification[];
   agentEvents: AgentActivity[];
+  delegations: DelegationRecord[];
   runs: TerminalRun[];
+  delegation: DelegationConfig;
   terminalFontFamily: string;
   settings: WmuxSettings;
   keybindings: KeybindingMap;

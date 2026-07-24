@@ -145,6 +145,13 @@ On child exit, the supervisor emits `WMUX_AGENT_TUI_EXIT <runId> <code>` and qua
 `WMUX_PUBLIC_URL`/`--public-url` must be an absolute credential-free HTTP(S) base without a query or fragment.
 `localUrl` uses the API base (including an intentional path prefix), `publicUrl` falls back to it, and `url` prefers the public handoff.
 
+Delegation controller waits use the mode defaults published by `/api/bootstrap`: 1,800 seconds for review and 7,200 seconds for change or deploy.
+`wmuxctl delegate` infers review without `--write-access` and change with it, or accepts an explicit `--mode review|change|deploy`.
+Use `--timeout SECONDS` only for a bounded 0.1 through 14,400 second per-dispatch override.
+The generated OpenCode tool uses change mode by default and accepts deploy mode plus the same `timeout_seconds` bounds.
+A wait expiry or pane-output read failure after submission records a nonterminal waiting delegation and leaves the pane and workspace alive.
+Reconcile it with `GET /api/delegations/:runId`; only explicit cancellation sends Ctrl-C.
+
 Set a manual title when the workspace is for a user-visible task:
 
 ```bash

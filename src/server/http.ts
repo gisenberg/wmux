@@ -8,7 +8,13 @@ import { fileURLToPath } from "node:url";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { resolveKeybindings } from "../shared/keybindings.js";
-import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
+import {
+  DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  MAX_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  MIN_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  type DelegationConfig,
+} from "../shared/protocol.js";
 import { readAgentProfileBundle } from "./agent-profile.js";
 import {
   authenticateRequest,
@@ -187,6 +193,7 @@ export const createHttpServer = (
       streams?: typeof resolveStreamStatuses;
     };
     keybindings?: KeybindingMap;
+    delegation?: DelegationConfig;
   },
 ): Promise<WmuxHttpServer> => {
   const { auth, hostRegistry, registrationToken } = options;
@@ -274,7 +281,15 @@ export const createHttpServer = (
       activeWorkspaceId: snapshot.activeWorkspaceId,
       notifications: snapshot.notifications,
       agentEvents: snapshot.agentEvents,
+      delegations: snapshot.delegations,
       runs: snapshot.runs,
+      delegation: options.delegation ?? {
+        waitTimeoutSeconds: DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS,
+        waitTimeoutBoundsSeconds: {
+          min: MIN_DELEGATION_WAIT_TIMEOUT_SECONDS,
+          max: MAX_DELEGATION_WAIT_TIMEOUT_SECONDS,
+        },
+      },
       terminalFontFamily: options.terminalFontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY,
       settings: settings.snapshot(),
       keybindings: options.keybindings ?? resolveKeybindings(),
