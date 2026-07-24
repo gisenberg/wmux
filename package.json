@@ -15,7 +15,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/server/index.ts --dev",
-    "build": "npm run build:client && npm run build:server",
+    "build": "npm run check:contracts && npm run build:client && npm run build:server",
     "build:client": "node scripts/build-client.mjs",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
@@ -27,6 +27,8 @@
     "docs:screenshots": "playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "check:scripts": "node scripts/check-scripts.mjs",
+    "check:contracts": "node --import tsx scripts/generate-agent-contract.mjs --check",
+    "generate:contracts": "node --import tsx scripts/generate-agent-contract.mjs",
     "check": "npm test && npm run typecheck && npm run check:scripts && npm run build"
   },
   "dependencies": {

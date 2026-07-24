@@ -826,6 +826,9 @@ __WMUX_OPENCODE_RUN_HELPER__
 cat > "$wmux_helper_dir/wmux-agent-run" <<'__WMUX_AGENT_RUN_HELPER__'
 ${localHelperScript("wmux-agent-run")}
 __WMUX_AGENT_RUN_HELPER__
+cat > "$wmux_helper_dir/wmux_agent_contract.py" <<'__WMUX_AGENT_CONTRACT__'
+${localHelperScript("wmux_agent_contract.py")}
+__WMUX_AGENT_CONTRACT__
 cat > "$wmux_helper_dir/wmux-copy" <<'__WMUX_COPY_HELPER__'
 ${localHelperScript("wmux-copy")}
 __WMUX_COPY_HELPER__

@@ -53,8 +53,10 @@ test("validates terminal typography defaults", () => {
 
 test("delegation wait defaults are mode-aware and config overrides are bounded", () => {
   assert.deepEqual(loadConfig().delegation.waitTimeoutSeconds, DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS);
+  assert.equal(loadConfig().delegation.preferHeadless, false);
   const parsed = configSchema.parse({
     delegation: {
+      preferHeadless: true,
       waitTimeoutSeconds: {
         review: 900,
         change: 7_200,
@@ -62,6 +64,7 @@ test("delegation wait defaults are mode-aware and config overrides are bounded",
       },
     },
   });
+  assert.equal(parsed.delegation?.preferHeadless, true);
   assert.equal(parsed.delegation?.waitTimeoutSeconds?.review, 900);
   for (const timeout of [0, 14_401, Number.POSITIVE_INFINITY, "7200"]) {
     assert.equal(configSchema.safeParse({

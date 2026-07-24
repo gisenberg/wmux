@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import { isTerminalProtocolResponse } from "../shared/terminal-protocol.js";
 import type { BrowserAuthMode } from "./auth.js";
+import { AgentSessionService } from "./agent-sessions.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
 import { sessionDriverForMachine, type ManagedSession } from "./session-driver.js";
@@ -125,6 +126,7 @@ export class SessionManager {
     private readonly terminalEnvironment: () => Record<string, string> = () => ({}),
     private readonly helperToken = "",
     private readonly browserAuthMode: BrowserAuthMode = "shared-or-login",
+    readonly agentSessions = new AgentSessionService(state),
   ) {
     this.currentMachines = typeof machines === "function" ? machines : () => machines;
   }
@@ -204,7 +206,9 @@ export class SessionManager {
         const socketState = this.socketState.get(socket);
         if (socketState && message.sequence !== undefined) socketState.inputSequence = message.sequence;
         this.promoteResizeOwner(paneId, socket, session);
-        if (isAgentInterruptInput(message.data)) this.state.interruptAgentForPane(paneId);
+        if (isAgentInterruptInput(message.data)) {
+          this.agentSessions.interruptAgentForPane(paneId);
+        }
         const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
         if (!terminalResponse) this.advancePaneInputEpoch(paneId);
         if (terminalResponse && session.writeTerminalResponse) {

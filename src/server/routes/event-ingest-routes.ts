@@ -1,3 +1,7 @@
+import type {
+  AgentEventPostBody,
+  RunEventPostBody,
+} from "../../shared/agent-contract.js";
 import {
   type ApiRoute,
   routePolicy,
@@ -50,19 +54,8 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
       ["automation", "helper"],
     ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
-      const body = (await readJsonBody()) as {
-        runId?: string;
-        workspaceId?: string;
-        tabId?: string;
-        paneId?: string;
-        agent?: string;
-        status?: string;
-        title?: string;
-        summary?: string;
-        message?: string;
-        body?: string;
-      };
-      const result = deps.state.recordAgentEvent({
+      const body = (await readJsonBody()) as AgentEventPostBody;
+      const result = deps.agentSessions.recordAgentEvent({
         runId: body.runId,
         workspaceId: body.workspaceId,
         tabId: body.tabId,
@@ -90,7 +83,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     ),
     handler: async ({ deps, match, sendJson }) => {
       if (!match) throw new Error("delegation status route matched without captures");
-      const delegation = deps.state.delegationForRun(match[1]);
+      const delegation = deps.agentSessions.delegationForRun(match[1]);
       if (!delegation) {
         sendJson(404, { error: "delegation_not_found" });
         return;
@@ -110,17 +103,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
       ["helper"],
     ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
-      const body = (await readJsonBody()) as {
-        workspaceId?: string;
-        tabId?: string;
-        paneId?: string;
-        runId?: string;
-        command?: string;
-        status?: "started" | "completed" | "failed";
-        exitCode?: number | null;
-        startedAt?: string;
-        completedAt?: string;
-      };
+      const body = (await readJsonBody()) as RunEventPostBody;
       if (
         body.status
         && !["started", "completed", "failed"].includes(body.status)

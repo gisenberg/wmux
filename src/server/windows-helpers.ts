@@ -39,6 +39,7 @@ const windowsRequiredHelperFiles = [
   ...windowsPowerShellHelperBaseNames.map((name) => `${name}.ps1`),
   "wmux-agent-run.cmd",
   "wmux-agent-run.py",
+  "wmux_agent_contract.py",
 ];
 const windowsClipboardAliasNames = ["wmux-clip", "wclip", "wmclip"];
 const WINDOWS_AGENT_RELEASE_PLACEHOLDER = "__WMUX_WINDOWS_AGENT_RELEASE_VERSION__";
@@ -431,6 +432,10 @@ const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
   {
     name: "wmux-agent-run.cmd",
     content: pythonCmdShim("wmux-agent-run.py"),
+  },
+  {
+    name: "wmux_agent_contract.py",
+    content: localScript("wmux_agent_contract.py"),
   },
 ];
 

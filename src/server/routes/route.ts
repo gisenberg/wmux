@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { AgentSessionService } from "../agent-sessions.js";
 import type { AuthConfig, AuthPrincipal } from "../auth.js";
 import type { HttpRoutePolicy } from "../auth-policy.js";
 import type { HostRegistry } from "../host-registry.js";
@@ -26,6 +27,7 @@ export class HttpError extends Error {
 export interface ServerDeps {
   bindHost: string;
   auth: AuthConfig;
+  agentSessions: AgentSessionService;
   trustedProxies: ReadonlySet<string>;
   loginAttempts: LoginAttemptThrottle;
   state: StateStore;

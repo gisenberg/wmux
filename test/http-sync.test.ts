@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { once } from "node:events";
 import test from "node:test";
 import { WebSocket } from "ws";
+import { AgentSessionService } from "../src/server/agent-sessions.js";
 import {
   HEALTH_EPOCH_PROCESS_STRIDE,
   PROCESS_HEALTH_EPOCH_BASE,
@@ -18,6 +19,9 @@ import type { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
 import type { BootstrapPayload, MachineConfig, MachineStatus, StreamStatus } from "../src/server/types.js";
+
+const agentsFor = (state: StateStore): AgentSessionService =>
+  new AgentSessionService(state);
 
 const listen = async (server: http.Server): Promise<number> => {
   server.listen(0, "127.0.0.1");
@@ -191,7 +195,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
-  state.recordAgentEvent({
+  agentsFor(state).recordAgentEvent({
     paneId,
     runId: "run-http-1",
     agent: "codex",
@@ -200,7 +204,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
     summary: "Codex delegation completed",
     message: "Review result",
   });
-  state.recordAgentEvent({
+  agentsFor(state).recordAgentEvent({
     paneId,
     runId: "run-http-interrupted",
     agent: "codex",
@@ -212,6 +216,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
   const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
     auth: { enabled: true, token: "delegation-test-token", loginEnabled: false, sessionSecret: "test" },
     delegation: {
+      preferHeadless: false,
       waitTimeoutSeconds: { review: 900, change: 7_200, deploy: 10_800 },
       waitTimeoutBoundsSeconds: { min: 0.1, max: 14_400 },
     },

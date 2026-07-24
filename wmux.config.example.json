@@ -2,6 +2,7 @@
   "terminalFontFamily": "\"MesloLGM Nerd Font\"",
   "terminalFontSize": 15,
   "delegation": {
+    "preferHeadless": false,
     "waitTimeoutSeconds": {
       "review": 1800,
       "change": 7200,
