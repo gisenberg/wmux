@@ -35,7 +35,6 @@ import { HostRegistryError, type HostRegistry } from "./host-registry.js";
 import { LoginAttemptThrottle } from "./login-throttle.js";
 import { readDurableSessionCwd } from "./durable-session.js";
 import { resolveMachineStatuses } from "./machines.js";
-import { observedClientAddress } from "./proxy-address.js";
 import { RepositoryReviewError, RepositoryReviewService } from "./repository-review.js";
 import { resolveStreamStatuses, StreamRequestStore } from "./streams.js";
 import type {
@@ -52,7 +51,6 @@ import type {
   TerminalNotification,
   WorkspaceReorderPosition,
 } from "./types.js";
-import { buildWindowsHelperBundle, buildWindowsPowerShellBootstrap } from "./windows-helpers.js";
 import {
   StateIdConflictError,
   WorkspaceDepthError,
@@ -69,10 +67,17 @@ import {
 } from "./paste-image-staging.js";
 import { authRoutes } from "./routes/auth-routes.js";
 import { bootstrapRoutes } from "./routes/bootstrap-routes.js";
+import { registryRoutes } from "./routes/registry-routes.js";
 import {
   matchApiRoute,
   type ServerDeps,
 } from "./routes/route.js";
+
+const apiRoutes = [
+  ...authRoutes,
+  ...bootstrapRoutes,
+  ...registryRoutes,
+] as const;
 
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string) {
@@ -420,11 +425,7 @@ export const createHttpServer = (
     const bundledMesloFont = request.method === "GET" || request.method === "HEAD"
       ? url.pathname.match(/^\/fonts\/meslo-v3\.4\.0\/(regular|bold|italic|bold-italic)$/)
       : null;
-    const matchedApiRoute = matchApiRoute(
-      [...authRoutes, ...bootstrapRoutes],
-      request.method,
-      url.pathname,
-    );
+    const matchedApiRoute = matchApiRoute(apiRoutes, request.method, url.pathname);
 
     // Every API method/path is classified before authentication so new routes
     // cannot silently inherit a broad credential's authority.
@@ -491,97 +492,9 @@ export const createHttpServer = (
         return;
       }
 
-      if (url.pathname === "/api/registry/hosts" && request.method === "GET") {
-        sendJson(response, 200, { hosts: hostRegistry?.snapshot() ?? [] });
-        return;
-      }
-
-      if (url.pathname === "/api/registry/hosts" && request.method === "POST") {
-        if (!hostRegistry) {
-          sendJson(response, 404, { error: "registry_disabled" });
-          return;
-        }
-        const host = hostRegistry.register(
-          await readBody(request),
-          observedClientAddress(request, trustedProxies),
-        );
-        sendJson(response, 200, {
-          host: { id: host.id, lastSeenAt: host.lastSeenAt, expiresAt: host.expiresAt },
-        });
-        return;
-      }
-
-      const registeredHost = url.pathname.match(/^\/api\/registry\/hosts\/([^/]+)$/);
-      if (registeredHost && request.method === "DELETE") {
-        if (!hostRegistry) {
-          sendJson(response, 404, { error: "registry_disabled" });
-          return;
-        }
-        const removed = hostRegistry.unregister(decodeURIComponent(registeredHost[1]));
-        sendJson(response, removed ? 200 : 404, { removed });
-        return;
-      }
-
       if (url.pathname === "/api/streams" && request.method === "GET") {
         await refreshStreamStatuses(false, true);
         sendJson(response, 200, { streams: streamStatuses });
-        return;
-      }
-
-      const windowsBootstrap = url.pathname.match(/^\/api\/helpers\/windows\/([^/]+)\/bootstrap$/);
-      if (windowsBootstrap && request.method === "GET") {
-        const machineId = decodeURIComponent(windowsBootstrap[1]);
-        const machine = machines.find((candidate) => candidate.id === machineId);
-        if (!machine) {
-          sendJson(response, 404, { error: "unknown_machine" });
-          return;
-        }
-        if (machine.kind !== "powershell-ssh") {
-          sendJson(response, 400, { error: "not_windows_machine" });
-          return;
-        }
-        const startCwd = url.searchParams.get("WMUX_START_CWD") ?? undefined;
-        const extraEnv: Record<string, string> = {};
-        for (const key of windowsBootstrapEnvKeys) {
-          const value = url.searchParams.get(key);
-          if (value) extraEnv[key] = value;
-        }
-        if (machine.source !== "registered") {
-          if (auth.helperToken) extraEnv.WMUX_HELPER_TOKEN = auth.helperToken;
-          else if ((auth.browserAuthMode ?? "shared-or-login") === "shared-or-login" && auth.token) extraEnv.WMUX_TOKEN = auth.token;
-          extraEnv.WMUX_BROWSER_AUTH_MODE = auth.browserAuthMode ?? "shared-or-login";
-        }
-        response.writeHead(200, {
-          "content-type": "text/plain; charset=utf-8",
-          "cache-control": "no-store",
-        });
-        const bundleMachine = machine.source === "registered" ? { ...machine, agentToken: undefined } : machine;
-        response.end(
-          buildWindowsPowerShellBootstrap(
-            machine,
-            startCwd,
-            extraEnv,
-            undefined,
-            machine.source === "registered" ? buildWindowsHelperBundle(bundleMachine, bindHost) : undefined,
-          ),
-        );
-        return;
-      }
-
-      const windowsHelpers = url.pathname.match(/^\/api\/helpers\/windows\/([^/]+)$/);
-      if (windowsHelpers && request.method === "GET") {
-        const machineId = decodeURIComponent(windowsHelpers[1]);
-        const machine = machines.find((candidate) => candidate.id === machineId);
-        if (!machine) {
-          sendJson(response, 404, { error: "unknown_machine" });
-          return;
-        }
-        if (machine.kind !== "powershell-ssh") {
-          sendJson(response, 400, { error: "not_windows_machine" });
-          return;
-        }
-        const bundleMachine = machine.source === "registered" ? { ...machine, agentToken: undefined } : machine;
-        sendJson(response, 200, buildWindowsHelperBundle(bundleMachine, bindHost));
         return;
       }
 
@@ -1591,20 +1504,6 @@ const serveBundledMesloFont = (
 
 const machineExists = (machines: MachineConfig[], machineId: string): boolean =>
   machines.some((machine) => machine.id === machineId);
-
-const windowsBootstrapEnvKeys = [
-  "WMUX_WORKSPACE_ID",
-  "WMUX_WORKSPACE_NAME",
-  "WMUX_TAB_ID",
-  "WMUX_TAB_TITLE",
-  "WMUX_PANE_ID",
-  "WMUX_COLOR_SCHEME",
-  "WMUX_COLOR_MODE",
-  "WMUX_TERMINAL_FOREGROUND",
-  "WMUX_TERMINAL_BACKGROUND",
-  "WMUX_TERMINAL_ANSI_PALETTE",
-  "KITTY_WINDOW_ID",
-];
 
 const cryptoRandomId = (): string =>
   `stream-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
