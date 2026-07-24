@@ -10,7 +10,15 @@ import {
   type KeybindingMap,
   type KeybindingOverrides,
 } from "../shared/keybindings.js";
-import { MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE } from "../shared/protocol.js";
+import {
+  DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  MAX_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  MAX_TERMINAL_FONT_SIZE,
+  MIN_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  MIN_TERMINAL_FONT_SIZE,
+  type DelegationConfig,
+  type DelegationMode,
+} from "../shared/protocol.js";
 import { localMachine } from "./machines.js";
 import type { MachineConfig } from "./types.js";
 
@@ -93,6 +101,19 @@ const keybindingOverridesSchema = z.record(z.array(z.string().min(1).max(80)).ma
   }
 });
 
+const delegationWaitTimeoutSchema = z.number()
+  .finite()
+  .min(MIN_DELEGATION_WAIT_TIMEOUT_SECONDS)
+  .max(MAX_DELEGATION_WAIT_TIMEOUT_SECONDS);
+
+const delegationSchema = z.object({
+  waitTimeoutSeconds: z.object({
+    review: delegationWaitTimeoutSchema.optional(),
+    change: delegationWaitTimeoutSchema.optional(),
+    deploy: delegationWaitTimeoutSchema.optional(),
+  }).strict().optional(),
+}).strict();
+
 export const configSchema = z.object({
   machines: z.array(machineSchema).optional(),
   // Container deployments may not want to expose a shell inside the wmux container.
@@ -103,6 +124,7 @@ export const configSchema = z.object({
     .regex(/^[^\x00-\x1f\x7f]+$/, "terminal font family must not contain control characters")
     .optional(),
   terminalFontSize: z.number().int().min(MIN_TERMINAL_FONT_SIZE).max(MAX_TERMINAL_FONT_SIZE).optional(),
+  delegation: delegationSchema.optional(),
 }).superRefine((config, context) => {
   const overrides = config.keybindings as KeybindingOverrides | undefined;
   const errors = validateKeybindingMap(resolveKeybindings(overrides));
@@ -116,7 +138,21 @@ export interface AppConfig {
   keybindings: KeybindingMap;
   terminalFontFamily?: string;
   terminalFontSize?: number;
+  delegation: DelegationConfig;
 }
+
+const resolveDelegationConfig = (
+  configured?: Partial<Record<DelegationMode, number>>,
+): DelegationConfig => ({
+  waitTimeoutSeconds: {
+    ...DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS,
+    ...configured,
+  },
+  waitTimeoutBoundsSeconds: {
+    min: MIN_DELEGATION_WAIT_TIMEOUT_SECONDS,
+    max: MAX_DELEGATION_WAIT_TIMEOUT_SECONDS,
+  },
+});
 
 const candidates = (): string[] => process.env.WMUX_CONFIG_PATH
   ? [path.resolve(process.env.WMUX_CONFIG_PATH)]
@@ -136,10 +172,15 @@ export const loadConfig = (): AppConfig => {
       keybindings,
       terminalFontFamily: parsed.terminalFontFamily,
       terminalFontSize: parsed.terminalFontSize,
+      delegation: resolveDelegationConfig(parsed.delegation?.waitTimeoutSeconds),
     };
   }
   if (process.env.WMUX_CONFIG_PATH) {
     throw new Error(`WMUX_CONFIG_PATH does not exist: ${path.resolve(process.env.WMUX_CONFIG_PATH)}`);
   }
-  return { machines: [localMachine()], keybindings: resolveKeybindings() };
+  return {
+    machines: [localMachine()],
+    keybindings: resolveKeybindings(),
+    delegation: resolveDelegationConfig(),
+  };
 };

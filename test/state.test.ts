@@ -600,6 +600,111 @@ test("delegation records distinguish observer errors from agent outcomes", () =>
   });
 });
 
+test("detached delegations reconcile delayed success and failure after controller restart", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneIds = [
+      store.snapshot().workspaces[0].tabs[0].panes[0].id,
+      store.createWorkspace("local").tabs[0].panes[0].id,
+    ];
+    for (const [index, runId] of ["run-delayed-success", "run-delayed-failure"].entries()) {
+      const paneId = paneIds[index];
+      store.recordAgentEvent({ paneId, runId, agent: "codex", status: "running", summary: "Working" });
+      store.recordAgentEvent({
+        paneId,
+        runId,
+        agent: "codex",
+        status: "observer_error",
+        summary: "Controller wait expired",
+        message: "Watcher detached",
+      });
+      store.recordAgentEvent({ paneId, runId, agent: "codex", status: "waiting", summary: "Worker may still be running" });
+      assert.equal(store.delegationForRun(runId)?.state, "waiting");
+    }
+    store.flush();
+
+    const recovered = new StateStore(machines, filePath);
+    recovered.recordAgentEvent({
+      paneId: paneIds[0],
+      runId: "run-delayed-success",
+      agent: "codex",
+      status: "completed",
+      summary: "Completed later",
+      message: "Late success",
+    });
+    recovered.recordAgentEvent({
+      paneId: paneIds[1],
+      runId: "run-delayed-failure",
+      agent: "codex",
+      status: "failed",
+      summary: "Failed later",
+      message: "Late worker failure",
+    });
+
+    assert.equal(recovered.delegationForRun("run-delayed-success")?.state, "completed");
+    assert.equal(recovered.delegationForRun("run-delayed-success")?.result, "Late success");
+    assert.equal(recovered.delegationForRun("run-delayed-failure")?.state, "failed");
+    assert.equal(recovered.delegationForRun("run-delayed-failure")?.error, "Late worker failure");
+    assert.equal(
+      recovered.snapshot().notifications.filter((notification) => notification.subtitle === "completed").length,
+      1,
+    );
+    assert.equal(
+      recovered.snapshot().notifications.filter((notification) => notification.subtitle === "failed").length,
+      1,
+    );
+  });
+});
+
+test("delegation terminal outcomes and notifications are exact-once", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    store.recordAgentEvent({ paneId, runId: "run-exact-success", agent: "codex", status: "running", summary: "Working" });
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-exact-success",
+      agent: "codex",
+      status: "completed",
+      summary: "Completed once",
+      message: "First result",
+    });
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-exact-success",
+      agent: "codex",
+      status: "completed",
+      summary: "Duplicate completion",
+      message: "Duplicate result",
+    });
+    store.recordAgentEvent({
+      paneId,
+      runId: "run-exact-success",
+      agent: "codex",
+      status: "failed",
+      summary: "Late conflicting failure",
+      message: "Late failure",
+    });
+
+    const completed = store.delegationForRun("run-exact-success");
+    assert.equal(completed?.state, "completed");
+    assert.equal(completed?.result, "First result");
+    assert.equal(store.snapshot().notifications.filter((note) => note.paneId === paneId).length, 1);
+    assert.equal(
+      store.snapshot().agentEvents.filter((event) =>
+        event.runId === "run-exact-success" && ["completed", "failed"].includes(event.status)).length,
+      1,
+    );
+    assert.equal(store.snapshot().workspaces[0].descriptor, "Completed once");
+
+    store.recordAgentEvent({ paneId, runId: "run-exact-failure", agent: "codex", status: "failed", summary: "Failed once", message: "First failure" });
+    store.recordAgentEvent({ paneId, runId: "run-exact-failure", agent: "codex", status: "completed", summary: "Late success", message: "Late result" });
+    const failed = store.delegationForRun("run-exact-failure");
+    assert.equal(failed?.state, "failed");
+    assert.equal(failed?.error, "First failure");
+  });
+});
+
 test("late active events cannot regress a terminal delegation", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);

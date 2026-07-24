@@ -28,6 +28,13 @@ WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 DURABLE_REFRESH_QUIET_SECONDS = 0.08
 DURABLE_REFRESH_FALLBACK_SECONDS = 0.7
 MAX_PANE_REPLAY_BYTES = 2 * 1024 * 1024
+MIN_DELEGATION_WAIT_TIMEOUT_SECONDS = 0.1
+MAX_DELEGATION_WAIT_TIMEOUT_SECONDS = 14_400
+DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS = {
+    "review": 1_800.0,
+    "change": 7_200.0,
+    "deploy": 7_200.0,
+}
 TERMINAL_DELEGATION_STATES = frozenset(
     {"completed", "blocked", "failed", "error", "cancelled", "stopped", "timed_out", "interrupted"}
 )
@@ -39,6 +46,39 @@ UNSAFE_TUI_PROMPT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 class DelegationObservationError(RuntimeError):
     """The controller could not determine an agent's terminal outcome."""
+
+
+def resolve_delegation_wait_timeout(
+    bootstrap: dict[str, Any],
+    mode: str,
+    override: float | None,
+) -> float:
+    if mode not in DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS:
+        raise SystemExit("wmuxctl: delegation mode must be review, change, or deploy")
+    if override is not None:
+        if (
+            not math.isfinite(override)
+            or override < MIN_DELEGATION_WAIT_TIMEOUT_SECONDS
+            or override > MAX_DELEGATION_WAIT_TIMEOUT_SECONDS
+        ):
+            raise SystemExit(
+                "wmuxctl: --timeout must be between "
+                f"{MIN_DELEGATION_WAIT_TIMEOUT_SECONDS:g} and {MAX_DELEGATION_WAIT_TIMEOUT_SECONDS:g} seconds"
+            )
+        return override
+    configured = (
+        bootstrap.get("delegation", {})
+        .get("waitTimeoutSeconds", {})
+        .get(mode)
+    )
+    if (
+        isinstance(configured, (int, float))
+        and not isinstance(configured, bool)
+        and math.isfinite(configured)
+        and MIN_DELEGATION_WAIT_TIMEOUT_SECONDS <= configured <= MAX_DELEGATION_WAIT_TIMEOUT_SECONDS
+    ):
+        return float(configured)
+    return DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS[mode]
 
 
 def _append_bounded_utf8(buffer: bytearray, value: str) -> None:
@@ -173,14 +213,22 @@ class WmuxClient:
         self.url = url.rstrip("/")
         self.token = token
 
-    def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        timeout: float = 20,
+    ) -> Any:
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise TimeoutError(f"wmuxctl: request deadline exhausted for {path}")
         data = None if body is None else json.dumps(body).encode("utf-8")
         headers = {"content-type": "application/json"}
         if self.token:
             headers["authorization"] = f"Bearer {self.token}"
         request = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
@@ -188,7 +236,11 @@ class WmuxClient:
                 raise SystemExit("wmuxctl: unauthorized; verify the selected automation or compatibility credential") from error
             raise SystemExit(f"wmuxctl: HTTP {error.code} for {path}: {detail}") from error
         except urllib.error.URLError as error:
+            if isinstance(error.reason, TimeoutError):
+                raise TimeoutError(f"wmuxctl: request timed out for {path}") from error
             raise SystemExit(f"wmuxctl: cannot reach {self.url}: {error.reason}") from error
+        except TimeoutError as error:
+            raise TimeoutError(f"wmuxctl: request timed out for {path}") from error
         if not raw:
             return None
         return json.loads(raw.decode("utf-8"))
@@ -260,11 +312,15 @@ class WmuxClient:
             body,
         )
 
-    def delegation_status(self, run_id: str) -> dict[str, Any] | None:
+    def delegation_status(self, run_id: str, timeout: float = 20) -> dict[str, Any] | None:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
             raise SystemExit("wmuxctl: invalid delegation run ID")
         try:
-            result = self.request("GET", f"/api/delegations/{urllib.parse.quote(run_id, safe='')}")
+            result = self.request(
+                "GET",
+                f"/api/delegations/{urllib.parse.quote(run_id, safe='')}",
+                timeout=timeout,
+            )
         except SystemExit as error:
             if "HTTP 404" in str(error):
                 return None
@@ -837,12 +893,19 @@ def wait_for_prompt_acceptance(
     rows: int,
 ) -> None:
     started = time.monotonic()
+    deadline = started + timeout
     next_enter = started + 1
     last_status_error = ""
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = f": {last_status_error}" if last_status_error else ""
+            raise DelegationObservationError(
+                f"wmuxctl: {runtime.capitalize()} did not acknowledge the submitted prompt within {timeout:g}s{detail}"
+            )
         try:
-            durable = client.delegation_status(run_id)
-        except SystemExit as error:
+            durable = client.delegation_status(run_id, timeout=remaining)
+        except (SystemExit, TimeoutError) as error:
             last_status_error = str(error)
         else:
             if durable:
@@ -855,15 +918,12 @@ def wait_for_prompt_acceptance(
             last_status_error = ""
 
         now = time.monotonic()
-        if now - started >= timeout:
-            detail = f": {last_status_error}" if last_status_error else ""
-            raise DelegationObservationError(
-                f"wmuxctl: {runtime.capitalize()} did not acknowledge the submitted prompt within {timeout:g}s{detail}"
-            )
         if now >= next_enter:
             client.send_input(pane_id, "\r", cols, rows)
             next_enter = now + 1
-        time.sleep(min(0.25, timeout - (now - started)))
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
 
 
 def cmd_send(client: WmuxClient, args: argparse.Namespace) -> int:
@@ -1317,20 +1377,24 @@ def wait_for_delegation_result(
     structured_outcome: bool = False,
 ) -> tuple[bool, Any, int, bool, float, str]:
     started = time.monotonic()
+    deadline = started + timeout
     done_pattern = re.compile(rf"(?m)^WMUX_AGENT_DONE {re.escape(run_id)} -?\d+$")
     last_replay_error = ""
     last_status_error = ""
-    while True:
-        remaining = timeout - (time.monotonic() - started)
+
+    def remaining_budget() -> float:
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             detail = last_status_error or last_replay_error or "no terminal result was observed"
             raise DelegationObservationError(
                 f"wmuxctl: timed out after {timeout:g}s waiting for delegated result: {detail}"
             )
+        return remaining
 
+    while True:
         try:
             replay = str(
-                client.read_pane_output(pane_id, cols, rows, timeout=min(1, max(remaining, 0.1))).get("replay")
+                client.read_pane_output(pane_id, cols, rows, timeout=min(1, remaining_budget())).get("replay")
                 or ""
             )
             output = clean_terminal_text(replay)
@@ -1350,8 +1414,8 @@ def wait_for_delegation_result(
             last_replay_error = str(error)
 
         try:
-            durable = client.delegation_status(run_id)
-        except SystemExit as error:
+            durable = client.delegation_status(run_id, timeout=remaining_budget())
+        except (SystemExit, OSError) as error:
             last_status_error = str(error)
         else:
             last_status_error = ""
@@ -1393,9 +1457,44 @@ def wait_for_delegation_result(
                     detail = summary.strip()
                 return ok, detail, 0 if ok else 1, True, time.monotonic() - started, outcome
 
-        remaining = timeout - (time.monotonic() - started)
-        if remaining > 0:
-            time.sleep(min(0.5, remaining))
+        time.sleep(min(0.5, remaining_budget()))
+
+
+def record_detached_delegation(
+    client: WmuxClient,
+    info: dict[str, Any],
+    runtime: str,
+    title: str,
+    run_id: str,
+    detail: str,
+) -> None:
+    events = (
+        (
+            "observer_error",
+            f"Lost contact with {runtime} delegation",
+            detail,
+        ),
+        (
+            "waiting",
+            f"{runtime.capitalize()} delegation detached; worker may still be running",
+            "",
+        ),
+    )
+    for status, summary, message in events:
+        try:
+            client.record_agent_event(
+                info["workspaceId"],
+                info["tabId"],
+                info["paneId"],
+                runtime,
+                status,
+                title,
+                summary,
+                message=message,
+                run_id=run_id,
+            )
+        except SystemExit:
+            continue
 
 
 def session_workspace(
@@ -1431,6 +1530,18 @@ def session_workspace(
 
 def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     prompt = read_delegate_prompt(args)
+    mode = args.mode or ("change" if args.write_access else "review")
+    if mode not in DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS:
+        raise SystemExit("wmuxctl: delegation mode must be review, change, or deploy")
+    if args.timeout is not None and (
+        not math.isfinite(args.timeout)
+        or args.timeout < MIN_DELEGATION_WAIT_TIMEOUT_SECONDS
+        or args.timeout > MAX_DELEGATION_WAIT_TIMEOUT_SECONDS
+    ):
+        raise SystemExit(
+            "wmuxctl: --timeout must be between "
+            f"{MIN_DELEGATION_WAIT_TIMEOUT_SECONDS:g} and {MAX_DELEGATION_WAIT_TIMEOUT_SECONDS:g} seconds"
+        )
     if args.session_workspace and not args.session:
         raise SystemExit("wmuxctl: --session-workspace requires --session")
     if args.session and args.runtime != "codex":
@@ -1444,7 +1555,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             raise SystemExit(
                 "wmuxctl: session prompt contains an unsafe terminal control character; only TAB and LF are allowed"
             )
-        for key in ("timeout", "ready_timeout", "gate_timeout"):
+        for key in ("ready_timeout", "gate_timeout"):
             value = getattr(args, key)
             if not math.isfinite(value) or value <= 0:
                 raise SystemExit(f"wmuxctl: --{key.replace('_', '-')} must be positive and finite")
@@ -1455,6 +1566,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     if args.structured_outcome and args.runtime != "codex":
         raise SystemExit("wmuxctl: structured outcomes currently require the Codex runtime")
     bootstrap = client.bootstrap()
+    args.timeout = resolve_delegation_wait_timeout(bootstrap, mode, args.timeout)
     machine = next((item for item in bootstrap.get("machines", []) if item.get("id") == args.machine), None)
     if not machine or machine.get("reachable") is not True:
         raise SystemExit(f"wmuxctl: machine is not reachable: {args.machine}")
@@ -1519,6 +1631,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     run_id = str(uuid.uuid4())
     info["runId"] = run_id
     secrets = [prompt, client.token]
+    worker_submitted = False
     try:
         if reused:
             replay = str(
@@ -1586,6 +1699,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 args.cols,
                 args.rows,
             )
+            worker_submitted = True
             wait_for_prompt_acceptance(
                 client,
                 info["paneId"],
@@ -1630,6 +1744,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                     },
                 )
             submit_interactive_prompt(client, info["paneId"], prompt, args.cols, args.rows)
+            worker_submitted = True
             wait_for_prompt_acceptance(
                 client,
                 info["paneId"],
@@ -1687,6 +1802,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 request["agent"] = args.opencode_agent
             encoded = base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode()
             submit_line(client, info["paneId"], encoded, True, args.cols, args.rows)
+            worker_submitted = True
         ok, detail_source, exit_code, recovered, elapsed, outcome = wait_for_delegation_result(
             client,
             info["paneId"],
@@ -1708,6 +1824,8 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         info.update({
             "runId": run_id,
             "runtime": args.runtime,
+            "mode": mode,
+            "waitTimeoutSeconds": args.timeout,
             "state": status,
             "outcome": outcome,
             "elapsedSeconds": round(elapsed, 3),
@@ -1740,29 +1858,36 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         print_json(info)
         return 130
     except DelegationObservationError as error:
-        try:
-            client.send_input(info["paneId"], "\x03", args.cols, args.rows)
-        except SystemExit:
-            pass
         detail = redact_delegate_text(str(error), secrets)
-        try:
-            client.record_agent_event(
-                info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "observer_error", title,
-                f"Lost contact with {args.runtime} delegation", message=detail, run_id=run_id,
-            )
-        except SystemExit:
-            pass
+        record_detached_delegation(client, info, args.runtime, title, run_id, detail)
         info.update({
             "runId": run_id,
             "runtime": args.runtime,
-            "state": "failed",
+            "mode": mode,
+            "waitTimeoutSeconds": args.timeout,
+            "state": "waiting",
             "failureKind": "observer",
             "error": detail,
             "closed": False,
         })
         print_json(info)
-        return 1
+        return 2
     except SystemExit as error:
+        if worker_submitted:
+            detail = redact_delegate_text(str(error), secrets)
+            record_detached_delegation(client, info, args.runtime, title, run_id, detail)
+            info.update({
+                "runId": run_id,
+                "runtime": args.runtime,
+                "mode": mode,
+                "waitTimeoutSeconds": args.timeout,
+                "state": "waiting",
+                "failureKind": "observer",
+                "error": detail,
+                "closed": False,
+            })
+            print_json(info)
+            return 2
         try:
             client.send_input(info["paneId"], "\x03", args.cols, args.rows)
         except SystemExit:
@@ -1775,7 +1900,15 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             )
         except SystemExit:
             pass
-        info.update({"runId": run_id, "runtime": args.runtime, "state": "failed", "error": detail, "closed": False})
+        info.update({
+            "runId": run_id,
+            "runtime": args.runtime,
+            "mode": mode,
+            "waitTimeoutSeconds": args.timeout,
+            "state": "failed",
+            "error": detail,
+            "closed": False,
+        })
         print_json(info)
         return 1
 
@@ -1981,7 +2114,18 @@ def build_parser() -> argparse.ArgumentParser:
     delegate.add_argument("--session", action="store_true", help="reuse a persistent Codex TUI for correlated turns")
     delegate.add_argument("--session-workspace", default="", help="agent workspace ID returned by an earlier session turn")
     delegate.add_argument("--accept-trust", action="store_true", help="accept only a recognized repository-trust prompt on session launch")
-    delegate.add_argument("--timeout", type=float, default=900, help="delegated task timeout in seconds")
+    delegate.add_argument(
+        "--mode",
+        choices=("review", "change", "deploy"),
+        default="",
+        help="delegation wait profile; inferred from --write-access when omitted",
+    )
+    delegate.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="bounded controller wait override in seconds; does not limit worker runtime",
+    )
     delegate.add_argument("--ready-timeout", type=float, default=30, help="shell/helper readiness timeout in seconds")
     delegate.add_argument("--gate-timeout", type=float, default=5, help="post-start session safety-gate observation in seconds")
     delegate.add_argument("--cols", type=int, default=120)

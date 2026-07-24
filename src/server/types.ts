@@ -1,5 +1,6 @@
 import type {
   AgentActivity,
+  DelegationRecord,
   MachineKind,
   MachinePlatform,
   MachineStreamConfig,
@@ -43,33 +44,6 @@ export interface MachineConfig {
 }
 
 export type MachineSource = MachineConfig[] | (() => MachineConfig[]);
-
-export type DelegationState =
-  | "running"
-  | "waiting"
-  | "completed"
-  | "failed"
-  | "error"
-  | "cancelled"
-  | "stopped"
-  | "timed_out"
-  | "interrupted";
-
-export interface DelegationRecord {
-  runId: string;
-  state: DelegationState;
-  runtime: string;
-  title: string;
-  summary: string;
-  result: string;
-  error: string;
-  observerError?: string;
-  workspaceId: string;
-  tabId: string;
-  paneId: string;
-  createdAt: string;
-  updatedAt: string;
-}
 
 export interface PersistedState {
   schemaVersion: number;

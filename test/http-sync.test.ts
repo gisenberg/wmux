@@ -211,12 +211,24 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
   const settings = new SettingsStore(path.join(dir, "settings.json"));
   const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
     auth: { enabled: true, token: "delegation-test-token", loginEnabled: false, sessionSecret: "test" },
+    delegation: {
+      waitTimeoutSeconds: { review: 900, change: 7_200, deploy: 10_800 },
+      waitTimeoutBoundsSeconds: { min: 0.1, max: 14_400 },
+    },
   });
   const port = await listen(server);
 
   try {
     const unauthorized = await fetch(`http://127.0.0.1:${port}/api/delegations/run-http-1`);
     assert.equal(unauthorized.status, 401);
+
+    const bootstrapResponse = await fetch(`http://127.0.0.1:${port}/api/bootstrap`, {
+      headers: { authorization: "Bearer delegation-test-token" },
+    });
+    const bootstrap = await bootstrapResponse.json() as BootstrapPayload;
+    assert.equal(bootstrap.delegations.some((delegation) => delegation.runId === "run-http-1"), true);
+    assert.deepEqual(bootstrap.delegation.waitTimeoutSeconds, { review: 900, change: 7_200, deploy: 10_800 });
+    assert.deepEqual(bootstrap.delegation.waitTimeoutBoundsSeconds, { min: 0.1, max: 14_400 });
 
     const response = await fetch(`http://127.0.0.1:${port}/api/delegations/run-http-1`, {
       headers: { authorization: "Bearer delegation-test-token" },
