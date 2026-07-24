@@ -26,6 +26,8 @@ const documentedRoutes = [
   ["pane-split", "POST", "/api/tabs/tab/split"],
   ["pane-input", "POST", "/api/panes/pane/input"],
   ["agent-event", "POST", "/api/agent-events"],
+  ["agent-session-timeline", "GET", "/api/agent-sessions/session"],
+  ["repository-snapshot-read", "GET", "/api/repository-snapshots/snapshot"],
   ["run-event", "POST", "/api/run-events"],
   ["stream-request", "POST", "/api/streams/linux-box/request"],
   ["stream-release", "DELETE", "/api/streams/linux-box/request/request"],

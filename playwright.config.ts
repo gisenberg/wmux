@@ -31,6 +31,7 @@ export default defineConfig({
       WMUX_CONFIG_PATH: path.resolve("e2e", "fixtures", "wmux.config.json"),
       WMUX_STATE_PATH: path.join(runtimeDir, "state.json"),
       WMUX_SETTINGS_PATH: path.join(runtimeDir, "settings.json"),
+      WMUX_AGENT_TIMELINE_PATH: path.join(runtimeDir, "agent-timelines.json"),
       WMUX_ATTACHMENT_DIR: path.join(runtimeDir, "attachments"),
       WMUX_PUBLIC_URL: `http://127.0.0.1:${port}`,
       WMUX_CERT_FILE: "",

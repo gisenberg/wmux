@@ -421,6 +421,7 @@ export const workspaceRoutes: readonly ApiRoute[] = [
         data?: unknown;
         cols?: unknown;
         rows?: unknown;
+        timelinePrompt?: unknown;
       };
       if (typeof body.data !== "string") {
         sendJson(400, { error: "invalid_input" });
@@ -430,8 +431,19 @@ export const workspaceRoutes: readonly ApiRoute[] = [
         sendJson(413, { error: "input_too_large" });
         return;
       }
+      if (
+        body.timelinePrompt !== undefined
+        && (
+          typeof body.timelinePrompt !== "string"
+          || body.timelinePrompt.length > 128 * 1024
+        )
+      ) {
+        sendJson(400, { error: "invalid_timeline_prompt" });
+        return;
+      }
+      const paneId = decodeURIComponent(match[1]);
       const written = deps.sessions.writePane(
-        decodeURIComponent(match[1]),
+        paneId,
         body.data,
         typeof body.cols === "number" ? body.cols : undefined,
         typeof body.rows === "number" ? body.rows : undefined,
@@ -439,6 +451,9 @@ export const workspaceRoutes: readonly ApiRoute[] = [
       if (!written) {
         sendJson(404, { error: "pane_not_found" });
         return;
+      }
+      if (typeof body.timelinePrompt === "string" && body.timelinePrompt.trim()) {
+        deps.agentSessions.recordUserPrompt(paneId, body.timelinePrompt);
       }
       sendJson(200, deps.currentPayload());
     },

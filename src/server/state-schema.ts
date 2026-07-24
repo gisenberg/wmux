@@ -2,7 +2,7 @@ import { z } from "zod";
 import { machineSchema } from "./config.js";
 import type { DelegationRecord, LayoutNode, PersistedState } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 3;
+export const CURRENT_STATE_SCHEMA_VERSION = 4;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -103,6 +103,7 @@ const delegationStateSchema = z.enum([
 
 const delegationSchema: z.ZodType<DelegationRecord> = z.object({
   runId: delegationRunIdSchema,
+  sessionId: delegationRunIdSchema,
   state: delegationStateSchema,
   runtime: z.string().max(500),
   title: z.string().max(500),
@@ -253,6 +254,24 @@ export const migrateV2ToV3State = (record: Record<string, unknown>): Record<stri
     : record.workspaces,
 });
 
+/** v3 delegation runs each become the first turn in a durable agent session. */
+export const migrateV3ToV4State = (record: Record<string, unknown>): Record<string, unknown> => ({
+  ...record,
+  schemaVersion: 4,
+  delegations: Array.isArray(record.delegations)
+    ? record.delegations.map((delegation) => {
+      if (!delegation || typeof delegation !== "object" || Array.isArray(delegation)) {
+        return delegation;
+      }
+      const delegationRecord = delegation as Record<string, unknown>;
+      return {
+        ...delegationRecord,
+        sessionId: delegationRecord.sessionId ?? delegationRecord.runId,
+      };
+    })
+    : record.delegations,
+});
+
 export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("state must be a JSON object");
@@ -262,12 +281,19 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion) && rawVersion > CURRENT_STATE_SCHEMA_VERSION) {
     throw new UnsupportedStateVersionError(rawVersion);
   }
-  if (rawVersion !== undefined && rawVersion !== 0 && rawVersion !== 1 && rawVersion !== 2 && rawVersion !== CURRENT_STATE_SCHEMA_VERSION) {
+  if (rawVersion !== undefined && rawVersion !== 0 && rawVersion !== 1 && rawVersion !== 2 && rawVersion !== 3 && rawVersion !== CURRENT_STATE_SCHEMA_VERSION) {
     throw new Error("state schemaVersion must be a supported integer");
   }
   const migrated = rawVersion !== CURRENT_STATE_SCHEMA_VERSION;
   const v2Candidate = rawVersion === 2 ? record : migratePreV2State(record);
-  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION ? record : migrateV2ToV3State(v2Candidate);
+  const v3Candidate = rawVersion === 3
+    ? record
+    : rawVersion === CURRENT_STATE_SCHEMA_VERSION
+      ? record
+      : migrateV2ToV3State(v2Candidate);
+  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+    ? record
+    : migrateV3ToV4State(v3Candidate);
   return { state: persistedStateSchema.parse(candidate), migrated };
 };
 

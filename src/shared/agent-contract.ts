@@ -91,6 +91,7 @@ export interface AgentResult {
 
 export interface AgentEventPostBody {
   runId?: string;
+  sessionId?: string;
   workspaceId?: string;
   tabId?: string;
   paneId?: string;
@@ -99,6 +100,7 @@ export interface AgentEventPostBody {
   title?: string;
   summary?: string;
   message?: string;
+  prompt?: string;
   body?: string;
 }
 

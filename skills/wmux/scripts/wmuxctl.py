@@ -292,6 +292,8 @@ class WmuxClient:
         summary: str,
         message: str = "",
         run_id: str = "",
+        session_id: str = "",
+        prompt: str = "",
     ) -> None:
         body = {
             "workspaceId": workspace_id,
@@ -306,6 +308,10 @@ class WmuxClient:
             body["message"] = message
         if run_id:
             body["runId"] = run_id
+        if session_id:
+            body["sessionId"] = session_id
+        if prompt:
+            body["prompt"] = prompt
         self.request(
             "POST",
             "/api/agent-events",
@@ -1629,6 +1635,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id())
     info = describe_workspace(client.url, workspace)
     run_id = str(uuid.uuid4())
+    session_id = info["workspaceId"] if args.session else run_id
     info["runId"] = run_id
     secrets = [prompt, client.token]
     worker_submitted = False
@@ -1659,6 +1666,8 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "running", title,
             f"{args.runtime.capitalize()} delegation running",
             run_id=run_id,
+            session_id=session_id,
+            prompt=prompt,
         )
         if is_windows:
             ready_pattern = CODEX_READY_PATTERN
@@ -1820,6 +1829,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             client.record_agent_event(
                 info["workspaceId"], info["tabId"], info["paneId"], args.runtime, status, title,
                 f"{args.runtime.capitalize()} delegation {status}", message=detail, run_id=run_id,
+                session_id=session_id,
             )
         info.update({
             "runId": run_id,

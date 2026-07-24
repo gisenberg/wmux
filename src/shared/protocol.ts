@@ -290,8 +290,49 @@ export type DelegationState =
   | "timed_out"
   | "interrupted";
 
+export type AgentTimelineEntryKind =
+  | "prompt"
+  | "status"
+  | "outcome"
+  | "snapshot";
+
+export interface AgentTimelineSnapshotLink {
+  id: string;
+  kind: RepositoryReviewKind;
+  url: string;
+  capturedAt: string;
+  complete: boolean;
+  filesTouched: string[];
+}
+
+export interface AgentTimelineEntry {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  runId?: string;
+  kind: AgentTimelineEntryKind;
+  actor: "user" | "agent" | "system";
+  text: string;
+  state?: DelegationState;
+  filesTouched: string[];
+  snapshot?: AgentTimelineSnapshotLink;
+  createdAt: string;
+}
+
+export interface AgentSessionTimeline {
+  id: string;
+  runtime: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  createdAt: string;
+  updatedAt: string;
+  entries: AgentTimelineEntry[];
+}
+
 export interface DelegationRecord {
   runId: string;
+  sessionId: string;
   state: DelegationState;
   runtime: string;
   title: string;
@@ -365,6 +406,7 @@ export interface BootstrapPayload {
   notifications: TerminalNotification[];
   agentEvents: AgentActivity[];
   delegations: DelegationRecord[];
+  agentTimelines: AgentSessionTimeline[];
   runs: TerminalRun[];
   delegation: DelegationConfig;
   terminalFontFamily: string;

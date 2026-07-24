@@ -936,9 +936,15 @@ export function AppShell() {
     },
   );
 
-  const sendPaneInput = async (paneId: string, data: string): Promise<void> => {
+  const sendPaneInput = async (
+    paneId: string,
+    data: string,
+    timelinePrompt?: string,
+  ): Promise<void> => {
     try {
-      await refresh(await api.sendPaneInput(paneId, data));
+      await refresh(
+        await api.sendPaneInput(paneId, data, timelinePrompt),
+      );
     } catch (nextError) {
       pushToast(`Send input failed: ${describeActionError(nextError)}`);
       throw nextError;

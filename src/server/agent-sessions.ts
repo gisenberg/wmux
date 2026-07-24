@@ -1,12 +1,19 @@
 import { createId } from "./id.js";
+import {
+  AgentTimelineStore,
+  type AgentTimelineLifecycleInput,
+} from "./agent-timeline.js";
 import { stripMarkup, type StateStore } from "./state.js";
 import type {
   AgentActivity,
+  AgentSessionTimeline,
+  AgentTimelineSnapshotLink,
   DelegationRecord,
   DelegationState,
   PersistedState,
   SurfaceTab,
   TerminalNotification,
+  WorkingTreeSnapshot,
   Workspace,
 } from "./types.js";
 import type { AgentEventPostBody } from "../shared/agent-contract.js";
@@ -84,12 +91,18 @@ export interface AgentEventResult {
 }
 
 export class AgentSessionService {
-  constructor(private readonly state: StateStore) {
+  constructor(
+    private readonly state: StateStore,
+    readonly timelines = new AgentTimelineStore(),
+  ) {
     this.reconcilePersistedState();
+    this.reconcilePersistedTimelines();
   }
 
   recordAgentEvent(input: AgentEventPostBody): AgentEventResult {
-    return this.state.commitMutation((persisted) => {
+    this.recordInitialPrompt(input);
+    const timelineInputs: AgentTimelineLifecycleInput[] = [];
+    const result = this.state.commitMutation((persisted) => {
       const target = resolveTarget(persisted, input);
       const agent = cleanTitle(input.agent ?? "agent", "agent");
       const status = cleanTitle(input.status ?? "updated", "updated").toLowerCase();
@@ -109,15 +122,48 @@ export class AgentSessionService {
           ? cleanDelegationRunId(latestAgentEvent.runId)
           : ""
       );
+      const existingDelegation = runId
+        ? persisted.delegations.find((candidate) => candidate.runId === runId)
+        : undefined;
+      const sessionId = cleanTimelineId(input.sessionId)
+        || existingDelegation?.sessionId
+        || runId;
       const createdAt = new Date().toISOString();
       if (ACTIVE_AGENT_STATUSES.has(status)) {
-        markLatestAgentInterrupted(
+        const interruptedEvent = latestAgentEvent
+          && latestAgentEvent.runId !== runId
+          ? structuredClone(latestAgentEvent)
+          : undefined;
+        const interruptedDelegation = interruptedEvent?.runId
+          ? persisted.delegations.find(
+            (candidate) => candidate.runId === interruptedEvent.runId,
+          )
+          : undefined;
+        const interrupted = markLatestAgentInterrupted(
           persisted,
           target.paneId,
           agent,
           createdAt,
           runId,
         );
+        if (
+          interrupted
+          && interruptedEvent?.runId
+          && interruptedDelegation?.sessionId
+        ) {
+          timelineInputs.push({
+            sessionId: interruptedDelegation.sessionId,
+            turnId: interruptedEvent.runId,
+            runId: interruptedEvent.runId,
+            runtime: interruptedEvent.agent,
+            workspaceId: interruptedEvent.workspaceId,
+            tabId: interruptedEvent.tabId,
+            paneId: interruptedEvent.paneId,
+            state: "interrupted",
+            text: `${interruptedEvent.agent} interrupted`,
+            createdAt,
+          });
+        }
       }
       const agentEvent: AgentActivity = {
         id: createId("agent"),
@@ -133,7 +179,12 @@ export class AgentSessionService {
         createdAt,
       };
       const delegationDisposition = runId
-        ? recordDelegationEvent(persisted, agentEvent, delegationMessage)
+        ? recordDelegationEvent(
+          persisted,
+          agentEvent,
+          delegationMessage,
+          sessionId,
+        )
         : { accepted: true, terminalTransition: false };
       if (delegationDisposition.accepted) {
         persisted.agentEvents.unshift(agentEvent);
@@ -191,6 +242,27 @@ export class AgentSessionService {
       }
 
       if (workspaceChanged) target.workspace.updatedAt = createdAt;
+      if (
+        sessionId
+        && (delegationDisposition.accepted || status === "observer_error")
+      ) {
+        timelineInputs.push({
+          sessionId,
+          turnId: runId || createId("turn"),
+          ...(runId ? { runId } : {}),
+          runtime: agent,
+          workspaceId: target.workspace.id,
+          tabId: target.tab.id,
+          paneId: target.paneId,
+          ...(input.prompt ? { prompt: cleanTimelinePrompt(input.prompt) } : {}),
+          ...(delegationStateForStatus(status)
+            ? { state: delegationStateForStatus(status) ?? undefined }
+            : {}),
+          text: delegationMessage || summary || title || `${agent} ${status}`,
+          createdAt,
+          ...(status === "observer_error" ? { observerError: true } : {}),
+        });
+      }
       return {
         result: {
           workspace: target.workspace,
@@ -201,12 +273,79 @@ export class AgentSessionService {
         notifications: notification ? [notification] : [],
       };
     });
+    for (const timelineInput of timelineInputs) {
+      this.timelines.recordLifecycle(timelineInput);
+    }
+    return result;
   }
 
   delegationForRun(runId: string): DelegationRecord | undefined {
     return this.state.snapshot().delegations.find(
       (candidate) => candidate.runId === runId,
     );
+  }
+
+  timelineSnapshot(): AgentSessionTimeline[] {
+    return this.timelines.snapshot();
+  }
+
+  timelineForSession(sessionId: string): AgentSessionTimeline | undefined {
+    return this.timelines.snapshot().find(
+      (candidate) => candidate.id === sessionId,
+    );
+  }
+
+  recordUserPrompt(paneId: string, text: string): AgentSessionTimeline {
+    const snapshot = this.state.snapshot();
+    const target = resolveTarget(snapshot, { paneId });
+    const latestAgent = snapshot.agentEvents.find(
+      (candidate) => candidate.paneId === paneId,
+    );
+    return this.timelines.recordPrompt({
+      paneId,
+      runtime: latestAgent?.agent ?? "agent",
+      text,
+      workspaceId: target.workspace.id,
+      tabId: target.tab.id,
+    });
+  }
+
+  archiveRepositorySnapshot(
+    paneId: string,
+    snapshot: WorkingTreeSnapshot,
+  ): AgentTimelineSnapshotLink | undefined {
+    return this.timelines.archiveWorkingTreeSnapshot(paneId, snapshot);
+  }
+
+  repositorySnapshot(id: string): WorkingTreeSnapshot | undefined {
+    return this.timelines.readWorkingTreeSnapshot(id);
+  }
+
+  private recordInitialPrompt(input: AgentEventPostBody): void {
+    if (!input.prompt) return;
+    const runId = cleanDelegationRunId(input.runId);
+    if (!runId) return;
+    const snapshot = this.state.snapshot();
+    const existing = snapshot.delegations.find(
+      (candidate) => candidate.runId === runId,
+    );
+    if (existing && TERMINAL_DELEGATION_STATES.has(existing.state)) return;
+    const target = resolveTarget(snapshot, input);
+    const runtime = cleanTitle(input.agent ?? "agent", "agent");
+    this.timelines.recordLifecycle({
+      sessionId: cleanTimelineId(input.sessionId)
+        || existing?.sessionId
+        || runId,
+      turnId: runId,
+      runId,
+      runtime,
+      workspaceId: target.workspace.id,
+      tabId: target.tab.id,
+      paneId: target.paneId,
+      prompt: cleanTimelinePrompt(input.prompt),
+      text: "",
+      createdAt: new Date().toISOString(),
+    });
   }
 
   interruptAgentForPane(paneId: string): boolean {
@@ -216,15 +355,36 @@ export class AgentSessionService {
     );
     if (!latest || !ACTIVE_AGENT_STATUSES.has(latest.status)) return false;
 
-    return this.state.commitMutation((persisted) => {
+    const delegation = latest.runId
+      ? snapshot.delegations.find(
+        (candidate) => candidate.runId === latest.runId,
+      )
+      : undefined;
+    const interruptedAt = new Date().toISOString();
+    const changed = this.state.commitMutation((persisted) => {
       const changed = markLatestAgentInterrupted(
         persisted,
         paneId,
         undefined,
-        new Date().toISOString(),
+        interruptedAt,
       );
       return { result: changed, changed };
     });
+    if (changed && latest.runId && delegation?.sessionId) {
+      this.timelines.recordLifecycle({
+        sessionId: delegation.sessionId,
+        turnId: latest.runId,
+        runId: latest.runId,
+        runtime: latest.agent,
+        workspaceId: latest.workspaceId,
+        tabId: latest.tabId,
+        paneId: latest.paneId,
+        state: "interrupted",
+        text: `${latest.agent} interrupted`,
+        createdAt: interruptedAt,
+      });
+    }
+    return changed;
   }
 
   private reconcilePersistedState(): void {
@@ -262,11 +422,73 @@ export class AgentSessionService {
           persisted,
           event,
           cleanDelegationMessage(event.message ?? ""),
+          event.runId,
         );
       }
       pruneDelegations(persisted);
       return { result: undefined, changed: true };
     });
+  }
+
+  private reconcilePersistedTimelines(): void {
+    const snapshot = this.state.snapshot();
+    const existingStates = new Set(
+      this.timelines.snapshot().flatMap((timeline) =>
+        timeline.entries
+          .filter((entry) => entry.runId && entry.state)
+          .map(
+            (entry) =>
+              `${timeline.id}\u0000${entry.runId}\u0000${entry.state}`,
+          )),
+    );
+    for (const delegation of [...snapshot.delegations].reverse()) {
+      const stateKey =
+        `${delegation.sessionId}\u0000${delegation.runId}\u0000${delegation.state}`;
+      if (existingStates.has(stateKey)) continue;
+      const events = snapshot.agentEvents
+        .filter((event) => event.runId === delegation.runId)
+        .sort(
+          (first, second) =>
+            Date.parse(first.createdAt) - Date.parse(second.createdAt),
+        );
+      if (events.length === 0) {
+        this.timelines.recordLifecycle({
+          sessionId: delegation.sessionId,
+          turnId: delegation.runId,
+          runId: delegation.runId,
+          runtime: delegation.runtime,
+          workspaceId: delegation.workspaceId,
+          tabId: delegation.tabId,
+          paneId: delegation.paneId,
+          state: delegation.state,
+          text: delegation.result
+            || delegation.error
+            || delegation.summary
+            || delegation.title,
+          createdAt: delegation.updatedAt,
+        });
+      } else {
+        for (const event of events) {
+          this.timelines.recordLifecycle({
+            sessionId: delegation.sessionId,
+            turnId: delegation.runId,
+            runId: delegation.runId,
+            runtime: event.agent,
+            workspaceId: event.workspaceId,
+            tabId: event.tabId,
+            paneId: event.paneId,
+            ...(delegationStateForStatus(event.status)
+              ? { state: delegationStateForStatus(event.status) ?? undefined }
+              : {}),
+            text: cleanDelegationMessage(event.message ?? "")
+              || event.summary
+              || event.title,
+            createdAt: event.createdAt,
+          });
+        }
+      }
+      existingStates.add(stateKey);
+    }
   }
 }
 
@@ -351,6 +573,7 @@ const recordDelegationEvent = (
   state: PersistedState,
   event: AgentActivity,
   message: string,
+  sessionId: string,
 ): DelegationEventDisposition => {
   if (!event.runId) return { accepted: true, terminalTransition: false };
   const existing = state.delegations.find(
@@ -368,6 +591,7 @@ const recordDelegationEvent = (
     } else {
       state.delegations.unshift({
         runId: event.runId,
+        sessionId,
         state: "running",
         runtime: event.agent,
         title: event.title,
@@ -405,6 +629,7 @@ const recordDelegationEvent = (
   const detail = message || event.summary;
   const delegation: DelegationRecord = existing ?? {
     runId: event.runId,
+    sessionId,
     state: nextState,
     runtime: event.agent,
     title: event.title,
@@ -418,6 +643,7 @@ const recordDelegationEvent = (
     updatedAt: event.createdAt,
   };
   delegation.state = nextState;
+  delegation.sessionId = sessionId || delegation.sessionId;
   delegation.runtime = event.agent;
   delegation.title = event.title;
   delegation.summary = event.summary;
@@ -498,7 +724,21 @@ const cleanDelegationMessage = (value: string): string =>
     .trim()
     .slice(0, 64_000);
 
+const cleanTimelinePrompt = (value: string): string =>
+  stripMarkup(value)
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .trim()
+    .slice(0, 128 * 1_024);
+
 const cleanDelegationRunId = (value?: string): string => {
+  const candidate = value ?? "";
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate)
+    ? candidate
+    : "";
+};
+
+const cleanTimelineId = (value?: string): string => {
   const candidate = value ?? "";
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate)
     ? candidate
