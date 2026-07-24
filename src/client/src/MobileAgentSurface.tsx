@@ -18,6 +18,8 @@ import {
 import type { PaneAttachment } from "./api";
 import type {
   AgentActivity,
+  AgentSessionTimeline,
+  AgentTimelineEntry,
   BootstrapPayload,
   MachineStatus,
   PaneState,
@@ -35,7 +37,11 @@ interface MobileAgentSurfaceProps {
   workspace?: Workspace;
   tab?: SurfaceTab;
   pane?: PaneState;
-  onSendInput: (paneId: string, data: string) => Promise<void>;
+  onSendInput: (
+    paneId: string,
+    data: string,
+    timelinePrompt?: string,
+  ) => Promise<void>;
   onUploadAttachment: (paneId: string, attachment: PaneAttachmentUpload) => Promise<PaneAttachment>;
   onFocusTerminal?: () => void;
   onOpenActions?: () => void;
@@ -83,6 +89,13 @@ type MobileThreadItem =
   | LocalMobileMessage
   | { kind: "separator"; id: string; createdAt: string; label: string }
   | { kind: "agent"; id: string; createdAt: string; event: AgentActivity }
+  | {
+      kind: "timeline";
+      id: string;
+      createdAt: string;
+      entry: AgentTimelineEntry;
+      runtime: string;
+    }
   | { kind: "run"; id: string; createdAt: string; run: TerminalRun }
   | { kind: "notification"; id: string; createdAt: string; notification: TerminalNotification };
 
@@ -158,9 +171,25 @@ export function MobileAgentSurface({
   const threadItems = useMemo(
     () =>
       workspace
-        ? buildMobileThreadItems(workspace.id, pane?.id, state.agentEvents, state.runs, state.notifications, localMessages)
+        ? buildMobileThreadItems(
+          workspace.id,
+          pane?.id,
+          state.agentEvents,
+          state.runs,
+          state.notifications,
+          localMessages,
+          state.agentTimelines ?? [],
+        )
         : [],
-    [localMessages, pane?.id, state.agentEvents, state.notifications, state.runs, workspace],
+    [
+      localMessages,
+      pane?.id,
+      state.agentEvents,
+      state.agentTimelines,
+      state.notifications,
+      state.runs,
+      workspace,
+    ],
   );
   const threadScrollKey = useMemo(() => threadItems.map(threadItemScrollKey).join("|"), [threadItems]);
   const recentItems = useMemo(
@@ -348,9 +377,15 @@ export function MobileAgentSurface({
       optimisticMessageAdded = true;
       setDraft("");
       setPendingImages([]);
-      await sendMobileComposerInput(onSendInput, pane.id, formatComposerTextInput(text, sentAttachments));
+      const formattedInput = formatComposerTextInput(text, sentAttachments);
+      await sendMobileComposerInput(
+        onSendInput,
+        pane.id,
+        formattedInput,
+        formattedInput.replace(/^\x1b\[200~/, "").replace(/\x1b\[201~$/, ""),
+      );
       setLocalMessages((current) =>
-        current.map((message) => message.id === localMessageId ? { ...message, delivery: "sent" } : message),
+        current.filter((message) => message.id !== localMessageId),
       );
     } catch (error) {
       if (optimisticMessageAdded) {
@@ -734,6 +769,52 @@ function MobileThreadMessage({ item }: { item: MobileMessageItem }) {
     );
   }
 
+  if (item.kind === "timeline") {
+    const user = item.entry.actor === "user";
+    const status = item.entry.state
+      ? agentStatusClass(item.entry.state)
+      : "updated";
+    return (
+      <article className={`mobile-agent-message ${user ? "user" : "agent"} ${status}`}>
+        <div className="mobile-agent-message-meta">
+          <span>
+            {user
+              ? "you"
+              : item.entry.actor === "agent"
+                ? item.runtime
+                : item.entry.actor}
+          </span>
+          {item.entry.state ? (
+            <span className={`mobile-agent-status ${status}`}>
+              {item.entry.state}
+            </span>
+          ) : null}
+          <span>{formatRelativeTime(item.createdAt)}</span>
+        </div>
+        {item.entry.text ? (
+          <MobileMessageText
+            text={item.entry.text}
+            collapsedLimit={user ? 1_400 : 1_600}
+          />
+        ) : null}
+        {item.entry.snapshot ? (
+          <a
+            className="mobile-agent-snapshot-link"
+            href={item.entry.snapshot.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Working tree snapshot
+            <span>
+              {item.entry.snapshot.filesTouched.length} files
+              {item.entry.snapshot.complete ? "" : " / partial"}
+            </span>
+          </a>
+        ) : null}
+      </article>
+    );
+  }
+
   if (item.kind === "run") {
     const complete = item.run.status !== "started";
     return (
@@ -797,15 +878,53 @@ export const buildMobileThreadItems = (
   runs: TerminalRun[],
   notifications: TerminalNotification[],
   localMessages: LocalMobileMessage[],
+  timelines: AgentSessionTimeline[] = [],
 ): MobileThreadItem[] => {
   if (!paneId) return [];
+  const timelineEntries = timelines
+    .filter(
+      (timeline) =>
+        timeline.workspaceId === workspaceId
+        && timeline.paneId === paneId,
+    )
+    .flatMap((timeline) =>
+      timeline.entries.map((entry) => ({
+        entry,
+        runtime: timeline.runtime,
+      })));
+  const timelinePrompts = new Set(
+    timelineEntries
+      .filter(({ entry }) => entry.kind === "prompt")
+      .map(({ entry }) => entry.text.trim()),
+  );
   const scopedAgentEvents = collapseAgentLifecycleEvents(
     agentEvents.filter((event) => event.workspaceId === workspaceId && event.paneId === paneId),
   );
   const rawItems: MobileMessageItem[] = [
-    ...localMessages.filter((message) => message.workspaceId === workspaceId && message.paneId === paneId),
-    ...scopedAgentEvents
-      .map((event) => ({ kind: "agent" as const, id: `agent:${event.id}`, createdAt: event.createdAt, event })),
+    ...localMessages.filter(
+      (message) =>
+        message.workspaceId === workspaceId
+        && message.paneId === paneId
+        && (
+          message.delivery === "sending"
+          || !timelinePrompts.has(message.text.trim())
+        ),
+    ),
+    ...timelineEntries.map(({ entry, runtime }) => ({
+      kind: "timeline" as const,
+      id: `timeline:${entry.id}`,
+      createdAt: entry.createdAt,
+      entry,
+      runtime,
+    })),
+    ...(timelineEntries.length === 0
+      ? scopedAgentEvents.map((event) => ({
+        kind: "agent" as const,
+        id: `agent:${event.id}`,
+        createdAt: event.createdAt,
+        event,
+      }))
+      : []),
     ...runs
       .filter((run) => run.workspaceId === workspaceId && run.paneId === paneId)
       .map((run) => ({ kind: "run" as const, id: `run:${run.id}`, createdAt: run.completedAt ?? run.startedAt, run })),
@@ -922,6 +1041,9 @@ const threadItemScrollKey = (item: MobileThreadItem): string => {
   if (item.kind === "separator") return `${item.id}:${item.label}`;
   if (item.kind === "user") return `${item.id}:${item.delivery ?? "sent"}:${item.text}`;
   if (item.kind === "agent") return `${item.id}:${item.event.status}:${item.event.title}:${item.event.summary}:${item.event.message ?? ""}`;
+  if (item.kind === "timeline") {
+    return `${item.id}:${item.entry.kind}:${item.entry.state ?? ""}:${item.entry.text}:${item.entry.snapshot?.id ?? ""}`;
+  }
   if (item.kind === "run") return `${item.id}:${item.run.status}:${item.run.exitCode ?? ""}:${item.run.command}`;
   return `${item.id}:${item.notification.title}:${item.notification.subtitle}:${item.notification.body}`;
 };
@@ -991,12 +1113,17 @@ const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[
 };
 
 export const sendMobileComposerInput = async (
-  sendInput: (paneId: string, data: string) => Promise<void>,
+  sendInput: (
+    paneId: string,
+    data: string,
+    timelinePrompt?: string,
+  ) => Promise<void>,
   paneId: string,
   message: string,
+  timelinePrompt?: string,
 ) => {
   await sendInput(paneId, message);
-  await sendInput(paneId, "\r");
+  await sendInput(paneId, "\r", timelinePrompt);
 };
 
 const isSupportedImageMimeType = (mimeType: string): boolean =>

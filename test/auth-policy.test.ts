@@ -29,6 +29,7 @@ const principal = (kind: AuthPrincipal["kind"]): AuthPrincipal => kind === "brow
 const routeCases: Array<[string, string, string]> = [
   ["health", "GET", "/api/health"], ["auth-info", "GET", "/api/auth-info"], ["login", "POST", "/api/login"],
   ["auth-session", "GET", "/api/auth/session"], ["bootstrap", "GET", "/api/bootstrap"],
+  ["agent-session-timeline", "GET", "/api/agent-sessions/session"],
   ["delegation-status", "GET", "/api/delegations/run"],
   ["registry-list", "GET", "/api/registry/hosts"], ["registry-register", "POST", "/api/registry/hosts"],
   ["registry-delete", "DELETE", "/api/registry/hosts/host"], ["session-audit", "GET", "/api/session-audit"],
@@ -50,6 +51,7 @@ const routeCases: Array<[string, string, string]> = [
   ["tab-close", "DELETE", "/api/workspaces/ws/tabs/tab"], ["tab-title", "POST", "/api/workspaces/ws/tabs/tab/title"],
   ["pane-split", "POST", "/api/tabs/tab/split"], ["split-ratio", "POST", "/api/tabs/tab/split-ratio"],
   ["pane-input", "POST", "/api/panes/pane/input"], ["pane-review-create", "POST", "/api/panes/pane/reviews"],
+  ["repository-snapshot-read", "GET", "/api/repository-snapshots/snapshot"],
   ["pane-notifications-read", "POST", "/api/panes/pane/notifications/read"],
   ["pane-close", "DELETE", "/api/tabs/tab/panes/pane"], ["attachment-read", "GET", "/api/attachments/pane/file"],
 ];

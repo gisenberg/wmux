@@ -70,6 +70,9 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 ## Architecture Notes
 
 - Server state lives in `~/.wmux/state.json` unless `WMUX_STATE_PATH` is set.
+- Durable agent turn history lives in `~/.wmux/agent-timelines.json` unless `WMUX_AGENT_TIMELINE_PATH` is set.
+  It uses a separate schema-versioned, owner-only atomic store with a validated rolling backup.
+  Repository snapshots linked from a timeline are immutable owner-only archives under the adjacent `repository-snapshots/` directory.
 - Server-backed UI settings live in `~/.wmux/settings.json` unless `WMUX_SETTINGS_PATH` is set.
 - State and settings use explicit schema versions, atomic owner-only writes, validated rolling backups, and downgrade refusal. Add a migration before changing a persisted shape.
 - Browser/server wire contracts live in `src/shared/protocol.ts`, including pane and event WebSocket unions. Keep credentials and other server-only configuration in `src/server/types.ts`; do not reintroduce parallel client/server wire shapes.
@@ -77,6 +80,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
   Keep request dispatch in `request-dispatch.ts`, static delivery in `static-files.ts`, event publication in `event-broadcast.ts`, and WebSocket upgrades in `ws-upgrade.ts`.
   Every dispatched route must remain covered by the real-server route-policy guard.
 - `AgentSessionService` in `src/server/agent-sessions.ts` owns delegation transitions, exact-once terminal outcomes, notification/title side effects, persistence backfill, and retention.
+  `AgentTimelineStore` owns session turns, prompts, lifecycle entries, and archived review links; mobile Chat must render this durable history without requiring a terminal attachment.
   Runtime-specific argv, structured output, and TUI marker behavior belong in the Codex, Claude, and OpenCode adapters under `src/server/agent-runtimes/`.
   Keep `delegation.preferHeadless` defaulting to `false`; interactive requests always use TUI adapters.
 - `SessionBackend` is the pane execution contract.

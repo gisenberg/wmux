@@ -578,3 +578,82 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   });
   expect(focusTerminalContained).toBe(true);
 });
+
+test("mobile chat restores durable timeline history without terminal replay", async ({ page, request }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only timeline coverage");
+
+  const bootstrapResponse = await request.get("/api/bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json() as {
+    activeWorkspaceId: string;
+    workspaces: Array<{
+      id: string;
+      activeTabId: string;
+      tabs: Array<{ id: string; activePaneId: string }>;
+    }>;
+  };
+  const workspace = bootstrap.workspaces.find(
+    (candidate) => candidate.id === bootstrap.activeWorkspaceId,
+  );
+  const tab = workspace?.tabs.find(
+    (candidate) => candidate.id === workspace.activeTabId,
+  );
+  expect(workspace).toBeTruthy();
+  expect(tab).toBeTruthy();
+
+  const running = await request.post("/api/agent-events", {
+    data: {
+      workspaceId: workspace?.id,
+      tabId: tab?.id,
+      paneId: tab?.activePaneId,
+      runId: "mobile-timeline-turn",
+      sessionId: "mobile-timeline-session",
+      agent: "codex",
+      status: "running",
+      title: "Durable mobile history",
+      summary: "Timeline turn running",
+      prompt: "Timeline-only prompt after the terminal replay boundary.",
+    },
+  });
+  expect(running.ok()).toBeTruthy();
+  const completed = await request.post("/api/agent-events", {
+    data: {
+      workspaceId: workspace?.id,
+      tabId: tab?.id,
+      paneId: tab?.activePaneId,
+      runId: "mobile-timeline-turn",
+      sessionId: "mobile-timeline-session",
+      agent: "codex",
+      status: "completed",
+      title: "Durable mobile history",
+      summary: "Timeline turn completed",
+      message: "Timeline-only response restored from durable storage.",
+    },
+  });
+  expect(completed.ok()).toBeTruthy();
+
+  await page.evaluate(() => {
+    window.sessionStorage.removeItem("wmux:mobile-agent-messages");
+    window.sessionStorage.removeItem("wmux.mobileSurfaceModes");
+  });
+  await page.reload();
+  await expect(
+    page.getByText("Timeline-only prompt after the terminal replay boundary."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Timeline-only response restored from durable storage."),
+  ).toBeVisible();
+
+  const timelineResponse = await request.get(
+    "/api/agent-sessions/mobile-timeline-session",
+  );
+  expect(timelineResponse.ok()).toBeTruthy();
+  const timeline = await timelineResponse.json() as {
+    timeline: { entries: Array<{ kind: string }> };
+  };
+  expect(timeline.timeline.entries.map((entry) => entry.kind)).toEqual([
+    "prompt",
+    "status",
+    "outcome",
+  ]);
+});

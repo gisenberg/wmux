@@ -30,7 +30,7 @@ The current route ids are:
 
 - Service and browser state: `health`, `auth-info`, `login`, `auth-session`, `bootstrap`, `settings`, `doctor`, `session-audit`, `session-cleanup`, and `agent-profile`.
 - Workspace lifecycle: `workspace-create`, `workspace-reorder`, `workspace-notifications-read`, `workspace-close`, `workspace-title`, `workspace-auto-title`, `tab-create`, `tab-close`, `tab-title`, `pane-split`, `split-ratio`, `pane-input`, `pane-notifications-read`, and `pane-close`.
-- Events and review: `notification-create`, `notification-read`, `agent-event`, `delegation-status`, `run-event`, and `pane-review-create`.
+- Events and review: `notification-create`, `notification-read`, `agent-event`, `agent-session-timeline`, `delegation-status`, `run-event`, `pane-review-create`, and `repository-snapshot-read`.
 - Media and streams: `media`, `clipboard`, `pane-paste-image-stage`, `pane-paste-image-delete`, `pane-attachment-create`, `attachment-read`, `streams`, `stream-request-status`, `stream-request`, and `stream-release`.
 - Dynamic hosts and Windows bootstrap: `registry-list`, `registry-register`, `registry-delete`, `windows-bootstrap`, and `windows-helpers`.
 
@@ -173,6 +173,8 @@ Use `--timeout SECONDS` only for a bounded 0.1 through 14,400 second per-dispatc
 The generated OpenCode tool uses change mode by default and accepts deploy mode plus the same `timeout_seconds` bounds.
 A wait expiry or pane-output read failure after submission records a nonterminal waiting delegation and leaves the pane and workspace alive.
 Reconcile it with `GET /api/delegations/:runId`; only explicit cancellation sends Ctrl-C.
+Query `GET /api/agent-sessions/:sessionId` for the durable prompt and outcome history across every turn in a session.
+Working-tree review responses include an authenticated archive link when the pane belongs to an agent timeline.
 
 Set a manual title when the workspace is for a user-visible task:
 

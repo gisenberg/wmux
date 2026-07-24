@@ -52,11 +52,42 @@ export const repositoryRoutes: readonly ApiRoute[] = [
           paneId,
           abortController.signal,
         );
-        sendJson(201, { snapshot }, { "cache-control": "no-store" });
+        const archive = deps.agentSessions.archiveRepositorySnapshot(
+          paneId,
+          snapshot,
+        );
+        sendJson(
+          201,
+          { snapshot, ...(archive ? { archive } : {}) },
+          { "cache-control": "no-store" },
+        );
       } finally {
         request.removeListener("aborted", abort);
         response.removeListener("close", abortOnClose);
       }
+    },
+  },
+  {
+    id: "repository-snapshot-read",
+    method: "GET",
+    pattern: /^\/api\/repository-snapshots\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/,
+    policy: routePolicy(
+      "repository-snapshot-read",
+      "GET",
+      /^\/api\/repository-snapshots\/[^/]+$/,
+      "normal",
+      ["automation"],
+    ),
+    handler: async ({ deps, match, sendJson }) => {
+      if (!match) {
+        throw new Error("repository snapshot route matched without captures");
+      }
+      const snapshot = deps.agentSessions.repositorySnapshot(match[1]);
+      if (!snapshot) {
+        sendJson(404, { error: "repository_snapshot_not_found" });
+        return;
+      }
+      sendJson(200, { snapshot }, { "cache-control": "no-store" });
     },
   },
 ];

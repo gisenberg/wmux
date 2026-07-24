@@ -196,6 +196,32 @@ test("version 2 state migrates to delegation-aware schema", () => {
   });
 });
 
+test("version 3 delegation runs migrate into durable agent sessions", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    agentsFor(store).recordAgentEvent({
+      paneId,
+      runId: "run-version-3",
+      agent: "codex",
+      status: "running",
+      summary: "Legacy active turn",
+    });
+    const previous = store.snapshot() as unknown as Record<string, unknown>;
+    previous.schemaVersion = 3;
+    const delegations = previous.delegations as Array<Record<string, unknown>>;
+    delete delegations[0].sessionId;
+    fs.writeFileSync(filePath, JSON.stringify(previous));
+
+    const migrated = new StateStore(machines, filePath);
+    assert.equal(
+      agentsFor(migrated).delegationForRun("run-version-3")?.sessionId,
+      "run-version-3",
+    );
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+  });
+});
+
 test("state recovers from the last validated backup", () => {
   withTempState((filePath, dir) => {
     const store = new StateStore(machines, filePath);

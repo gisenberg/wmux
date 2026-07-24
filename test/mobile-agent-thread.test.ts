@@ -64,12 +64,16 @@ test("only settled successful events expose assistant response text", () => {
 });
 
 test("mobile composer sends Enter as a distinct sequential terminal input", async () => {
-  const writes: Array<{ paneId: string; data: string }> = [];
-  await sendMobileComposerInput(async (paneId, data) => {
-    writes.push({ paneId, data });
-  }, "pane-1", "hello agent");
+  const writes: Array<{
+    paneId: string;
+    data: string;
+    timelinePrompt?: string;
+  }> = [];
+  await sendMobileComposerInput(async (paneId, data, timelinePrompt) => {
+    writes.push({ paneId, data, ...(timelinePrompt ? { timelinePrompt } : {}) });
+  }, "pane-1", "hello agent", "hello agent");
   assert.deepEqual(writes, [
     { paneId: "pane-1", data: "hello agent" },
-    { paneId: "pane-1", data: "\r" },
+    { paneId: "pane-1", data: "\r", timelinePrompt: "hello agent" },
   ]);
 });

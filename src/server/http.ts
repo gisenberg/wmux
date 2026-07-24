@@ -103,6 +103,7 @@ export const createHttpServer = (
   const events = new EventBroadcastRuntime({
     bindHost,
     state,
+    agentSessions,
     settings,
     streamRequests,
     currentMachines,

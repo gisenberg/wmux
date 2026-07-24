@@ -57,6 +57,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
       const body = (await readJsonBody()) as AgentEventPostBody;
       const result = deps.agentSessions.recordAgentEvent({
         runId: body.runId,
+        sessionId: body.sessionId,
         workspaceId: body.workspaceId,
         tabId: body.tabId,
         paneId: body.paneId,
@@ -65,9 +66,33 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
         title: body.title,
         summary: body.summary,
         message: body.message,
+        prompt: body.prompt,
         body: body.body,
       });
       sendJson(201, { ...result, state: deps.currentPayload() });
+    },
+  },
+  {
+    id: "agent-session-timeline",
+    method: "GET",
+    pattern: /^\/api\/agent-sessions\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/,
+    policy: routePolicy(
+      "agent-session-timeline",
+      "GET",
+      /^\/api\/agent-sessions\/[^/]+$/,
+      "normal",
+      ["automation"],
+    ),
+    handler: async ({ deps, match, sendJson }) => {
+      if (!match) {
+        throw new Error("agent session timeline route matched without captures");
+      }
+      const timeline = deps.agentSessions.timelineForSession(match[1]);
+      if (!timeline) {
+        sendJson(404, { error: "agent_session_not_found" });
+        return;
+      }
+      sendJson(200, { timeline });
     },
   },
   {

@@ -195,16 +195,19 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
-  agentsFor(state).recordAgentEvent({
+  const agentSessions = agentsFor(state);
+  agentSessions.recordAgentEvent({
     paneId,
     runId: "run-http-1",
+    sessionId: "session-http-1",
     agent: "codex",
     status: "completed",
     title: "Review",
     summary: "Codex delegation completed",
     message: "Review result",
+    prompt: "Review this change.",
   });
-  agentsFor(state).recordAgentEvent({
+  agentSessions.recordAgentEvent({
     paneId,
     runId: "run-http-interrupted",
     agent: "codex",
@@ -220,6 +223,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
       waitTimeoutSeconds: { review: 900, change: 7_200, deploy: 10_800 },
       waitTimeoutBoundsSeconds: { min: 0.1, max: 14_400 },
     },
+    agentSessions,
   });
   const port = await listen(server);
 
@@ -232,6 +236,12 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
     });
     const bootstrap = await bootstrapResponse.json() as BootstrapPayload;
     assert.equal(bootstrap.delegations.some((delegation) => delegation.runId === "run-http-1"), true);
+    assert.equal(
+      bootstrap.agentTimelines.some(
+        (timeline) => timeline.id === "session-http-1",
+      ),
+      true,
+    );
     assert.deepEqual(bootstrap.delegation.waitTimeoutSeconds, { review: 900, change: 7_200, deploy: 10_800 });
     assert.deepEqual(bootstrap.delegation.waitTimeoutBoundsSeconds, { min: 0.1, max: 14_400 });
 
@@ -242,6 +252,19 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
     assert.equal(response.status, 200);
     assert.equal(payload.delegation.state, "completed");
     assert.equal(payload.delegation.result, "Review result");
+
+    const timelineResponse = await fetch(
+      `http://127.0.0.1:${port}/api/agent-sessions/session-http-1`,
+      { headers: { authorization: "Bearer delegation-test-token" } },
+    );
+    const timelinePayload = await timelineResponse.json() as {
+      timeline: { entries: Array<{ kind: string; text: string }> };
+    };
+    assert.equal(timelineResponse.status, 200);
+    assert.deepEqual(
+      timelinePayload.timeline.entries.map((entry) => entry.kind),
+      ["prompt", "outcome"],
+    );
 
     const interruptedResponse = await fetch(`http://127.0.0.1:${port}/api/delegations/run-http-interrupted`, {
       headers: { authorization: "Bearer delegation-test-token" },

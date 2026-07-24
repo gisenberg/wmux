@@ -2029,6 +2029,26 @@ button.active-tool {
   font-weight: 800;
 }
 
+.mobile-agent-snapshot-link {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(212, 180, 95, 0.22);
+  padding: 7px 9px;
+  color: #8ebdff;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.mobile-agent-snapshot-link span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .mobile-agent-message-attachments {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));

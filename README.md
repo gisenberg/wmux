@@ -44,7 +44,7 @@ The desktop view and both mobile surfaces show the same live Codex workspace.
 | Browser client | React chrome, `ghostty-web` terminals, mobile controls, media, text/image clipboard handling, and stream views |
 | HTTP transport | Declarative route table with stable route ids, exact method/path matching, body limits, authorization policy, request dispatch, static delivery, event publication, and WebSocket upgrades |
 | Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
-| Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
+| Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; the versioned timeline store retains prompts, outcomes, touched files, and archived working-tree snapshots; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
 | Session manager | One live client per pane, pinned backend snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Raw PTY, durable `tmux`/`screen`, and Windows agent adapters; the Windows agent owns pane processes, replay, and dynamic-registration heartbeat |
@@ -539,6 +539,9 @@ A later Windows delegation with the same machine and exact title reuses that idl
 The helper rejects concurrent delegation to a titled session that is already running work.
 Delegated agent hooks associate each prompt and final response with the controller's active run ID.
 wmux maintains a dedicated delegation ledger separately from workspace activity, so an outcome remains queryable after its pane or workspace closes.
+Each session also has a durable turn timeline containing its prompts, state changes, outcomes, and links to working-tree snapshots captured through the repository review API.
+Query `GET /api/agent-sessions/:sessionId` for that history.
+The mobile Chat surface renders matching sessions directly from this timeline, so it can restore complete conversation history without attaching the terminal pane.
 `wmuxctl` races terminal replay against the authenticated delegation-status endpoint, allowing either completion signal to finish the request without waiting for the other to time out.
 Controller observation failures are recorded separately and never replace an agent's terminal outcome.
 `--mode review`, `--mode change`, and `--mode deploy` select the configured wait profile.
@@ -727,6 +730,9 @@ wmux stores workspace layout in `~/.wmux/state.json` using versioned, atomic,
 owner-only writes with a rolling validated backup.
 The same state file retains the newest 1,000 delegation records, expires terminal outcomes after 30 days, and keeps active outcomes until they become terminal or fall outside the count bound.
 Delegation records are independent of pane and workspace cleanup.
+Agent turn history is stored separately in `~/.wmux/agent-timelines.json` with the same schema-versioned, atomic, owner-only, rolling-backup discipline.
+Set `WMUX_AGENT_TIMELINE_PATH` to override that location.
+Working-tree snapshots linked from a timeline are archived as owner-only versioned files under `~/.wmux/repository-snapshots/`.
 
 | Backend | Survives browser refresh | Survives wmux restart |
 | --- | --- | --- |

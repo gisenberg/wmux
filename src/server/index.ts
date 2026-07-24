@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { ServerOptions as HttpsServerOptions } from "node:https";
 import os from "node:os";
 import { AgentSessionService } from "./agent-sessions.js";
+import { AgentTimelineStore } from "./agent-timeline.js";
 import path from "node:path";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "../shared/protocol.js";
 import { loadAuthConfig, loadRegistrationAuthConfig, validateAuthCredentialSeparation } from "./auth.js";
@@ -97,7 +98,10 @@ const main = async (): Promise<void> => {
   const settings = new SettingsStore(undefined, {
     terminalFontSize: config.terminalFontSize,
   });
-  const agentSessions = new AgentSessionService(state);
+  const agentSessions = new AgentSessionService(
+    state,
+    AgentTimelineStore.persistent(),
+  );
   const sessionManager = new SessionManager(
     state,
     currentMachines,

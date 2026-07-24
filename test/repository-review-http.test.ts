@@ -5,6 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { AgentSessionService } from "../src/server/agent-sessions.js";
+import { AgentTimelineStore } from "../src/server/agent-timeline.js";
 import { issueSessionToken, type AuthConfig } from "../src/server/auth.js";
 import { createHttpServer } from "../src/server/http.js";
 import { RepositoryReviewService } from "../src/server/repository-review.js";
@@ -26,6 +28,7 @@ interface HttpFixture {
   directory: string;
   repository: string;
   state: StateStore;
+  agentSessions: AgentSessionService;
   localPaneId: string;
   remotePaneId: string;
   nonRepositoryPaneId: string;
@@ -75,6 +78,12 @@ const createFixture = async (): Promise<HttpFixture> => {
       patchBytes: 128 * 1024,
     },
   });
+  const agentSessions = new AgentSessionService(
+    state,
+    AgentTimelineStore.persistent(
+      path.join(directory, "agent-timelines.json"),
+    ),
+  );
   const server = await createHttpServer(
     "127.0.0.1",
     state,
@@ -85,6 +94,7 @@ const createFixture = async (): Promise<HttpFixture> => {
       auth,
       registrationToken: "R".repeat(43),
       repositoryReviews,
+      agentSessions,
       healthResolvers: { machines: async () => [], streams: async () => [] },
     },
   );
@@ -96,6 +106,7 @@ const createFixture = async (): Promise<HttpFixture> => {
     directory,
     repository,
     state,
+    agentSessions,
     localPaneId,
     remotePaneId,
     nonRepositoryPaneId,
@@ -174,6 +185,49 @@ test("repository review HTTP route grants normal browser access only", async () 
     assert.ok(payload.snapshot.files.some((file) => file.path === "tracked.txt"));
     assert.ok(payload.snapshot.files.some((file) => file.path === "untracked.txt"));
     assert.match(payload.snapshot.workingTreePatch.text, /\+changed/);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+test("repository reviews archive into the active agent timeline", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.agentSessions.recordAgentEvent({
+      paneId: fixture.localPaneId,
+      runId: "review-turn",
+      sessionId: "review-session",
+      agent: "codex",
+      status: "running",
+      summary: "Reviewing changes",
+      prompt: "Review the working tree.",
+    });
+    const response = await postReview(
+      fixture,
+      fixture.localPaneId,
+      JSON.stringify({ kind: "working-tree" }),
+      bearer(fixture.sessionToken),
+    );
+    assert.equal(response.status, 201);
+    const payload = await response.json() as {
+      archive: { id: string; url: string; filesTouched: string[] };
+    };
+    assert.ok(payload.archive.filesTouched.includes("tracked.txt"));
+    const archived = await fetch(
+      `${fixture.baseUrl}${payload.archive.url}`,
+      { headers: bearer(fixture.sessionToken) },
+    );
+    assert.equal(archived.status, 200);
+    assert.equal(
+      (await archived.json() as { snapshot: { kind: string } }).snapshot.kind,
+      "working-tree",
+    );
+    assert.equal(
+      fixture.agentSessions
+        .timelineForSession("review-session")
+        ?.entries.at(-1)?.snapshot?.id,
+      payload.archive.id,
+    );
   } finally {
     await closeFixture(fixture);
   }

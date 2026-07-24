@@ -8,6 +8,7 @@ import {
   type DelegationConfig,
 } from "../shared/protocol.js";
 import type { StateStore } from "./state.js";
+import type { AgentSessionService } from "./agent-sessions.js";
 import type { SettingsStore } from "./settings.js";
 import type { StreamRequestStore } from "./streams.js";
 import type {
@@ -43,6 +44,7 @@ export const PROCESS_HEALTH_EPOCH_BASE = healthEpochForProcessStart(Date.now());
 interface EventBroadcastOptions {
   bindHost: string;
   state: StateStore;
+  agentSessions: AgentSessionService;
   settings: SettingsStore;
   streamRequests: StreamRequestStore;
   currentMachines: () => MachineConfig[];
@@ -88,6 +90,7 @@ export class EventBroadcastRuntime {
 
   constructor(private readonly options: EventBroadcastOptions) {
     options.state.on("change", this.onStateChange);
+    options.agentSessions.timelines.on("change", this.onTimelineChange);
     options.settings.on("change", this.onSettingsChange);
     options.state.on("notification", this.onNotification);
     options.state.on("media", this.onMedia);
@@ -113,6 +116,10 @@ export class EventBroadcastRuntime {
 
   readonly currentPayload = () => {
     const snapshot = this.options.state.snapshot();
+    const visiblePaneIds = new Set(
+      snapshot.workspaces.flatMap((workspace) =>
+        workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id))),
+    );
     return {
       revision: snapshot.revision,
       workspaceTreeRevision: snapshot.workspaceTreeRevision,
@@ -123,6 +130,9 @@ export class EventBroadcastRuntime {
       notifications: snapshot.notifications,
       agentEvents: snapshot.agentEvents,
       delegations: snapshot.delegations,
+      agentTimelines: this.options.agentSessions
+        .timelineSnapshot()
+        .filter((timeline) => visiblePaneIds.has(timeline.paneId)),
       runs: snapshot.runs,
       delegation: this.options.delegation ?? {
         preferHeadless: false,
@@ -266,6 +276,7 @@ export class EventBroadcastRuntime {
     clearInterval(this.machineHealthTimer);
     clearInterval(this.streamHealthTimer);
     this.options.state.off("change", this.onStateChange);
+    this.options.agentSessions.timelines.off("change", this.onTimelineChange);
     this.options.settings.off("change", this.onSettingsChange);
     this.options.state.off("notification", this.onNotification);
     this.options.state.off("media", this.onMedia);
@@ -369,6 +380,10 @@ export class EventBroadcastRuntime {
 
   private readonly onSettingsChange = (): void => {
     this.broadcastSnapshot("settings");
+  };
+
+  private readonly onTimelineChange = (): void => {
+    this.broadcastSnapshot("agent-timeline");
   };
 
   private readonly onNotification = (
