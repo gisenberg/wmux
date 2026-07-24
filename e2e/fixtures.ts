@@ -29,6 +29,7 @@ interface CreateWorkspaceOptions {
 }
 
 interface WmuxFixtures {
+  bootPage: void;
   bootedServer: BootstrapSignal;
   authenticatedPage: Page;
   createReadyWorkspace: (options?: CreateWorkspaceOptions) => Promise<E2eWorkspace>;
@@ -92,6 +93,10 @@ const waitForPaneMessage = async (
 };
 
 export const test = base.extend<WmuxFixtures>({
+  bootPage: [async ({ authenticatedPage }, use) => {
+    void authenticatedPage;
+    await use();
+  }, { auto: true }],
   bootedServer: async ({ request }, use) => {
     const bootstrap = await readBootstrap(request);
     await use({ revision: bootstrap.revision });
@@ -131,10 +136,6 @@ export const test = base.extend<WmuxFixtures>({
       return workspace;
     });
   },
-});
-
-test.beforeEach(async ({ authenticatedPage }) => {
-  void authenticatedPage;
 });
 
 export const routeTerminalFontFamily = async (
