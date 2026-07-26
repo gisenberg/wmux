@@ -3,9 +3,14 @@ import { Terminal } from "ghostty-web";
 import { api } from "./api";
 import { RetroBootArtwork } from "./RetroBootArtwork";
 import { RetroGraphicalBootScreen } from "./RetroGraphicalBootScreen";
-import { playRetroPostSound } from "./retro-boot-audio";
+import { playRetroFloppySound, playRetroPostSound } from "./retro-boot-audio";
 import { retroFramebufferStyle, useRetroFramebuffer } from "./retro-framebuffer";
-import { selectRetroBootProfile, type RetroBootProfile } from "./retro-boot-profiles";
+import {
+  parseRetroBootProfileHistory,
+  selectRetroBootProfile,
+  type RetroBootProfile,
+  updateRetroBootProfileHistory,
+} from "./retro-boot-profiles";
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
 import { setToken } from "./token";
@@ -20,17 +25,19 @@ interface RetroBootScreenProps {
 
 const LAST_BOOT_PROFILE_KEY = "wmux:last-retro-boot-profile";
 type BootVisualPhase = "blank" | "artwork" | "guru" | "terminal";
+type TapeBorderPhase = NonNullable<RetroBootProfile["boot"][number]["tapeBorder"]>;
 
 const chooseBootProfile = () => {
-  let previousId: string | null = null;
+  let previousIds: string[] = [];
   try {
-    previousId = window.sessionStorage.getItem(LAST_BOOT_PROFILE_KEY);
+    previousIds = parseRetroBootProfileHistory(window.sessionStorage.getItem(LAST_BOOT_PROFILE_KEY));
   } catch {
     // Private browsing can make session storage unavailable.
   }
-  const profile = selectRetroBootProfile(Math.random(), previousId);
+  const profile = selectRetroBootProfile(Math.random(), previousIds);
   try {
-    window.sessionStorage.setItem(LAST_BOOT_PROFILE_KEY, profile.id);
+    const nextHistory = updateRetroBootProfileHistory(previousIds, profile.id);
+    window.sessionStorage.setItem(LAST_BOOT_PROFILE_KEY, JSON.stringify(nextHistory));
   } catch {
     // The random profile still works without persistence.
   }
@@ -64,6 +71,7 @@ function RetroTerminalBootScreen({
   const [visualPhase, setVisualPhase] = useState<BootVisualPhase>(() =>
     !hasBootArtwork ? "terminal" : profile.specialBoot === "amiga-guru" ? "guru" : isAmiga ? "blank" : "artwork",
   );
+  const [tapeBorderPhase, setTapeBorderPhase] = useState<TapeBorderPhase | null>(null);
   const [status, setStatus] = useState(`Starting ${profile.name}`);
   useRetroFramebuffer(screenRef, profile.id);
 
@@ -84,7 +92,7 @@ function RetroTerminalBootScreen({
   }, [onComplete]);
 
   useEffect(() => {
-    const stopPostSound = playRetroPostSound(profile.id);
+    let stopPostSound = profile.id === "amiga-workbench" ? () => undefined : playRetroPostSound(profile.id);
     let cancelled = false;
     let terminal: Terminal | null = null;
     let authStage: "idle" | "username" | "password" | "submitting" = "idle";
@@ -215,12 +223,14 @@ function RetroTerminalBootScreen({
         if (cancelled) return;
         setStatus("Restarting after Guru Meditation");
         setVisualPhase("blank");
+        stopPostSound = playRetroFloppySound();
         await pause(450);
         if (cancelled) return;
         setStatus("Waiting for Workbench disk");
         setVisualPhase("artwork");
         await pause(1_600);
       } else if (isAmiga) {
+        stopPostSound = playRetroPostSound(profile.id);
         await pause(600);
         if (cancelled) return;
         setStatus("Waiting for Workbench disk");
@@ -235,6 +245,7 @@ function RetroTerminalBootScreen({
       write("\x1b[2J\x1b[H");
       for (const bootStep of profile.boot) {
         if (cancelled) return;
+        setTapeBorderPhase(bootStep.tapeBorder ?? null);
         if (bootStep.typedFrom === undefined) {
           write(bootStep.text);
         } else {
@@ -242,11 +253,16 @@ function RetroTerminalBootScreen({
           for (const character of bootStep.text.slice(bootStep.typedFrom)) {
             if (cancelled) return;
             await writeCommitted(character);
-            if (character !== "\n") await pause(character === " " ? 22 : 38);
+            if (character !== "\n") {
+              const baseDelay = character === " " ? 22 : 38;
+              const hesitation = Math.random() < 0.035 ? 200 : 0;
+              await pause(baseDelay + Math.random() * 45 + hesitation);
+            }
           }
         }
         await pause(bootStep.delay);
       }
+      setTapeBorderPhase(null);
 
       setStatus("Waiting for wmux service");
       let challenged = false;
@@ -302,9 +318,16 @@ function RetroTerminalBootScreen({
     "--retro-background": profile.colors.background,
     "--retro-foreground": profile.colors.foreground,
   } as CSSProperties;
+  const tapeBorderClass = tapeBorderPhase ? `retro-tape-border-${tapeBorderPhase}` : "";
 
   return (
-    <main ref={screenRef} className={`retro-boot-screen retro-boot-${profile.id}`} style={style} data-boot-profile={profile.id}>
+    <main
+      ref={screenRef}
+      className={`retro-boot-screen retro-boot-${profile.id} ${tapeBorderClass}`}
+      style={style}
+      data-boot-profile={profile.id}
+      data-tape-border={tapeBorderPhase ?? undefined}
+    >
       <section className="retro-boot-bezel" aria-label={`${profile.name} wmux loading`}>
         <div className="retro-boot-framebuffer">
           <div className="retro-boot-terminal-frame">
