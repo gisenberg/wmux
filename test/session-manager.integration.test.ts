@@ -24,6 +24,7 @@ import { SettingsStore } from "../src/server/settings.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const execFileAsync = promisify(execFile);
+const canonicalTempRoot = fs.realpathSync(os.tmpdir());
 
 test("registered sessions never receive the broad wmux API token", () => {
   const registered: MachineConfig = {
@@ -69,7 +70,7 @@ test("pane disposal prefers the live session's pre-heartbeat machine snapshot", 
 });
 
 test("idle durable-client recycle detaches only the transient client and keeps the old endpoint snapshot", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-recycle-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-recycle-"));
   let machine: MachineConfig = {
     id: "recycled-roamer",
     name: "Recycled roamer",
@@ -132,7 +133,7 @@ test("idle durable-client recycle detaches only the transient client and keeps t
 });
 
 test("ready holds every empty durable-refresh replay, including a late attach to a live client", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-refresh-ready-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-refresh-ready-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -196,7 +197,7 @@ test("ready holds every empty durable-refresh replay, including a late attach to
 });
 
 test("output watchers receive raw replay instead of a rendered checkpoint", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-output-replay-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-output-replay-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -226,7 +227,7 @@ test("output watchers receive raw replay instead of a rendered checkpoint", asyn
 });
 
 test("offline registered machines reject new session creation", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-offline-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-offline-"));
   const machine: MachineConfig = {
     id: "offline-host",
     name: "Offline host",
@@ -326,7 +327,7 @@ const waitForWebSocketMessage = async (
 });
 
 const withState = async (machine: MachineConfig, run: (state: StateStore, dir: string) => Promise<void>) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-manager-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-manager-"));
   try {
     await run(new StateStore([machine], path.join(dir, "state.json")), dir);
   } finally {
@@ -368,7 +369,7 @@ test("failed agent exit retains its old endpoint snapshot for close after a hear
   assert.ok(oldAddress && typeof oldAddress === "object");
   assert.ok(newAddress && typeof newAddress === "object");
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-agent-move-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-agent-move-"));
   let machine: MachineConfig = {
     id: "moving-agent",
     name: "Moving agent",
@@ -436,7 +437,7 @@ test("terminal-generated response metadata survives client message parsing", () 
 });
 
 test("pane output acknowledges each browser's latest input sequence without tagging output watchers", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-input-ack-"));
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-input-ack-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -527,7 +528,7 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
     manager.attach(pane.id, reconnected, 92, 28);
     const ready = await waitForMessage(reconnected, (message) => message.type === "ready");
     assert.match(ready.replay, /wmux-multi-marker/);
-    assert.equal(ready.replayKind, "raw");
+    assert.equal(ready.replayKind, "checkpoint");
 
     const workspaceId = state.snapshot().workspaces[0].id;
     assert.equal(manager.closeWorkspace(workspaceId), true);
@@ -636,12 +637,47 @@ test("late attach receives an authoritative checkpoint for a full-screen PTY", {
   });
 });
 
+test("late attach after a terminal resize receives an authoritative checkpoint", async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    try {
+      const first = socket();
+      manager.attach(pane.id, first, 80, 24);
+      await waitForMessage(first, (message) => message.type === "ready");
+
+      fake(first).message({
+        type: "input",
+        data: "printf '\\033[2J\\033[24;1Hcross-size-marker\\033[24;20H\\033[?25l'\r",
+      });
+      await waitForMessage(
+        first,
+        (message) =>
+          message.type === "output"
+          && message.data.includes("\x1b[2J")
+          && message.data.includes("cross-size-marker"),
+      );
+      fake(first).close();
+
+      const reconnected = socket();
+      manager.attach(pane.id, reconnected, 40, 12);
+      const ready = await waitForMessage(reconnected, (message) => message.type === "ready");
+      assert.equal(ready.replayKind, "checkpoint");
+      assert.match(ready.replay, /cross-size-marker/);
+      assert.match(ready.replay, /\x1b\[\?25l/);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+});
+
 test(
   "raw PTY restores its persisted screen checkpoint after manager restart",
   { skip: process.platform === "win32" },
   async () => {
     const directory = fs.mkdtempSync(
-      path.join(os.tmpdir(), "wmux-raw-checkpoint-"),
+      path.join(canonicalTempRoot, "wmux-raw-checkpoint-"),
     );
     const machine: MachineConfig = {
       id: "local",
@@ -706,7 +742,7 @@ test(
   "new and reattached tmux panes synchronize cwd after the durable session is ready",
   { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
   async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-cwd-"));
+    const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-cwd-"));
     const initialCwd = path.join(dir, "initial");
     const movedCwd = path.join(dir, "moved");
     fs.mkdirSync(initialCwd);
@@ -860,7 +896,7 @@ test(
   "output-only HTTP websocket refreshes a controller-created tmux pane and streams later input",
   { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
   async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-controller-tmux-"));
+    const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-controller-tmux-"));
     const machine: MachineConfig = {
       id: "local",
       name: "Local",

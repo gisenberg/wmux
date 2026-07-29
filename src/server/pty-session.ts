@@ -25,6 +25,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
   private replayBytes = 0;
   private replayTruncated = false;
   private readonly checkpoint: TerminalCheckpoint;
+  private replayRequiresCheckpoint = false;
   private exited = false;
   private title: string;
   private cwd = "";
@@ -95,6 +96,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
       this.replayOutput,
       this.replayTruncated,
       this.checkpoint,
+      this.replayRequiresCheckpoint,
     );
     if (!this.restoredCheckpoint || this.restoredReplayConsumed) return current;
     if (!this.liveResetEmitted) return this.restoredCheckpoint;
@@ -124,8 +126,15 @@ export class PtySession extends EventEmitter<PtyEvents> {
   resize(cols: number, rows: number): void {
     if (this.exited || cols < 2 || rows < 1) return;
     try {
+      const previousSize = this.checkpoint.dimensions;
       this.pty.resize(cols, rows);
       this.checkpoint.resize(cols, rows);
+      if (previousSize && (previousSize.cols !== cols || previousSize.rows !== rows)) {
+        // Raw VT history contains cursor movement and wrapping decisions made
+        // at its original dimensions. Replaying it at the new size can paint
+        // plausible cells while restoring the cursor to the wrong position.
+        this.replayRequiresCheckpoint = true;
+      }
     } catch {
       /* PTY already exited */
     }
