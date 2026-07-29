@@ -124,7 +124,7 @@ test("uses the canvas console settings surface on desktop and mobile", async ({
   await expect(page.locator("form.settings-panel")).toHaveCount(0);
   await expect(page.getByTitle("Use DOM settings fallback")).toHaveCount(0);
 
-  await page.keyboard.press("Enter");
+  await settings.press("Enter");
   const editor = settings.locator(".open-tui-settings-editor-input");
   await expect(editor).toHaveAttribute("inputmode", "numeric");
   await editor.fill("15");
