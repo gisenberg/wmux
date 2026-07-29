@@ -49,6 +49,7 @@ const routeCases: Array<[string, string, string]> = [
   ["stream-request-status", "GET", "/api/streams/host/request"], ["stream-request", "POST", "/api/streams/host/request"],
   ["stream-release", "DELETE", "/api/streams/host/request/request"], ["session-cleanup", "DELETE", "/api/session-audit/tmux/name"],
   ["settings", "POST", "/api/settings"], ["workspace-create", "POST", "/api/workspaces"],
+  ["workspace-cleanup-configure", "POST", "/api/workspaces/ws/cleanup"],
   ["workspace-reorder", "POST", "/api/workspaces/reorder"], ["notification-create", "POST", "/api/notifications"],
   ["agent-event", "POST", "/api/agent-events"], ["run-event", "POST", "/api/run-events"],
   ["media", "POST", "/api/media"], ["clipboard", "POST", "/api/clipboard"],
@@ -86,6 +87,8 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("GET", "/api/helpers/windows/win")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("GET", "/api/helpers/windows/win/bootstrap")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("GET", "/api/bootstrap")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/workspaces/ws/cleanup")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/workspaces/ws/cleanup")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("GET", "/api/delegations/run")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/agent-sessions/session/turns")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/agent-sessions/session/turns")), false);

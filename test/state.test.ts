@@ -295,6 +295,19 @@ test("version 4 delegations migrate explicit fleet attention reasons", () => {
   });
 });
 
+test("version 6 state migrates with existing workspaces retained indefinitely", () => {
+  withTempState((filePath) => {
+    const previous = new StateStore(machines, filePath).snapshot() as unknown as Record<string, unknown>;
+    previous.schemaVersion = 6;
+    fs.writeFileSync(filePath, JSON.stringify(previous));
+
+    const migrated = new StateStore(machines, filePath).snapshot();
+    assert.equal(migrated.schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+    assert.equal(migrated.workspaces[0].cleanupPolicy, undefined);
+    assert.equal(migrated.workspaces[0].cleanupAt, undefined);
+  });
+});
+
 test("state recovers from the last validated backup", () => {
   withTempState((filePath, dir) => {
     const store = new StateStore(machines, filePath);
@@ -319,7 +332,7 @@ test("newer state schemas refuse downgrade without moving or overwriting the fil
   });
 });
 
-test("current v6 state truncates an oversized notification body without losing workspace metadata", () => {
+test("current state truncates an oversized notification body without losing workspace metadata", () => {
   withTempState((filePath, dir) => {
     const seeded = new StateStore(machines, filePath).snapshot();
     seeded.workspaces[0].name = "Operator-owned workspace";
@@ -359,7 +372,7 @@ test("current v6 state truncates an oversized notification body without losing w
   });
 });
 
-test("current v6 backup truncates an oversized notification body without quarantine or workspace loss", () => {
+test("current backup truncates an oversized notification body without quarantine or workspace loss", () => {
   withTempState((filePath, dir) => {
     const seeded = new StateStore(machines, filePath).snapshot();
     seeded.workspaces[0].name = "Backup workspace";
@@ -561,6 +574,69 @@ test("agent-created workspace origin persists while user workspaces remain unmar
     const reloaded = new StateStore(machines, filePath).snapshot();
     assert.equal(reloaded.workspaces.find((workspace) => workspace.id === userWorkspace.id)?.createdBy, undefined);
     assert.equal(reloaded.workspaces.find((workspace) => workspace.id === agentWorkspace.id)?.createdBy, "agent");
+  });
+});
+
+test("agent workspace cleanup policy persists, accelerates on success, and can be disarmed", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const originalCleanupAt = "2026-07-31T12:00:00.000Z";
+    const workspace = store.createWorkspace(
+      "local",
+      undefined,
+      "agent",
+      undefined,
+      undefined,
+      { policy: "on-success", cleanupAt: originalCleanupAt },
+    );
+
+    assert.equal(workspace.cleanupPolicy, "on-success");
+    assert.equal(workspace.cleanupAt, originalCleanupAt);
+    assert.deepEqual(store.expiredAgentWorkspaceIds(Date.parse(originalCleanupAt) - 1), []);
+    assert.deepEqual(store.expiredAgentWorkspaceIds(Date.parse(originalCleanupAt)), [workspace.id]);
+
+    const successAt = Date.parse("2026-07-29T12:00:00.000Z");
+    assert.equal(store.scheduleWorkspaceCleanupAfterSuccess(workspace.id, 5_000, successAt), true);
+    assert.equal(
+      store.snapshot().workspaces.find((candidate) => candidate.id === workspace.id)?.cleanupAt,
+      "2026-07-29T12:00:05.000Z",
+    );
+    store.flush();
+    assert.equal(
+      new StateStore(machines, filePath).snapshot().workspaces.find(
+        (candidate) => candidate.id === workspace.id,
+      )?.cleanupPolicy,
+      "on-success",
+    );
+
+    const retained = store.configureWorkspaceCleanup(workspace.id);
+    assert.equal(retained.cleanupPolicy, undefined);
+    assert.equal(retained.cleanupAt, undefined);
+    assert.deepEqual(store.expiredAgentWorkspaceIds(Number.MAX_SAFE_INTEGER), []);
+  });
+});
+
+test("user workspaces cannot be armed for automatic cleanup", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    assert.throws(
+      () => store.createWorkspace(
+        "local",
+        undefined,
+        "user",
+        undefined,
+        undefined,
+        { policy: "on-success", cleanupAt: "2026-07-31T12:00:00.000Z" },
+      ),
+      /only agent workspaces/,
+    );
+    assert.throws(
+      () => store.configureWorkspaceCleanup(
+        store.snapshot().workspaces[0].id,
+        { policy: "on-success", cleanupAt: "2026-07-31T12:00:00.000Z" },
+      ),
+      /only agent workspaces/,
+    );
   });
 });
 

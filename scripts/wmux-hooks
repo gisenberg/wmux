@@ -70,10 +70,10 @@ If it is not on \`PATH\`, invoke ${JSON.stringify(path.join(scriptDir, "wmuxctl"
    Replace \`codex\` with \`claude\` or \`opencode\` when requested.
 3. Omit \`--write-access\` for Codex read-only or Claude plan mode. Add it only when edits are intended.
 4. Add \`--unattended\` only when the user explicitly authorized unattended approvals. Write access alone does not bypass approval prompts.
-5. Delegations stay open by default. Use \`--close-on-success\` only for disposable successful work, and report the returned direct URL for anything left open.
+5. One-shot delegations close after success by default. Use \`--retain-workspace\` only when the successful terminal must remain available, and report the returned direct URL for anything left open.
 6. Review waits default to 30 minutes and change/deploy waits default to two hours. A wait timeout detaches the controller without stopping the worker; reconcile the returned run ID before retrying.
 
-Never put a long or sensitive prompt directly in shell arguments. Do not close failed, stopped, or timed-out workspaces; leave them visible for inspection.
+Never put a long or sensitive prompt directly in shell arguments. Failed, stopped, and timed-out one-shot workspaces remain visible for inspection and expire after 24 hours unless explicitly retained.
 `;
 
 const installClaudeSkill = () => {
@@ -632,6 +632,7 @@ const delegate = tool({
     timeout_seconds: tool.schema.number().optional(),
     auto_approve: tool.schema.boolean().optional(),
     close_on_success: tool.schema.boolean().optional(),
+    retain_workspace: tool.schema.boolean().optional(),
   },
   execute: async (args: any, context: any) => {
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(args.machine)) throw new Error("invalid delegation machine")
@@ -642,6 +643,9 @@ const delegate = tool({
     const mode = args.mode ?? "change"
     if (mode !== "change" && mode !== "deploy") throw new Error("mode must be change or deploy")
     if (args.close_on_success !== undefined && typeof args.close_on_success !== "boolean") throw new Error("invalid close_on_success")
+    if (args.retain_workspace !== undefined && typeof args.retain_workspace !== "boolean") throw new Error("invalid retain_workspace")
+    if (args.close_on_success === true && args.retain_workspace === true) throw new Error("close_on_success conflicts with retain_workspace")
+    const automaticCleanup = args.retain_workspace !== true
     if (
       args.timeout_seconds !== undefined
       && (
@@ -662,7 +666,7 @@ const delegate = tool({
           machine: args.machine,
           directory: args.directory,
           mode,
-          closeOnSuccess: args.close_on_success === true,
+          closeOnSuccess: automaticCleanup,
         },
       }))
     } catch {
@@ -695,6 +699,10 @@ const delegate = tool({
       body: JSON.stringify({
         machineId: args.machine,
         createdBy: "agent",
+        ...(automaticCleanup ? {
+          cleanupPolicy: "on-success",
+          cleanupTtlSeconds: 24 * 60 * 60,
+        } : {}),
         ...(parentPaneId ? { parentPaneId } : {}),
       }),
       signal: context.abort,
@@ -846,7 +854,7 @@ const delegate = tool({
       if (!observed.recovered) {
         await postLifecycle(ok ? "completed" : "failed", ok ? "OpenCode delegation completed" : "OpenCode delegation failed", detail, context.abort)
       }
-      if (!ok || args.close_on_success !== true) return taskOutput(ok ? "completed" : "failed", ids, detail, ok)
+      if (!ok || !automaticCleanup) return taskOutput(ok ? "completed" : "failed", ids, detail, ok)
       try {
         await deleteWorkspace(url, token, workspace.id, context.abort)
         return taskOutput("completed", ids, detail, true, true)

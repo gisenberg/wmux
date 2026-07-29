@@ -289,6 +289,7 @@ test("predicts bounded shell and alternate-screen input locally", async ({
       () => deliveredTerminalOutput.slice(alternateOutputOffset),
       { timeout: 10_000 },
     ).toContain("READY");
+    await waitForAuthoritativeOutput();
     await settleDeliveredOutput();
     expect(sawAlternateScreen).toBe(true);
     await page.keyboard.type("a");

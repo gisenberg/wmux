@@ -537,6 +537,35 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
   });
 });
 
+test("session manager reaps expired agent workspaces while preserving retained workspaces", async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const retained = state.snapshot().workspaces[0];
+    const expired = state.createWorkspace(
+      "local",
+      undefined,
+      "agent",
+      undefined,
+      undefined,
+      { policy: "on-success", cleanupAt: "2000-01-01T00:00:00.000Z" },
+    );
+    const manager = new SessionManager(state, [machine]);
+    try {
+      assert.equal(
+        state.snapshot().workspaces.some((workspace) => workspace.id === expired.id),
+        false,
+      );
+      assert.equal(
+        state.snapshot().workspaces.some((workspace) => workspace.id === retained.id),
+        true,
+      );
+      assert.deepEqual(manager.sweepExpiredAgentWorkspaces(), []);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+});
+
 test("foreground activation cannot steal resize ownership without input", { skip: process.platform === "win32" }, async () => {
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   await withState(machine, async (state) => {

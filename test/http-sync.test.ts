@@ -161,6 +161,105 @@ test("agent workspace creation reports workspace_depth without changing the tree
   }
 });
 
+test("agent workspace cleanup API validates, persists, and disarms bounded policies", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-workspace-cleanup-"));
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  const state = new StateStore(machines, path.join(dir, "state.json"));
+  const userWorkspace = state.snapshot().workspaces[0];
+  const settings = new SettingsStore(path.join(dir, "settings.json"));
+  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+    auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" },
+  });
+  const port = await listen(server);
+
+  try {
+    const before = Date.now();
+    const createdResponse = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        machineId: "local",
+        createdBy: "agent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 3_600,
+      }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as { workspace: BootstrapPayload["workspaces"][number] };
+    assert.equal(created.workspace.cleanupPolicy, "on-success");
+    assert.ok(Date.parse(created.workspace.cleanupAt ?? "") >= before + 3_599_000);
+    assert.ok(Date.parse(created.workspace.cleanupAt ?? "") <= Date.now() + 3_601_000);
+
+    const retainedResponse = await fetch(
+      `http://127.0.0.1:${port}/api/workspaces/${created.workspace.id}/cleanup`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cleanupPolicy: "retain" }),
+      },
+    );
+    assert.equal(retainedResponse.status, 200);
+    const retained = await retainedResponse.json() as { workspace: BootstrapPayload["workspaces"][number] };
+    assert.equal(retained.workspace.cleanupPolicy, undefined);
+    assert.equal(retained.workspace.cleanupAt, undefined);
+
+    const rearmedResponse = await fetch(
+      `http://127.0.0.1:${port}/api/workspaces/${created.workspace.id}/cleanup`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cleanupPolicy: "on-success", cleanupTtlSeconds: 3_600 }),
+      },
+    );
+    assert.equal(rearmedResponse.status, 200);
+    const runResponse = await fetch(`http://127.0.0.1:${port}/api/run-events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: created.workspace.id,
+        paneId: created.workspace.tabs[0].panes[0].id,
+        runId: "cleanup-run",
+        status: "completed",
+        exitCode: 0,
+      }),
+    });
+    assert.equal(runResponse.status, 201);
+    assert.ok(
+      Date.parse(
+        state.snapshot().workspaces.find(
+          (workspace) => workspace.id === created.workspace.id,
+        )?.cleanupAt ?? "",
+      ) <= Date.now() + 31_000,
+    );
+
+    const userResponse = await fetch(
+      `http://127.0.0.1:${port}/api/workspaces/${userWorkspace.id}/cleanup`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cleanupPolicy: "on-success", cleanupTtlSeconds: 3_600 }),
+      },
+    );
+    assert.equal(userResponse.status, 409);
+
+    const invalidResponse = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        machineId: "local",
+        createdBy: "agent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 1,
+      }),
+    });
+    assert.equal(invalidResponse.status, 400);
+  } finally {
+    state.flush();
+    await close(server);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("bundled browser fonts remain available without API credentials", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-font-"));
   const machines: MachineConfig[] = [];

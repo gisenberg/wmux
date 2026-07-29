@@ -37,6 +37,7 @@ DEFAULT_DELEGATION_WAIT_TIMEOUT_SECONDS = {
     "change": 7_200.0,
     "deploy": 7_200.0,
 }
+DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS = 24 * 60 * 60
 TERMINAL_DELEGATION_STATES = frozenset(
     {"completed", "blocked", "failed", "error", "cancelled", "stopped", "timed_out", "interrupted"}
 )
@@ -250,12 +251,32 @@ class WmuxClient:
     def bootstrap(self) -> dict[str, Any]:
         return self.request("GET", "/api/bootstrap")
 
-    def create_workspace(self, machine_id: str, parent_pane_id: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+    def create_workspace(
+        self,
+        machine_id: str,
+        parent_pane_id: str = "",
+        automatic_cleanup: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         body = {"machineId": machine_id, "createdBy": "agent"}
         if parent_pane_id:
             body["parentPaneId"] = parent_pane_id
+        if automatic_cleanup:
+            body["cleanupPolicy"] = "on-success"
+            body["cleanupTtlSeconds"] = DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS
         result = self.request("POST", "/api/workspaces", body)
         return result["workspace"], result["state"]
+
+    def configure_workspace_cleanup(self, workspace_id: str, automatic_cleanup: bool) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "cleanupPolicy": "on-success" if automatic_cleanup else "retain",
+        }
+        if automatic_cleanup:
+            body["cleanupTtlSeconds"] = DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS
+        return self.request(
+            "POST",
+            f"/api/workspaces/{urllib.parse.quote(workspace_id)}/cleanup",
+            body,
+        )
 
     def create_tab(self, workspace_id: str, machine_id: str, source_pane_id: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
         body = {"machineId": machine_id}
@@ -706,7 +727,9 @@ def find_workspace(client: WmuxClient, machine_id: str, title: str) -> dict[str,
     matches = [
         workspace
         for workspace in payload.get("workspaces", [])
-        if workspace.get("machineId") == machine_id and workspace_title(workspace) == title
+        if workspace.get("machineId") == machine_id
+        and workspace.get("createdBy") == "agent"
+        and workspace_title(workspace) == title
     ]
     if not matches:
         return None
@@ -717,12 +740,25 @@ def invoking_parent_pane_id() -> str:
     return os.environ.get("WMUX_PANE_ID", "")
 
 
-def get_or_create_workspace(client: WmuxClient, machine_id: str, title: str, force_new: bool) -> tuple[dict[str, Any], bool]:
+def get_or_create_workspace(
+    client: WmuxClient,
+    machine_id: str,
+    title: str,
+    force_new: bool,
+    automatic_cleanup: bool | None = None,
+) -> tuple[dict[str, Any], bool]:
     if not force_new:
         workspace = find_workspace(client, machine_id, title)
         if workspace:
+            if automatic_cleanup is not None:
+                configured = client.configure_workspace_cleanup(workspace["id"], automatic_cleanup)
+                workspace = configured.get("workspace") or workspace
             return workspace, True
-    workspace, _state = client.create_workspace(machine_id, invoking_parent_pane_id())
+    workspace, _state = client.create_workspace(
+        machine_id,
+        invoking_parent_pane_id(),
+        automatic_cleanup is True,
+    )
     if title:
         client.set_workspace_title(workspace["id"], title)
         workspace["manualTitle"] = title
@@ -963,7 +999,17 @@ def cmd_send(client: WmuxClient, args: argparse.Namespace) -> int:
 
 
 def cmd_run(client: WmuxClient, args: argparse.Namespace) -> int:
-    workspace, reused = get_or_create_workspace(client, args.machine, args.title, args.new)
+    if args.close_on_match and not args.wait_for:
+        raise SystemExit("wmuxctl: --close-on-match requires --wait-for")
+    if args.close_on_match and args.retain_workspace:
+        raise SystemExit("wmuxctl: --close-on-match conflicts with --retain-workspace")
+    workspace, reused = get_or_create_workspace(
+        client,
+        args.machine,
+        args.title,
+        args.new,
+        not args.retain_workspace,
+    )
     info = describe_workspace(client.url, workspace, args.tab, args.pane, require_explicit_multi_tab=reused)
     if not reused and not args.no_wait_ready:
         info["shellReadySeconds"] = round(
@@ -976,6 +1022,8 @@ def cmd_run(client: WmuxClient, args: argparse.Namespace) -> int:
     info["sentBytes"] = sent_bytes
     if args.wait_for:
         append_wait_result(client, args, info, args.wait_for)
+    if args.close_on_match:
+        info["closed"] = bool(client.close_workspace(info["workspaceId"]).get("removed"))
     print_json(info)
     return 0
 
@@ -1795,6 +1843,8 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         raise SystemExit("wmuxctl: durable sessions return native agent responses; omit --structured-outcome")
     if args.session and args.close_on_success:
         raise SystemExit("wmuxctl: durable sessions cannot use --close-on-success")
+    if args.close_on_success and args.retain_workspace:
+        raise SystemExit("wmuxctl: --close-on-success conflicts with --retain-workspace")
     if args.session:
         if UNSAFE_TUI_PROMPT_CONTROL.search(prompt):
             raise SystemExit(
@@ -1810,6 +1860,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         raise SystemExit("wmuxctl: explicit sandbox modes currently require the Codex runtime")
     if args.structured_outcome and args.runtime != "codex":
         raise SystemExit("wmuxctl: structured outcomes currently require the Codex runtime")
+    automatic_cleanup = not args.session and not args.retain_workspace
     bootstrap = client.bootstrap()
     args.timeout = resolve_delegation_wait_timeout(bootstrap, mode, args.timeout)
     machine = next((item for item in bootstrap.get("machines", []) if item.get("id") == args.machine), None)
@@ -1837,7 +1888,9 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         candidates = [
             candidate
             for candidate in bootstrap.get("workspaces", [])
-            if candidate.get("machineId") == args.machine and workspace_title(candidate) == title
+            if candidate.get("machineId") == args.machine
+            and candidate.get("createdBy") == "agent"
+            and workspace_title(candidate) == title
         ]
         candidates.sort(key=lambda candidate: candidate.get("updatedAt") or candidate.get("createdAt") or "", reverse=True)
         for candidate in candidates:
@@ -1871,7 +1924,17 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
     if workspace is None:
         # This is inherited only by a newly created delegated workspace. Reused
         # title matches retain their server-owned parent relationship.
-        workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id())
+        workspace, _state = client.create_workspace(
+            args.machine,
+            invoking_parent_pane_id(),
+            automatic_cleanup,
+        )
+    elif not args.session:
+        configured = client.configure_workspace_cleanup(
+            workspace["id"],
+            automatic_cleanup,
+        )
+        workspace = configured.get("workspace") or workspace
     info = describe_workspace(client.url, workspace)
     run_id = str(uuid.uuid4())
     session_id = info["workspaceId"] if args.session else run_id
@@ -2092,7 +2155,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         })
         if outcome == "blocked":
             info["state"] = "blocked"
-        if ok and args.close_on_success:
+        if ok and automatic_cleanup:
             try:
                 info["closed"] = bool(client.close_workspace(info["workspaceId"]).get("removed"))
             except SystemExit as error:
@@ -2217,6 +2280,71 @@ def cmd_finish(client: WmuxClient, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cleanup(client: WmuxClient, args: argparse.Namespace) -> int:
+    payload = client.bootstrap()
+    workspaces = {
+        workspace.get("id"): workspace
+        for workspace in payload.get("workspaces", [])
+        if isinstance(workspace, dict) and isinstance(workspace.get("id"), str)
+    }
+    active_workspace_ids = {
+        delegation.get("workspaceId")
+        for delegation in payload.get("delegations", [])
+        if isinstance(delegation, dict)
+        and delegation.get("state") not in TERMINAL_DELEGATION_STATES
+    }
+    active_workspace_ids.update(
+        run.get("workspaceId")
+        for run in payload.get("runs", [])
+        if isinstance(run, dict) and run.get("status") == "started"
+    )
+    results: list[dict[str, Any]] = []
+    failed = False
+    for workspace_id in dict.fromkeys(args.workspace):
+        workspace = workspaces.get(workspace_id)
+        if not workspace:
+            results.append({
+                "workspaceId": workspace_id,
+                "closed": True,
+                "alreadyClosed": True,
+            })
+            continue
+        if workspace.get("createdBy") != "agent":
+            results.append({
+                "workspaceId": workspace_id,
+                "closed": False,
+                "reason": "not_agent_created",
+            })
+            failed = True
+            continue
+        if workspace_id in active_workspace_ids and not args.include_active:
+            results.append({
+                "workspaceId": workspace_id,
+                "closed": False,
+                "reason": "active_lifecycle",
+            })
+            failed = True
+            continue
+        try:
+            closed = bool(client.close_workspace(workspace_id).get("removed"))
+        except SystemExit as error:
+            results.append({
+                "workspaceId": workspace_id,
+                "closed": False,
+                "reason": str(error),
+            })
+            failed = True
+            continue
+        results.append({
+            "workspaceId": workspace_id,
+            "closed": closed,
+        })
+        if not closed:
+            failed = True
+    print_json({"results": results})
+    return 1 if failed else 0
+
+
 def read_script_arg(args: argparse.Namespace) -> str:
     if args.file:
         return read_text(args.file)
@@ -2234,7 +2362,17 @@ def powershell_encoded_command(script: str, sentinel: str) -> str:
 
 
 def cmd_ps(client: WmuxClient, args: argparse.Namespace) -> int:
-    workspace, reused = get_or_create_workspace(client, args.machine, args.title, args.new)
+    if args.close_on_complete and not args.wait:
+        raise SystemExit("wmuxctl: --close-on-complete requires --wait")
+    if args.close_on_complete and args.retain_workspace:
+        raise SystemExit("wmuxctl: --close-on-complete conflicts with --retain-workspace")
+    workspace, reused = get_or_create_workspace(
+        client,
+        args.machine,
+        args.title,
+        args.new,
+        not args.retain_workspace,
+    )
     info = describe_workspace(client.url, workspace, args.tab, args.pane, require_explicit_multi_tab=reused)
     if not reused and not args.no_wait_ready:
         info["shellReadySeconds"] = round(
@@ -2256,6 +2394,8 @@ def cmd_ps(client: WmuxClient, args: argparse.Namespace) -> int:
         if not sentinel:
             raise SystemExit("wmuxctl: --wait requires the completion sentinel; omit --no-sentinel")
         append_wait_result(client, args, info, re.escape(sentinel))
+    if args.close_on_complete:
+        info["closed"] = bool(client.close_workspace(info["workspaceId"]).get("removed"))
     print_json(info)
     return 0
 
@@ -2339,6 +2479,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-event", action="store_true", help="deprecated no-op; running agent events are opt-in")
     run.add_argument("--no-enter", dest="enter", action="store_false", help="do not append Enter")
     run.add_argument("--wait-for", default="", help="wait until this regular expression appears in pane output")
+    run.add_argument("--close-on-match", action="store_true", help="close the workspace after --wait-for matches")
+    run.add_argument(
+        "--retain-workspace",
+        action="store_true",
+        help="disable successful-run cleanup and the 24-hour one-shot expiry",
+    )
     run.add_argument("--timeout", type=float, default=30, help="wait timeout in seconds")
     run.add_argument("--raw-wait", action="store_true", help="match --wait-for against raw terminal output")
     run.add_argument("--ready-timeout", type=float, default=30, help="new-pane shell readiness timeout in seconds")
@@ -2365,7 +2511,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="require Codex to return completed, blocked, or failed with a summary",
     )
     delegate.add_argument("--unattended", action="store_true", help="disable agent approval prompts; dangerous on trusted targets only")
-    delegate.add_argument("--close-on-success", action="store_true", help="close the workspace only after success")
+    delegate.add_argument(
+        "--close-on-success",
+        action="store_true",
+        help="deprecated explicit form of the one-shot default",
+    )
+    delegate.add_argument(
+        "--retain-workspace",
+        action="store_true",
+        help="keep a one-shot workspace after success and disable its 24-hour expiry",
+    )
     delegate.add_argument("--session", action="store_true", help="reuse a persistent Codex TUI for correlated turns")
     delegate.add_argument("--session-workspace", default="", help="agent workspace ID returned by an earlier session turn")
     delegate.add_argument("--accept-trust", action="store_true", help="accept only a recognized repository-trust prompt on session launch")
@@ -2438,6 +2593,12 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--no-event", action="store_true", help="deprecated no-op; running agent events are opt-in")
     ps.add_argument("--no-sentinel", action="store_true", help="do not append a completion marker")
     ps.add_argument("--wait", action="store_true", help="wait for the generated completion sentinel")
+    ps.add_argument("--close-on-complete", action="store_true", help="close the workspace after the sentinel is observed")
+    ps.add_argument(
+        "--retain-workspace",
+        action="store_true",
+        help="disable successful-run cleanup and the 24-hour one-shot expiry",
+    )
     ps.add_argument("--timeout", type=float, default=120, help="sentinel wait timeout in seconds")
     ps.add_argument("--raw-wait", action="store_true", help="match the sentinel against raw terminal output")
     ps.add_argument("--ready-timeout", type=float, default=30, help="new-pane shell readiness timeout in seconds")
@@ -2457,6 +2618,23 @@ def build_parser() -> argparse.ArgumentParser:
     finish.add_argument("--summary", required=True, help="final event summary")
     finish.add_argument("--close", action="store_true", help="close the workspace after recording the event")
     finish.set_defaults(func=cmd_finish)
+
+    cleanup = subparsers.add_parser(
+        "cleanup",
+        help="idempotently close exact agent-created workspaces without adding lifecycle events",
+    )
+    cleanup.add_argument(
+        "--workspace",
+        action="append",
+        required=True,
+        help="exact agent-created workspace id; repeat for multiple workspaces",
+    )
+    cleanup.add_argument(
+        "--include-active",
+        action="store_true",
+        help="also close workspaces whose persisted run or delegation still appears active",
+    )
+    cleanup.set_defaults(func=cmd_cleanup)
 
     return parser
 
