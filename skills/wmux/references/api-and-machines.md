@@ -203,7 +203,10 @@ Use `scripts/wmuxctl.py run <machine> --line '<shell line>'` to create a workspa
 - POSIX hosts: `wmux-run -- bash -lc 'cd ~/repo && npm test'`
 - Windows PowerShell hosts: `wmux-run -- pwsh -NoLogo -NoProfile -Command "Get-ComputerInfo | Select-Object CsName,WindowsVersion"`
 
-Give automated work a descriptive `--title`. Workspaces created by `wmuxctl` are persisted with `createdBy: "agent"`, which gives them a stable `AI` badge in the workspace rail. `wmuxctl open`, `run`, and `ps` reuse the latest workspace with the same machine/title by default, which prevents a diagnostic loop from creating many generic workspaces. Pass `--new` only for intentionally separate sessions.
+Give automated work a descriptive `--title`.
+Workspaces created by `wmuxctl` are persisted with `createdBy: "agent"`, which gives them a stable `AI` badge in the workspace rail.
+`wmuxctl open`, `run`, and `ps` reuse the latest agent-created workspace with the same machine/title by default, which prevents a diagnostic loop from creating many generic workspaces.
+Pass `--new` only for intentionally separate sessions.
 
 For a newly created workspace, `run` and `ps` wait until the shell prompt is visible before sending input. This avoids losing or duplicating input during SSH/PowerShell bootstrap. Use `--no-wait-ready` only when deliberately testing that startup path.
 
@@ -226,9 +229,16 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py ps windows-box \
   --wait
 ```
 
-`wmuxctl ps` sends a child `pwsh -EncodedCommand` and appends a completion sentinel. `--wait` confirms that the unique sentinel reached pane output; without it, the JSON response only confirms input delivery. Keep encoded scripts short: Windows Defender may reject encoded commands, and long prompts should be bracketed-pasted into an already-running agent TUI instead.
+`wmuxctl ps` sends a child `pwsh -EncodedCommand` and appends a completion sentinel.
+`--wait` confirms that the unique sentinel reached pane output; without it, the JSON response only confirms input delivery.
+Add `--close-on-complete` when observing the sentinel is sufficient to close the one-shot workspace.
+Keep encoded scripts short: Windows Defender may reject encoded commands, and long prompts should be bracketed-pasted into an already-running agent TUI instead.
 
-`wmuxctl run` and `wmuxctl ps` intentionally do not create a `running` agent event unless `--agent-event` is passed. For spawned process progress, wrap the pane command with `wmux-run -- ...`; that records start/completion/exit status and clears when the process exits. Use `--agent-event` only for agent-level work that will call `wmuxctl finish` or post a final `wmux-agent-event completed|failed|stopped`.
+`wmuxctl run` and `wmuxctl ps` intentionally do not create a `running` agent event unless `--agent-event` is passed.
+For spawned process progress, wrap the pane command with `wmux-run -- ...`; that records start/completion/exit status and automatically schedules a successful one-shot workspace for cleanup.
+Both commands apply a 24-hour fallback expiry to new or reused one-shot workspaces.
+Use `--retain-workspace` for interactive or deliberately long-lived work.
+Use `--agent-event` only for agent-level work that will call `wmuxctl finish` or post a final `wmux-agent-event completed|failed|stopped`.
 
 Inspect or wait for pane output through the authenticated output-only websocket:
 
@@ -240,7 +250,8 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "npm tes
 
 Treat `sentBytes`, a process id, and a `running` event as delivery/lifecycle metadata, not proof of active work. Verify the current pane output or agent transcript, and remember that an interactive agent process can remain alive and idle after its latest turn reports `task_complete`.
 
-When an agent-created, one-shot workspace completes successfully and no user inspection is needed, record the final event and close it:
+When an agent-created, one-shot workspace completes successfully, record the final event.
+The completed event schedules automatic cleanup, while `--close` performs it synchronously:
 
 ```bash
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish \
@@ -250,12 +261,23 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish \
   --close
 ```
 
-For failed runs, debugging sessions, interactive work, or long-running processes the user should monitor, omit `--close` so the terminal remains available.
+Failed one-shot runs remain available for diagnosis until their fallback expiry.
+After a replacement run resolves the workflow, close superseded failures and abandoned setup panes explicitly:
+
+```bash
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py cleanup \
+  --workspace "$FAILED_WORKSPACE_ID" \
+  --workspace "$SETUP_WORKSPACE_ID"
+```
+
+The cleanup command is idempotent, refuses user-created workspaces, and refuses lifecycle-active workspaces unless `--include-active` is explicitly supplied.
+Use `--retain-workspace` when debugging evidence, interactive work, or a user-monitored process must remain indefinitely.
 
 ## Other Useful Endpoints
 
 - `GET /api/bootstrap`: machines, workspaces, notifications, agent events, runs, settings, streams.
-- `POST /api/workspaces`: body `{ "machineId": "linux-box", "createdBy": "agent" }`; omit `createdBy` for browser/user-created workspaces.
+- `POST /api/workspaces`: body `{ "machineId": "linux-box", "createdBy": "agent", "cleanupPolicy": "on-success", "cleanupTtlSeconds": 86400 }`; omit the cleanup fields and `createdBy` for browser/user-created workspaces.
+- `POST /api/workspaces/:workspaceId/cleanup`: automation-only body `{ "cleanupPolicy": "on-success", "cleanupTtlSeconds": 86400 }` or `{ "cleanupPolicy": "retain" }` for an agent-created workspace.
 - `DELETE /api/workspaces/:workspaceId`: close a workspace and kill its pane sessions.
 - `POST /api/workspaces/:workspaceId/tabs`: body `{ "machineId": "local" }`.
 - `POST /api/tabs/:tabId/split`: body `{ "paneId": "...", "direction": "horizontal"|"vertical", "machineId": "..." }`.

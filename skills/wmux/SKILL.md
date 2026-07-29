@@ -16,7 +16,8 @@ Prefer direct local tools or SSH only for quick invisible checks. Prefer wmux wh
 - Discover configured and dynamically registered machines, including reachability and backend health.
 - Create or reuse visible agent-generated workspaces and tabs on local, SSH, or Windows targets. These persist with `createdBy: "agent"`, appear with an `AI` badge, and can be handed to the user with a direct URL.
 - Send shell input, run short PowerShell scripts, inspect replay, and wait for output or completion sentinels.
-- Record command and agent lifecycle metadata, post browser notifications, and close successful one-shot workspaces when inspection is no longer needed.
+- Record command and agent lifecycle metadata, post browser notifications, and automatically close successful one-shot workspaces.
+- Give one-shot agent workspaces a bounded 24-hour fallback lifetime so controller loss, missing terminal events, and broken remote sessions cannot strand them indefinitely.
 
 ## First Steps
 
@@ -38,6 +39,7 @@ cat /tmp/task.md | python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui codex lin
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui opencode linux-box --directory /srv/project --no-prompt --accept-trust
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py ps windows-box --title "Runner repair" --script "Get-ScheduledTask -TaskName build-runner" --wait
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine windows-box --title "Runner repair" --status completed --summary "Runner repaired" --close
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py cleanup --workspace ws_failed --workspace ws_superseded
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py send pane_abc123 --line "wmux-agent-event --agent codex --status completed --title Done --summary 'Remote step finished'"
 ```
 
@@ -74,14 +76,24 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
   Use Ctrl-C only for explicit cancellation.
 - Use `wmuxctl tui` for an interactive POSIX OpenCode, Codex, or Claude session. It starts the real terminal-attached TUI through the staged foreground supervisor, keeps the workspace open, and does not create manual lifecycle events. A TUI invoked inside wmux nests under the invoking pane; outside wmux it creates a root workspace. Use `--prompt-file PATH`, `--prompt-file -`, piped stdin, or deliberate `--no-prompt`; prompts are bracketed-pasted only after the launch ACK, fresh child output, and the bounded `--gate-timeout` observation (five seconds by default). Repository trust fails closed unless the reviewed invocation adds `--accept-trust`, which answers only a recognized numbered `1` yes/trust/continue choice using separate text and Enter requests, then repeats the observation. Login, credentials, generic onboarding, and unknown first-run screens are never automated. If the runtime exits early, input is quarantined; manual Ctrl-C returns to the shell. `localUrl` uses the caller's API base; `url` prefers the configured `publicUrl`, which otherwise falls back to local.
 - Keep write access and unattended approval separate. Omit `--write-access` for Codex read-only or Claude plan mode; add it only when repository edits are intended. OpenCode has no enforceable read-only adapter and therefore requires explicit `--write-access`. Add `--unattended` only when the user authorized bypassing approval prompts.
-- Delegations stay open by default. Use `--close-on-success` only for disposable successful work. Failed, stopped, timed-out, and close-failed workspaces must remain available for inspection.
+- One-shot delegations close after a successful result by default.
+  Use `--retain-workspace` only when the user needs the successful terminal to remain available.
+  Durable `--session` workspaces always remain open.
+  Failed, stopped, timed-out, and observer-failed one-shot workspaces remain available for inspection, then expire after 24 hours unless `--retain-workspace` was selected.
 - A successful input POST, `sentBytes`, process existence, or a `running` event proves neither that a command was submitted nor that an agent is still working. Confirm pane output with `wmuxctl output`/`wait` and distinguish the latest agent turn from a persistent idle TUI process.
 - Reused workspaces with multiple tabs require `--tab` or `--pane` for `run` and `ps`. Name support tabs when creating them, close task-owned abandoned tabs, and hand off the direct URL for the actual agent tab.
-- `wmuxctl run` and `ps` wait for a newly created shell prompt before sending input. Keep that guard enabled unless intentionally testing startup behavior; `--no-wait-ready` can reproduce the raw race.
+- `wmuxctl run` and `ps` wait for a newly created shell prompt before sending input.
+  Keep that guard enabled unless intentionally testing startup behavior; `--no-wait-ready` can reproduce the raw race.
+- `wmuxctl run` and `ps` arm one-shot workspaces for cleanup after a successful `wmux-run` lifecycle event and for fallback cleanup after 24 hours.
+  Use `run --close-on-match` or `ps --close-on-complete` when the helper itself observes the definitive completion marker.
+  Use `--retain-workspace` for an interactive shell, a user-monitored service, or evidence that must outlive the fallback window.
 - `wmuxctl run`, `send`, and `ps` submit Enter separately from the command text so PSReadLine can consume the final pasted bytes. Keep this behavior when extending the helper; combining a long Windows line and `\r` in one input request can truncate the tail or leave the command unsubmitted.
 - Prefer `wmuxctl ps` for short Windows multi-step scripts, with `--wait` for one-shot work. Windows Defender can reject `pwsh -EncodedCommand`; do not use it for large scripts or as a transport for long agent prompts. Use a checked-in/staged script or start the TUI with a short command and bracketed-paste the prompt after it is ready.
 - `wmuxctl run` and `wmuxctl ps` do not create a running agent event by default. Use `wmux-run -- ...` inside the command for spawned process progress. Add `--agent-event` only when the agent will later call `wmuxctl finish`; otherwise the workspace spinner can stay running after the process exits.
-- For one-shot automated work that the agent created and completed successfully, record a final event and close the workspace with `wmuxctl finish --status completed --close` if an agent event was opened. Keep the workspace open when the task failed, needs user inspection, is interactive, or leaves a long-running process that the user should monitor.
+- For one-shot automated work that opened an agent event, record the final event with `wmuxctl finish`.
+  A completed event arms automatic cleanup, and `--close` remains available when the caller has already captured the result and wants immediate synchronous closure.
+  Keep a failed workspace only while it is diagnostically useful.
+  At workflow completion, close superseded failures and abandoned setup workspaces with `wmuxctl cleanup --workspace <id>`.
 - Do not dump full process command lines from wmux-managed Windows shells. They can contain encoded wmux bootstrap URLs or tokens. Select safe fields such as `ProcessId`, `Name`, `CreationDate`, and service/task state unless the user explicitly needs command-line debugging.
 
 ## Workflow
@@ -93,8 +105,11 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
 5. Verify submission and progress from pane replay. Use a unique `--wait-for`/sentinel when possible; otherwise inspect `wmuxctl output` for the actual prompt, tool calls, completion, or failure.
 6. Wrap substantive commands in `wmux-run -- ...` from inside the pane so process progress and exit status come from run metadata instead of an agent spinner.
 7. Use `wmuxctl run --agent-event`, `wmuxctl ps --agent-event`, or `wmux-agent-event` only for agent-level work that will end with `wmuxctl finish` or a final `wmux-agent-event completed|failed|stopped`.
-8. For successful, non-interactive task-owned workspaces, run `wmuxctl finish --workspace <workspaceId> --status completed --summary "..." --close` after recording the result. For failures, debugging sessions, or user-visible long-running sessions, use `finish` without `--close` and leave the workspace open.
-9. Report the direct URL for the exact agent tab, pane id, machine id, current turn status, and whether the workspace was closed.
+8. For successful agent-level work, run `wmuxctl finish --workspace <workspaceId> --status completed --summary "..."`; add `--close` when immediate closure is useful.
+9. Before handing off a completed workflow, reconcile every recorded workspace id.
+   Close superseded failures, setup panes, and abandoned lanes with one idempotent `wmuxctl cleanup` call.
+   Retain only active interactive work or evidence the user still needs.
+10. Report the direct URL for each retained agent tab, pane id, machine id, current turn status, and retention reason.
 
 ## Visible Agent Sessions
 

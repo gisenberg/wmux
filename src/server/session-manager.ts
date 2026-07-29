@@ -116,6 +116,7 @@ const sameMachineEndpoint = (left: MachineConfig, right: MachineConfig): boolean
 // mark; resume once every consumer drains below the low-water mark.
 const BACKPRESSURE_HIGH_WATER = 4 * 1024 * 1024;
 const BACKPRESSURE_LOW_WATER = 1 * 1024 * 1024;
+const AGENT_WORKSPACE_CLEANUP_SWEEP_MS = 5_000;
 
 export class SessionManager {
   private sessions = new Map<string, BackendSession>();
@@ -132,6 +133,7 @@ export class SessionManager {
   private durableCwdRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private durableCwdRefreshInFlight = new Set<string>();
   private durableCwdLastReadAt = new Map<string, number>();
+  private readonly agentWorkspaceCleanupTimer: ReturnType<typeof setInterval>;
   private readonly currentMachines: () => MachineConfig[];
   private readonly terminalCheckpoints: TerminalCheckpointStore;
   private readonly durableEndpoints: DurableEndpointStore;
@@ -172,6 +174,12 @@ export class SessionManager {
       ),
       this.currentMachines(),
     );
+    this.sweepExpiredAgentWorkspaces();
+    this.agentWorkspaceCleanupTimer = setInterval(
+      () => this.sweepExpiredAgentWorkspaces(),
+      AGENT_WORKSPACE_CLEANUP_SWEEP_MS,
+    );
+    this.agentWorkspaceCleanupTimer.unref?.();
   }
 
   hasLiveSessionsForMachine(machineId: string): boolean {
@@ -406,6 +414,14 @@ export class SessionManager {
     for (const paneId of paneIds) this.disposePaneProcess(paneId, machineIds.get(paneId));
     if (paneIds.length > 0) this.onPaneReferencesChanged();
     return paneIds.length > 0;
+  }
+
+  sweepExpiredAgentWorkspaces(nowMs = Date.now()): string[] {
+    const closed: string[] = [];
+    for (const workspaceId of this.state.expiredAgentWorkspaceIds(nowMs)) {
+      if (this.closeWorkspace(workspaceId)) closed.push(workspaceId);
+    }
+    return closed;
   }
 
   writePane(paneId: string, data: string, cols = 96, rows = 32): boolean {
@@ -695,6 +711,7 @@ export class SessionManager {
 
   /** Detach every live client and clear timers. Called on process shutdown. */
   disposeAll(): void {
+    clearInterval(this.agentWorkspaceCleanupTimer);
     try {
       this.terminalCheckpoints.flush();
     } catch (error) {

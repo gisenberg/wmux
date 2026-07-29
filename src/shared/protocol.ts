@@ -214,6 +214,7 @@ export type RepositoryReviewErrorCode =
 
 export type TitleSource = "default" | "auto" | "user";
 export type WorkspaceCreator = "user" | "agent";
+export type WorkspaceCleanupPolicy = "on-success";
 export type WorkspaceReorderPosition = "before" | "after" | "into" | "out-of";
 export type SplitDirection = "horizontal" | "vertical";
 
@@ -235,6 +236,9 @@ export interface Workspace {
   id: string;
   name: string;
   createdBy?: WorkspaceCreator;
+  /** Agent-owned one-shot work may close after success and always has a bounded lifetime. */
+  cleanupPolicy?: WorkspaceCleanupPolicy;
+  cleanupAt?: string;
   /** Parent is represented by preorder placement in workspaces, never an order key. */
   parentWorkspaceId?: string;
   nameSource?: TitleSource;

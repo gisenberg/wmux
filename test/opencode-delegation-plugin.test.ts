@@ -486,7 +486,12 @@ posixTest("generated OpenCode delegation aborts a stalled running lifecycle requ
     );
     assert.deepEqual(
       api.requests.find((request) => request.pathname === "/api/workspaces")?.body,
-      { machineId: "posix-1", createdBy: "agent" },
+      {
+        machineId: "posix-1",
+        createdBy: "agent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
+      },
     );
   }, { holdFirstAgentEvent: true });
 });
@@ -520,7 +525,7 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
         permission: "wmux_delegate",
         patterns: ["posix-1", repoRoot],
         always: ["*"],
-        metadata: { machine: "posix-1", directory: repoRoot, mode: "change", closeOnSuccess: false },
+        metadata: { machine: "posix-1", directory: repoRoot, mode: "change", closeOnSuccess: true },
       });
       assert.equal(fake.instances.length, 1);
       const socket = fake.instances[0];
@@ -557,9 +562,9 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
         },
       });
       assert.match(output, /State: completed/);
-      assert.match(output, /Workspace closed: false/);
+      assert.match(output, /Workspace closed: true/);
       assert.match(output, /<task_result>\ndelegated ✓\n<\/task_result>/);
-      assert.match(output, new RegExp(`URL: ${api.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/workspaces/workspace-1/tabs/tab-1`));
+      assert.match(output, /URL: unavailable \(workspace closed\)/);
       assert.equal(output.includes(prompt), false);
       assert.equal(output.includes("test-token-private"), false);
 
@@ -567,6 +572,8 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
       assert.deepEqual(workspaceRequest?.body, {
         machineId: "posix-1",
         createdBy: "agent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
         parentPaneId: "pane-parent",
       });
       assert.deepEqual(
@@ -580,8 +587,8 @@ posixTest("generated OpenCode delegation tool runs permission, pane protocol, re
       ]);
       assert.ok(lifecycle.every((event) => event?.runId === (metadata[0] as any).metadata.runId));
       assert.equal(api.authenticated(), true);
-      assert.equal(api.workspaces.some((workspace) => workspace.id === "workspace-1"), true);
-      assert.equal(api.requests.some((request) => request.method === "DELETE"), false);
+      assert.equal(api.workspaces.some((workspace) => workspace.id === "workspace-1"), false);
+      assert.equal(api.requests.some((request) => request.method === "DELETE"), true);
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;
     }
@@ -685,7 +692,7 @@ posixTest("generated wmux_close permission-gates ownership, closes agent workspa
   });
 });
 
-posixTest("close_on_success closes only after completed lifecycle and reports the URL unavailable", async () => {
+posixTest("retain_workspace keeps a successful delegation available", async () => {
   await withGeneratedTool(async ({ tool, api }) => {
     const fake = fakeWebSocket("complete");
     api.setPaneInputHandler(fake.input);
@@ -696,7 +703,7 @@ posixTest("close_on_success closes only after completed lifecycle and reports th
     const prompt = "close-success private prompt";
     try {
       const output = await tool.execute(
-        { machine: "posix-1", directory: repoRoot, prompt, close_on_success: true, timeout_seconds: 30 },
+        { machine: "posix-1", directory: repoRoot, prompt, retain_workspace: true, timeout_seconds: 30 },
         {
           abort: new AbortController().signal,
           ask: (input: Record<string, unknown>) => {
@@ -711,19 +718,20 @@ posixTest("close_on_success closes only after completed lifecycle and reports th
         permission: "wmux_delegate",
         patterns: ["posix-1", repoRoot],
         always: ["*"],
-        metadata: { machine: "posix-1", directory: repoRoot, mode: "change", closeOnSuccess: true },
+        metadata: { machine: "posix-1", directory: repoRoot, mode: "change", closeOnSuccess: false },
       });
       assert.match(output, /State: completed/);
-      assert.match(output, /Workspace closed: true/);
-      assert.match(output, /URL: unavailable \(workspace closed\)/);
-      assert.equal(output.includes(`${api.url}/workspaces/workspace-1/tabs/tab-1`), false);
+      assert.match(output, /Workspace closed: false/);
+      assert.match(output, new RegExp(`URL: ${api.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/workspaces/workspace-1/tabs/tab-1`));
       assert.match(output, /<task_result>\ndelegated ✓\n<\/task_result>/);
       assert.equal(output.includes(prompt), false);
       assert.equal(output.includes("test-token-private"), false);
-      assert.equal(api.workspaces.some((workspace) => workspace.id === "workspace-1"), false);
-      const completedIndex = api.requests.findIndex((request) => request.pathname === "/api/agent-events" && request.body?.status === "completed");
-      const deleteIndex = api.requests.findIndex((request) => request.method === "DELETE");
-      assert.ok(completedIndex >= 0 && deleteIndex > completedIndex, "completed lifecycle precedes workspace deletion");
+      assert.equal(api.workspaces.some((workspace) => workspace.id === "workspace-1"), true);
+      assert.equal(api.requests.some((request) => request.method === "DELETE"), false);
+      assert.deepEqual(
+        api.requests.find((request) => request.pathname === "/api/workspaces")?.body,
+        { machineId: "posix-1", createdBy: "agent" },
+      );
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;
     }

@@ -51,6 +51,11 @@ export interface WorkspaceCreationIds {
   paneId: string;
 }
 
+export interface WorkspaceCleanupOptions {
+  policy: "on-success";
+  cleanupAt: string;
+}
+
 export interface TabCreationIds {
   tabId: string;
   paneId: string;
@@ -231,8 +236,12 @@ export class StateStore extends EventEmitter {
     createdBy: "user" | "agent" = "user",
     parentWorkspaceId?: string,
     ids?: WorkspaceCreationIds,
+    cleanup?: WorkspaceCleanupOptions,
   ): Workspace {
     if (parentWorkspaceId && createdBy !== "agent") throw new Error("only agent workspaces may have a parent");
+    if (cleanup && createdBy !== "agent") throw new Error("only agent workspaces may have automatic cleanup");
+    const cleanupAt = cleanup ? validIsoDate(cleanup.cleanupAt) : null;
+    if (cleanup && !cleanupAt) throw new Error("invalid workspace cleanup deadline");
     if (parentWorkspaceId && !this.state.workspaces.some((workspace) => workspace.id === parentWorkspaceId)) throw new Error("parent workspace not found");
     if (parentWorkspaceId && this.depthForParent(parentWorkspaceId) >= 4) throw new WorkspaceDepthError();
     if (ids) {
@@ -260,6 +269,9 @@ export class StateStore extends EventEmitter {
       id: ids?.workspaceId ?? createId("ws"),
       name: this.nextWorkspaceName(machineId),
       ...(createdBy === "agent" ? { createdBy } : {}),
+      ...(cleanup && cleanupAt
+        ? { cleanupPolicy: cleanup.policy, cleanupAt }
+        : {}),
       ...(parentWorkspaceId ? { parentWorkspaceId } : {}),
       nameSource: "default",
       descriptor: this.machineDescriptor(machineId),
@@ -276,6 +288,62 @@ export class StateStore extends EventEmitter {
     this.bumpWorkspaceTreeRevision();
     this.save();
     return workspace;
+  }
+
+  configureWorkspaceCleanup(
+    workspaceId: string,
+    cleanup?: WorkspaceCleanupOptions,
+  ): Workspace {
+    const workspace = this.requireWorkspace(workspaceId);
+    if (workspace.createdBy !== "agent") {
+      throw new Error("only agent workspaces may have automatic cleanup");
+    }
+    const cleanupAt = cleanup ? validIsoDate(cleanup.cleanupAt) : null;
+    if (cleanup && !cleanupAt) throw new Error("invalid workspace cleanup deadline");
+    if (cleanup && cleanupAt) {
+      workspace.cleanupPolicy = cleanup.policy;
+      workspace.cleanupAt = cleanupAt;
+    } else {
+      delete workspace.cleanupPolicy;
+      delete workspace.cleanupAt;
+    }
+    workspace.updatedAt = now();
+    this.save();
+    return structuredClone(workspace);
+  }
+
+  scheduleWorkspaceCleanupAfterSuccess(
+    workspaceId: string,
+    delayMs: number,
+    nowMs = Date.now(),
+  ): boolean {
+    const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
+    if (
+      !workspace
+      || workspace.createdBy !== "agent"
+      || workspace.cleanupPolicy !== "on-success"
+      || !workspace.cleanupAt
+    ) return false;
+    const requestedAt = nowMs + Math.max(0, delayMs);
+    const currentAt = Date.parse(workspace.cleanupAt);
+    workspace.cleanupAt = new Date(
+      Number.isFinite(currentAt) ? Math.min(currentAt, requestedAt) : requestedAt,
+    ).toISOString();
+    workspace.updatedAt = now();
+    this.save();
+    return true;
+  }
+
+  expiredAgentWorkspaceIds(nowMs = Date.now()): string[] {
+    return this.state.workspaces.flatMap((workspace) => {
+      if (
+        workspace.createdBy !== "agent"
+        || !workspace.cleanupPolicy
+        || !workspace.cleanupAt
+      ) return [];
+      const cleanupAt = Date.parse(workspace.cleanupAt);
+      return Number.isFinite(cleanupAt) && cleanupAt <= nowMs ? [workspace.id] : [];
+    });
   }
 
   reorderWorkspace(

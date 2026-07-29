@@ -7,7 +7,7 @@ import type {
   PersistedState,
 } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 6;
+export const CURRENT_STATE_SCHEMA_VERSION = 7;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -57,6 +57,8 @@ const workspaceSchema = z.object({
   id: idSchema,
   name: z.string().max(500),
   createdBy: z.enum(["user", "agent"]).optional(),
+  cleanupPolicy: z.literal("on-success").optional(),
+  cleanupAt: timestampSchema.optional(),
   parentWorkspaceId: idSchema.optional(),
   nameSource: titleSourceSchema.optional(),
   descriptor: z.string().max(2000).optional(),
@@ -165,6 +167,23 @@ const persistedStateSchema = z.object({
       context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "id"], message: "duplicate workspace id" });
     }
     workspaceIds.add(workspace.id);
+    if (
+      (workspace.cleanupPolicy || workspace.cleanupAt)
+      && workspace.createdBy !== "agent"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaces", workspaceIndex, "cleanupPolicy"],
+        message: "only agent workspaces may have automatic cleanup",
+      });
+    }
+    if (Boolean(workspace.cleanupPolicy) !== Boolean(workspace.cleanupAt)) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaces", workspaceIndex, "cleanupAt"],
+        message: "workspace cleanup policy and deadline must be configured together",
+      });
+    }
     if (workspace.parentWorkspaceId === workspace.id) context.addIssue({ code: "custom", path: ["workspaces", workspaceIndex, "parentWorkspaceId"], message: "workspace cannot parent itself" });
     const tabIds = new Set<string>();
     for (const [tabIndex, tab] of workspace.tabs.entries()) {
@@ -419,6 +438,14 @@ export const migrateV5ToV6State = (
     : record.delegations,
 });
 
+/** v6 workspaces retain their prior indefinite lifetime unless explicitly armed. */
+export const migrateV6ToV7State = (
+  record: Record<string, unknown>,
+): Record<string, unknown> => ({
+  ...record,
+  schemaVersion: 7,
+});
+
 export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("state must be a JSON object");
@@ -436,6 +463,7 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
     && rawVersion !== 3
     && rawVersion !== 4
     && rawVersion !== 5
+    && rawVersion !== 6
     && rawVersion !== CURRENT_STATE_SCHEMA_VERSION
   ) {
     throw new Error("state schemaVersion must be a supported integer");
@@ -453,9 +481,12 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   const v5Candidate = rawVersion !== undefined && rawVersion >= 5
     ? record
     : migrateV4ToV5State(v4Candidate);
-  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+  const v6Candidate = rawVersion !== undefined && rawVersion >= 6
     ? record
     : migrateV5ToV6State(v5Candidate);
+  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+    ? record
+    : migrateV6ToV7State(v6Candidate);
   const normalized = normalizeNotificationBodies(candidate);
   return {
     state: persistedStateSchema.parse(normalized.record),

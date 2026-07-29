@@ -333,6 +333,7 @@ test("wmuxctl refuses an ambiguous reused workspace and honors an explicit tab",
   const workspace = {
     id: "ws_multi",
     name: "Runner repair",
+    createdBy: "agent",
     machineId: "windows-runner",
     activeTabId: "tab_shell",
     createdAt: "2026-01-01T00:00:00Z",
@@ -365,6 +366,14 @@ test("wmuxctl refuses an ambiguous reused workspace and honors an explicit tab",
         inputs.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
         response.writeHead(200, { "content-type": "application/json" });
         response.end("{}");
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_multi/cleanup") {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace }));
       });
       return;
     }
@@ -465,8 +474,104 @@ test("wmuxctl waits for a new Windows shell prompt before sending input", async 
     const result = JSON.parse(sent.stdout);
     assert.equal(result.paneId, "pane_new");
     assert.equal(typeof result.shellReadySeconds, "number");
-    assert.deepEqual(workspaceRequests, [{ machineId: "windows-runner", createdBy: "agent" }]);
+    assert.deepEqual(workspaceRequests, [{
+      machineId: "windows-runner",
+      createdBy: "agent",
+      cleanupPolicy: "on-success",
+      cleanupTtlSeconds: 86_400,
+    }]);
     assert.deepEqual(events, ["prompt", "input", "input"]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("wmuxctl run closes a one-shot workspace after a definitive completion match", async () => {
+  let upgradeCount = 0;
+  let deleted = false;
+  const workspace = {
+    id: "ws_close_match",
+    createdBy: "agent",
+    machineId: "linux-box",
+    activeTabId: "tab_close_match",
+    tabs: [{
+      id: "tab_close_match",
+      activePaneId: "pane_close_match",
+      panes: [{ id: "pane_close_match", machineId: "linux-box" }],
+    }],
+  };
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        machines: [{ id: "linux-box", kind: "local", platform: "linux", reachable: true }],
+        workspaces: [],
+      }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces") {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace, state: {} }));
+      });
+      return;
+    }
+    if (
+      request.method === "POST"
+      && (
+        request.url === "/api/workspaces/ws_close_match/title"
+        || request.url === "/api/panes/pane_close_match/input"
+      )
+    ) {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+      return;
+    }
+    if (request.method === "DELETE" && request.url === "/api/workspaces/ws_close_match") {
+      deleted = true;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"removed":true}');
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("upgrade", (request, socket) => {
+    upgradeCount += 1;
+    const key = request.headers["sec-websocket-key"];
+    assert.equal(typeof key, "string");
+    const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"));
+    socket.end(websocketFrame({
+      type: "ready",
+      paneId: "pane_close_match",
+      replay: upgradeCount === 1 ? "operator@host /srv/project $ " : "tests passed\nWMUX_DONE:0\n",
+    }));
+  });
+
+  const url = await listen(server);
+  try {
+    const completed = await cli(url, [
+      "run", "linux-box",
+      "--title", "Close on match",
+      "--line", "run-tests",
+      "--wait-for", "WMUX_DONE:0",
+      "--close-on-match",
+    ]);
+    const result = JSON.parse(completed.stdout);
+    assert.equal(result.matched, "WMUX_DONE:0");
+    assert.equal(result.closed, true);
+    assert.equal(deleted, true);
   } finally {
     await close(server);
   }
@@ -516,11 +621,25 @@ test("wmuxctl shared workspace consumers parent only newly created workspaces", 
   try {
     await cli(url, ["open", "linux-box", "--title", "Open"], { WMUX_PANE_ID: "pane_parent" });
     await cli(url, ["run", "linux-box", "--title", "Run", "--line", "true", "--no-wait-ready"], { WMUX_PANE_ID: "pane_parent" });
+    await cli(url, ["run", "linux-box", "--title", "Retained", "--line", "true", "--no-wait-ready", "--retain-workspace"], { WMUX_PANE_ID: "pane_parent" });
     await cli(url, ["ps", "linux-box", "--title", "Ps", "--script", "Write-Output ok", "--no-wait-ready"], { WMUX_PANE_ID: "pane_parent" });
     assert.deepEqual(workspaceRequests, [
       { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
+      {
+        machineId: "linux-box",
+        createdBy: "agent",
+        parentPaneId: "pane_parent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
+      },
       { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
-      { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
+      {
+        machineId: "linux-box",
+        createdBy: "agent",
+        parentPaneId: "pane_parent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
+      },
     ]);
   } finally {
     await close(server);
@@ -567,7 +686,7 @@ test("wmuxctl omits empty or missing workspace parents", async () => {
 });
 
 test("wmuxctl reuse never reparents, while --new creates a child and preserves parent errors", async () => {
-  const workspace = { id: "ws_existing", name: "Shared", machineId: "linux-box", activeTabId: "tab", tabs: [{ id: "tab", activePaneId: "pane", panes: [{ id: "pane", machineId: "linux-box" }] }] };
+  const workspace = { id: "ws_existing", name: "Shared", createdBy: "agent", machineId: "linux-box", activeTabId: "tab", tabs: [{ id: "tab", activePaneId: "pane", panes: [{ id: "pane", machineId: "linux-box" }] }] };
   const workspaceRequests: Array<Record<string, unknown>> = [];
   let rejectParent = false;
   const server = http.createServer((request, response) => {
@@ -595,7 +714,11 @@ test("wmuxctl reuse never reparents, while --new creates a child and preserves p
     await cli(url, ["open", "linux-box", "--title", "Shared"], { WMUX_PANE_ID: "pane_parent" });
     assert.equal(workspaceRequests.length, 0);
     await cli(url, ["open", "linux-box", "--title", "Shared", "--new"], { WMUX_PANE_ID: "pane_parent" });
-    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
+    assert.deepEqual(workspaceRequests, [{
+      machineId: "linux-box",
+      createdBy: "agent",
+      parentPaneId: "pane_parent",
+    }]);
     rejectParent = true;
     await assert.rejects(cli(url, ["open", "linux-box", "--title", "Rejected", "--new"], { WMUX_PANE_ID: "pane_invalid" }), (error: { stderr?: string }) => {
       assert.match(error.stderr ?? "", /wmuxctl: HTTP 422 for \/api\/workspaces: {"error":"invalid parent"}/);
@@ -607,7 +730,65 @@ test("wmuxctl reuse never reparents, while --new creates a child and preserves p
   }
 });
 
-test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success", async () => {
+test("wmuxctl cleanup is idempotent and refuses user-owned or active workspaces by default", async () => {
+  const deleted: string[] = [];
+  const server = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/bootstrap") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        workspaces: [
+          { id: "ws_idle", createdBy: "agent" },
+          { id: "ws_active", createdBy: "agent" },
+          { id: "ws_user" },
+        ],
+        runs: [{ id: "run_active", workspaceId: "ws_active", status: "started" }],
+        delegations: [],
+      }));
+      return;
+    }
+    const match = request.url?.match(/^\/api\/workspaces\/(ws_[^/]+)$/);
+    if (request.method === "DELETE" && match) {
+      deleted.push(match[1]);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"removed":true}');
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const url = await listen(server);
+  try {
+    const first = await cliProcess(url, [
+      "cleanup",
+      "--workspace", "ws_idle",
+      "--workspace", "ws_active",
+      "--workspace", "ws_user",
+      "--workspace", "ws_missing",
+    ]);
+    assert.equal(first.code, 1);
+    const result = JSON.parse(first.stdout);
+    assert.deepEqual(result.results, [
+      { workspaceId: "ws_idle", closed: true },
+      { workspaceId: "ws_active", closed: false, reason: "active_lifecycle" },
+      { workspaceId: "ws_user", closed: false, reason: "not_agent_created" },
+      { workspaceId: "ws_missing", closed: true, alreadyClosed: true },
+    ]);
+    assert.deepEqual(deleted, ["ws_idle"]);
+
+    const forced = await cli(url, [
+      "cleanup",
+      "--workspace", "ws_active",
+      "--include-active",
+    ]);
+    assert.deepEqual(JSON.parse(forced.stdout).results, [
+      { workspaceId: "ws_active", closed: true },
+    ]);
+    assert.deepEqual(deleted, ["ws_idle", "ws_active"]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("wmuxctl delegate drives the staged runner, lifecycle, and closes successful one-shots by default", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-delegate-"));
   const promptPath = path.join(root, "prompt.md");
   const prompt = "private parity task Ω";
@@ -721,7 +902,7 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
   try {
     const delegated = await cli(url, [
       "delegate", "codex", "linux-box", "--directory", "/srv/project", "--prompt-file", promptPath,
-      "--title", "Parity review", "--model", "gpt-test", "--write-access", "--unattended", "--close-on-success",
+      "--title", "Parity review", "--model", "gpt-test", "--write-access", "--unattended",
     ], { WMUX_PANE_ID: "pane_parent" });
     const result = JSON.parse(delegated.stdout);
     assert.equal(result.state, "completed");
@@ -732,7 +913,13 @@ test("wmuxctl delegate drives the staged runner, lifecycle, and close-on-success
     assert.equal(result.url, `${url}/workspaces/ws_delegate/tabs/tab_delegate`);
     assert.deepEqual(inputs.slice(0, 2).map((body) => body.data), [`wmux-agent-run request ${runId}`, "\r"]);
     assert.equal(inputs.some((body) => String(body.data).includes(prompt)), false);
-    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
+    assert.deepEqual(workspaceRequests, [{
+      machineId: "linux-box",
+      createdBy: "agent",
+      parentPaneId: "pane_parent",
+      cleanupPolicy: "on-success",
+      cleanupTtlSeconds: 86_400,
+    }]);
     assert.deepEqual(lifecycle.map((event) => ({ agent: event.agent, status: event.status, message: event.message, runId: event.runId })), [
       { agent: "codex", status: "running", message: undefined, runId },
       { agent: "codex", status: "completed", message: "review complete", runId },
@@ -977,6 +1164,7 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
   const machine = { id: "windows-runner", kind: "powershell-ssh", platform: "win", reachable: true };
   const workspace = {
     id: "ws_windows_delegate",
+    createdBy: "agent",
     machineId: "windows-runner",
     activeTabId: "tab_windows_delegate",
     tabs: [{
@@ -1007,6 +1195,11 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
         workspace.manualTitle = "Windows catalog import";
         jsonResponse(response, {});
       });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_windows_delegate/cleanup") {
+      request.resume();
+      request.on("end", () => jsonResponse(response, { workspace }));
       return;
     }
     if (request.method === "POST" && request.url === "/api/agent-events") {
@@ -1087,12 +1280,13 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
     const delegated = await cli(url, [
       "delegate", "codex", "windows-runner", "--directory", "T:\\git\\example\\project",
       "--prompt-file", promptPath, "--title", "Windows catalog import", "--write-access",
-      "--sandbox", "danger-full-access", "--structured-outcome",
+      "--sandbox", "danger-full-access", "--structured-outcome", "--retain-workspace",
     ]);
     const result = JSON.parse(delegated.stdout);
     assert.equal(result.state, "completed");
     assert.equal(result.outcome, "completed");
     assert.equal(result.result, "catalog imported");
+    assert.equal(result.closed, false);
     const launch = String(inputs[0].data);
     assert.match(launch, /WMUX_DELEGATED_RUN='1'/);
     assert.match(launch, /Remove-Item Env:WMUX_DELEGATION_RUN_ID/);
@@ -1114,7 +1308,7 @@ test("wmuxctl delegates Codex directly to Windows with an explicit sandbox and s
     const secondDelegation = await cli(url, [
       "delegate", "codex", "windows-runner", "--directory", "T:\\git\\example\\project",
       "--prompt-file", promptPath, "--title", "Windows catalog import", "--write-access",
-      "--sandbox", "danger-full-access", "--structured-outcome",
+      "--sandbox", "danger-full-access", "--structured-outcome", "--retain-workspace",
     ]);
     const secondResult = JSON.parse(secondDelegation.stdout);
     assert.equal(secondResult.state, "completed");
@@ -1575,7 +1769,12 @@ test("wmuxctl delegate records failure and preserves the workspace when setup fa
       },
     );
     assert.equal(interrupted, true);
-    assert.deepEqual(workspaceRequests, [{ machineId: "linux-box", createdBy: "agent" }]);
+    assert.deepEqual(workspaceRequests, [{
+      machineId: "linux-box",
+      createdBy: "agent",
+      cleanupPolicy: "on-success",
+      cleanupTtlSeconds: 86_400,
+    }]);
     assert.deepEqual(lifecycle.map((event) => event.status), ["failed"]);
     assert.equal(lifecycle[0].message && String(lifecycle[0].message).includes("setup failure prompt"), false);
   } finally {
@@ -1773,6 +1972,7 @@ test("wmuxctl tui uses post-launch replay, bracketed paste, and stable handoff J
     response.writeHead(404).end();
   });
   server.on("upgrade", (request, socket) => {
+    socket.on("error", () => undefined);
     const key = request.headers["sec-websocket-key"]; assert.equal(typeof key, "string");
     const accept = crypto.createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
     socket.write(["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade", `Sec-WebSocket-Accept: ${accept}`, "", ""].join("\r\n"));
