@@ -75,6 +75,35 @@ test("truncated normal-screen history restores the authoritative current screen"
   }
 });
 
+test("cross-size replay restores the authoritative cursor from a checkpoint", () => {
+  const rawReplay =
+    "\x1b[2J\x1b[Habcdefghijklmnopqrst"
+    + "\x1b[2;1HABCDEFGHIJKLMNOPQRST"
+    + "\x1b[3;1H01234567890123456789"
+    + "\x1b[5;11H\x1b[?25l";
+  const source = new TerminalCheckpoint(20, 6);
+  const rawAtNewSize = new TerminalCheckpoint(10, 6);
+  const restored = new TerminalCheckpoint(10, 6);
+  try {
+    source.write(rawReplay);
+    source.resize(10, 6);
+    rawAtNewSize.write(rawReplay);
+
+    assert.notDeepEqual(rawAtNewSize.cursor(), source.cursor());
+
+    const replay = selectAttachReplay(rawReplay, false, source, true);
+    assert.equal(replay.kind, "checkpoint");
+    restored.write(replay.data);
+
+    assert.deepEqual(restored.screenLines(), source.screenLines());
+    assert.deepEqual(restored.cursor(), source.cursor());
+  } finally {
+    source.dispose();
+    rawAtNewSize.dispose();
+    restored.dispose();
+  }
+});
+
 test("checkpoint snapshots retain split private input-mode sequences", () => {
   const checkpoint = new TerminalCheckpoint(10, 2);
   try {

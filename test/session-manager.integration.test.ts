@@ -527,7 +527,7 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
     manager.attach(pane.id, reconnected, 92, 28);
     const ready = await waitForMessage(reconnected, (message) => message.type === "ready");
     assert.match(ready.replay, /wmux-multi-marker/);
-    assert.equal(ready.replayKind, "raw");
+    assert.equal(ready.replayKind, "checkpoint");
 
     const workspaceId = state.snapshot().workspaces[0].id;
     assert.equal(manager.closeWorkspace(workspaceId), true);
@@ -604,6 +604,41 @@ test("late attach receives an authoritative checkpoint for a full-screen PTY", {
     assert.match(ready.replay, /cursor/);
 
     manager.disposeAll();
+  });
+});
+
+test("late attach after a terminal resize receives an authoritative checkpoint", async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    try {
+      const first = socket();
+      manager.attach(pane.id, first, 80, 24);
+      await waitForMessage(first, (message) => message.type === "ready");
+
+      fake(first).message({
+        type: "input",
+        data: "printf '\\033[2J\\033[24;1Hcross-size-marker\\033[24;20H\\033[?25l'\r",
+      });
+      await waitForMessage(
+        first,
+        (message) =>
+          message.type === "output"
+          && message.data.includes("\x1b[2J")
+          && message.data.includes("cross-size-marker"),
+      );
+      fake(first).close();
+
+      const reconnected = socket();
+      manager.attach(pane.id, reconnected, 40, 12);
+      const ready = await waitForMessage(reconnected, (message) => message.type === "ready");
+      assert.equal(ready.replayKind, "checkpoint");
+      assert.match(ready.replay, /cross-size-marker/);
+      assert.match(ready.replay, /\x1b\[\?25l/);
+    } finally {
+      manager.disposeAll();
+    }
   });
 });
 
