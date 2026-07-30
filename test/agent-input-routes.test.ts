@@ -22,10 +22,16 @@ import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
-const registrationBody = (nonce: string) => ({
+const registrationBody = (nonce: string, challenge: Parameters<typeof createOpenCodeRuntimeAttestation>[1]) => ({
   instanceNonce: nonce,
   kind: "opencode" as const,
-  runtimeAttestation: createOpenCodeRuntimeAttestation(nonce),
+  runtimeAttestation: createOpenCodeRuntimeAttestation(nonce, challenge),
+});
+const challengeFrom = (value: any): Parameters<typeof createOpenCodeRuntimeAttestation>[1] => ({
+  id: value.id,
+  nonce: value.nonce,
+  issuedAt: value.issuedAt,
+  deadline: value.deadline,
 });
 const captureBodyFor = (occurrenceId: string, sessionID: string, id: string, questions: any[], ordinal = 1) => ({
   occurrenceId, occurrenceKey: nativeOccurrenceKey(sessionID, id), ordinal,
@@ -84,29 +90,71 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
       created.tabs[0].panes[0].id,
     );
     assert.throws(() => issueAgentInputRegistrationCapabilityForPane(credentials, state, "other-pane"), /pane_unavailable/);
+    assert.equal((await fetch(`${base}/api/agent-input/sources/challenge`, {
+      method: "POST", headers: bearer(auth.token), body: JSON.stringify({ kind: "opencode" }),
+    })).status, 403, "broad browser authority cannot mint a runtime challenge");
+    const boundedCapability = issueAgentInputRegistrationCapabilityForPane(credentials, state, created.tabs[0].panes[0].id);
+    assert.equal((await fetch(`${base}/api/agent-input/sources/challenge`, {
+      method: "POST", headers: bearer(boundedCapability.capability), body: "x".repeat(1_025),
+    })).status, 413, "challenge requests have an independent small body bound");
+    const lostChallengeResponse = await fetch(`${base}/api/agent-input/sources/challenge`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify({ kind: "opencode" }),
+    });
+    assert.equal(lostChallengeResponse.status, 201);
+    const lostChallenge = challengeFrom(await lostChallengeResponse.json());
+    const challenged = await fetch(`${base}/api/agent-input/sources/challenge`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify({ kind: "opencode" }),
+    });
+    assert.equal(challenged.status, 201);
+    assert.equal(challenged.headers.get("cache-control"), "no-store");
+    const serverChallenge = challengeFrom(await challenged.json());
+    assert.notEqual(serverChallenge.id, lostChallenge.id, "a response-loss retry renews rather than reuses plaintext");
+    const staleChallenge = await fetch(`${base}/api/agent-input/sources/register`, {
+      method: "POST", headers: bearer(capability.capability),
+      body: JSON.stringify(registrationBody("O".repeat(43), lostChallenge)),
+    });
+    assert.equal(staleChallenge.status, 409, "renewal makes the unobserved predecessor unusable");
+    assert.equal((await staleChallenge.json() as { error: string }).error, "runtime_attestation_invalid");
     const invalidNonce = "I".repeat(43);
     const invalidAttestation = await fetch(`${base}/api/agent-input/sources/register`, {
       method: "POST", headers: bearer(capability.capability), body: JSON.stringify({
-        ...registrationBody(invalidNonce),
-        runtimeAttestation: { ...createOpenCodeRuntimeAttestation(invalidNonce), release: "1.18.8" },
+        ...registrationBody(invalidNonce, serverChallenge),
+        runtimeAttestation: { ...createOpenCodeRuntimeAttestation(invalidNonce, serverChallenge), release: "1.18.8" },
       }),
     });
     assert.equal(invalidAttestation.status, 409, "the server independently rejects a non-exact runtime attestation");
     assert.equal(credentials.authenticate(capability.capability)?.kind, "agent-input-registration",
       "invalid attestation does not consume the one-shot capability");
     const register = await fetch(`${base}/api/agent-input/sources/register`, {
-      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43))),
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43), serverChallenge)),
     });
     assert.equal(register.status, 201);
     assert.equal(register.headers.get("cache-control"), "no-store");
     const source = await register.json() as { sourceId: string; relaySecret: string };
     assert.ok(source.sourceId && source.relaySecret);
+    const sourceChallengeResponse = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/challenge`, {
+      method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify({ kind: "opencode" }),
+    });
+    assert.equal(sourceChallengeResponse.status, 201);
+    const sourceChallenge = challengeFrom(await sourceChallengeResponse.json());
+    const priorRelaySecret = source.relaySecret;
+    const refreshedResponse = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/refresh`, {
+      method: "POST", headers: bearer(priorRelaySecret),
+      body: JSON.stringify(registrationBody("R".repeat(43), sourceChallenge)),
+    });
+    assert.equal(refreshedResponse.status, 200);
+    source.relaySecret = (await refreshedResponse.json() as { relaySecret: string }).relaySecret;
+    assert.equal(credentials.authenticate(priorRelaySecret), undefined);
+    const storedAttestation = credentials.source(source.sourceId)?.runtimeAttestation as Record<string, unknown>;
+    assert.equal("nonce" in storedAttestation, false);
+    assert.equal("serverChallenge" in storedAttestation, false);
+    assert.doesNotMatch(fs.readFileSync(credentials.filePath, "utf8"), new RegExp(sourceChallenge.nonce));
     const incompleteNativeSnapshot = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/native-list`, {
       method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify({ pendingRequestIds: [] }),
     });
     assert.equal(incompleteNativeSnapshot.status, 400, "absence reconciliation requires an explicit complete snapshot");
     const lostRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
-      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43))),
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43), serverChallenge)),
     });
     assert.equal(lostRegistrationReplay.status, 401, "a used capability never reconstructs a lost plaintext response");
     assert.equal((await fetch(`${base}/api/agent-input/sources/register?token=${encodeURIComponent(capability.capability)}`, {
@@ -216,7 +264,8 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     const secondPrincipal = credentials.authenticate(secondCapability.capability);
     assert.equal(secondPrincipal?.kind, "agent-input-registration");
     if (secondPrincipal?.kind === "agent-input-registration") {
-      const second = credentials.exchange(secondPrincipal, registrationBody("S".repeat(43)));
+      const secondChallenge = credentials.issueRuntimeChallenge(secondPrincipal);
+      const second = credentials.exchange(secondPrincipal, registrationBody("S".repeat(43), secondChallenge));
       if (second.outcome === "issued") {
         assert.equal((await fetch(`${base}/api/agent-input/sources/${source.sourceId}/deliveries`, { headers: bearer(second.relaySecret) })).status, 401);
       }
@@ -256,7 +305,8 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
   });
   const registration = credentials.authenticate(capability.capability);
   if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-  const exchange = credentials.exchange(registration, registrationBody("L".repeat(43)));
+  const registrationChallenge = credentials.issueRuntimeChallenge(registration);
+  const exchange = credentials.exchange(registration, registrationBody("L".repeat(43), registrationChallenge));
   if (exchange.outcome !== "issued") throw new Error("source unavailable");
   const principal = credentials.authenticate(exchange.relaySecret);
   if (principal?.kind !== "agent-input-source") throw new Error("source principal unavailable");
@@ -329,9 +379,10 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
     const unsupportedRegistration = credentials.authenticate(unsupportedCapability.capability);
     if (unsupportedRegistration?.kind !== "agent-input-registration") throw new Error("unsupported registration unavailable");
     const futureNonce = "F".repeat(43);
+    const futureChallenge = credentials.issueRuntimeChallenge(unsupportedRegistration);
     assert.throws(() => credentials.exchange(unsupportedRegistration, {
-      ...registrationBody(futureNonce),
-      runtimeAttestation: { ...createOpenCodeRuntimeAttestation(futureNonce), release: "future" },
+      ...registrationBody(futureNonce, futureChallenge),
+      runtimeAttestation: { ...createOpenCodeRuntimeAttestation(futureNonce, futureChallenge), release: "future" },
     }), /runtime_attestation_invalid/);
 
     const concurrent = capture("concurrent");
@@ -399,7 +450,8 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
       const split = Math.floor(rotationBody.length / 2);
       request.write(rotationBody.subarray(0, split));
       setImmediate(() => {
-        credentials.refresh(principal);
+        const refreshChallenge = credentials.issueRuntimeChallenge(principal);
+        credentials.refresh(principal, registrationBody("R".repeat(43), refreshChallenge));
         request.end(rotationBody.subarray(split));
       });
     });
@@ -412,6 +464,42 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
     server.close();
     await once(server, "close");
     state.flush();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("feature disable rejects challenge creation without leaving pending challenge authority", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-route-disabled-"));
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  const state = new StateStore(machines, path.join(directory, "state.json"));
+  const settings = new SettingsStore(path.join(directory, "settings.json"));
+  const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "server-key" });
+  const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "answer-key" });
+  const relay = new AgentInputRelay(requests, credentials, { enabled: false, isPaneLive: () => true });
+  const auth: AuthConfig = {
+    enabled: true, token: "browser-user-token", loginEnabled: false,
+    sessionSecret: "session-secret", browserAuthMode: "shared-or-login",
+  };
+  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+    auth, agentInputEnabled: false, agentInputCredentials: credentials, agentInputRequests: requests,
+    agentInputRelay: relay, healthResolvers: { machines: async () => [], streams: async () => [] },
+  });
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const context = state.findPaneContext(pane.id)!;
+  const capability = credentials.issueRegistrationCapability({
+    workspaceId: context.workspace.id, tabId: context.tab.id, paneId: pane.id,
+    machineId: pane.machineId, sourceKind: "opencode",
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("server unavailable");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/agent-input/sources/challenge`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify({ kind: "opencode" }),
+    });
+    assert.equal(response.status, 503);
+    assert.equal(credentials.snapshot().challenges.length, 0);
+  } finally {
+    server.close(); await once(server, "close"); state.flush();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

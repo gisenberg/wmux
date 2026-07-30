@@ -8,12 +8,16 @@ import type { StateStore } from "./state.js";
 import {
   isSupportedOpenCodeRuntimeAttestation,
   openCodeRuntimeAttestationSchema,
+  sanitizeOpenCodeRuntimeAttestation,
+  sanitizedOpenCodeRuntimeAttestationSchema,
+  type OpenCodeServerChallenge,
   type OpenCodeRuntimeAttestation,
 } from "./opencode-question-contract.js";
 
-export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 3;
+export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 4;
 export const DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS = 5 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_RELAY_TTL_MS = 24 * 60 * 60 * 1_000;
+export const DEFAULT_AGENT_INPUT_CHALLENGE_TTL_MS = 15_000;
 export const DEFAULT_AGENT_INPUT_SOURCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_CREDENTIAL_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
@@ -69,7 +73,7 @@ const sourceSchema = z.object({
   credentialGeneration: z.number().int().positive(),
   context: contextSchema,
   instanceNonce: value(),
-  runtimeAttestation: openCodeRuntimeAttestationSchema.optional(),
+  runtimeAttestation: sanitizedOpenCodeRuntimeAttestationSchema.optional(),
   runtimeReady: z.boolean(),
   supported: z.boolean(),
   diagnostic: z.enum(["runtime_ready", "attestation_required", "recovery_invalidated"]),
@@ -86,10 +90,48 @@ const sourceSchema = z.object({
   }
 });
 const sourceV2Schema = z.object({ ...attestationlessSourceFields, secretVerifier: verifierSchema }).strict();
+const sourceV3Schema = z.object({
+  id: value(),
+  credentialId: z.string().uuid(),
+  secretVerifier: verifierSchema,
+  credentialGeneration: z.number().int().positive(),
+  context: contextSchema,
+  instanceNonce: value(),
+  runtimeAttestation: openCodeRuntimeAttestationSchema.optional(),
+  runtimeReady: z.boolean(),
+  supported: z.boolean(),
+  diagnostic: z.enum(["runtime_ready", "attestation_required", "recovery_invalidated"]),
+  issuedAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().positive(),
+  refreshedAt: z.number().int().nonnegative(),
+  revokedAt: z.number().int().nonnegative().optional(),
+}).strict();
 const capabilityTombstoneSchema = z.object({
   id: z.string().uuid(),
   sourceId: value(),
   exchangeNonce: value(),
+  expiresAt: z.number().int().positive(),
+}).strict();
+const challengeBindingSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("registration"),
+    capabilityId: z.string().uuid(),
+    paneId: value(),
+  }).strict(),
+  z.object({
+    kind: z.literal("source"),
+    sourceId: value(),
+    credentialId: z.string().uuid(),
+    credentialGeneration: z.number().int().positive(),
+    paneId: value(),
+  }).strict(),
+]);
+const challengeSchema = z.object({
+  id: z.string().uuid(),
+  verifier: verifierSchema,
+  binding: challengeBindingSchema,
+  context: contextSchema,
+  issuedAt: z.number().int().nonnegative(),
   expiresAt: z.number().int().positive(),
 }).strict();
 const envelopeSchema = z.object({
@@ -97,6 +139,7 @@ const envelopeSchema = z.object({
   capabilities: z.array(capabilitySchema).max(4_000),
   sources: z.array(sourceSchema).max(2_000),
   capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
+  challenges: z.array(challengeSchema).max(4_000),
 }).strict();
 const legacyCapabilitySchema = capabilitySchema.omit({ verifier: true }).extend({ hash: legacyHashSchema }).strict();
 const legacySourceSchema = z.object({ ...attestationlessSourceFields, secretHash: legacyHashSchema }).strict();
@@ -115,6 +158,12 @@ const envelopeV2Schema = z.object({
   schemaVersion: z.literal(2),
   capabilities: z.array(capabilitySchema).max(4_000),
   sources: z.array(sourceV2Schema).max(2_000),
+  capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
+}).strict();
+const envelopeV3Schema = z.object({
+  schemaVersion: z.literal(3),
+  capabilities: z.array(capabilitySchema).max(4_000),
+  sources: z.array(sourceV3Schema).max(2_000),
   capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
 }).strict();
 type Envelope = z.infer<typeof envelopeSchema>;
@@ -155,6 +204,8 @@ export interface RegisterAgentInputSource {
   runtimeAttestation: OpenCodeRuntimeAttestation;
 }
 
+export type RefreshAgentInputSource = RegisterAgentInputSource;
+
 export type AgentInputSourceExchange =
   | {
       outcome: "issued";
@@ -170,6 +221,7 @@ export interface AgentInputCredentialStoreOptions {
   hashKey: string;
   capabilityTtlMs?: number;
   relayTtlMs?: number;
+  challengeTtlMs?: number;
   beforeRename?: () => void;
   directoryFsync?: (directory: string, target: "backup" | "primary" | "quarantine") => void;
   pruneIntervalMs?: number;
@@ -185,6 +237,7 @@ export class AgentInputCredentialStore extends EventEmitter {
   private data: Envelope;
   private readonly capabilityTtlMs: number;
   private readonly relayTtlMs: number;
+  private readonly challengeTtlMs: number;
   private readonly pruneTimer?: ReturnType<typeof setInterval>;
   private disposed = false;
 
@@ -196,6 +249,10 @@ export class AgentInputCredentialStore extends EventEmitter {
     if (!options.hashKey) throw new Error("agent input credential hash key is required");
     this.capabilityTtlMs = options.capabilityTtlMs ?? DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS;
     this.relayTtlMs = options.relayTtlMs ?? DEFAULT_AGENT_INPUT_RELAY_TTL_MS;
+    this.challengeTtlMs = options.challengeTtlMs ?? DEFAULT_AGENT_INPUT_CHALLENGE_TTL_MS;
+    if (!Number.isSafeInteger(this.challengeTtlMs) || this.challengeTtlMs < 1_000 || this.challengeTtlMs > 30_000) {
+      throw new Error("agent input challenge TTL must be between 1 and 30 seconds");
+    }
     this.ensureSecureParent();
     const loaded = this.load();
     this.data = loaded.recovered ? invalidateRecoveredEnvelope(loaded.data, this.options.hashKey) : loaded.data;
@@ -227,6 +284,64 @@ export class AgentInputCredentialStore extends EventEmitter {
       });
     });
     return { capability: `aic_${id}.${secret}`, capabilityId: id, expiresAt };
+  }
+
+  issueRuntimeChallenge(
+    principal: AgentInputRegistrationPrincipal | AgentInputSourcePrincipal,
+    nowMs = Date.now(),
+  ): OpenCodeServerChallenge {
+    const id = crypto.randomUUID();
+    const nonce = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = nowMs + this.challengeTtlMs;
+    let sourceId: string | undefined;
+    this.commit((draft) => {
+      draft.challenges = draft.challenges.filter((candidate) => candidate.expiresAt > nowMs);
+      let binding: z.infer<typeof challengeBindingSchema>;
+      let context: AgentInputSourceContext;
+      if (principal.kind === "agent-input-registration") {
+        const capability = draft.capabilities.find((candidate) => candidate.id === principal.capabilityId);
+        if (!capability || capability.usedAt !== undefined || capability.expiresAt <= nowMs
+          || capability.context.paneId !== principal.paneId) {
+          throw new AgentInputCredentialError("unauthorized");
+        }
+        binding = { kind: "registration", capabilityId: capability.id, paneId: capability.context.paneId };
+        context = capability.context;
+      } else {
+        const source = draft.sources.find((candidate) => candidate.id === principal.sourceId);
+        if (!source || source.revokedAt !== undefined || source.expiresAt <= nowMs
+          || source.credentialId !== principal.credentialId
+          || source.credentialGeneration !== principal.credentialGeneration
+          || source.context.paneId !== principal.paneId) {
+          throw new AgentInputCredentialError("unauthorized");
+        }
+        binding = {
+          kind: "source",
+          sourceId: source.id,
+          credentialId: source.credentialId,
+          credentialGeneration: source.credentialGeneration,
+          paneId: source.context.paneId,
+        };
+        context = source.context;
+        sourceId = source.id;
+        source.runtimeAttestation = undefined;
+        source.runtimeReady = false;
+        source.supported = false;
+        source.diagnostic = "attestation_required";
+      }
+      draft.challenges = draft.challenges.filter((candidate) => !sameChallengeBinding(candidate.binding, binding));
+      if (draft.challenges.length >= 4_000) throw new AgentInputCredentialError("challenge_limit");
+      draft.challenges.push({
+        id,
+        verifier: this.verifier("challenge", id, nonce),
+        binding,
+        context: structuredClone(context),
+        issuedAt: nowMs,
+        expiresAt,
+      });
+    }, () => {
+      if (sourceId) this.emit("attestation-required", sourceId);
+    });
+    return { id, nonce, issuedAt: nowMs, deadline: expiresAt };
   }
 
   authenticate(presented: string, nowMs = Date.now()): AgentInputRegistrationPrincipal | AgentInputSourcePrincipal | undefined {
@@ -262,10 +377,6 @@ export class AgentInputCredentialStore extends EventEmitter {
       kind: z.literal("opencode"),
       runtimeAttestation: openCodeRuntimeAttestationSchema,
     }).strict().parse(input);
-    if (parsed.instanceNonce !== parsed.runtimeAttestation.nonce
-      || !isSupportedOpenCodeRuntimeAttestation(parsed.runtimeAttestation, nowMs)) {
-      throw new AgentInputCredentialError("runtime_attestation_invalid");
-    }
     let plaintext = "";
     const result = this.commit((draft) => {
       const capability = draft.capabilities.find((candidate) => candidate.id === principal.capabilityId);
@@ -275,6 +386,7 @@ export class AgentInputCredentialStore extends EventEmitter {
       if (capability.usedAt !== undefined) {
         return { outcome: "already_exchanged" as const, sourceId: capability.sourceId ?? "unavailable" };
       }
+      this.consumeRuntimeChallenge(draft, principal, capability.context, parsed, nowMs);
       if (draft.sources.length >= 2_000) throw new AgentInputCredentialError("source_limit");
       const sourceUuid = crypto.randomUUID();
       const sourceId = `source_${sourceUuid}`;
@@ -287,7 +399,7 @@ export class AgentInputCredentialStore extends EventEmitter {
         credentialGeneration: 1,
         context: structuredClone(capability.context),
         instanceNonce: parsed.instanceNonce,
-        runtimeAttestation: structuredClone(parsed.runtimeAttestation),
+        runtimeAttestation: sanitizeOpenCodeRuntimeAttestation(parsed.runtimeAttestation),
         runtimeReady: true,
         supported: true,
         diagnostic: "runtime_ready",
@@ -318,12 +430,17 @@ export class AgentInputCredentialStore extends EventEmitter {
     return result;
   }
 
-  refresh(principal: AgentInputSourcePrincipal, nowMs = Date.now()): {
+  refresh(principal: AgentInputSourcePrincipal, input: RefreshAgentInputSource, nowMs = Date.now()): {
     sourceId: string;
     relaySecret: string;
     expiresAt: number;
     credentialGeneration: number;
   } {
+    const parsed = z.object({
+      instanceNonce: value(),
+      kind: z.literal("opencode"),
+      runtimeAttestation: openCodeRuntimeAttestationSchema,
+    }).strict().parse(input);
     let plaintext = "";
     return this.commit((draft) => {
       const source = draft.sources.find((candidate) => candidate.id === principal.sourceId);
@@ -333,10 +450,16 @@ export class AgentInputCredentialStore extends EventEmitter {
         || source.context.paneId !== principal.paneId) {
         throw new AgentInputCredentialError("unauthorized");
       }
+      this.consumeRuntimeChallenge(draft, principal, source.context, parsed, nowMs);
       plaintext = crypto.randomBytes(32).toString("base64url");
-       source.secretVerifier = this.verifier("source", source.id, plaintext);
+      source.secretVerifier = this.verifier("source", source.id, plaintext);
       source.credentialId = crypto.randomUUID();
       source.credentialGeneration += 1;
+      source.instanceNonce = parsed.instanceNonce;
+      source.runtimeAttestation = sanitizeOpenCodeRuntimeAttestation(parsed.runtimeAttestation);
+      source.runtimeReady = true;
+      source.supported = true;
+      source.diagnostic = "runtime_ready";
       source.refreshedAt = nowMs;
       source.expiresAt = nowMs + this.relayTtlMs;
       return {
@@ -353,6 +476,8 @@ export class AgentInputCredentialStore extends EventEmitter {
       const source = draft.sources.find((candidate) => candidate.id === sourceId);
       if (!source || source.revokedAt !== undefined) return false;
       source.revokedAt = nowMs;
+      draft.challenges = draft.challenges.filter((challenge) =>
+        challenge.binding.kind !== "source" || challenge.binding.sourceId !== sourceId);
       return true;
     }, () => this.emit("revoked", sourceId));
   }
@@ -366,6 +491,7 @@ export class AgentInputCredentialStore extends EventEmitter {
         source.revokedAt = nowMs;
         changed += 1;
       }
+      draft.challenges = draft.challenges.filter((challenge) => challenge.binding.kind !== "source");
       return changed;
     });
     for (const id of ids) this.emit("revoked", id);
@@ -381,6 +507,7 @@ export class AgentInputCredentialStore extends EventEmitter {
         capability.usedAt ??= nowMs;
         count += 1;
       }
+      draft.challenges = draft.challenges.filter((challenge) => challenge.binding.kind !== "registration");
       return count;
     });
   }
@@ -418,6 +545,7 @@ export class AgentInputCredentialStore extends EventEmitter {
     this.commit((draft) => {
       draft.capabilities = draft.capabilities.filter((capability) => capability.expiresAt > nowMs);
       draft.capabilityTombstones = draft.capabilityTombstones.filter((tombstone) => tombstone.expiresAt > nowMs);
+      draft.challenges = draft.challenges.filter((challenge) => challenge.expiresAt > nowMs);
       draft.sources = draft.sources.filter((source) =>
         (source.revokedAt ?? source.expiresAt) + DEFAULT_AGENT_INPUT_SOURCE_RETENTION_MS > nowMs);
     });
@@ -429,7 +557,7 @@ export class AgentInputCredentialStore extends EventEmitter {
     if (this.pruneTimer) clearInterval(this.pruneTimer);
   }
 
-  private verifier(kind: "capability" | "source", id: string, secret: string): z.infer<typeof verifierSchema> {
+  private verifier(kind: "capability" | "source" | "challenge", id: string, secret: string): z.infer<typeof verifierSchema> {
     return {
       kind: "hmac-sha256",
       digest: crypto.createHmac("sha256", this.options.hashKey)
@@ -439,7 +567,7 @@ export class AgentInputCredentialStore extends EventEmitter {
   }
 
   private verify(
-    kind: "capability" | "source",
+    kind: "capability" | "source" | "challenge",
     id: string,
     secret: string,
     verifier: z.infer<typeof verifierSchema>,
@@ -447,6 +575,34 @@ export class AgentInputCredentialStore extends EventEmitter {
     const actual = Buffer.from(this.verifier(kind, id, secret).digest, "hex");
     const expected = Buffer.from(verifier.digest, "hex");
     return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  }
+
+  private consumeRuntimeChallenge(
+    draft: Envelope,
+    principal: AgentInputRegistrationPrincipal | AgentInputSourcePrincipal,
+    context: AgentInputSourceContext,
+    input: RegisterAgentInputSource,
+    nowMs: number,
+  ): void {
+    const invalid = (): never => { throw new AgentInputCredentialError("runtime_attestation_invalid"); };
+    const attestation = input.runtimeAttestation;
+    if (input.instanceNonce !== attestation.nonce || !isSupportedOpenCodeRuntimeAttestation(attestation, nowMs)) invalid();
+    const challenge = draft.challenges.find((candidate) => candidate.id === attestation.serverChallenge.id) ?? invalid();
+    if (challenge.expiresAt <= nowMs || challenge.issuedAt !== attestation.serverChallenge.issuedAt
+      || challenge.expiresAt !== attestation.serverChallenge.deadline
+      || !sameContext(challenge.context, context)
+      || !this.verify("challenge", challenge.id, attestation.serverChallenge.nonce, challenge.verifier)) invalid();
+    const bindingMatches = principal.kind === "agent-input-registration"
+      ? challenge.binding.kind === "registration"
+        && challenge.binding.capabilityId === principal.capabilityId
+        && challenge.binding.paneId === principal.paneId
+      : challenge.binding.kind === "source"
+        && challenge.binding.sourceId === principal.sourceId
+        && challenge.binding.credentialId === principal.credentialId
+        && challenge.binding.credentialGeneration === principal.credentialGeneration
+        && challenge.binding.paneId === principal.paneId;
+    if (!bindingMatches) invalid();
+    draft.challenges = draft.challenges.filter((candidate) => candidate.id !== challenge.id);
   }
 
   private commit<T>(mutate: (draft: Envelope) => T, after?: () => void): T {
@@ -500,6 +656,13 @@ export class AgentInputCredentialStore extends EventEmitter {
         const old = envelopeV2Schema.parse(input);
         return {
           data: invalidateAttestationlessEnvelope(old, this.options.hashKey),
+          migrated: true,
+        };
+      }
+      if (version === 3) {
+        const old = envelopeV3Schema.parse(input);
+        return {
+          data: migrateChallengeBoundEnvelope(old),
           migrated: true,
         };
       }
@@ -598,10 +761,11 @@ export const issueAgentInputRegistrationCapabilityForPane = (
 };
 
 const emptyEnvelope = (): Envelope => ({
-  schemaVersion: 3,
+  schemaVersion: 4,
   capabilities: [],
   sources: [],
   capabilityTombstones: [],
+  challenges: [],
 });
 
 const invalidateLegacyEnvelope = (
@@ -615,7 +779,7 @@ const invalidateLegacyEnvelope = (
     digest: crypto.createHmac("sha256", hashKey).update(`invalidated-${kind}\0${id}`).digest("hex"),
   });
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     capabilities: capabilities.map(({ hash: _hash, ...capability }) => ({
       ...capability,
       verifier: invalid("capability", capability.id),
@@ -639,6 +803,7 @@ const invalidateLegacyEnvelope = (
       };
     }),
     capabilityTombstones,
+    challenges: [],
   };
 };
 
@@ -651,7 +816,7 @@ const invalidateAttestationlessEnvelope = (
     digest: crypto.createHmac("sha256", hashKey).update(`attestation-required-${kind}\0${id}`).digest("hex"),
   });
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     capabilities: input.capabilities.map((capability) => ({
       ...capability,
       verifier: invalid("capability", capability.id),
@@ -674,8 +839,25 @@ const invalidateAttestationlessEnvelope = (
       };
     }),
     capabilityTombstones: input.capabilityTombstones,
+    challenges: [],
   };
 };
+
+const migrateChallengeBoundEnvelope = (input: z.infer<typeof envelopeV3Schema>): Envelope => ({
+  schemaVersion: 4,
+  capabilities: structuredClone(input.capabilities),
+  sources: input.sources.map((source) => {
+    const { runtimeAttestation: _runtimeAttestation, ...rest } = source;
+    return {
+      ...rest,
+      runtimeReady: false,
+      supported: false,
+      diagnostic: "attestation_required" as const,
+    };
+  }),
+  capabilityTombstones: structuredClone(input.capabilityTombstones),
+  challenges: [],
+});
 
 const invalidateRecoveredEnvelope = (input: Envelope, hashKey: string, nowMs = Date.now()): Envelope => {
   const invalid = (kind: string, id: string): z.infer<typeof verifierSchema> => ({
@@ -698,8 +880,27 @@ const invalidateRecoveredEnvelope = (input: Envelope, hashKey: string, nowMs = D
       diagnostic: "recovery_invalidated" as const,
       revokedAt: source.revokedAt ?? nowMs,
     })),
+    challenges: [],
   };
 };
+
+const sameContext = (left: AgentInputSourceContext, right: AgentInputSourceContext): boolean =>
+  left.workspaceId === right.workspaceId
+  && left.tabId === right.tabId
+  && left.paneId === right.paneId
+  && left.machineId === right.machineId
+  && left.sourceKind === right.sourceKind;
+
+const sameChallengeBinding = (
+  left: z.infer<typeof challengeBindingSchema>,
+  right: z.infer<typeof challengeBindingSchema>,
+): boolean => left.kind === right.kind && (left.kind === "registration" && right.kind === "registration"
+  ? left.capabilityId === right.capabilityId && left.paneId === right.paneId
+  : left.kind === "source" && right.kind === "source"
+    && left.sourceId === right.sourceId
+    && left.credentialId === right.credentialId
+    && left.credentialGeneration === right.credentialGeneration
+    && left.paneId === right.paneId);
 
 export const loadOrCreateAgentInputSecret = (filePath: string): string => {
   const parent = path.dirname(path.resolve(filePath));

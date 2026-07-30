@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "handshakeSchema": 1,
+  "handshakeSchema": 2,
   "openCodeRelease": "1.18.9",
   "sdkPackage": "@opencode-ai/sdk",
   "sdkVersion": "1.18.9",
@@ -21,6 +21,6 @@
     "question.reply",
     "session.get"
   ],
-  "compatibilityFingerprint": "opencode-question-occurrence-stream-v4-runtime-attestation-1.18.9",
-  "canonicalContractDigest": "1feab28627744cac89922c1aaf5177a26f2f290511d1b0e457d0fd8f1671997f"
+  "compatibilityFingerprint": "opencode-question-occurrence-stream-v5-server-challenge-1.18.9",
+  "canonicalContractDigest": "e40431c973b2be0db6ffe684669e3fe2cfd03477203bae08015d2a6736452334"
 }

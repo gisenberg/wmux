@@ -16,9 +16,15 @@ import {
   createOpenCodeRuntimeAttestation,
 } from "../src/server/opencode-question-contract.js";
 
-const registrationInput = (nonce: string) => ({
-  instanceNonce: nonce, kind: "opencode" as const, runtimeAttestation: createOpenCodeRuntimeAttestation(nonce),
-});
+const registrationInput = (
+  credentials: AgentInputCredentialStore,
+  principal: Parameters<AgentInputCredentialStore["issueRuntimeChallenge"]>[0],
+  nonce: string,
+) => {
+  const challenge = credentials.issueRuntimeChallenge(principal);
+  return { instanceNonce: nonce, kind: "opencode" as const,
+    runtimeAttestation: createOpenCodeRuntimeAttestation(nonce, challenge) };
+};
 
 const setup = (directory: string, timeout = 500) => {
   const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "hash-key" });
@@ -29,7 +35,7 @@ const setup = (directory: string, timeout = 500) => {
   const registrationPrincipal = credentials.authenticate(capability.capability);
   assert.equal(registrationPrincipal?.kind, "agent-input-registration");
   if (registrationPrincipal?.kind !== "agent-input-registration") throw new Error("missing principal");
-  const exchange = credentials.exchange(registrationPrincipal, registrationInput("N".repeat(43)));
+  const exchange = credentials.exchange(registrationPrincipal, registrationInput(credentials, registrationPrincipal, "N".repeat(43)));
   if (exchange.outcome !== "issued") throw new Error("missing source");
   const principal = credentials.authenticate(exchange.relaySecret);
   if (principal?.kind !== "agent-input-source") throw new Error("missing source principal");
@@ -140,7 +146,8 @@ test("poll leases clean up exactly, replace per source, and enforce the global c
       });
       const registration = credentials.authenticate(capability.capability);
       if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-      const exchange = credentials.exchange(registration, registrationInput(String(index).padStart(43, "0")));
+      const exchange = credentials.exchange(registration,
+        registrationInput(credentials, registration, String(index).padStart(43, "0")));
       if (exchange.outcome !== "issued") throw new Error("source unavailable");
       const principal = credentials.authenticate(exchange.relaySecret);
       if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");
@@ -240,7 +247,7 @@ test("credential rotation cancels handoff, invalidates old principal, and confin
     assert.equal(captured.outcome, "created");
     if (captured.outcome !== "created") return;
     const pending = relay.submit(captured.request.id, 1, "rotation-client", [["Safe"]]);
-    const refreshed = credentials.refresh(principal);
+    const refreshed = credentials.refresh(principal, registrationInput(credentials, principal, "R".repeat(43)));
     assert.equal(credentials.authenticate(relaySecret), undefined);
     assert.deepEqual(await pending, { outcome: "source_unavailable" });
     const next = credentials.authenticate(refreshed.relaySecret);
@@ -470,7 +477,8 @@ test("one source exhausting its delivery quota cannot deny an unrelated source",
       });
       const registration = credentials.authenticate(capability.capability);
       if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-      const exchange = credentials.exchange(registration, registrationInput(name[0].toUpperCase().padEnd(43, "N")));
+      const exchange = credentials.exchange(registration,
+        registrationInput(credentials, registration, name[0].toUpperCase().padEnd(43, "N")));
       if (exchange.outcome !== "issued") throw new Error("source unavailable");
       const principal = credentials.authenticate(exchange.relaySecret);
       if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");

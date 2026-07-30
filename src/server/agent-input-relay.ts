@@ -81,6 +81,7 @@ export class AgentInputRelay {
     this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? DEFAULT_AGENT_INPUT_DELIVERY_TIMEOUT_MS;
     credentials.on("revoked", this.onSourceRevoked);
     credentials.on("rotated", this.onSourceRotated);
+    credentials.on("attestation-required", this.onSourceAttestationRequired);
     credentials.on("issued", this.onSourceIssued);
     for (const source of credentials.snapshot().sources) {
       if (source.revokedAt !== undefined || source.expiresAt <= Date.now()) requests.retireSource(source.id);
@@ -435,6 +436,7 @@ export class AgentInputRelay {
     this.polls.clear();
     this.credentials.off("revoked", this.onSourceRevoked);
     this.credentials.off("rotated", this.onSourceRotated);
+    this.credentials.off("attestation-required", this.onSourceAttestationRequired);
     this.credentials.off("issued", this.onSourceIssued);
     for (const timer of this.expiryTimers.values()) clearTimeout(timer);
     this.expiryTimers.clear();
@@ -443,6 +445,10 @@ export class AgentInputRelay {
   private readonly onSourceRotated = (sourceId: string): void => {
     this.disconnectSource(sourceId);
     this.scheduleExpiry(sourceId);
+  };
+
+  private readonly onSourceAttestationRequired = (sourceId: string): void => {
+    this.disconnectSource(sourceId);
   };
 
   private readonly onSourceRevoked = (sourceId: string): void => {

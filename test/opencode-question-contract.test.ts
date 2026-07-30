@@ -89,7 +89,9 @@ test("runtime compatibility fails closed for missing APIs, versions, fingerprint
   assert.equal(isSupportedOpenCodeQuestionRuntime(supported), true);
   assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, capabilities: { ...supported.capabilities, questionReply: false } }), false);
   assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, release: "future" }), false);
-  assert.equal(isSupportedOpenCodeQuestionRuntime(createOpenCodeRuntimeAttestation("F".repeat(43), Date.now() + 60_000)), false);
+  assert.equal(isSupportedOpenCodeQuestionRuntime(createOpenCodeRuntimeAttestation(
+    "F".repeat(43), undefined, Date.now() + 60_000,
+  )), false);
   assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, compatibilityFingerprint: "wrong" }), false);
   assert.deepEqual(sanitizeOpenCodeQuestionEvent({ type: "question.asked", properties: {} }), {
     kind: "unsupported", code: "incompatible_event_shape",

@@ -23,6 +23,15 @@ import type { AgentInputQuestion, BootstrapPayload, MachineConfig } from "../src
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const runtime = { type: "legacy_runtime_ignored" };
+const serverChallenge = () => ({
+  type: "server_challenge",
+  handshakeSchema: 2,
+  contractDigest: "e40431c973b2be0db6ffe684669e3fe2cfd03477203bae08015d2a6736452334",
+  id: crypto.randomUUID(),
+  nonce: crypto.randomBytes(32).toString("base64url"),
+  issuedAt: Date.now(),
+  deadline: Date.now() + 15_000,
+});
 const question: AgentInputQuestion = {
   header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: true,
 };
@@ -135,6 +144,7 @@ test("broker occurrence stream converges duplicate events, orders reused IDs, su
     const send = (status: number, value: unknown) => {
       response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
     };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     if (requestPath.endsWith("/requests")) {
       let binding = bindings.get(body.occurrenceId);
@@ -200,7 +210,7 @@ test("broker occurrence stream converges duplicate events, orders reused IDs, su
     const ordinalThreeCalls = calls.filter((call) => call.path.endsWith("/requests") && call.body.ordinal === 3);
     assert.equal(ordinalThreeCalls.length, 1, "permanent binding 409 is consumed exactly once");
     const persisted = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
-    assert.equal(persisted.schemaVersion, 9);
+    assert.equal(persisted.schemaVersion, 10);
     assert.equal(persisted.streams[Object.keys(persisted.streams)[0]].nextOrdinal, 3);
     assert.equal(persisted.receipts.filter((receipt: any) => receipt.occurrenceId === [...bindings.keys()][0]).length, 2,
       "multiple asked-event receipts converge durably on occurrence one");
@@ -258,6 +268,7 @@ test("broker resets a stale high delivery cursor when the transient relay epoch 
     const send = (status: number, value: unknown) => {
       response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
     };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath.endsWith("/refresh")) return send(200, {
       sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2,
     });
@@ -310,12 +321,12 @@ test("broker migrations discard unbound metadata, require fresh registration, an
     await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === false));
     await broker.stop();
     const migrated = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
-    assert.equal(migrated.schemaVersion, 9);
+    assert.equal(migrated.schemaVersion, 10);
     assert.equal(migrated.supported, false);
     assert.deepEqual(migrated.outbox, []);
     assert.equal(calls.length, 0, "legacy unbound metadata performs no capture or resolution call");
 
-    const future = `${JSON.stringify({ schemaVersion: 10, sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: 9e15, cursor: 0 })}\n`;
+    const future = `${JSON.stringify({ schemaVersion: 11, sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: 9e15, cursor: 0 })}\n`;
     fs.writeFileSync(credentialPath, future, { mode: 0o600 });
     broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
     broker.send(runtime);
@@ -350,7 +361,7 @@ test("broker stale credentials and receipt capacity fail closed without metadata
 
     const key = "a".repeat(64);
     const digest = "b".repeat(64);
-    fs.writeFileSync(credentialPath, `${JSON.stringify({ schemaVersion: 9, sourceId: "source-one", relaySecret: "S".repeat(43),
+    fs.writeFileSync(credentialPath, `${JSON.stringify({ schemaVersion: 10, sourceId: "source-one", relaySecret: "S".repeat(43),
       expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1, cursor: 0,
       occurrenceEpoch: "epoch", relayEpoch: null, lastEventSequence: 512,
       streams: {}, receipts: Array.from({ length: 512 }, (_, index) => ({ eventId: `event-${index}`, occurrenceKey: key,
@@ -444,6 +455,7 @@ test("same-key metadata stays FIFO through resolve backoff while an unrelated re
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const requestPath = request.url ?? "";
     const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     if (requestPath.endsWith("/requests")) {
       if (body.id === "unrelated" && resolveAttempts === 1) unrelatedCapturedBeforeRetry = true;
@@ -501,6 +513,7 @@ test("capture metadata survives more than eight transient failures and recovers 
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const requestPath = request.url ?? "";
     const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     if (requestPath.endsWith("/requests")) {
       attempts += 1;
@@ -534,14 +547,14 @@ test("capture metadata survives more than eight transient failures and recovers 
 
 test("broker runtime attestation rejects every predicate with stable sanitized diagnostics and drops pre-ready events", { skip: process.platform === "win32" }, async (t) => {
   const baseAttestation = (challenge: any) => ({
-    ...createOpenCodeRuntimeAttestation(challenge.nonce),
+    ...createOpenCodeRuntimeAttestation(challenge.nonce, challenge.serverChallenge),
     challengeIssuedAt: challenge.issuedAt,
     challengeDeadline: challenge.deadline,
     observedAt: Date.now(),
     contractDigest: challenge.contractDigest,
   });
   const variants: Array<[string, string, (value: any, challenge: any) => any]> = [
-    ["handshake schema", "handshake_schema_mismatch", (value) => ({ ...value, handshakeSchema: 2 })],
+    ["handshake schema", "handshake_schema_mismatch", (value) => ({ ...value, handshakeSchema: 1 })],
     ["nonce", "attestation_nonce_mismatch", (value) => ({ ...value, nonce: "W".repeat(43) })],
     ["freshness", "attestation_late", (value, challenge) => ({ ...value, observedAt: challenge.deadline + 1 })],
     ["digest", "contract_digest_mismatch", (value) => ({ ...value, contractDigest: "0".repeat(64) })],
@@ -571,7 +584,8 @@ test("broker runtime attestation rejects every predicate with stable sanitized d
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-predicate-"));
       const credentialPath = path.join(directory, "pane.json");
       writeCredential(credentialPath);
-      const broker = launchBroker(directory, "http://127.0.0.1:9", "pane", credentialPath, undefined,
+      const fixture = await startChallengeOnlyFixture();
+      const broker = launchBroker(directory, fixture.base, "pane", credentialPath, undefined,
         (challenge) => mutate(baseAttestation(challenge), challenge));
       const sentinel = ["PRE", "READY", "QUESTION"].join("_");
       broker.sendRaw({ type: "asked", eventId: "pre-ready", eventSequence: 1, id: "request", sessionID: "session",
@@ -582,7 +596,7 @@ test("broker runtime attestation rejects every predicate with stable sanitized d
         assert.deepEqual({ state: status.state, diagnostic: status.diagnostic }, { state: "failed", diagnostic });
         assert.doesNotMatch(fs.readFileSync(credentialPath, "utf8"), new RegExp(sentinel));
       } finally {
-        await broker.stop(); fs.rmSync(directory, { recursive: true, force: true });
+        await broker.stop(); await fixture.close(); fs.rmSync(directory, { recursive: true, force: true });
       }
     });
   }
@@ -590,7 +604,7 @@ test("broker runtime attestation rejects every predicate with stable sanitized d
 
 test("broker runtime challenge is one-shot and distinguishes replay, duplicate, and conflict", { skip: process.platform === "win32" }, async (t) => {
   const attestation = (challenge: any) => ({
-    ...createOpenCodeRuntimeAttestation(challenge.nonce),
+    ...createOpenCodeRuntimeAttestation(challenge.nonce, challenge.serverChallenge),
     challengeIssuedAt: challenge.issuedAt,
     challengeDeadline: challenge.deadline,
     observedAt: Date.now(),
@@ -604,7 +618,12 @@ test("broker runtime challenge is one-shot and distinguishes replay, duplicate, 
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-once-"));
       const credentialPath = path.join(directory, "pane.json");
       writeCredential(credentialPath);
-      const server = http.createServer(async (request, _response) => { for await (const _chunk of request) { /* hold */ } });
+      const server = http.createServer(async (request, response) => {
+        for await (const _chunk of request) { /* drain */ }
+        if (request.url?.endsWith("/challenge")) {
+          response.writeHead(201, { "content-type": "application/json" }); response.end(JSON.stringify(serverChallenge()));
+        }
+      });
       server.listen(0, "127.0.0.1"); await once(server, "listening");
       const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
       let first: any;
@@ -632,24 +651,22 @@ test("broker runtime challenge is one-shot and distinguishes replay, duplicate, 
     const credentialPath = path.join(directory, "pane.json");
     writeCredential(credentialPath);
     const oldNonce = "R".repeat(43);
-    const stored = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
-    stored.lastChallengeDigest = crypto.createHash("sha256").update(`wmux-runtime-challenge\0${oldNonce}`).digest("hex");
-    fs.writeFileSync(credentialPath, `${JSON.stringify(stored)}\n`, { mode: 0o600 });
-    const broker = launchBroker(directory, "http://127.0.0.1:9", "pane", credentialPath, undefined, (challenge) => ({
+    const fixture = await startChallengeOnlyFixture();
+    const broker = launchBroker(directory, fixture.base, "pane", credentialPath, undefined, (challenge) => ({
       ...attestation(challenge), nonce: oldNonce,
     }));
     try {
       await broker.exit();
       const status = JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8"));
-      assert.equal(status.diagnostic, "attestation_replay");
+      assert.equal(status.diagnostic, "attestation_nonce_mismatch");
     } finally {
-      await broker.stop(); fs.rmSync(directory, { recursive: true, force: true });
+      await broker.stop(); await fixture.close(); fs.rmSync(directory, { recursive: true, force: true });
     }
   });
 });
 
 function writeCredential(filePath: string): void {
-  fs.writeFileSync(filePath, `${JSON.stringify({ schemaVersion: 9, sourceId: "source-one", relaySecret: "S".repeat(43),
+  fs.writeFileSync(filePath, `${JSON.stringify({ schemaVersion: 10, sourceId: "source-one", relaySecret: "S".repeat(43),
     expiresAt: Date.now() + 60_000, supported: true, credentialGeneration: 1, cursor: 0,
     occurrenceEpoch: "epoch-one", relayEpoch: null, lastEventSequence: 0,
     streams: {}, receipts: [], outbox: [], quarantines: [] })}\n`, { mode: 0o600 });
@@ -662,7 +679,7 @@ function launchBroker(
   credentialPath: string,
   capabilityPath?: string,
   attest: (challenge: any) => any = (message) => ({
-    ...createOpenCodeRuntimeAttestation(message.nonce),
+    ...createOpenCodeRuntimeAttestation(message.nonce, message.serverChallenge),
     challengeIssuedAt: message.issuedAt,
     challengeDeadline: message.deadline,
     observedAt: Date.now(),
@@ -716,6 +733,24 @@ function launchBroker(
   return { child, messages, sanitized, stderr, send, sendRaw, exit, stop };
 }
 
+async function startChallengeOnlyFixture() {
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain */ }
+    if (request.url?.endsWith("/challenge")) {
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end(JSON.stringify(serverChallenge()));
+      return;
+    }
+    response.writeHead(409, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "runtime_attestation_invalid" }));
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+  return { base: `http://127.0.0.1:${address.port}`, close: async () => {
+    server.closeAllConnections(); server.close(); await once(server, "close");
+  } };
+}
+
 async function startSimpleFixture(calls: Array<{ path: string; body: any }>) {
   const bindings = new Map<string, any>();
   const server = http.createServer(async (request, response) => {
@@ -723,6 +758,7 @@ async function startSimpleFixture(calls: Array<{ path: string; body: any }>) {
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const requestPath = request.url ?? ""; calls.push({ path: requestPath, body });
     const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     if (requestPath.endsWith("/requests")) {
       const binding = bindings.get(body.occurrenceId) ?? { id: `public-${body.ordinal}`, generation: body.ordinal, state: "pending" };

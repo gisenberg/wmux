@@ -6,7 +6,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const MAX_LINE_BYTES = 128 * 1024;
 const MAX_OUTBOX = 256;
@@ -32,11 +32,10 @@ let stopping = false;
 let pollAbort = new AbortController();
 let drainPromise;
 let refreshPromise;
-let attestationResolve;
-let runtimeAttestation;
 let runtimeReady = false;
 let challenge;
-let attestationSeen = false;
+let pendingAttestation;
+let settledAttestation;
 let lastDiagnostic;
 let snapshotRequested = false;
 let snapshotRerunPending = false;
@@ -49,7 +48,6 @@ const wakes = new Set();
 // after a broker restart, a native request still listed without a new terminal
 // event is a new occurrence of that reused identity.
 const snapshotFences = new Map();
-const attestationPromise = new Promise((resolve) => { attestationResolve = resolve; });
 
 const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -69,7 +67,7 @@ function loadContract() {
     const unsigned = structuredClone(parsed);
     delete unsigned.canonicalContractDigest;
     const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
-    return parsed?.schemaVersion === 2 && parsed.handshakeSchema === 1
+    return parsed?.schemaVersion === 2 && parsed.handshakeSchema === 2
       && parsed.openCodeRelease === "1.18.9" && parsed.openCodeRelease === parsed.sdkVersion
       && parsed.healthCall === "client.global.health()"
       && parsed.eventEnvelope === "legacy-properties"
@@ -140,7 +138,6 @@ function disabledLegacy(parsed) {
     credentialGeneration: parsed.credentialGeneration,
     cursor: parsed.cursor,
     occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
-    lastChallengeDigest: undefined,
     streams: {}, receipts: [], outbox: [], quarantines: [{ reason: "migration-unbound", at: Date.now() }],
     requiresFreshRegistration: true,
   };
@@ -148,6 +145,10 @@ function disabledLegacy(parsed) {
 
 function normalizeCredential(parsed) {
   if (!validBase(parsed)) return undefined;
+  if (parsed.schemaVersion === 9) {
+    const { lastChallengeDigest: _lastChallengeDigest, ...legacy } = parsed;
+    parsed = { ...legacy, schemaVersion: SCHEMA_VERSION, supported: false, requiresFreshAttestation: true };
+  }
   if (parsed.schemaVersion !== SCHEMA_VERSION) {
     if (Number.isSafeInteger(parsed.schemaVersion) && parsed.schemaVersion > SCHEMA_VERSION) {
       futureCredential = true;
@@ -158,7 +159,7 @@ function normalizeCredential(parsed) {
   if (typeof parsed.occurrenceEpoch !== "string"
     || !(parsed.relayEpoch === null || typeof parsed.relayEpoch === "string")
     || !Number.isSafeInteger(parsed.lastEventSequence) || parsed.lastEventSequence < 0
-    || !(parsed.lastChallengeDigest === undefined || /^[a-f0-9]{64}$/.test(parsed.lastChallengeDigest))
+    || !(parsed.requiresFreshAttestation === undefined || typeof parsed.requiresFreshAttestation === "boolean")
     || !parsed.streams || typeof parsed.streams !== "object"
     || !Array.isArray(parsed.receipts) || !Array.isArray(parsed.outbox) || !Array.isArray(parsed.quarantines)
     || Object.keys(parsed.streams).length > MAX_STREAMS || parsed.receipts.length > MAX_RECEIPTS
@@ -213,20 +214,28 @@ async function request(pathname, token, init = {}, signal, timeoutMs = REQUEST_T
   finally { clearTimeout(timer); signal?.removeEventListener("abort", forward); }
 }
 
-function challengeDigest(nonce) {
-  return crypto.createHash("sha256").update(`wmux-runtime-challenge\0${nonce}`).digest("hex");
-}
-
 function exactKeys(value, keys) {
   return value && typeof value === "object" && !Array.isArray(value)
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function validServerChallenge(value) {
+  const now = Date.now();
+  return exactKeys(value, ["type", "handshakeSchema", "contractDigest", "id", "nonce", "issuedAt", "deadline"])
+    && value.type === "server_challenge" && value.handshakeSchema === contract?.handshakeSchema
+    && value.contractDigest === contract?.canonicalContractDigest
+    && typeof value.id === "string" && /^[0-9a-f-]{36}$/.test(value.id)
+    && typeof value.nonce === "string" && /^[A-Za-z0-9_-]{43}$/.test(value.nonce)
+    && Number.isSafeInteger(value.issuedAt) && Number.isSafeInteger(value.deadline)
+    && value.deadline > value.issuedAt && value.deadline - value.issuedAt <= 30_000
+    && value.issuedAt <= now + 1_000 && value.deadline > now;
 }
 
 function attestationDiagnostic(value) {
   if (!contract || !challenge || !value || typeof value !== "object" || value.type !== "runtime_attestation") {
     return "attestation_malformed";
   }
-  if (!exactKeys(value, ["type", "handshakeSchema", "nonce", "challengeIssuedAt", "challengeDeadline", "observedAt",
+  if (!exactKeys(value, ["type", "handshakeSchema", "nonce", "serverChallenge", "challengeIssuedAt", "challengeDeadline", "observedAt",
     "contractDigest", "compatibilityFingerprint", "eventEnvelope", "release", "health", "capabilities", "diagnostic"])
     || typeof value.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value.nonce)
     || typeof value.contractDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.contractDigest)
@@ -235,9 +244,9 @@ function attestationDiagnostic(value) {
     || typeof value.release !== "string" || value.release.length > 64
     || typeof value.diagnostic !== "string" || value.diagnostic.length > 64) return "attestation_malformed";
   if (value.handshakeSchema !== challenge.handshakeSchema) return "handshake_schema_mismatch";
-  if (value.nonce !== challenge.nonce) {
-    return credential?.lastChallengeDigest === challengeDigest(value.nonce) ? "attestation_replay" : "attestation_nonce_mismatch";
-  }
+  if (value.nonce !== challenge.nonce) return "attestation_nonce_mismatch";
+  if (!exactKeys(value.serverChallenge, ["id", "nonce", "issuedAt", "deadline"])
+    || JSON.stringify(value.serverChallenge) !== JSON.stringify(challenge.serverChallenge)) return "server_challenge_mismatch";
   if (value.challengeIssuedAt !== challenge.issuedAt || value.challengeDeadline !== challenge.deadline
     || !Number.isSafeInteger(value.observedAt) || value.observedAt < challenge.issuedAt
     || value.observedAt > challenge.deadline || Date.now() > challenge.deadline) return "attestation_late";
@@ -267,10 +276,67 @@ function attestationDiagnostic(value) {
   return "ok";
 }
 
+function readCapability() {
+  if (!capabilityPath) return "";
+  try { assertPrivateFile(capabilityPath); return fs.readFileSync(capabilityPath, "utf8").trim(); } catch { return ""; }
+}
+
+async function obtainServerChallenge() {
+  const useSource = credential && !credential.requiresFreshRegistration;
+  const token = useSource ? credential.relaySecret : readCapability();
+  const pathname = useSource
+    ? `/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/challenge`
+    : "/api/agent-input/sources/challenge";
+  if (!token) return undefined;
+  for (let attempt = 0; attempt < 3 && !stopping; attempt += 1) {
+    const response = await request(pathname, token, { method: "POST", body: JSON.stringify({ kind: "opencode" }) });
+    if (response.status === 201 && validServerChallenge(response.body)) return response.body;
+    if (response.status !== 0 && response.status !== 408 && response.status !== 429 && response.status < 500) {
+      if (useSource && (response.status === 401 || response.status === 403)) disable("stale-credential");
+      return undefined;
+    }
+    await sleep(Math.min(500, 100 * (2 ** attempt)));
+  }
+  return undefined;
+}
+
+function requestRuntimeAttestation(serverChallenge) {
+  settledAttestation = undefined;
+  const issuedAt = Date.now();
+  const deadline = Math.min(issuedAt + HANDSHAKE_TIMEOUT_MS, serverChallenge.deadline);
+  if (deadline <= issuedAt) return Promise.resolve(undefined);
+  challenge = {
+    type: "runtime_challenge",
+    handshakeSchema: contract.handshakeSchema,
+    nonce: crypto.randomBytes(32).toString("base64url"),
+    serverChallenge: {
+      id: serverChallenge.id,
+      nonce: serverChallenge.nonce,
+      issuedAt: serverChallenge.issuedAt,
+      deadline: serverChallenge.deadline,
+    },
+    issuedAt,
+    deadline,
+    contractDigest: contract.canonicalContractDigest,
+  };
+  persistStatus("attesting", "challenge_issued");
+  emit(challenge);
+  let pending;
+  const result = new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (pendingAttestation?.challenge === challenge) pendingAttestation = undefined;
+      resolve(undefined);
+    }, Math.max(1, deadline - Date.now()));
+    pending = { challenge, seen: undefined, resolve: (value) => { clearTimeout(timer); resolve(value); } };
+    pendingAttestation = pending;
+  });
+  return result.finally(() => { if (pendingAttestation === pending) pendingAttestation = undefined; });
+}
+
 async function register(attestation) {
   if (!capabilityPath || attestationDiagnostic(attestation) !== "ok") return false;
-  let capability = "";
-  try { assertPrivateFile(capabilityPath); capability = fs.readFileSync(capabilityPath, "utf8").trim(); } catch { return false; }
+  let capability = readCapability();
+  if (!capability) return false;
   const response = await request("/api/agent-input/sources/register", capability, {
     method: "POST", body: JSON.stringify({
       instanceNonce: attestation.nonce,
@@ -287,8 +353,7 @@ async function register(attestation) {
       expiresAt: response.body.expiresAt, supported: response.body.supported === true,
       credentialGeneration: response.body.credentialGeneration, cursor: 0,
        occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
-       lastChallengeDigest: challengeDigest(attestation.nonce),
-       streams: {}, receipts: [], outbox: [], quarantines: [],
+       streams: {}, receipts: [], outbox: [], quarantines: [], requiresFreshAttestation: false,
     };
     persistCredential();
     return true;
@@ -298,23 +363,40 @@ async function register(attestation) {
   }
 }
 
-async function refresh() {
+async function refresh(attestation) {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     if (!credential || credential.requiresFreshRegistration) return false;
     pollAbort.abort();
+    if (!attestation) {
+      const serverChallenge = await obtainServerChallenge();
+      if (!serverChallenge) return false;
+      attestation = await requestRuntimeAttestation(serverChallenge);
+      if (!attestation || attestationDiagnostic(attestation) !== "ok") return false;
+    }
     const response = await request(`/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/refresh`,
-      credential.relaySecret, { method: "POST", body: "{}" });
+      credential.relaySecret, { method: "POST", body: JSON.stringify({
+        instanceNonce: attestation.nonce,
+        kind: "opencode",
+        runtimeAttestation: attestation,
+      }) });
     if (response.status === 200 && typeof response.body.relaySecret === "string" && typeof response.body.expiresAt === "number") {
       credential.relaySecret = response.body.relaySecret;
       credential.expiresAt = response.body.expiresAt;
       credential.credentialGeneration = response.body.credentialGeneration;
+      credential.supported = true;
+      credential.requiresFreshAttestation = false;
       persistCredential();
       return true;
     }
     if (response.status === 401 || response.status === 403) disable("stale-credential");
+    else if (response.status === 400 || response.status === 409) disable("runtime_attestation_invalid");
     return false;
-  })().finally(() => { refreshPromise = undefined; });
+  })().finally(() => {
+    refreshPromise = undefined;
+    challenge = undefined;
+    settledAttestation = undefined;
+  });
   return refreshPromise;
 }
 
@@ -756,15 +838,22 @@ function waitForDrain(milliseconds) {
 function acceptMessage(message) {
   if (!message || typeof message !== "object") return;
   if (message.type === "runtime_attestation") {
-    if (attestationSeen) {
-      return disable(JSON.stringify(runtimeAttestation) === JSON.stringify(message)
+    if (!pendingAttestation) {
+      if (!runtimeReady && settledAttestation) {
+        return disable(JSON.stringify(settledAttestation) === JSON.stringify(message)
+          ? "attestation_duplicate" : "attestation_conflict");
+      }
+      return disable("attestation_unexpected");
+    }
+    if (pendingAttestation.seen) {
+      return disable(JSON.stringify(pendingAttestation.seen) === JSON.stringify(message)
         ? "attestation_duplicate" : "attestation_conflict");
     }
-    attestationSeen = true;
+    pendingAttestation.seen = message;
     const diagnostic = attestationDiagnostic(message);
     if (diagnostic !== "ok") return disable(diagnostic);
-    runtimeAttestation = message;
-    attestationResolve(message);
+    settledAttestation = message;
+    pendingAttestation.resolve(message);
     return;
   }
   if (!runtimeReady || !credential?.supported) return;
@@ -836,17 +925,10 @@ async function initialize(attestation) {
   if (credential?.requiresFreshRegistration) {
     persistCredential();
     credential = undefined;
-  } else if (credential && credential.expiresAt > Date.now() && await refresh()) {
-    credential.lastChallengeDigest = challengeDigest(attestation.nonce);
-    persistCredential();
+  } else if (credential && credential.expiresAt > Date.now() && await refresh(attestation)) {
     return true;
   }
-  for (let attempt = 0; attempt < 5 && !stopping; attempt += 1) {
-    if (await register(attestation)) return true;
-    if (!capabilityPath || !fs.existsSync(capabilityPath)) return false;
-    await sleep(Math.min(2_000, 100 * (2 ** attempt)));
-  }
-  return false;
+  return register(attestation);
 }
 
 async function serve() {
@@ -861,21 +943,23 @@ async function serve() {
     emit({ type: "runtime_ready", supported: false, diagnostic: !contract ? "contract_invalid" : "pane_prerequisite_missing" });
     return;
   }
-  const issuedAt = Date.now();
-  challenge = {
-    type: "runtime_challenge",
-    handshakeSchema: contract.handshakeSchema,
-    nonce: crypto.randomBytes(32).toString("base64url"),
-    issuedAt,
-    deadline: issuedAt + HANDSHAKE_TIMEOUT_MS,
-    contractDigest: contract.canonicalContractDigest,
-  };
-  persistStatus("attesting", "challenge_issued");
-  emit(challenge);
-  const attestation = await Promise.race([attestationPromise, sleep(HANDSHAKE_TIMEOUT_MS).then(() => undefined)]);
+  if (credential?.requiresFreshRegistration) {
+    persistCredential();
+    credential = undefined;
+  }
+  const serverChallenge = await obtainServerChallenge();
+  if (!serverChallenge) {
+    const diagnostic = lastDiagnostic ?? "server_challenge_failed";
+    persistStatus("failed", diagnostic);
+    emit({ type: "runtime_ready", supported: false, diagnostic });
+    stop();
+    return;
+  }
+  const attestation = await requestRuntimeAttestation(serverChallenge);
   if (!attestation) {
-    disable("attestation_timeout");
-    emit({ type: "runtime_ready", supported: false, diagnostic: "attestation_timeout" });
+    const diagnostic = lastDiagnostic ?? "attestation_timeout";
+    if (!lastDiagnostic) disable(diagnostic);
+    emit({ type: "runtime_ready", supported: false, diagnostic });
     return;
   }
   const ready = await initialize(attestation);
@@ -885,6 +969,8 @@ async function serve() {
   emit({ type: "runtime_ready", supported: runtimeReady,
     eventSequence: runtimeReady && credential ? credential.lastEventSequence : 0,
     diagnostic });
+  challenge = undefined;
+  settledAttestation = undefined;
   if (!runtimeReady) {
     stop();
     return;
@@ -909,6 +995,11 @@ function stop() {
   if (stopping) return;
   stopping = true;
   pollAbort.abort();
+  if (pendingAttestation) {
+    const pending = pendingAttestation;
+    pendingAttestation = undefined;
+    pending.resolve(undefined);
+  }
   setTimeout(() => process.exit(0), 100).unref();
 }
 

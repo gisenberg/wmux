@@ -10,10 +10,10 @@ import type { AgentInputQuestion } from "../shared/protocol.js";
 
 export const SUPPORTED_OPENCODE_SDK_VERSION = "1.18.9";
 export const SUPPORTED_OPENCODE_SOURCE_COMMIT = "4da7bb44c84e013fa53e9c5d02ac753d1435c81a";
-export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 1;
+export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 2;
 export const OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT =
-  "opencode-question-occurrence-stream-v4-runtime-attestation-1.18.9";
-export const OPENCODE_QUESTION_CONTRACT_DIGEST = "1feab28627744cac89922c1aaf5177a26f2f290511d1b0e457d0fd8f1671997f";
+  "opencode-question-occurrence-stream-v5-server-challenge-1.18.9";
+export const OPENCODE_QUESTION_CONTRACT_DIGEST = "e40431c973b2be0db6ffe684669e3fe2cfd03477203bae08015d2a6736452334";
 export const OPENCODE_QUESTION_EVENT_ENVELOPE = "legacy-properties";
 
 export type OpenCodeQuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0];
@@ -43,10 +43,20 @@ const attestationCapabilitySchema = z.object({
   sessionGet: z.boolean(),
 }).strict();
 
+export const openCodeServerChallengeSchema = z.object({
+  id: z.string().uuid(),
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  issuedAt: z.number().int().nonnegative(),
+  deadline: z.number().int().positive(),
+}).strict();
+
+export type OpenCodeServerChallenge = z.infer<typeof openCodeServerChallengeSchema>;
+
 export const openCodeRuntimeAttestationSchema = z.object({
   type: z.literal("runtime_attestation"),
   handshakeSchema: z.literal(OPENCODE_RUNTIME_HANDSHAKE_SCHEMA),
   nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  serverChallenge: openCodeServerChallengeSchema,
   challengeIssuedAt: z.number().int().nonnegative(),
   challengeDeadline: z.number().int().positive(),
   observedAt: z.number().int().nonnegative(),
@@ -75,6 +85,28 @@ export const openCodeRuntimeAttestationSchema = z.object({
 
 export type OpenCodeRuntimeAttestation = z.infer<typeof openCodeRuntimeAttestationSchema>;
 
+export const sanitizedOpenCodeRuntimeAttestationSchema = openCodeRuntimeAttestationSchema.omit({
+  nonce: true,
+  serverChallenge: true,
+  challengeIssuedAt: true,
+  challengeDeadline: true,
+});
+
+export type SanitizedOpenCodeRuntimeAttestation = z.infer<typeof sanitizedOpenCodeRuntimeAttestationSchema>;
+
+export const sanitizeOpenCodeRuntimeAttestation = (
+  input: OpenCodeRuntimeAttestation,
+): SanitizedOpenCodeRuntimeAttestation => {
+  const {
+    nonce: _nonce,
+    serverChallenge: _serverChallenge,
+    challengeIssuedAt: _challengeIssuedAt,
+    challengeDeadline: _challengeDeadline,
+    ...sanitized
+  } = input;
+  return sanitizedOpenCodeRuntimeAttestationSchema.parse(sanitized);
+};
+
 export const isSupportedOpenCodeRuntimeAttestation = (
   input: unknown,
   nowMs = Date.now(),
@@ -91,6 +123,11 @@ export const isSupportedOpenCodeRuntimeAttestation = (
     && value.challengeIssuedAt <= nowMs + 15_000
     && value.observedAt <= nowMs + 15_000
     && value.challengeDeadline >= nowMs - 1_000
+    && value.serverChallenge.deadline > value.serverChallenge.issuedAt
+    && value.serverChallenge.deadline - value.serverChallenge.issuedAt <= 30_000
+    && value.serverChallenge.issuedAt <= value.challengeIssuedAt
+    && value.challengeDeadline <= value.serverChallenge.deadline
+    && value.serverChallenge.deadline >= nowMs - 1_000
     && value.contractDigest === OPENCODE_QUESTION_CONTRACT_DIGEST
     && value.compatibilityFingerprint === OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT
     && value.eventEnvelope === OPENCODE_QUESTION_EVENT_ENVELOPE
@@ -109,13 +146,20 @@ export const isSupportedOpenCodeRuntimeAttestation = (
 
 export const createOpenCodeRuntimeAttestation = (
   nonce: string,
+  serverChallenge: OpenCodeServerChallenge = {
+    id: "00000000-0000-4000-8000-000000000000",
+    nonce: "S".repeat(43),
+    issuedAt: Date.now() - 2,
+    deadline: Date.now() + 10_000,
+  },
   nowMs = Date.now(),
 ): OpenCodeRuntimeAttestation => ({
   type: "runtime_attestation",
   handshakeSchema: OPENCODE_RUNTIME_HANDSHAKE_SCHEMA,
   nonce,
-  challengeIssuedAt: nowMs - 1,
-  challengeDeadline: nowMs + 5_000,
+  serverChallenge,
+  challengeIssuedAt: Math.max(nowMs - 1, serverChallenge.issuedAt),
+  challengeDeadline: Math.min(nowMs + 5_000, serverChallenge.deadline),
   observedAt: nowMs,
   contractDigest: OPENCODE_QUESTION_CONTRACT_DIGEST,
   compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,

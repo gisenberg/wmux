@@ -12,9 +12,15 @@ import {
 
 const boundInput = (input: any) => ({ ...input, occurrenceId: input.occurrenceId ?? "occ-request", occurrenceOrdinal: 1,
   occurrenceKey: nativeOccurrenceKey(input.openCodeSessionId, input.openCodeRequestId), payloadDigest: capturePayloadDigest(input) });
-const registrationInput = (nonce = "N".repeat(43)) => ({
-  instanceNonce: nonce, kind: "opencode" as const, runtimeAttestation: createOpenCodeRuntimeAttestation(nonce),
-});
+const registrationInput = (
+  credentials: AgentInputCredentialStore,
+  principal: Parameters<AgentInputCredentialStore["issueRuntimeChallenge"]>[0],
+  nonce = "N".repeat(43),
+) => {
+  const challenge = credentials.issueRuntimeChallenge(principal);
+  return { instanceNonce: nonce, kind: "opencode" as const,
+    runtimeAttestation: createOpenCodeRuntimeAttestation(nonce, challenge) };
+};
 
 test("restart clears a pre-exposure delivery binding and permits the same submission retry", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-restart-"));
@@ -29,7 +35,7 @@ test("restart clears a pre-exposure delivery binding and permits the same submis
     const registration = credentials.authenticate(capability.capability);
     assert.equal(registration?.kind, "agent-input-registration");
     if (registration?.kind !== "agent-input-registration") return;
-    const exchange = credentials.exchange(registration, registrationInput());
+    const exchange = credentials.exchange(registration, registrationInput(credentials, registration));
     if (exchange.outcome !== "issued") return;
     let principal = credentials.authenticate(exchange.relaySecret);
     if (principal?.kind !== "agent-input-source") return;
@@ -104,7 +110,7 @@ test("restart after exposure remains quarantined while list-present and never re
     });
     const registration = credentials.authenticate(capability.capability);
     if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-    const exchange = credentials.exchange(registration, registrationInput());
+    const exchange = credentials.exchange(registration, registrationInput(credentials, registration));
     if (exchange.outcome !== "issued") throw new Error("source unavailable");
     let principal = credentials.authenticate(exchange.relaySecret);
     if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");
@@ -154,7 +160,7 @@ test("durable delivery identity accepts SDK-success ack after relay restart with
     const capability = credentials.issueRegistrationCapability({ workspaceId: "workspace", tabId: "tab", paneId: "pane", sourceKind: "opencode" });
     const registration = credentials.authenticate(capability.capability);
     if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-    const exchange = credentials.exchange(registration, registrationInput());
+    const exchange = credentials.exchange(registration, registrationInput(credentials, registration));
     if (exchange.outcome !== "issued") throw new Error("source unavailable");
     let principal = credentials.authenticate(exchange.relaySecret);
     if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");

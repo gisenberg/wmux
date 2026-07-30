@@ -24,16 +24,33 @@ source/session/native-request key and fences snapshot membership and absence at
 that cut.
 
 Before accepting structured events, the generated plugin starts the broker from
-pane-bound runtime-file paths. The broker emits a fresh one-shot nonce challenge
-with handshake schema 1, the canonical contract digest, and a five-second
-deadline. The plugin probes the actual injected client, calls
+pane-bound runtime-file paths. The broker first obtains a cryptographically
+random, one-shot server challenge using either the exact pane registration
+capability or the current source credential. It then emits that challenge inside
+a separate broker nonce challenge with handshake schema 2, the canonical contract
+digest, and a five-second deadline. The plugin probes the actual injected client, calls
 `client.global.health()` through that same client, and returns only bounded
 runtime evidence: release, digest, fingerprint, event envelope, method booleans,
-health fields, and challenge timestamps. The broker independently validates the
-nonce, freshness, one-shot state, exact contract, release, health result, and
-methods before exchanging the registration capability. The server validates the
-same sanitized attestation again. Package manifests and package search paths are
-not runtime compatibility authority.
+health fields, and challenge timestamps. A successful health result must be the
+typed status-200 `RequestResult`, with an explicit `error: undefined` and a plain
+data object whose only own properties are `healthy: true` and the exact supported
+`version`. The broker independently validates the local nonce, freshness, exact
+contract, release, health result, and methods before exchanging or refreshing.
+The server atomically validates and consumes its challenge under the exact
+capability/source, immutable pane context, and source credential generation, then
+stores only the nonce-free sanitized evidence. Package manifests and package
+search paths are not runtime compatibility authority.
+
+This runtime attestation is a trusted same-UID plugin compatibility check, not
+cryptographic proof against a compromised OpenCode process, plugin host, or user
+process. Its security boundary is narrower: an untrusted caller with only the
+public helper constructor cannot register, and an observed attestation cannot be
+replayed across capabilities, panes, sources, credential generations, or server
+challenges. Each plugin/broker restart obtains a source-authenticated challenge
+and replaces the stored evidence during credential refresh. If a challenge
+response is lost, the broker requests a fresh challenge; issuance invalidates the
+older pending challenge, so concurrent attempts have one newest winner and an old
+response cannot later be replayed.
 
 Fixtures under `test/fixtures/opencode-question` are synthetic and sanitized at
 the capture boundary. In particular, `question.replied` is identity-only; its
@@ -112,9 +129,11 @@ uses pane input as an answer transport.
 The server persists request identity, bounded question/option content, state,
 generation, server-only occurrence identity/key/ordinal and payload digests, keyed
 answer digests used for idempotency, and contentless attention markers. It does
-not persist raw answers or relay deliveries. Source and
-registration secrets are stored only as keyed HMAC verifiers in the server's
-owner-only credential store. The broker's source credential, occurrence epoch,
+not persist raw answers or relay deliveries. Source and registration secrets and
+pending challenge nonces are stored only as keyed HMAC verifiers in the server's
+owner-only credential store. Challenge records are bounded, short-lived, pruned,
+and removed atomically on successful exchange or refresh; plaintext exists only
+in the challenge response and runtime attestation in flight. The broker's source credential, occurrence epoch,
 transient server relay epoch and cursor, per-key ordinal/current occurrence and
 last event sequence, bounded asked-event receipts, and exact server bindings are
 stored in its owner-only pane file under
@@ -141,18 +160,22 @@ revokes every recovered source before authentication resumes; a fresh pane
 registration is required. Recovery from a request-store backup closes every
 recovered pending request and settles its submission as already resolved,
 because the lost primary may have recorded answer exposure. Generation anchors
-and already-terminal outcomes remain intact. Credential schema 3 uses
+and already-terminal outcomes remain intact. Credential schema 4 uses
 record-ID-scoped HMAC-SHA-256 verifiers and constant-time comparison; plaintext
-capabilities and relay secrets are never stored. Migration from schema 0 or 1
+capabilities, relay secrets, and challenge nonces are never stored. Migration from schema 0 or 1
 cannot reconstruct HMAC verifiers from legacy salted hashes, so it deliberately
 marks every legacy capability used and every legacy source revoked. Open a new
 pane to issue fresh credentials after that migration. Migration from schema 2
 retains bounded source evidence but invalidates every pre-attestation capability,
 revokes every source, and marks it `attestation_required`; a fresh pane is
-mandatory. Request schema 6 preserves
+mandatory. Migration from schema 3 preserves valid source credentials but removes
+the old unbound attestation and marks each source `attestation_required`; the
+current broker can source-authenticate a fresh challenge and refresh without a
+new pane. Request schema 6 preserves
 generation anchors but closes legacy pending records as `migration-unbound`;
-it never fabricates occurrence IDs. Broker schema 9 discards/quarantines old
-unbound metadata, disables the old source, and requires fresh registration.
+it never fabricates occurrence IDs. Broker schema 10 migrates schema-9 source
+credentials to require fresh source-authenticated attestation while older unbound
+metadata is discarded/quarantined and requires fresh registration.
 Future schema files are refused without rewriting them.
 
 Request schema 7 adds durable retired-source evidence and bounded resource

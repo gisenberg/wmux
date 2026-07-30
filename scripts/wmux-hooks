@@ -38,7 +38,7 @@ function readQuestionContract() {
         ? Object.fromEntries(Object.keys(input).sort().map((key) => [key, canonicalize(input[key])]))
         : input;
     const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
-    if (value?.schemaVersion !== 2 || value.handshakeSchema !== 1 || value.openCodeRelease !== value.sdkVersion
+    if (value?.schemaVersion !== 2 || value.handshakeSchema !== 2 || value.openCodeRelease !== value.sdkVersion
       || typeof value.sdkVersion !== "string" || typeof value.compatibilityFingerprint !== "string"
       || value.healthCall !== "client.global.health()" || value.eventEnvelope !== "legacy-properties"
       || !/^[a-f0-9]{64}$/.test(claimed) || claimed !== actual) throw new Error("invalid OpenCode question contract");
@@ -1039,7 +1039,7 @@ const createQuestionBroker = (client: OpencodeClient) => {
   let readyResolve: (eventSequence: number | undefined) => void
   const ready = new Promise<number | undefined>((resolve) => { readyResolve = resolve })
   let structuredReady = false
-  let attestationSent = false
+  const attestedChallenges = new Set<string>()
   const deliveryStates = new Map<string, "running" | "acknowledged">()
   const startWaiters = new Map<string, { resolve: (started: boolean) => void; timer: ReturnType<typeof setTimeout> }>()
   const writeControl = (message: Record<string, unknown>) => {
@@ -1052,20 +1052,30 @@ const createQuestionBroker = (client: OpencodeClient) => {
     if (structuredReady) writeControl(message)
   }
   const attest = async (message: any) => {
-    if (attestationSent) return
-    attestationSent = true
     const now = Date.now()
     if (!message || JSON.stringify(Object.keys(message).sort()) !== JSON.stringify([
-      "type", "handshakeSchema", "nonce", "issuedAt", "deadline", "contractDigest",
+      "type", "handshakeSchema", "nonce", "serverChallenge", "issuedAt", "deadline", "contractDigest",
     ].sort()) || message.type !== "runtime_challenge" || message.handshakeSchema !== questionContract?.handshakeSchema
       || typeof message.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.nonce)
+      || !message.serverChallenge || Object.getPrototypeOf(message.serverChallenge) !== Object.prototype
+      || JSON.stringify(Object.keys(message.serverChallenge).sort()) !== JSON.stringify(["id", "nonce", "issuedAt", "deadline"].sort())
+      || typeof message.serverChallenge.id !== "string" || !/^[0-9a-f-]{36}$/.test(message.serverChallenge.id)
+      || typeof message.serverChallenge.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.serverChallenge.nonce)
+      || !Number.isSafeInteger(message.serverChallenge.issuedAt) || !Number.isSafeInteger(message.serverChallenge.deadline)
+      || message.serverChallenge.deadline <= message.serverChallenge.issuedAt
+      || message.serverChallenge.deadline - message.serverChallenge.issuedAt > 30_000
       || !Number.isSafeInteger(message.issuedAt) || !Number.isSafeInteger(message.deadline)
       || message.deadline <= message.issuedAt || message.deadline - message.issuedAt > 10_000
-      || now < message.issuedAt || now > message.deadline
+      || now < message.issuedAt || now > message.deadline || message.issuedAt < message.serverChallenge.issuedAt
+      || message.deadline > message.serverChallenge.deadline
       || message.contractDigest !== questionContract?.canonicalContractDigest) {
       persistBrokerStatus("failed", "challenge_invalid")
       return
     }
+    const challengeKey = message.serverChallenge.id + ":" + message.nonce
+    if (attestedChallenges.has(challengeKey)) return
+    if (attestedChallenges.size >= 16) attestedChallenges.delete(attestedChallenges.values().next().value!)
+    attestedChallenges.add(challengeKey)
     const capabilities = {
       globalHealth: typeof (client as any)?.global?.health === "function",
       questionList: typeof (client as any)?.question?.list === "function",
@@ -1091,12 +1101,27 @@ const createQuestionBroker = (client: OpencodeClient) => {
         diagnostic = "health_error"
       } else {
         const result: any = outcome.value
-        const release = typeof result?.data?.version === "string" && result.data.version.length <= 64
-          && /^[A-Za-z0-9._+-]*$/.test(result.data.version) ? result.data.version : ""
+        const resultIsObject = result !== null && typeof result === "object"
+        const dataDescriptor = resultIsObject ? Object.getOwnPropertyDescriptor(result, "data") : undefined
+        const errorDescriptor = resultIsObject ? Object.getOwnPropertyDescriptor(result, "error") : undefined
+        const data = dataDescriptor && "value" in dataDescriptor ? dataDescriptor.value : undefined
+        const dataKeys = data !== null && typeof data === "object" ? Reflect.ownKeys(data) : []
+        const healthyDescriptor = data !== null && typeof data === "object" ? Object.getOwnPropertyDescriptor(data, "healthy") : undefined
+        const versionDescriptor = data !== null && typeof data === "object" ? Object.getOwnPropertyDescriptor(data, "version") : undefined
+        const dataIsExact = data !== null && typeof data === "object" && !Array.isArray(data)
+          && Object.getPrototypeOf(data) === Object.prototype
+          && dataKeys.length === 2 && dataKeys.every((key) => key === "healthy" || key === "version")
+          && healthyDescriptor !== undefined && "value" in healthyDescriptor
+          && versionDescriptor !== undefined && "value" in versionDescriptor
+        const healthyValue = dataIsExact && healthyDescriptor && "value" in healthyDescriptor ? healthyDescriptor.value : false
+        const versionValue = dataIsExact && versionDescriptor && "value" in versionDescriptor ? versionDescriptor.value : ""
+        const release = typeof versionValue === "string" && versionValue.length <= 64
+          && /^[A-Za-z0-9._+-]*$/.test(versionValue) ? versionValue : ""
         const status = Number.isInteger(result?.response?.status) && result.response.status >= 0 && result.response.status <= 999
           ? result.response.status : 0
-        if (status !== 200 || result?.data?.healthy !== true || !release || result?.error !== undefined) {
-          health = { called: true, outcome: "malformed", status, healthy: result?.data?.healthy === true, release }
+        const errorIsExact = Boolean(errorDescriptor && "value" in errorDescriptor && errorDescriptor.value === undefined)
+        if (status !== 200 || !dataIsExact || healthyValue !== true || !release || !errorIsExact) {
+          health = { called: true, outcome: "malformed", status, healthy: dataIsExact && healthyValue === true, release }
           diagnostic = "health_malformed"
         } else if (release !== questionContract?.openCodeRelease) {
           health = { called: true, outcome: "release_mismatch", status, healthy: true, release }
@@ -1111,6 +1136,7 @@ const createQuestionBroker = (client: OpencodeClient) => {
       type: "runtime_attestation",
       handshakeSchema: message.handshakeSchema,
       nonce: message.nonce,
+      serverChallenge: message.serverChallenge,
       challengeIssuedAt: message.issuedAt,
       challengeDeadline: message.deadline,
       observedAt: Date.now(),

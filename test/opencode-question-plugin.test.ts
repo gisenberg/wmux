@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -10,6 +11,12 @@ import { pathToFileURL } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const serverChallenge = () => ({
+  type: "server_challenge", handshakeSchema: 2,
+  contractDigest: "e40431c973b2be0db6ffe684669e3fe2cfd03477203bae08015d2a6736452334",
+  id: crypto.randomUUID(), nonce: crypto.randomBytes(32).toString("base64url"),
+  issuedAt: Date.now(), deadline: Date.now() + 15_000,
+});
 
 test("generated plugin allowlists top-level questions and uses only typed question.reply delivery", { skip: process.platform === "win32" }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-plugin-"));
@@ -32,7 +39,9 @@ test("generated plugin allowlists top-level questions and uses only typed questi
       response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify(value));
     };
-    if (request.url === "/api/agent-input/sources/register") {
+    if (request.url?.endsWith("/challenge")) {
+      send(201, serverChallenge());
+    } else if (request.url === "/api/agent-input/sources/register") {
       send(201, { sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
     } else if (request.url === "/api/agent-input/sources/source-one/refresh") {
       send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
@@ -131,7 +140,8 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     });
     assert.deepEqual(Object.keys(registrationCapture.body.runtimeAttestation).sort(), [
       "capabilities", "challengeDeadline", "challengeIssuedAt", "compatibilityFingerprint", "contractDigest",
-      "diagnostic", "eventEnvelope", "handshakeSchema", "health", "nonce", "observedAt", "release", "type",
+      "diagnostic", "eventEnvelope", "handshakeSchema", "health", "nonce", "observedAt", "release",
+      "serverChallenge", "type",
     ]);
     assert.doesNotMatch(JSON.stringify(registrationCapture.body.runtimeAttestation),
       /pane-one|workspace-one|tab-one|broad-|wmux-question-plugin-|transport details|RAW|ANSWER/);
@@ -277,7 +287,7 @@ test("new generated plugin fails structured handling closed against an old serve
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-events")
       && captures.some((capture) => capture.path.startsWith("/api/agent-input/")));
     await waitFor(() => fs.existsSync(`${env.WMUX_AGENT_INPUT_CREDENTIAL_PATH}.status.json`)
-      && JSON.parse(fs.readFileSync(`${env.WMUX_AGENT_INPUT_CREDENTIAL_PATH}.status.json`, "utf8")).diagnostic === "registration_failed");
+      && JSON.parse(fs.readFileSync(`${env.WMUX_AGENT_INPUT_CREDENTIAL_PATH}.status.json`, "utf8")).diagnostic === "server_challenge_failed");
     assert.ok(captures.some((capture) => capture.path === "/api/agent-events" && capture.body.status === "running"));
     assert.equal(sdkInvocations, 0, "an old server cannot expose an answer for SDK invocation");
   } finally {
@@ -298,6 +308,12 @@ test("generated plugin reports sanitized injected-health failures while generic 
     ["timeout", "health_timeout", async () => new Promise(() => {})],
     ["error", "health_error", async () => { throw new Error("RAW_HEALTH_EXCEPTION"); }],
     ["malformed", "health_malformed", async () => ({ data: { healthy: false, version: "1.18.9" }, response: { status: 200 } })],
+    ["extra health data", "health_malformed", async () => ({ data: { healthy: true, version: "1.18.9", extra: true }, error: undefined, response: { status: 200 } })],
+    ["missing health data", "health_malformed", async () => ({ data: { healthy: true }, error: undefined, response: { status: 200 } })],
+    ["prototyped health data", "health_malformed", async () => ({
+      data: Object.assign(Object.create({ inherited: true }), { healthy: true, version: "1.18.9" }),
+      error: undefined, response: { status: 200 },
+    })],
     ["release mismatch", "release_mismatch", async () => ({ data: { healthy: true, version: "1.18.8" }, error: undefined, response: { status: 200 } })],
   ];
   for (const [name, diagnostic, health] of variants) {
@@ -314,7 +330,8 @@ test("generated plugin reports sanitized injected-health failures while generic 
         const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
         const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
         calls.push({ path: request.url ?? "", body });
-        response.writeHead(201, { "content-type": "application/json" }); response.end("{}");
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify(request.url?.endsWith("/challenge") ? serverChallenge() : {}));
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address(); assert.ok(address && typeof address === "object");
@@ -408,8 +425,12 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     };
-    if (request.url === "/api/agent-input/sources/register") {
+    if (request.url?.endsWith("/challenge")) {
+      send(201, serverChallenge());
+    } else if (request.url === "/api/agent-input/sources/register") {
       send(201, { sourceId: "source-partial", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
+    } else if (request.url === "/api/agent-input/sources/source-partial/refresh") {
+      send(200, { sourceId: "source-partial", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     } else if (request.url === "/api/agent-input/sources/source-partial/requests") {
       send(201, { id: `input-${body.id}`, generation: 1, state: "pending", eventRevision: 1 });
     } else if (request.url?.includes("/deliveries?")) {
@@ -503,6 +524,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
     const send = (status: number, value: unknown) => {
       response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
     };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath === "/api/agent-input/sources/register") return send(201, {
       sourceId: "source-cut", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000,
       supported: true, credentialGeneration: 1,
@@ -631,6 +653,8 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
   const captures: Array<{ requestId: string; occurrenceId: string; ordinal: number; generation: number }> = [];
   const nativeLists: any[] = [];
   const operationGenerations = new Map<string, number>();
+  const challengeAuthorizations: Array<string | undefined> = [];
+  const attestations: any[] = [];
   let currentGeneration = 0;
   let pendingGeneration: number | undefined;
   const server = http.createServer(async (request, response) => {
@@ -641,9 +665,14 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     };
-    if (request.url === "/api/agent-input/sources/register") {
+    if (request.url?.endsWith("/challenge")) {
+      challengeAuthorizations.push(request.headers.authorization);
+      send(201, serverChallenge());
+    } else if (request.url === "/api/agent-input/sources/register") {
+      attestations.push(body.runtimeAttestation);
       send(201, { sourceId: "source-reuse", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
     } else if (request.url === "/api/agent-input/sources/source-reuse/refresh") {
+      attestations.push(body.runtimeAttestation);
       send(200, { sourceId: "source-reuse", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     } else if (request.url === "/api/agent-input/sources/source-reuse/requests") {
       let generation = operationGenerations.get(body.occurrenceId);
@@ -743,6 +772,11 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
     assert.deepEqual(captures.map((capture) => capture.ordinal), [1, 2]);
     assert.notEqual(captures[0].occurrenceId, captures[1].occurrenceId,
       "the durable broker advances a terminal reused native identity");
+    assert.equal(attestations.length, 2, "registration and restart refresh each submit current runtime evidence");
+    assert.notEqual(attestations[0].nonce, attestations[1].nonce);
+    assert.notEqual(attestations[0].serverChallenge.id, attestations[1].serverChallenge.id);
+    assert.deepEqual(challengeAuthorizations, [`Bearer ${"C".repeat(43)}`, `Bearer ${"S".repeat(43)}`],
+      "restart challenge authority comes from the existing source credential, not the consumed constructor capability");
   } finally {
     if (firstPlugin) await firstPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     if (secondPlugin) await secondPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
@@ -776,7 +810,9 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     };
-    if (request.url === "/api/agent-input/sources/register") {
+    if (request.url?.endsWith("/challenge")) {
+      send(201, serverChallenge());
+    } else if (request.url === "/api/agent-input/sources/register") {
       registered = true;
       send(201, { sourceId: "source-serial", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
     } else if (request.url === "/api/agent-input/sources/source-serial/requests") {
@@ -878,10 +914,10 @@ test("generated plugin uses injected runtime attestation and never package manif
       const capabilityPath = path.join(home, "pane.cap");
       fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
       let requests = 0;
-      const server = http.createServer((_request, response) => {
+      const server = http.createServer((request, response) => {
         requests += 1;
         response.writeHead(201, { "content-type": "application/json" });
-        response.end(JSON.stringify({
+        response.end(JSON.stringify(request.url?.endsWith("/challenge") ? serverChallenge() : {
           sourceId: "unexpected", relaySecret: "S".repeat(43), expiresAt: Date.now() + 60_000,
           supported: true, credentialGeneration: 1,
         }));

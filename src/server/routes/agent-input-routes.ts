@@ -5,12 +5,17 @@ import type {
 } from "../agent-input-credential-store.js";
 import { AgentInputCredentialError } from "../agent-input-credential-store.js";
 import { AgentInputRequestStoreError } from "../agent-input-request-store.js";
-import { openCodeRuntimeAttestationSchema } from "../opencode-question-contract.js";
+import {
+  OPENCODE_QUESTION_CONTRACT_DIGEST,
+  OPENCODE_RUNTIME_HANDSHAKE_SCHEMA,
+  openCodeRuntimeAttestationSchema,
+} from "../opencode-question-contract.js";
 import type { ApiRoute, RouteContext } from "./route.js";
 import { HttpError, routePolicy } from "./route.js";
 
 const NO_STORE = { "cache-control": "no-store" };
 const MAX_SOURCE_BODY = 128 * 1024;
+const MAX_CHALLENGE_BODY = 1_024;
 const MAX_ANSWER_BODY = 256 * 1024;
 const text = (max = 256) => z.string().min(1).max(max);
 const questionSchema = z.object({
@@ -25,6 +30,7 @@ const registerSchema = z.object({
   kind: z.literal("opencode"),
   runtimeAttestation: openCodeRuntimeAttestationSchema,
 }).strict();
+const challengeSchema = z.object({ kind: z.literal("opencode") }).strict();
 const captureSchema = z.object({
   occurrenceId: text(),
   occurrenceKey: z.string().regex(/^[a-f0-9]{64}$/),
@@ -98,6 +104,47 @@ const liveContext = (ctx: RouteContext, context: {
 
 export const agentInputRoutes: readonly ApiRoute[] = [
   {
+    id: "agent-input-registration-challenge",
+    method: "POST",
+    pattern: "/api/agent-input/sources/challenge",
+    policy: routePolicy("agent-input-registration-challenge", "POST", "/api/agent-input/sources/challenge", "agent-input-registration"),
+    handler: async (ctx) => {
+      if (!ctx.deps.agentInputEnabled || ctx.principal.kind !== "agent-input-registration") {
+        throw new HttpError(503, "agent_input_disabled");
+      }
+      parse(challengeSchema, await ctx.readJsonBody(MAX_CHALLENGE_BODY));
+      const context = ctx.deps.agentInputCredentials.registrationContext(ctx.principal.capabilityId);
+      if (!context || !liveContext(ctx, context)) throw new HttpError(409, "pane_unavailable");
+      const challenge = ctx.deps.agentInputCredentials.issueRuntimeChallenge(ctx.principal);
+      ctx.sendJson(201, {
+        type: "server_challenge",
+        handshakeSchema: OPENCODE_RUNTIME_HANDSHAKE_SCHEMA,
+        contractDigest: OPENCODE_QUESTION_CONTRACT_DIGEST,
+        ...challenge,
+      }, NO_STORE);
+    },
+  },
+  {
+    id: "agent-input-source-challenge",
+    method: "POST",
+    pattern: /^\/api\/agent-input\/sources\/([^/]+)\/challenge$/,
+    policy: routePolicy("agent-input-source-challenge", "POST", /^\/api\/agent-input\/sources\/([^/]+)\/challenge$/, "agent-input-source"),
+    handler: async (ctx) => {
+      if (!ctx.deps.agentInputEnabled) throw new HttpError(503, "agent_input_disabled");
+      const principal = sourcePrincipal(ctx, ctx.match![1]);
+      parse(challengeSchema, await ctx.readJsonBody(MAX_CHALLENGE_BODY));
+      const source = ctx.deps.agentInputCredentials.sourceForPrincipal(principal);
+      if (!source || !liveContext(ctx, source.context)) throw new HttpError(409, "pane_unavailable");
+      const challenge = ctx.deps.agentInputCredentials.issueRuntimeChallenge(principal);
+      ctx.sendJson(201, {
+        type: "server_challenge",
+        handshakeSchema: OPENCODE_RUNTIME_HANDSHAKE_SCHEMA,
+        contractDigest: OPENCODE_QUESTION_CONTRACT_DIGEST,
+        ...challenge,
+      }, NO_STORE);
+    },
+  },
+  {
     id: "agent-input-source-register",
     method: "POST",
     pattern: "/api/agent-input/sources/register",
@@ -131,7 +178,10 @@ export const agentInputRoutes: readonly ApiRoute[] = [
     handler: async (ctx) => {
       if (!ctx.deps.agentInputEnabled) throw new HttpError(503, "agent_input_disabled");
       const principal = sourcePrincipal(ctx, ctx.match![1]);
-      ctx.sendJson(200, ctx.deps.agentInputCredentials.refresh(principal), NO_STORE);
+      const body = parse(registerSchema, await ctx.readJsonBody(MAX_SOURCE_BODY));
+      const source = ctx.deps.agentInputCredentials.sourceForPrincipal(principal);
+      if (!source || !liveContext(ctx, source.context)) throw new HttpError(409, "pane_unavailable");
+      ctx.sendJson(200, ctx.deps.agentInputCredentials.refresh(principal, body), NO_STORE);
     },
   },
   {

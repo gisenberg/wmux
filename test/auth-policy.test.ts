@@ -36,6 +36,8 @@ const routeCases: Array<[string, string, string]> = [
   ["bootstrap", "GET", "/api/bootstrap"],
   ["agent-session-timeline", "GET", "/api/agent-sessions/session"],
   ["agent-session-follow-up", "POST", "/api/agent-sessions/session/turns"],
+  ["agent-input-registration-challenge", "POST", "/api/agent-input/sources/challenge"],
+  ["agent-input-source-challenge", "POST", "/api/agent-input/sources/source/challenge"],
   ["agent-input-source-register", "POST", "/api/agent-input/sources/register"],
   ["agent-input-source-refresh", "POST", "/api/agent-input/sources/source/refresh"],
   ["agent-input-request-capture", "POST", "/api/agent-input/sources/source/requests"],
@@ -129,6 +131,10 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal({ ...auth, browserAuthMode: "shared-or-login" }, principal("legacy-shared"), policy("GET", "/api/bootstrap")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-registration"), policy("POST", "/api/agent-input/sources/register")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("POST", "/api/agent-input/sources/register")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-registration"), policy("POST", "/api/agent-input/sources/challenge")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("POST", "/api/agent-input/sources/challenge")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("POST", "/api/agent-input/sources/source/challenge")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-registration"), policy("POST", "/api/agent-input/sources/source/challenge")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("GET", "/api/agent-input/sources/source/deliveries")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("GET", "/api/agent-input/sources/source/deliveries")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("POST", "/api/agent-input/requests/request/answer")), false);

@@ -46,7 +46,7 @@ If your manifest fields differ, read the JSON directly and do not assume a fixed
 Current candidate expectation:
 
 - Candidate build deployed here is schema **7** and must only be started against schema-7 state.
-- The runtime-attestation candidate uses agent-input credential schema **3** and broker schema **9**; schema-2 credentials and pre-schema-9 broker files are deliberately disabled during migration.
+- The server-challenge runtime-attestation candidate uses agent-input credential schema **4** and broker schema **10**. Schema-3 source credentials survive only as refresh authority and must reattest; schema-2 credentials and pre-schema-9 broker files remain deliberately disabled during migration.
 - Legacy commit `c0ceb73` is schema **6** and **must not** be selected against live schema-7 state.
 
 After deploying the runtime-attestation candidate, run `wmux-hooks install
