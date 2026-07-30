@@ -14,21 +14,8 @@ import type { MachineConfig } from "../src/server/types.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const posixTest = process.platform === "win32" ? test.skip : test;
-const fakeTmux = `#!/bin/sh
-mode=
-last=
-for argument do
-  case "$argument" in
-    has-session|new-session|attach-session) mode=$argument ;;
-  esac
-  last=$argument
-done
-case "$mode" in
-  has-session) exit 1 ;;
-  new-session) exec /bin/sh -c "$last" ;;
-  *) exit 0 ;;
-esac
-`;
+const tmuxExecutable = process.platform === "win32" ? undefined : resolveExecutable("tmux");
+const tmuxTest = tmuxExecutable ? test : test.skip;
 
 test("SSH staging keeps registration capability in owner-only runtime payload and stages broker helper", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-stage-"));
@@ -57,8 +44,8 @@ test("SSH staging keeps registration capability in owner-only runtime payload an
     const payload = fs.readFileSync(payloadMatch[1], "utf8");
     assert.equal(fs.statSync(payloadMatch[1]).mode & 0o777, 0o600);
     assert.match(payload, new RegExp(capability));
-    assert.match(payload, /wmux_home_dir=.*\.wmux/);
-    assert.match(payload, /wmux_agent_input_dir=.*agent-input/);
+    assert.match(payload, /__wmux_stage_agent_input_v1/);
+    assert.match(payload, /"\$HOME\/\.wmux\/agent-input"/);
     assert.match(payload, /wmux-agent-input-broker/);
   } finally {
     if (previous === undefined) delete process.env.XDG_RUNTIME_DIR;
@@ -67,103 +54,213 @@ test("SSH staging keeps registration capability in owner-only runtime payload an
   }
 });
 
-posixTest("tmux durable SSH pane exports staged agent-input paths to the launched child", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-durable-"));
-  const home = path.join(directory, "home");
-  const bin = path.join(directory, "bin");
-  const childEnvironmentPath = path.join(directory, "child.env");
-  const paneId = "pane-durable-stage";
-  const capability = `aic_${"e".repeat(36)}.${"F".repeat(43)}`;
-  fs.mkdirSync(home, { mode: 0o700 });
-  fs.mkdirSync(bin, { mode: 0o700 });
-  fs.writeFileSync(path.join(bin, "tmux"), fakeTmux, { mode: 0o700 });
+tmuxTest("full durable tmux command keeps its long-lived child alive with staged path-only input", () => {
+  for (const callerOptions of [[], ["-eu"]]) {
+    const fixture = createTmuxFixture(`wmux-input-durable-${callerOptions.length ? "eu" : "default"}-`);
+    const paneId = `pane-durable-${callerOptions.length ? "eu" : "default"}`;
+    const capability = `aic_${"e".repeat(36)}.${(callerOptions.length ? "G" : "F").repeat(43)}`;
+    const capabilityPath = path.join(fixture.home, ".wmux", "agent-input", `${paneId}.cap`);
+    const credentialPath = path.join(fixture.home, ".wmux", "agent-input", `${paneId}.json`);
+    const childEnvironmentPath = path.join(fixture.directory, "child.env");
+    const readinessPath = path.join(fixture.directory, "ready");
+    const unsetProbePath = path.join(fixture.directory, "unset-probe");
+    const stateProbePath = path.join(fixture.directory, "state-probed");
+    const beforeTrapPath = path.join(fixture.directory, "trap.before");
+    const afterTrapPath = path.join(fixture.directory, "trap.after");
+    const beforeUmaskPath = path.join(fixture.directory, "umask.before");
+    const afterUmaskPath = path.join(fixture.directory, "umask.after");
+    const afterOptionsPath = path.join(fixture.directory, "options.after");
+    const functionStatePath = path.join(fixture.directory, "function.after");
+    fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(capabilityPath, "stale-capability\n", { mode: 0o644 });
 
-  try {
-    const script = durableShellScript({
-      backend: "tmux",
-      sessionName: "wmux_test_durable_stage",
-      cwd: home,
-      cols: 80,
-      rows: 24,
-      shellCommand: `env > ${shellQuoteForTest(childEnvironmentPath)}`,
-      extraEnv: {
-        WMUX_PANE_ID: paneId,
-        WMUX_WORKSPACE_ID: "workspace-durable-stage",
-        WMUX_TAB_ID: "tab-durable-stage",
-        WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: capability,
-      },
-      helperPathExport: `export PATH=${shellQuoteForTest(bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
-      useSystemdScope: false,
-    });
-    const syntax = spawnSync("/bin/sh", ["-n"], { input: script, encoding: "utf8" });
-    assert.equal(syntax.status, 0, syntax.stderr);
-    const result = spawnSync("/bin/sh", ["-c", script], {
-      cwd: directory,
-      encoding: "utf8",
-      env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
-    });
-    assert.equal(result.status, 0, result.stderr);
+    try {
+      const script = durableShellScript({
+        backend: "tmux",
+        sessionName: fixture.sessionName,
+        cwd: fixture.home,
+        cols: 80,
+        rows: 24,
+        shellCommand: [
+          `env > ${shellQuoteForTest(childEnvironmentPath)}`,
+          `printf '%s' "$WMUX_OPTION_SENTINEL" > ${shellQuoteForTest(unsetProbePath)}`,
+          `printf ready > ${shellQuoteForTest(readinessPath)}`,
+          "while :; do sleep 1; done",
+        ].join("; "),
+        extraEnv: {
+          WMUX_PANE_ID: paneId,
+          WMUX_WORKSPACE_ID: "workspace-durable-stage",
+          WMUX_TAB_ID: "tab-durable-stage",
+          WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: capability,
+        },
+        helperPathExport: [
+          `if [ ! -e ${shellQuoteForTest(stateProbePath)} ]; then`,
+          `trap > ${shellQuoteForTest(afterTrapPath)};`,
+          `umask > ${shellQuoteForTest(afterUmaskPath)};`,
+          `printf '%s\\n' "$-" > ${shellQuoteForTest(afterOptionsPath)};`,
+          `if command -v __wmux_stage_agent_input_v1 >/dev/null 2>&1; then printf present; else printf absent; fi > ${shellQuoteForTest(functionStatePath)};`,
+          `: > ${shellQuoteForTest(stateProbePath)};`,
+          "fi;",
+          `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
+        ].join(" "),
+        agentProfileOptionalAuth: true,
+        useSystemdScope: false,
+      });
+      const trapAction = `printf hup > ${shellQuoteForTest(path.join(fixture.directory, "hup"))}`;
+      const runtime = `#!/bin/sh\ntrap ${shellQuoteForTest(trapAction)} HUP\ntrap > ${shellQuoteForTest(beforeTrapPath)}\numask > ${shellQuoteForTest(beforeUmaskPath)}\n${script}\n`;
+      fs.writeFileSync(fixture.runtimePath, runtime, { mode: 0o700 });
+      const syntax = spawnSync("/bin/sh", ["-n", fixture.runtimePath], { encoding: "utf8" });
+      assert.equal(syntax.status, 0, syntax.stderr);
+      spawnSync("/bin/sh", [...callerOptions, fixture.runtimePath], {
+        cwd: fixture.directory,
+        encoding: "utf8",
+        env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      });
 
-    const childEnvironment = readEnvironment(childEnvironmentPath);
-    const capabilityPath = path.join(home, ".wmux", "agent-input", `${paneId}.cap`);
-    const credentialPath = path.join(home, ".wmux", "agent-input", `${paneId}.json`);
-    assert.equal(childEnvironment.WMUX_AGENT_INPUT_CAPABILITY_PATH, capabilityPath);
-    assert.equal(childEnvironment.WMUX_AGENT_INPUT_CREDENTIAL_PATH, credentialPath);
-    assert.equal(childEnvironment.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY, undefined);
-    assert.equal(childEnvironment.WMUX_TOKEN, undefined);
-    assert.equal(Object.values(childEnvironment).includes(capability), false);
-    assert.equal(fs.readFileSync(capabilityPath, "utf8"), `${capability}\n`);
-    assert.equal(fs.statSync(path.dirname(capabilityPath)).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(capabilityPath).mode & 0o777, 0o600);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+      waitForFile(readinessPath);
+      assert.equal(fixture.tmux(["has-session", "-t", fixture.sessionName]).status, 0);
+      const childEnvironment = readEnvironment(childEnvironmentPath);
+      assert.equal(childEnvironment.WMUX_AGENT_INPUT_CAPABILITY_PATH, capabilityPath);
+      assert.equal(childEnvironment.WMUX_AGENT_INPUT_CREDENTIAL_PATH, credentialPath);
+      assert.equal(childEnvironment.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY, undefined);
+      assert.equal(childEnvironment.WMUX_TOKEN, undefined);
+      assert.equal(Object.values(childEnvironment).includes(capability), false);
+      assert.equal(fs.readFileSync(unsetProbePath, "utf8"), "");
+      assert.equal(fs.readFileSync(capabilityPath, "utf8"), `${capability}\n`);
+      assert.equal(fs.statSync(path.dirname(capabilityPath)).mode & 0o777, 0o700);
+      assert.equal(fs.statSync(capabilityPath).mode & 0o777, 0o600);
+      assert.equal(fs.readFileSync(afterTrapPath, "utf8"), fs.readFileSync(beforeTrapPath, "utf8"));
+      assert.equal(fs.readFileSync(afterUmaskPath, "utf8"), fs.readFileSync(beforeUmaskPath, "utf8"));
+      const callerFlags = fs.readFileSync(afterOptionsPath, "utf8").trim();
+      assert.equal(callerFlags.includes("e"), callerOptions.length > 0);
+      assert.equal(callerFlags.includes("u"), callerOptions.length > 0);
+      assert.equal(fs.readFileSync(functionStatePath, "utf8"), "absent");
+      const paneCommand = fixture.tmux(["list-panes", "-t", fixture.sessionName, "-F", "#{pane_start_command}"]);
+      assert.equal(paneCommand.status, 0, paneCommand.stderr);
+      assert.doesNotMatch(paneCommand.stdout, new RegExp(capability));
+    } finally {
+      fixture.cleanup();
+    }
   }
 });
 
-posixTest("feature-disabled tmux durable SSH pane launches without agent-input credentials", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-durable-disabled-"));
-  const home = path.join(directory, "home");
-  const bin = path.join(directory, "bin");
-  const childEnvironmentPath = path.join(directory, "child.env");
-  fs.mkdirSync(home, { mode: 0o700 });
-  fs.mkdirSync(bin, { mode: 0o700 });
-  fs.writeFileSync(path.join(bin, "tmux"), fakeTmux, { mode: 0o700 });
-
+tmuxTest("feature-disabled full durable tmux command stays alive without agent-input credentials", () => {
+  const fixture = createTmuxFixture("wmux-input-durable-disabled-");
+  const childEnvironmentPath = path.join(fixture.directory, "child.env");
+  const readinessPath = path.join(fixture.directory, "ready");
   try {
     const script = durableShellScript({
       backend: "tmux",
-      sessionName: "wmux_test_durable_disabled",
-      cwd: home,
+      sessionName: fixture.sessionName,
+      cwd: fixture.home,
       cols: 80,
       rows: 24,
-      shellCommand: `env > ${shellQuoteForTest(childEnvironmentPath)}`,
+      shellCommand: `env > ${shellQuoteForTest(childEnvironmentPath)}; printf ready > ${shellQuoteForTest(readinessPath)}; while :; do sleep 1; done`,
       extraEnv: {
         WMUX_PANE_ID: "pane-durable-disabled",
         WMUX_WORKSPACE_ID: "workspace-durable-disabled",
         WMUX_TAB_ID: "tab-durable-disabled",
       },
-      helperPathExport: `export PATH=${shellQuoteForTest(bin)}:$PATH;`,
+      helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
       agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
-    const syntax = spawnSync("/bin/sh", ["-n"], { input: script, encoding: "utf8" });
+    fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
+    const syntax = spawnSync("/bin/sh", ["-n", fixture.runtimePath], { encoding: "utf8" });
     assert.equal(syntax.status, 0, syntax.stderr);
-    const result = spawnSync("/bin/sh", ["-c", script], {
-      cwd: directory,
+    spawnSync("/bin/sh", [fixture.runtimePath], {
+      cwd: fixture.directory,
       encoding: "utf8",
-      env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });
-    assert.equal(result.status, 0, result.stderr);
-
+    waitForFile(readinessPath);
+    assert.equal(fixture.tmux(["has-session", "-t", fixture.sessionName]).status, 0);
     const childEnvironment = readEnvironment(childEnvironmentPath);
     assert.equal(childEnvironment.WMUX_AGENT_INPUT_CAPABILITY_PATH, undefined);
     assert.equal(childEnvironment.WMUX_AGENT_INPUT_CREDENTIAL_PATH, undefined);
     assert.equal(childEnvironment.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY, undefined);
     assert.equal(childEnvironment.WMUX_TOKEN, undefined);
-    assert.equal(fs.existsSync(path.join(home, ".wmux", "agent-input")), false);
+    assert.equal(fs.existsSync(path.join(fixture.home, ".wmux", "agent-input")), false);
   } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+    fixture.cleanup();
+  }
+});
+
+tmuxTest("durable agent-input staging fails closed on a symlinked capability path", () => {
+  const fixture = createTmuxFixture("wmux-input-durable-unsafe-");
+  const paneId = "pane-durable-unsafe";
+  const agentInputDirectory = path.join(fixture.home, ".wmux", "agent-input");
+  const outsidePath = path.join(fixture.directory, "outside");
+  fs.mkdirSync(agentInputDirectory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(outsidePath, "outside\n", { mode: 0o600 });
+  fs.symlinkSync(outsidePath, path.join(agentInputDirectory, `${paneId}.cap`));
+  try {
+    const script = durableShellScript({
+      backend: "tmux",
+      sessionName: fixture.sessionName,
+      cwd: fixture.home,
+      cols: 80,
+      rows: 24,
+      shellCommand: "while :; do sleep 1; done",
+      extraEnv: {
+        WMUX_PANE_ID: paneId,
+        WMUX_WORKSPACE_ID: "workspace-durable-unsafe",
+        WMUX_TAB_ID: "tab-durable-unsafe",
+        WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: `aic_${"u".repeat(36)}.${"V".repeat(43)}`,
+      },
+      helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
+      agentProfileOptionalAuth: true,
+      useSystemdScope: false,
+    });
+    fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
+    const result = spawnSync("/bin/sh", [fixture.runtimePath], {
+      cwd: fixture.directory,
+      encoding: "utf8",
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(fixture.tmux(["has-session", "-t", fixture.sessionName]).status, 1);
+    assert.equal(fs.readFileSync(outsidePath, "utf8"), "outside\n");
+    assert.deepEqual(fs.readdirSync(agentInputDirectory), [`${paneId}.cap`]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+tmuxTest("durable agent-input staging fails closed when its private write cannot start", () => {
+  const fixture = createTmuxFixture("wmux-input-durable-write-failure-");
+  const paneId = "pane-durable-write-failure";
+  fs.writeFileSync(path.join(fixture.bin, "mktemp"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  try {
+    const script = durableShellScript({
+      backend: "tmux",
+      sessionName: fixture.sessionName,
+      cwd: fixture.home,
+      cols: 80,
+      rows: 24,
+      shellCommand: "while :; do sleep 1; done",
+      extraEnv: {
+        WMUX_PANE_ID: paneId,
+        WMUX_WORKSPACE_ID: "workspace-durable-write-failure",
+        WMUX_TAB_ID: "tab-durable-write-failure",
+        WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: `aic_${"w".repeat(36)}.${"X".repeat(43)}`,
+      },
+      helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
+      agentProfileOptionalAuth: true,
+      useSystemdScope: false,
+    });
+    fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
+    const result = spawnSync("/bin/sh", [fixture.runtimePath], {
+      cwd: fixture.directory,
+      encoding: "utf8",
+      env: { HOME: fixture.home, PATH: `${fixture.bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(fixture.tmux(["has-session", "-t", fixture.sessionName]).status, 1);
+    const agentInputDirectory = path.join(fixture.home, ".wmux", "agent-input");
+    assert.deepEqual(fs.readdirSync(agentInputDirectory), []);
+  } finally {
+    fixture.cleanup();
   }
 });
 
@@ -416,6 +513,59 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("timed out waiting for staged agent payload");
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
+const createTmuxFixture = (prefix: string) => {
+  assert.ok(tmuxExecutable);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const home = path.join(directory, "home");
+  const bin = path.join(directory, "bin");
+  const runtimePath = path.join(directory, "runtime.sh");
+  const socketName = path.basename(directory).replace(/[^A-Za-z0-9_.-]/g, "_");
+  const sessionName = `wmux_${socketName}`;
+  const wrapperPath = path.join(bin, "tmux");
+  fs.mkdirSync(home, { mode: 0o700 });
+  fs.mkdirSync(bin, { mode: 0o700 });
+  fs.writeFileSync(
+    wrapperPath,
+    `#!/bin/sh\nexec ${shellQuoteForTest(tmuxExecutable)} -L ${shellQuoteForTest(socketName)} "$@"\n`,
+    { mode: 0o700 },
+  );
+  const tmux = (args: string[]) => spawnSync(wrapperPath, args, { encoding: "utf8" });
+  return {
+    directory,
+    home,
+    bin,
+    runtimePath,
+    sessionName,
+    tmux,
+    cleanup: () => {
+      tmux(["kill-server"]);
+      fs.rmSync(directory, { recursive: true, force: true });
+    },
+  };
+};
+
+function resolveExecutable(name: string): string | undefined {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Continue through PATH.
+    }
+  }
+  return undefined;
+}
+
+const waitForFile = (filePath: string): void => {
+  const deadline = Date.now() + 3_000;
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${path.basename(filePath)}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
 };
 

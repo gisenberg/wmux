@@ -705,14 +705,52 @@ export const durableShellScript = ({
     ? `( umask 077; mkdir -p "$HOME/.wmux" 2>/dev/null || true; ${credentialWrites.join(" ")} );`
     : "";
   const agentInputCapability = extraEnv.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY;
+  const agentInputCapabilityPath = `"$HOME/.wmux/agent-input/"${shellQuote(`${extraEnv.WMUX_PANE_ID}.cap`)}`;
+  const agentInputCredentialPath = `"$HOME/.wmux/agent-input/"${shellQuote(`${extraEnv.WMUX_PANE_ID}.json`)}`;
+  const agentInputTemporaryPath = `"$HOME/.wmux/agent-input/."${shellQuote(`${extraEnv.WMUX_PANE_ID}.cap.XXXXXX`)}`;
+  // Stage before entering tmux/screen so the capability never appears in the
+  // durable child's argv; only the stable file paths are repeated there.
   const agentInputStage = agentInputCapability
-    ? `{ set -eu; umask 077; wmux_home_dir="$HOME/.wmux"; if [ -e "$wmux_home_dir" ] || [ -L "$wmux_home_dir" ]; then [ -d "$wmux_home_dir" ] && [ ! -L "$wmux_home_dir" ]; else mkdir "$wmux_home_dir"; fi; wmux_agent_input_dir="$wmux_home_dir/agent-input"; if [ -e "$wmux_agent_input_dir" ] || [ -L "$wmux_agent_input_dir" ]; then [ -d "$wmux_agent_input_dir" ] && [ ! -L "$wmux_agent_input_dir" ]; else mkdir "$wmux_agent_input_dir"; fi; chmod 700 "$wmux_agent_input_dir"; wmux_agent_input_cap="$wmux_agent_input_dir/${extraEnv.WMUX_PANE_ID}.cap"; if [ -e "$wmux_agent_input_cap" ] || [ -L "$wmux_agent_input_cap" ]; then [ -f "$wmux_agent_input_cap" ] && [ ! -L "$wmux_agent_input_cap" ]; fi; wmux_agent_input_tmp=$(mktemp "$wmux_agent_input_dir/.${extraEnv.WMUX_PANE_ID}.cap.XXXXXX"); trap 'rm -f "$wmux_agent_input_tmp"' EXIT HUP INT TERM; printf '%s\\n' ${shellQuote(agentInputCapability)} > "$wmux_agent_input_tmp"; chmod 600 "$wmux_agent_input_tmp"; mv -f "$wmux_agent_input_tmp" "$wmux_agent_input_cap"; trap - EXIT HUP INT TERM; export WMUX_AGENT_INPUT_CAPABILITY_PATH="$wmux_agent_input_cap"; export WMUX_AGENT_INPUT_CREDENTIAL_PATH="$wmux_agent_input_dir/${extraEnv.WMUX_PANE_ID}.json"; };`
+    ? `__wmux_stage_agent_input_v1() {
+  umask 077 || return 1
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    if [ ! -d "$1" ] || [ -L "$1" ]; then umask "$7"; return 1; fi
+  elif ! mkdir "$1"; then umask "$7"; return 1
+  fi
+  if [ -e "$2" ] || [ -L "$2" ]; then
+    if [ ! -d "$2" ] || [ -L "$2" ]; then umask "$7"; return 1; fi
+  elif ! mkdir "$2"; then umask "$7"; return 1
+  fi
+  if ! chmod 700 "$2"; then umask "$7"; return 1; fi
+  if [ -e "$3" ] || [ -L "$3" ]; then
+    if [ ! -f "$3" ] || [ -L "$3" ]; then umask "$7"; return 1; fi
+  fi
+  set -- "$@" "$(mktemp "$5")"
+  if [ -z "\${8:-}" ] || [ ! -f "$8" ] || [ -L "$8" ]; then
+    if [ -n "\${8:-}" ]; then rm -f "$8"; fi
+    umask "$7"
+    return 1
+  fi
+  if ! printf '%s\\n' "$6" > "$8"; then rm -f "$8"; umask "$7"; return 1; fi
+  set -- "$1" "$2" "$3" "$4" "$5" "" "$7" "$8"
+  if ! chmod 600 "$8"; then rm -f "$8"; umask "$7"; return 1; fi
+  if ! mv -f "$8" "$3"; then rm -f "$8"; umask "$7"; return 1; fi
+  umask "$7" || return 1
+  WMUX_AGENT_INPUT_CAPABILITY_PATH=$3
+  WMUX_AGENT_INPUT_CREDENTIAL_PATH=$4
+  export WMUX_AGENT_INPUT_CAPABILITY_PATH WMUX_AGENT_INPUT_CREDENTIAL_PATH
+}
+__wmux_stage_agent_input_v1 "$HOME/.wmux" "$HOME/.wmux/agent-input" ${agentInputCapabilityPath} ${agentInputCredentialPath} ${agentInputTemporaryPath} ${shellQuote(agentInputCapability)} "$(umask)" || { unset -f __wmux_stage_agent_input_v1; exit 1; }
+unset -f __wmux_stage_agent_input_v1;`
+    : "";
+  const agentInputPathExports = agentInputCapability
+    ? `export WMUX_AGENT_INPUT_CAPABILITY_PATH=${agentInputCapabilityPath}; export WMUX_AGENT_INPUT_CREDENTIAL_PATH=${agentInputCredentialPath};`
     : "";
   const pathExport = helperPathExport ?? "";
   const optionalAuth = agentProfileOptionalAuth ? " --optional-auth" : "";
   const agentProfileApply = `${pathExport} if command -v wmux-agent-profile >/dev/null 2>&1; then wmux-agent-profile apply --quiet${optionalAuth} || true; fi;`;
   const startDir = cwd ? `cd ${shellQuote(cwd)} 2>/dev/null || true;` : "";
-  const paneCommand = `${startDir} ${agentInputStage} ${exports} ${pathExport} ${shellCommand}`;
+  const paneCommand = `${startDir} ${agentInputPathExports} ${exports} ${pathExport} ${shellCommand}`;
   const tmuxCreateCommand = [
     "tmux",
     "-u",
@@ -754,12 +792,12 @@ export const durableShellScript = ({
   const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
 
   if (backend === "tmux") {
-    return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
   if (backend === "screen") {
-    return `${persistCredentials} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
-  return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
+  return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
 };
 
 const stageLocalRuntime = (sessionName: string, innerScript: string): string => {
