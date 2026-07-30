@@ -677,7 +677,7 @@ interface DurableShellInput {
   useSystemdScope: boolean;
 }
 
-const durableShellScript = ({
+export const durableShellScript = ({
   backend,
   sessionName,
   cwd,
@@ -706,7 +706,7 @@ const durableShellScript = ({
     : "";
   const agentInputCapability = extraEnv.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY;
   const agentInputStage = agentInputCapability
-    ? `( set -eu; umask 077; wmux_home_dir="$HOME/.wmux"; if [ -e "$wmux_home_dir" ] || [ -L "$wmux_home_dir" ]; then [ -d "$wmux_home_dir" ] && [ ! -L "$wmux_home_dir" ]; else mkdir "$wmux_home_dir"; fi; wmux_agent_input_dir="$wmux_home_dir/agent-input"; if [ -e "$wmux_agent_input_dir" ] || [ -L "$wmux_agent_input_dir" ]; then [ -d "$wmux_agent_input_dir" ] && [ ! -L "$wmux_agent_input_dir" ]; else mkdir "$wmux_agent_input_dir"; fi; chmod 700 "$wmux_agent_input_dir"; wmux_agent_input_cap="$wmux_agent_input_dir/${extraEnv.WMUX_PANE_ID}.cap"; if [ -e "$wmux_agent_input_cap" ] || [ -L "$wmux_agent_input_cap" ]; then [ -f "$wmux_agent_input_cap" ] && [ ! -L "$wmux_agent_input_cap" ]; fi; wmux_agent_input_tmp=$(mktemp "$wmux_agent_input_dir/.${extraEnv.WMUX_PANE_ID}.cap.XXXXXX"); trap 'rm -f "$wmux_agent_input_tmp"' EXIT HUP INT TERM; printf '%s\\n' ${shellQuote(agentInputCapability)} > "$wmux_agent_input_tmp"; chmod 600 "$wmux_agent_input_tmp"; mv -f "$wmux_agent_input_tmp" "$wmux_agent_input_cap"; trap - EXIT HUP INT TERM; export WMUX_AGENT_INPUT_CAPABILITY_PATH="$wmux_agent_input_cap"; export WMUX_AGENT_INPUT_CREDENTIAL_PATH="$wmux_agent_input_dir/${extraEnv.WMUX_PANE_ID}.json"; );`
+    ? `{ set -eu; umask 077; wmux_home_dir="$HOME/.wmux"; if [ -e "$wmux_home_dir" ] || [ -L "$wmux_home_dir" ]; then [ -d "$wmux_home_dir" ] && [ ! -L "$wmux_home_dir" ]; else mkdir "$wmux_home_dir"; fi; wmux_agent_input_dir="$wmux_home_dir/agent-input"; if [ -e "$wmux_agent_input_dir" ] || [ -L "$wmux_agent_input_dir" ]; then [ -d "$wmux_agent_input_dir" ] && [ ! -L "$wmux_agent_input_dir" ]; else mkdir "$wmux_agent_input_dir"; fi; chmod 700 "$wmux_agent_input_dir"; wmux_agent_input_cap="$wmux_agent_input_dir/${extraEnv.WMUX_PANE_ID}.cap"; if [ -e "$wmux_agent_input_cap" ] || [ -L "$wmux_agent_input_cap" ]; then [ -f "$wmux_agent_input_cap" ] && [ ! -L "$wmux_agent_input_cap" ]; fi; wmux_agent_input_tmp=$(mktemp "$wmux_agent_input_dir/.${extraEnv.WMUX_PANE_ID}.cap.XXXXXX"); trap 'rm -f "$wmux_agent_input_tmp"' EXIT HUP INT TERM; printf '%s\\n' ${shellQuote(agentInputCapability)} > "$wmux_agent_input_tmp"; chmod 600 "$wmux_agent_input_tmp"; mv -f "$wmux_agent_input_tmp" "$wmux_agent_input_cap"; trap - EXIT HUP INT TERM; export WMUX_AGENT_INPUT_CAPABILITY_PATH="$wmux_agent_input_cap"; export WMUX_AGENT_INPUT_CREDENTIAL_PATH="$wmux_agent_input_dir/${extraEnv.WMUX_PANE_ID}.json"; };`
     : "";
   const pathExport = helperPathExport ?? "";
   const optionalAuth = agentProfileOptionalAuth ? " --optional-auth" : "";

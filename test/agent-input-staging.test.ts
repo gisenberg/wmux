@@ -8,11 +8,27 @@ import path from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { SessionManager } from "../src/server/session-manager.js";
-import { buildSpawnSpec } from "../src/server/spawn-backends.js";
+import { buildSpawnSpec, durableShellScript } from "../src/server/spawn-backends.js";
 import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const posixTest = process.platform === "win32" ? test.skip : test;
+const fakeTmux = `#!/bin/sh
+mode=
+last=
+for argument do
+  case "$argument" in
+    has-session|new-session|attach-session) mode=$argument ;;
+  esac
+  last=$argument
+done
+case "$mode" in
+  has-session) exit 1 ;;
+  new-session) exec /bin/sh -c "$last" ;;
+  *) exit 0 ;;
+esac
+`;
 
 test("SSH staging keeps registration capability in owner-only runtime payload and stages broker helper", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-stage-"));
@@ -47,6 +63,106 @@ test("SSH staging keeps registration capability in owner-only runtime payload an
   } finally {
     if (previous === undefined) delete process.env.XDG_RUNTIME_DIR;
     else process.env.XDG_RUNTIME_DIR = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+posixTest("tmux durable SSH pane exports staged agent-input paths to the launched child", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-durable-"));
+  const home = path.join(directory, "home");
+  const bin = path.join(directory, "bin");
+  const childEnvironmentPath = path.join(directory, "child.env");
+  const paneId = "pane-durable-stage";
+  const capability = `aic_${"e".repeat(36)}.${"F".repeat(43)}`;
+  fs.mkdirSync(home, { mode: 0o700 });
+  fs.mkdirSync(bin, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "tmux"), fakeTmux, { mode: 0o700 });
+
+  try {
+    const script = durableShellScript({
+      backend: "tmux",
+      sessionName: "wmux_test_durable_stage",
+      cwd: home,
+      cols: 80,
+      rows: 24,
+      shellCommand: `env > ${shellQuoteForTest(childEnvironmentPath)}`,
+      extraEnv: {
+        WMUX_PANE_ID: paneId,
+        WMUX_WORKSPACE_ID: "workspace-durable-stage",
+        WMUX_TAB_ID: "tab-durable-stage",
+        WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: capability,
+      },
+      helperPathExport: `export PATH=${shellQuoteForTest(bin)}:$PATH;`,
+      agentProfileOptionalAuth: true,
+      useSystemdScope: false,
+    });
+    const syntax = spawnSync("/bin/sh", ["-n"], { input: script, encoding: "utf8" });
+    assert.equal(syntax.status, 0, syntax.stderr);
+    const result = spawnSync("/bin/sh", ["-c", script], {
+      cwd: directory,
+      encoding: "utf8",
+      env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+    });
+    assert.equal(result.status, 0, result.stderr);
+
+    const childEnvironment = readEnvironment(childEnvironmentPath);
+    const capabilityPath = path.join(home, ".wmux", "agent-input", `${paneId}.cap`);
+    const credentialPath = path.join(home, ".wmux", "agent-input", `${paneId}.json`);
+    assert.equal(childEnvironment.WMUX_AGENT_INPUT_CAPABILITY_PATH, capabilityPath);
+    assert.equal(childEnvironment.WMUX_AGENT_INPUT_CREDENTIAL_PATH, credentialPath);
+    assert.equal(childEnvironment.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY, undefined);
+    assert.equal(childEnvironment.WMUX_TOKEN, undefined);
+    assert.equal(Object.values(childEnvironment).includes(capability), false);
+    assert.equal(fs.readFileSync(capabilityPath, "utf8"), `${capability}\n`);
+    assert.equal(fs.statSync(path.dirname(capabilityPath)).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(capabilityPath).mode & 0o777, 0o600);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+posixTest("feature-disabled tmux durable SSH pane launches without agent-input credentials", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-durable-disabled-"));
+  const home = path.join(directory, "home");
+  const bin = path.join(directory, "bin");
+  const childEnvironmentPath = path.join(directory, "child.env");
+  fs.mkdirSync(home, { mode: 0o700 });
+  fs.mkdirSync(bin, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "tmux"), fakeTmux, { mode: 0o700 });
+
+  try {
+    const script = durableShellScript({
+      backend: "tmux",
+      sessionName: "wmux_test_durable_disabled",
+      cwd: home,
+      cols: 80,
+      rows: 24,
+      shellCommand: `env > ${shellQuoteForTest(childEnvironmentPath)}`,
+      extraEnv: {
+        WMUX_PANE_ID: "pane-durable-disabled",
+        WMUX_WORKSPACE_ID: "workspace-durable-disabled",
+        WMUX_TAB_ID: "tab-durable-disabled",
+      },
+      helperPathExport: `export PATH=${shellQuoteForTest(bin)}:$PATH;`,
+      agentProfileOptionalAuth: true,
+      useSystemdScope: false,
+    });
+    const syntax = spawnSync("/bin/sh", ["-n"], { input: script, encoding: "utf8" });
+    assert.equal(syntax.status, 0, syntax.stderr);
+    const result = spawnSync("/bin/sh", ["-c", script], {
+      cwd: directory,
+      encoding: "utf8",
+      env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+    });
+    assert.equal(result.status, 0, result.stderr);
+
+    const childEnvironment = readEnvironment(childEnvironmentPath);
+    assert.equal(childEnvironment.WMUX_AGENT_INPUT_CAPABILITY_PATH, undefined);
+    assert.equal(childEnvironment.WMUX_AGENT_INPUT_CREDENTIAL_PATH, undefined);
+    assert.equal(childEnvironment.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY, undefined);
+    assert.equal(childEnvironment.WMUX_TOKEN, undefined);
+    assert.equal(fs.existsSync(path.join(home, ".wmux", "agent-input")), false);
+  } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -302,3 +418,15 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 };
+
+const shellQuoteForTest = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+const readEnvironment = (filePath: string): Record<string, string> => Object.fromEntries(
+  fs.readFileSync(filePath, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((entry) => {
+      const separator = entry.indexOf("=");
+      return [entry.slice(0, separator), entry.slice(separator + 1)];
+    }),
+);
