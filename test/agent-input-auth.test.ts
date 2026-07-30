@@ -19,6 +19,13 @@ const context = {
   machineId: "local",
   sourceKind: "opencode" as const,
 };
+const schema3Fixture = fs.readFileSync(
+  new URL("./fixtures/agent-input/schema3-parent-5d476f84.json", import.meta.url),
+  "utf8",
+);
+const schema3RelaySecret = "ais_00000000-0000-4000-8000-000000000002.AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE";
+const schema3UnusedCapability = "aic_00000000-0000-4000-8000-000000000004.AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
+const schema3SourceId = "source_00000000-0000-4000-8000-000000000002";
 const registration = (
   store: AgentInputCredentialStore,
   principal: Parameters<AgentInputCredentialStore["issueRuntimeChallenge"]>[0],
@@ -281,41 +288,75 @@ test("schema-2 pre-attestation capabilities and sources migrate disabled and req
   }
 });
 
-test("schema-3 sources migrate as refresh-only authority and replace old attestation after restart", () => {
+test("authentic parent schema-3 primary migrates with only source refresh authority", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v3-"));
-  const currentPath = path.join(directory, "current.json");
   const migrationPath = path.join(directory, "migration.json");
   try {
-    const current = new AgentInputCredentialStore(currentPath, { hashKey: "server-key" });
-    const capability = current.issueRegistrationCapability(context, 1_000);
-    const registrationPrincipal = current.authenticate(capability.capability, 1_001);
-    if (registrationPrincipal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-    const oldInput = registration(current, registrationPrincipal, "O".repeat(43), 1_002);
-    const exchange = current.exchange(registrationPrincipal, oldInput, 1_002);
-    if (exchange.outcome !== "issued") throw new Error("source unavailable");
-    const envelope = current.snapshot();
-    fs.writeFileSync(migrationPath, `${JSON.stringify({
-      schemaVersion: 3,
-      capabilities: envelope.capabilities,
-      sources: envelope.sources.map((source) => ({ ...source, runtimeAttestation: oldInput.runtimeAttestation })),
-      capabilityTombstones: envelope.capabilityTombstones,
-    })}\n`, { mode: 0o600 });
+    fs.writeFileSync(migrationPath, schema3Fixture, { mode: 0o600 });
 
-    const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key" });
+    const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "schema3-fixture-key" });
     assert.equal(migrated.snapshot().schemaVersion, 4);
-    const disabled = migrated.source(exchange.sourceId)!;
+    assert.equal(fs.statSync(migrationPath).mode & 0o777, 0o600);
+    assert.equal(migrated.authenticate(schema3UnusedCapability, 1_003), undefined,
+      "unexchanged schema-3 registration capability must not survive the challenge boundary");
+    const disabled = migrated.source(schema3SourceId)!;
     assert.equal(disabled.runtimeReady, false);
     assert.equal(disabled.supported, false);
+    assert.equal(disabled.diagnostic, "attestation_required");
     assert.equal(disabled.runtimeAttestation, undefined);
-    const principal = migrated.authenticate(exchange.relaySecret, 1_003);
+    const principal = migrated.authenticate(schema3RelaySecret, 1_003);
     if (principal?.kind !== "agent-input-source") throw new Error("migration lost refresh authority");
     const refreshed = migrated.refresh(principal, registration(migrated, principal, "N".repeat(43), 1_004), 1_004);
-    assert.equal(migrated.authenticate(exchange.relaySecret, 1_005), undefined);
+    assert.equal(migrated.authenticate(schema3RelaySecret, 1_005), undefined);
     assert.equal(migrated.authenticate(refreshed.relaySecret, 1_005)?.kind, "agent-input-source");
-    const ready = migrated.source(exchange.sourceId)!;
+    const ready = migrated.source(schema3SourceId)!;
     assert.equal(ready.runtimeReady, true);
     assert.equal(ready.supported, true);
     assert.equal("nonce" in (ready.runtimeAttestation as Record<string, unknown>), false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("authentic parent schema-3 backup recovery revokes all recovered authority", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v3-backup-"));
+  const migrationPath = path.join(directory, "migration.json");
+  try {
+    fs.writeFileSync(migrationPath, "{broken", { mode: 0o600 });
+    fs.writeFileSync(`${migrationPath}.bak`, schema3Fixture, { mode: 0o600 });
+    const recovered = new AgentInputCredentialStore(migrationPath, { hashKey: "schema3-fixture-key" });
+    const persisted = JSON.parse(fs.readFileSync(migrationPath, "utf8"));
+    assert.equal(persisted.schemaVersion, 4);
+    assert.equal(fs.statSync(migrationPath).mode & 0o777, 0o600);
+    assert.equal(recovered.authenticate(schema3UnusedCapability, 1_003), undefined);
+    assert.equal(recovered.authenticate(schema3RelaySecret, 1_003), undefined);
+    assert.equal(recovered.source(schema3SourceId)?.diagnostic, "recovery_invalidated");
+    assert.ok(recovered.snapshot().sources.every((source) => source.revokedAt !== undefined));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("schema-3 malformed attestation is rejected and future primary refuses valid backup fallback", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v3-invalid-"));
+  try {
+    const malformedPath = path.join(directory, "malformed.json");
+    const malformed = JSON.parse(schema3Fixture);
+    malformed.sources[0].runtimeAttestation.handshakeSchema = 2;
+    const malformedBytes = `${JSON.stringify(malformed)}\n`;
+    fs.writeFileSync(malformedPath, malformedBytes, { mode: 0o600 });
+    assert.throws(() => new AgentInputCredentialStore(malformedPath, { hashKey: "schema3-fixture-key" }),
+      /credential store is invalid/);
+    assert.equal(fs.readFileSync(malformedPath, "utf8"), malformedBytes);
+
+    const futurePath = path.join(directory, "future.json");
+    const futureBytes = `${JSON.stringify({ schemaVersion: 5, preserve: true })}\n`;
+    fs.writeFileSync(futurePath, futureBytes, { mode: 0o600 });
+    fs.writeFileSync(`${futurePath}.bak`, schema3Fixture, { mode: 0o600 });
+    assert.throws(() => new AgentInputCredentialStore(futurePath, { hashKey: "schema3-fixture-key" }),
+      UnsupportedAgentInputCredentialVersionError);
+    assert.equal(fs.readFileSync(futurePath, "utf8"), futureBytes);
+    assert.equal(fs.readFileSync(`${futurePath}.bak`, "utf8"), schema3Fixture);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

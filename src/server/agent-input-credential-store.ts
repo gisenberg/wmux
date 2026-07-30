@@ -90,6 +90,42 @@ const sourceSchema = z.object({
   }
 });
 const sourceV2Schema = z.object({ ...attestationlessSourceFields, secretVerifier: verifierSchema }).strict();
+// Credential schema 3 was written by handshake schema 1. Keep its persisted
+// shape independent of the current challenge-bound wire contract.
+const historicalRuntimeAttestationV1Schema = z.object({
+  type: z.literal("runtime_attestation"),
+  handshakeSchema: z.literal(1),
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  challengeIssuedAt: z.number().int().nonnegative(),
+  challengeDeadline: z.number().int().positive(),
+  observedAt: z.number().int().nonnegative(),
+  contractDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  compatibilityFingerprint: z.string().min(1).max(256),
+  eventEnvelope: z.string().min(1).max(64),
+  release: z.string().max(64),
+  health: z.object({
+    called: z.boolean(),
+    outcome: z.enum(["ok", "missing", "timeout", "error", "malformed", "release_mismatch"]),
+    status: z.number().int().min(0).max(999),
+    healthy: z.boolean(),
+    release: z.string().max(64),
+  }).strict(),
+  capabilities: z.object({
+    globalHealth: z.boolean(),
+    questionList: z.boolean(),
+    questionReply: z.boolean(),
+    sessionGet: z.boolean(),
+  }).strict(),
+  diagnostic: z.enum([
+    "ok",
+    "health_method_missing",
+    "health_timeout",
+    "health_error",
+    "health_malformed",
+    "health_release_mismatch",
+    "client_method_missing",
+  ]),
+}).strict();
 const sourceV3Schema = z.object({
   id: value(),
   credentialId: z.string().uuid(),
@@ -97,7 +133,7 @@ const sourceV3Schema = z.object({
   credentialGeneration: z.number().int().positive(),
   context: contextSchema,
   instanceNonce: value(),
-  runtimeAttestation: openCodeRuntimeAttestationSchema.optional(),
+  runtimeAttestation: historicalRuntimeAttestationV1Schema.optional(),
   runtimeReady: z.boolean(),
   supported: z.boolean(),
   diagnostic: z.enum(["runtime_ready", "attestation_required", "recovery_invalidated"]),
@@ -105,7 +141,14 @@ const sourceV3Schema = z.object({
   expiresAt: z.number().int().positive(),
   refreshedAt: z.number().int().nonnegative(),
   revokedAt: z.number().int().nonnegative().optional(),
-}).strict();
+}).strict().superRefine((source, ctx) => {
+  const ready = source.runtimeReady && source.supported
+    && source.diagnostic === "runtime_ready" && source.runtimeAttestation !== undefined;
+  const disabled = !source.runtimeReady && !source.supported && source.diagnostic !== "runtime_ready";
+  if (!ready && !disabled) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "inconsistent runtime attestation state" });
+  }
+});
 const capabilityTombstoneSchema = z.object({
   id: z.string().uuid(),
   sourceId: value(),
@@ -845,7 +888,10 @@ const invalidateAttestationlessEnvelope = (
 
 const migrateChallengeBoundEnvelope = (input: z.infer<typeof envelopeV3Schema>): Envelope => ({
   schemaVersion: 4,
-  capabilities: structuredClone(input.capabilities),
+  capabilities: input.capabilities.map((capability) => ({
+    ...capability,
+    usedAt: capability.usedAt ?? capability.issuedAt,
+  })),
   sources: input.sources.map((source) => {
     const { runtimeAttestation: _runtimeAttestation, ...rest } = source;
     return {
