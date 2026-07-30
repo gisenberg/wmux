@@ -83,7 +83,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
   try {
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
     installFixturePackages(configHome);
-    const sdkPackage = path.join(configHome, "node_modules", "@opencode-ai", "sdk");
+    const sdkPackage = path.join(configHome, "opencode", "node_modules", "@opencode-ai", "sdk");
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const module = await import(`${pathToFileURL(pluginPath).href}?question=${Date.now()}`);
     const replies: unknown[] = [];
@@ -733,16 +733,22 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   }
 });
 
-test("generated plugin discovers import-only ESM packages and rejects unsafe manifests", { skip: process.platform !== "linux" }, async (t) => {
-  const variants: Array<{ name: string; mutate: (manifest: string, home: string) => void }> = [
-    { name: "supported", mutate: () => undefined },
-    { name: "version mismatch", mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":"1.18.8"}') },
-    { name: "name mismatch", mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/not-sdk","version":"1.18.9"}') },
-    { name: "non-string version", mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":1.18}') },
-    { name: "missing", mutate: (manifest) => fs.rmSync(manifest) },
-    { name: "malformed", mutate: (manifest) => fs.writeFileSync(manifest, '{') },
-    { name: "world writable", mutate: (manifest) => fs.chmodSync(manifest, 0o666) },
-    { name: "symlink", mutate: (manifest, home) => {
+test("generated plugin discovers exact XDG OpenCode packages from a separate loader cache and rejects unsafe manifests", { skip: process.platform !== "linux" }, async (t) => {
+  const variants: Array<{
+    name: string;
+    customXdg?: boolean;
+    launches: boolean;
+    mutate: (manifest: string, home: string) => void;
+  }> = [
+    { name: "default HOME layout", launches: true, mutate: () => undefined },
+    { name: "custom XDG base", customXdg: true, launches: true, mutate: () => undefined },
+    { name: "version mismatch", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":"1.18.8"}') },
+    { name: "name mismatch", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/not-sdk","version":"1.18.9"}') },
+    { name: "non-string version", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":1.18}') },
+    { name: "missing", launches: false, mutate: (manifest) => fs.rmSync(manifest) },
+    { name: "malformed", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{') },
+    { name: "world writable", launches: false, mutate: (manifest) => fs.chmodSync(manifest, 0o666) },
+    { name: "symlink", launches: false, mutate: (manifest, home) => {
       const target = path.join(home, "sdk-package.json");
       fs.writeFileSync(target, '{"name":"@opencode-ai/sdk","version":"1.18.9"}', { mode: 0o600 });
       fs.rmSync(manifest);
@@ -752,7 +758,7 @@ test("generated plugin discovers import-only ESM packages and rejects unsafe man
   for (const variant of variants) {
     await t.test(variant.name, async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-package-"));
-      const configHome = path.join(home, "config");
+      const configHome = variant.customXdg ? path.join(home, "custom-config") : path.join(home, ".config");
       const capabilityPath = path.join(home, "pane.cap");
       fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
       let requests = 0;
@@ -767,9 +773,12 @@ test("generated plugin discovers import-only ESM packages and rejects unsafe man
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address();
       assert.ok(address && typeof address === "object");
-      const runnerPath = path.join(home, "run-plugin.mjs");
+      const cacheRoot = path.join(home, "loader-cache", "opencode");
+      const cachedPluginPath = path.join(cacheRoot, "plugins", "wmux.ts");
+      const runnerPath = path.join(cacheRoot, "run-plugin.mjs");
+      fs.mkdirSync(path.dirname(cachedPluginPath), { recursive: true, mode: 0o700 });
       fs.writeFileSync(runnerPath, `
-        const pluginModule = await import(${JSON.stringify(pathToFileURL(path.join(configHome, "opencode", "plugins", "wmux.ts")).href)});
+        const pluginModule = await import(${JSON.stringify(pathToFileURL(cachedPluginPath).href)});
         const client = {
           question: {
             list: async () => ({ data: [], response: { status: 200 } }),
@@ -786,10 +795,9 @@ test("generated plugin discovers import-only ESM packages and rejects unsafe man
         await plugin.event({ event: { type: "question.future", properties: {} } });
         await new Promise((resolve) => setTimeout(resolve, 100));
       `, { mode: 0o600 });
-      const env = {
+      const env: NodeJS.ProcessEnv = {
         ...process.env,
         HOME: home,
-        XDG_CONFIG_HOME: configHome,
         WMUX_URL: `http://127.0.0.1:${address.port}`,
         WMUX_PANE_ID: `pane-${variant.name}`,
         WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
@@ -799,18 +807,34 @@ test("generated plugin discovers import-only ESM packages and rejects unsafe man
         WMUX_AUTOMATION_TOKEN: "broad-automation-token-must-not-cross",
         WMUX_REGISTRATION_TOKEN: "broad-registration-token-must-not-cross",
       };
+      if (variant.customXdg) env.XDG_CONFIG_HOME = configHome;
+      else delete env.XDG_CONFIG_HOME;
       let child: ReturnType<typeof spawn> | undefined;
       let output = "";
       let errors = "";
       try {
         await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
         installFixturePackages(configHome, true);
-        variant.mutate(path.join(configHome, "node_modules", "@opencode-ai", "sdk", "package.json"), home);
+        fs.copyFileSync(path.join(configHome, "opencode", "plugins", "wmux.ts"), cachedPluginPath);
+        const cachedModules = path.join(cacheRoot, "node_modules");
+        fs.mkdirSync(path.join(cachedModules, "@opencode-ai"), { recursive: true, mode: 0o700 });
+        fs.symlinkSync(
+          path.join(configHome, "opencode", "node_modules", "@opencode-ai", "plugin"),
+          path.join(cachedModules, "@opencode-ai", "plugin"),
+          "dir",
+        );
+        fs.symlinkSync(
+          path.join(configHome, "opencode", "node_modules", "effect"),
+          path.join(cachedModules, "effect"),
+          "dir",
+        );
+        const sdkManifest = path.join(configHome, "opencode", "node_modules", "@opencode-ai", "sdk", "package.json");
+        variant.mutate(sdkManifest, home);
         child = spawn(process.execPath, ["--experimental-transform-types", runnerPath], { env, stdio: ["ignore", "pipe", "pipe"] });
         child.stdout.on("data", (chunk) => { output += chunk.toString(); });
         child.stderr.on("data", (chunk) => { errors += chunk.toString(); });
         await waitFor(() => output.includes("READY"), () => errors);
-        if (variant.name === "supported") {
+        if (variant.launches) {
           await waitFor(() => requests > 0 && brokerChildIds(child!.pid).length > 0, () => JSON.stringify({ requests, errors }));
           const environment = fs.readFileSync(`/proc/${brokerChildIds(child.pid)[0]}/environ`, "utf8").split("\0");
           for (const key of ["WMUX_TOKEN", "WMUX_HELPER_TOKEN", "WMUX_AUTOMATION_TOKEN", "WMUX_REGISTRATION_TOKEN"]) {
@@ -834,9 +858,10 @@ test("generated plugin discovers import-only ESM packages and rejects unsafe man
 });
 
 const installFixturePackages = (configHome: string, importOnly = false): void => {
-  const pluginPackage = path.join(configHome, "node_modules", "@opencode-ai", "plugin");
-  const effectPackage = path.join(configHome, "node_modules", "effect");
-  const sdkPackage = path.join(configHome, "node_modules", "@opencode-ai", "sdk");
+  const nodeModules = path.join(configHome, "opencode", "node_modules");
+  const pluginPackage = path.join(nodeModules, "@opencode-ai", "plugin");
+  const effectPackage = path.join(nodeModules, "effect");
+  const sdkPackage = path.join(nodeModules, "@opencode-ai", "sdk");
   fs.mkdirSync(pluginPackage, { recursive: true });
   fs.mkdirSync(effectPackage, { recursive: true });
   fs.mkdirSync(path.join(sdkPackage, "v2"), { recursive: true });
