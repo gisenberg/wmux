@@ -1,10 +1,13 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "handshakeSchema": 1,
   "openCodeRelease": "1.18.9",
   "sdkPackage": "@opencode-ai/sdk",
   "sdkVersion": "1.18.9",
   "sdkImport": "@opencode-ai/sdk/v2/client",
   "officialTagCommit": "4da7bb44c84e013fa53e9c5d02ac753d1435c81a",
+  "healthCall": "client.global.health()",
+  "healthResult": "RequestResult<GlobalHealthResponses, GlobalHealthErrors, false, fields>",
   "eventEnvelope": "legacy-properties",
   "questionListCall": "client.question.list({ directory })",
   "questionReplyCall": "client.question.reply({ requestID, answers }, { signal })",
@@ -12,5 +15,12 @@
   "questionIdentityOwner": "broker-occurrence-stream",
   "questionSnapshotAuthority": "complete-validated-top-level-members",
   "questionResolutionBinding": "exact-occurrence-public-id-generation",
-  "compatibilityFingerprint": "opencode-question-occurrence-stream-v3-sdk-1.18.9"
+  "requiredClientMethods": [
+    "global.health",
+    "question.list",
+    "question.reply",
+    "session.get"
+  ],
+  "compatibilityFingerprint": "opencode-question-occurrence-stream-v4-runtime-attestation-1.18.9",
+  "canonicalContractDigest": "1feab28627744cac89922c1aaf5177a26f2f290511d1b0e457d0fd8f1671997f"
 }

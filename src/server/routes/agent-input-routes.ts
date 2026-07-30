@@ -5,6 +5,7 @@ import type {
 } from "../agent-input-credential-store.js";
 import { AgentInputCredentialError } from "../agent-input-credential-store.js";
 import { AgentInputRequestStoreError } from "../agent-input-request-store.js";
+import { openCodeRuntimeAttestationSchema } from "../opencode-question-contract.js";
 import type { ApiRoute, RouteContext } from "./route.js";
 import { HttpError, routePolicy } from "./route.js";
 
@@ -22,9 +23,7 @@ const questionSchema = z.object({
 const registerSchema = z.object({
   instanceNonce: text(),
   kind: z.literal("opencode"),
-  pluginVersion: text(64),
-  sdkVersion: text(64),
-  compatibilityFingerprint: text(),
+  runtimeAttestation: openCodeRuntimeAttestationSchema,
 }).strict();
 const captureSchema = z.object({
   occurrenceId: text(),
@@ -149,7 +148,7 @@ export const agentInputRoutes: readonly ApiRoute[] = [
       // replacement during upload cannot mutate state under stale authority.
       const source = ctx.deps.agentInputCredentials.sourceForPrincipal(principal);
       if (!source || !liveContext(ctx, source.context)) throw new HttpError(401, "unauthorized");
-      if (!source.supported) throw new HttpError(409, "source_unsupported");
+      if (!source.runtimeReady || !source.supported) throw new HttpError(409, "source_unsupported");
       const result = ctx.deps.agentInputRequests.capture({
         occurrenceId: body.occurrenceId,
         occurrenceKey: body.occurrenceKey,

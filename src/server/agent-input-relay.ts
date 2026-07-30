@@ -456,7 +456,7 @@ export class AgentInputRelay {
   private readonly onSourceIssued = (sourceId: string): void => this.scheduleExpiry(sourceId);
 
   private sourceAvailable(source: AgentInputSourceRecord): boolean {
-    return this.enabled && source.supported && source.revokedAt === undefined
+    return this.enabled && source.runtimeReady && source.supported && source.revokedAt === undefined
       && source.expiresAt > Date.now() && this.options.isPaneLive(source);
   }
 

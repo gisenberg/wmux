@@ -6,11 +6,12 @@ import path from "node:path";
 import { z } from "zod";
 import type { StateStore } from "./state.js";
 import {
-  OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  SUPPORTED_OPENCODE_SDK_VERSION,
+  isSupportedOpenCodeRuntimeAttestation,
+  openCodeRuntimeAttestationSchema,
+  type OpenCodeRuntimeAttestation,
 } from "./opencode-question-contract.js";
 
-export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 2;
+export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 3;
 export const DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS = 5 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_RELAY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_SOURCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -46,10 +47,9 @@ const capabilitySchema = z.object({
   exchangeNonce: value().optional(),
   sourceId: value().optional(),
 }).strict();
-const sourceSchema = z.object({
+const attestationlessSourceFields = {
   id: value(),
   credentialId: z.string().uuid(),
-  secretVerifier: verifierSchema,
   credentialGeneration: z.number().int().positive(),
   context: contextSchema,
   instanceNonce: value(),
@@ -61,7 +61,31 @@ const sourceSchema = z.object({
   expiresAt: z.number().int().positive(),
   refreshedAt: z.number().int().nonnegative(),
   revokedAt: z.number().int().nonnegative().optional(),
-}).strict();
+};
+const sourceSchema = z.object({
+  id: value(),
+  credentialId: z.string().uuid(),
+  secretVerifier: verifierSchema,
+  credentialGeneration: z.number().int().positive(),
+  context: contextSchema,
+  instanceNonce: value(),
+  runtimeAttestation: openCodeRuntimeAttestationSchema.optional(),
+  runtimeReady: z.boolean(),
+  supported: z.boolean(),
+  diagnostic: z.enum(["runtime_ready", "attestation_required", "recovery_invalidated"]),
+  issuedAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().positive(),
+  refreshedAt: z.number().int().nonnegative(),
+  revokedAt: z.number().int().nonnegative().optional(),
+}).strict().superRefine((source, ctx) => {
+  const ready = source.runtimeReady && source.supported
+    && source.diagnostic === "runtime_ready" && source.runtimeAttestation !== undefined;
+  const disabled = !source.runtimeReady && !source.supported && source.diagnostic !== "runtime_ready";
+  if (!ready && !disabled) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "inconsistent runtime attestation state" });
+  }
+});
+const sourceV2Schema = z.object({ ...attestationlessSourceFields, secretVerifier: verifierSchema }).strict();
 const capabilityTombstoneSchema = z.object({
   id: z.string().uuid(),
   sourceId: value(),
@@ -75,7 +99,7 @@ const envelopeSchema = z.object({
   capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
 }).strict();
 const legacyCapabilitySchema = capabilitySchema.omit({ verifier: true }).extend({ hash: legacyHashSchema }).strict();
-const legacySourceSchema = sourceSchema.omit({ secretVerifier: true }).extend({ secretHash: legacyHashSchema }).strict();
+const legacySourceSchema = z.object({ ...attestationlessSourceFields, secretHash: legacyHashSchema }).strict();
 const envelopeV1Schema = z.object({
   schemaVersion: z.literal(1),
   capabilities: z.array(legacyCapabilitySchema).max(4_000),
@@ -86,6 +110,12 @@ const envelopeV0Schema = z.object({
   schemaVersion: z.literal(0),
   capabilities: z.array(legacyCapabilitySchema).max(4_000),
   sources: z.array(legacySourceSchema).max(2_000),
+}).strict();
+const envelopeV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  capabilities: z.array(capabilitySchema).max(4_000),
+  sources: z.array(sourceV2Schema).max(2_000),
+  capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
 }).strict();
 type Envelope = z.infer<typeof envelopeSchema>;
 export type AgentInputSourceRecord = z.infer<typeof sourceSchema>;
@@ -122,9 +152,7 @@ export class AgentInputCredentialError extends Error {
 export interface RegisterAgentInputSource {
   instanceNonce: string;
   kind: "opencode";
-  pluginVersion: string;
-  sdkVersion: string;
-  compatibilityFingerprint: string;
+  runtimeAttestation: OpenCodeRuntimeAttestation;
 }
 
 export type AgentInputSourceExchange =
@@ -232,10 +260,12 @@ export class AgentInputCredentialStore extends EventEmitter {
     const parsed = z.object({
       instanceNonce: value(),
       kind: z.literal("opencode"),
-      pluginVersion: value(64),
-      sdkVersion: value(64),
-      compatibilityFingerprint: value(256),
+      runtimeAttestation: openCodeRuntimeAttestationSchema,
     }).strict().parse(input);
+    if (parsed.instanceNonce !== parsed.runtimeAttestation.nonce
+      || !isSupportedOpenCodeRuntimeAttestation(parsed.runtimeAttestation, nowMs)) {
+      throw new AgentInputCredentialError("runtime_attestation_invalid");
+    }
     let plaintext = "";
     const result = this.commit((draft) => {
       const capability = draft.capabilities.find((candidate) => candidate.id === principal.capabilityId);
@@ -250,9 +280,6 @@ export class AgentInputCredentialStore extends EventEmitter {
       const sourceId = `source_${sourceUuid}`;
       plaintext = crypto.randomBytes(32).toString("base64url");
       const credentialId = crypto.randomUUID();
-      const supported = parsed.sdkVersion === SUPPORTED_OPENCODE_SDK_VERSION
-        && parsed.pluginVersion === SUPPORTED_OPENCODE_SDK_VERSION
-        && parsed.compatibilityFingerprint === OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT;
       const source: AgentInputSourceRecord = {
         id: sourceId,
         credentialId,
@@ -260,10 +287,10 @@ export class AgentInputCredentialStore extends EventEmitter {
         credentialGeneration: 1,
         context: structuredClone(capability.context),
         instanceNonce: parsed.instanceNonce,
-        pluginVersion: parsed.pluginVersion,
-        sdkVersion: parsed.sdkVersion,
-        compatibilityFingerprint: parsed.compatibilityFingerprint,
-        supported,
+        runtimeAttestation: structuredClone(parsed.runtimeAttestation),
+        runtimeReady: true,
+        supported: true,
+        diagnostic: "runtime_ready",
         issuedAt: nowMs,
         refreshedAt: nowMs,
         expiresAt: nowMs + this.relayTtlMs,
@@ -283,7 +310,7 @@ export class AgentInputCredentialStore extends EventEmitter {
         sourceId,
         relaySecret: `ais_${sourceUuid}.${plaintext}`,
         expiresAt: source.expiresAt,
-        supported,
+        supported: true,
         credentialGeneration: 1,
       };
     });
@@ -379,7 +406,8 @@ export class AgentInputCredentialStore extends EventEmitter {
 
   isAvailable(sourceId: string, nowMs = Date.now()): boolean {
     const source = this.data.sources.find((candidate) => candidate.id === sourceId);
-    return Boolean(source && source.supported && source.revokedAt === undefined && source.expiresAt > nowMs);
+    return Boolean(source && source.runtimeReady && source.supported
+      && source.revokedAt === undefined && source.expiresAt > nowMs);
   }
 
   snapshot(): Envelope {
@@ -465,6 +493,13 @@ export class AgentInputCredentialStore extends EventEmitter {
         const old = envelopeV1Schema.parse(input);
         return {
           data: invalidateLegacyEnvelope(old.capabilities, old.sources, old.capabilityTombstones, this.options.hashKey),
+          migrated: true,
+        };
+      }
+      if (version === 2) {
+        const old = envelopeV2Schema.parse(input);
+        return {
+          data: invalidateAttestationlessEnvelope(old, this.options.hashKey),
           migrated: true,
         };
       }
@@ -563,7 +598,7 @@ export const issueAgentInputRegistrationCapabilityForPane = (
 };
 
 const emptyEnvelope = (): Envelope => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   capabilities: [],
   sources: [],
   capabilityTombstones: [],
@@ -580,18 +615,65 @@ const invalidateLegacyEnvelope = (
     digest: crypto.createHmac("sha256", hashKey).update(`invalidated-${kind}\0${id}`).digest("hex"),
   });
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     capabilities: capabilities.map(({ hash: _hash, ...capability }) => ({
       ...capability,
       verifier: invalid("capability", capability.id),
       usedAt: capability.usedAt ?? capability.issuedAt,
     })),
-    sources: sources.map(({ secretHash: _secretHash, ...source }) => ({
-      ...source,
-      secretVerifier: invalid("source", source.id),
-      revokedAt: source.revokedAt ?? source.refreshedAt,
-    })),
+    sources: sources.map((source) => {
+      const {
+        secretHash: _secretHash,
+        pluginVersion: _pluginVersion,
+        sdkVersion: _sdkVersion,
+        compatibilityFingerprint: _compatibilityFingerprint,
+        ...rest
+      } = source;
+      return {
+        ...rest,
+        secretVerifier: invalid("source", source.id),
+        runtimeReady: false,
+        supported: false,
+        diagnostic: "attestation_required" as const,
+        revokedAt: source.revokedAt ?? source.refreshedAt,
+      };
+    }),
     capabilityTombstones,
+  };
+};
+
+const invalidateAttestationlessEnvelope = (
+  input: z.infer<typeof envelopeV2Schema>,
+  hashKey: string,
+): Envelope => {
+  const invalid = (kind: string, id: string): z.infer<typeof verifierSchema> => ({
+    kind: "hmac-sha256",
+    digest: crypto.createHmac("sha256", hashKey).update(`attestation-required-${kind}\0${id}`).digest("hex"),
+  });
+  return {
+    schemaVersion: 3,
+    capabilities: input.capabilities.map((capability) => ({
+      ...capability,
+      verifier: invalid("capability", capability.id),
+      usedAt: capability.usedAt ?? capability.issuedAt,
+    })),
+    sources: input.sources.map((source) => {
+      const {
+        pluginVersion: _pluginVersion,
+        sdkVersion: _sdkVersion,
+        compatibilityFingerprint: _compatibilityFingerprint,
+        ...rest
+      } = source;
+      return {
+        ...rest,
+        secretVerifier: invalid("source", source.id),
+        runtimeReady: false,
+        supported: false,
+        diagnostic: "attestation_required" as const,
+        revokedAt: source.revokedAt ?? source.refreshedAt,
+      };
+    }),
+    capabilityTombstones: input.capabilityTombstones,
   };
 };
 
@@ -611,6 +693,9 @@ const invalidateRecoveredEnvelope = (input: Envelope, hashKey: string, nowMs = D
     sources: input.sources.map((source) => ({
       ...source,
       secretVerifier: invalid("source", source.id),
+      runtimeReady: false,
+      supported: false,
+      diagnostic: "recovery_invalidated" as const,
       revokedAt: source.revokedAt ?? nowMs,
     })),
   };

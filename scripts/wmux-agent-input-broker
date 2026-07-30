@@ -6,7 +6,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
+const HANDSHAKE_TIMEOUT_MS = 5_000;
 const MAX_LINE_BYTES = 128 * 1024;
 const MAX_OUTBOX = 256;
 const MAX_STREAMS = 256;
@@ -15,13 +16,13 @@ const MAX_QUARANTINES = 256;
 const MAX_BACKOFF_ATTEMPTS = 8;
 const REQUEST_TIMEOUT_MS = 10_000;
 const REFRESH_LEAD_MS = 5 * 60 * 1_000;
-const RUNTIME_WAIT_MS = 5_000;
 const paneId = process.env.WMUX_PANE_ID?.trim() ?? "";
 const home = process.env.HOME || os.homedir();
 const baseUrl = (process.env.WMUX_URL || readText(path.join(home, ".wmux", "url"))).replace(/\/+$/, "");
 const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH
   || path.join(home, ".wmux", "agent-input", `${safeName(paneId)}.json`);
 const capabilityPath = process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH?.trim() || "";
+const statusPath = credentialPath ? `${credentialPath}.status.json` : "";
 const contractPath = process.env.WMUX_OPENCODE_QUESTION_CONTRACT_PATH?.trim()
   || path.join(path.dirname(fileURLToPath(import.meta.url)), "opencode-question-contract.json");
 const contract = loadContract();
@@ -31,11 +32,14 @@ let stopping = false;
 let pollAbort = new AbortController();
 let drainPromise;
 let refreshPromise;
-let runtimeResolve;
-let runtime;
+let attestationResolve;
+let runtimeAttestation;
+let runtimeReady = false;
+let challenge;
+let attestationSeen = false;
+let lastDiagnostic;
 let snapshotRequested = false;
 let snapshotRerunPending = false;
-const pendingMessages = [];
 const inFlightDeliveries = new Set();
 const inFlightOperations = new Set();
 const retries = new Map();
@@ -45,7 +49,7 @@ const wakes = new Set();
 // after a broker restart, a native request still listed without a new terminal
 // event is a new occurrence of that reused identity.
 const snapshotFences = new Map();
-const runtimePromise = new Promise((resolve) => { runtimeResolve = resolve; });
+const attestationPromise = new Promise((resolve) => { attestationResolve = resolve; });
 
 const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -61,9 +65,46 @@ function readText(filePath) {
 function loadContract() {
   try {
     const parsed = JSON.parse(fs.readFileSync(contractPath, "utf8"));
-    return parsed?.schemaVersion === 1 && parsed.openCodeRelease === parsed.sdkVersion
-      && typeof parsed.sdkVersion === "string" && typeof parsed.compatibilityFingerprint === "string" ? parsed : undefined;
+    const claimed = parsed?.canonicalContractDigest;
+    const unsigned = structuredClone(parsed);
+    delete unsigned.canonicalContractDigest;
+    const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
+    return parsed?.schemaVersion === 2 && parsed.handshakeSchema === 1
+      && parsed.openCodeRelease === "1.18.9" && parsed.openCodeRelease === parsed.sdkVersion
+      && parsed.healthCall === "client.global.health()"
+      && parsed.eventEnvelope === "legacy-properties"
+      && Array.isArray(parsed.requiredClientMethods)
+      && JSON.stringify(parsed.requiredClientMethods) === JSON.stringify([
+        "global.health", "question.list", "question.reply", "session.get",
+      ])
+      && typeof parsed.compatibilityFingerprint === "string"
+      && /^[a-f0-9]{64}$/.test(claimed) && claimed === actual ? parsed : undefined;
   } catch { return undefined; }
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
+function persistStatus(state, diagnostic) {
+  if (!statusPath) return;
+  try {
+    const resolved = path.resolve(statusPath);
+    const directory = path.dirname(resolved);
+    assertPrivateDirectory(directory, true);
+    if (fs.existsSync(resolved)) assertPrivateFile(resolved);
+    const temporary = path.join(directory, `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`);
+    const handle = fs.openSync(temporary, "wx", 0o600);
+    try {
+      fs.writeFileSync(handle, `${JSON.stringify({ schemaVersion: 1, state, diagnostic, updatedAt: Date.now() })}\n`);
+      fs.fsyncSync(handle);
+    } finally { fs.closeSync(handle); }
+    fs.renameSync(temporary, resolved);
+    const directoryHandle = fs.openSync(directory, "r");
+    try { fs.fsyncSync(directoryHandle); } finally { fs.closeSync(directoryHandle); }
+  } catch {}
 }
 
 function assertPrivateDirectory(directory, create = false) {
@@ -99,6 +140,7 @@ function disabledLegacy(parsed) {
     credentialGeneration: parsed.credentialGeneration,
     cursor: parsed.cursor,
     occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
+    lastChallengeDigest: undefined,
     streams: {}, receipts: [], outbox: [], quarantines: [{ reason: "migration-unbound", at: Date.now() }],
     requiresFreshRegistration: true,
   };
@@ -116,6 +158,7 @@ function normalizeCredential(parsed) {
   if (typeof parsed.occurrenceEpoch !== "string"
     || !(parsed.relayEpoch === null || typeof parsed.relayEpoch === "string")
     || !Number.isSafeInteger(parsed.lastEventSequence) || parsed.lastEventSequence < 0
+    || !(parsed.lastChallengeDigest === undefined || /^[a-f0-9]{64}$/.test(parsed.lastChallengeDigest))
     || !parsed.streams || typeof parsed.streams !== "object"
     || !Array.isArray(parsed.receipts) || !Array.isArray(parsed.outbox) || !Array.isArray(parsed.quarantines)
     || Object.keys(parsed.streams).length > MAX_STREAMS || parsed.receipts.length > MAX_RECEIPTS
@@ -170,24 +213,72 @@ async function request(pathname, token, init = {}, signal, timeoutMs = REQUEST_T
   finally { clearTimeout(timer); signal?.removeEventListener("abort", forward); }
 }
 
-function validRuntime(value) {
-  return Boolean(contract && value?.type === "runtime" && value.openCodeVersion === contract.openCodeRelease
-    && value.sdkVersion === contract.sdkVersion && value.compatibilityFingerprint === contract.compatibilityFingerprint
-    && value.eventEnvelope === contract.eventEnvelope);
+function challengeDigest(nonce) {
+  return crypto.createHash("sha256").update(`wmux-runtime-challenge\0${nonce}`).digest("hex");
 }
 
-async function register(runtimeInfo) {
-  if (!capabilityPath || !validRuntime(runtimeInfo)) return false;
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function attestationDiagnostic(value) {
+  if (!contract || !challenge || !value || typeof value !== "object" || value.type !== "runtime_attestation") {
+    return "attestation_malformed";
+  }
+  if (!exactKeys(value, ["type", "handshakeSchema", "nonce", "challengeIssuedAt", "challengeDeadline", "observedAt",
+    "contractDigest", "compatibilityFingerprint", "eventEnvelope", "release", "health", "capabilities", "diagnostic"])
+    || typeof value.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value.nonce)
+    || typeof value.contractDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.contractDigest)
+    || typeof value.compatibilityFingerprint !== "string" || value.compatibilityFingerprint.length > 256
+    || typeof value.eventEnvelope !== "string" || value.eventEnvelope.length > 64
+    || typeof value.release !== "string" || value.release.length > 64
+    || typeof value.diagnostic !== "string" || value.diagnostic.length > 64) return "attestation_malformed";
+  if (value.handshakeSchema !== challenge.handshakeSchema) return "handshake_schema_mismatch";
+  if (value.nonce !== challenge.nonce) {
+    return credential?.lastChallengeDigest === challengeDigest(value.nonce) ? "attestation_replay" : "attestation_nonce_mismatch";
+  }
+  if (value.challengeIssuedAt !== challenge.issuedAt || value.challengeDeadline !== challenge.deadline
+    || !Number.isSafeInteger(value.observedAt) || value.observedAt < challenge.issuedAt
+    || value.observedAt > challenge.deadline || Date.now() > challenge.deadline) return "attestation_late";
+  if (value.contractDigest !== contract.canonicalContractDigest) return "contract_digest_mismatch";
+  if (value.compatibilityFingerprint !== contract.compatibilityFingerprint) return "fingerprint_mismatch";
+  if (value.eventEnvelope !== contract.eventEnvelope) return "event_envelope_mismatch";
+  const capabilities = value.capabilities;
+  if (!exactKeys(capabilities, ["globalHealth", "questionList", "questionReply", "sessionGet"])) return "capabilities_malformed";
+  for (const [name, diagnostic] of [
+    ["globalHealth", "method_global_health_missing"],
+    ["questionList", "method_question_list_missing"],
+    ["questionReply", "method_question_reply_missing"],
+    ["sessionGet", "method_session_get_missing"],
+  ]) if (capabilities[name] !== true) return diagnostic;
+  if (!exactKeys(value.health, ["called", "outcome", "status", "healthy", "release"])
+    || !Number.isInteger(value.health.status) || value.health.status < 0 || value.health.status > 999
+    || typeof value.health.healthy !== "boolean" || typeof value.health.release !== "string"
+    || value.health.release.length > 64 || typeof value.health.outcome !== "string") return "health_malformed";
+  if (value.health.called !== true) return "health_missing";
+  if (value.health.outcome === "timeout" || value.diagnostic === "health_timeout") return "health_timeout";
+  if (value.health.outcome === "error" || value.diagnostic === "health_error") return "health_error";
+  if (value.health.outcome === "missing" || value.diagnostic === "health_method_missing") return "health_missing";
+  if (value.health.outcome === "release_mismatch" || value.diagnostic === "health_release_mismatch") return "release_mismatch";
+  if (value.health.outcome !== "ok" || value.health.status !== 200 || value.health.healthy !== true
+    || value.diagnostic !== "ok") return "health_malformed";
+  if (value.release !== contract.openCodeRelease || value.health.release !== contract.openCodeRelease) return "release_mismatch";
+  return "ok";
+}
+
+async function register(attestation) {
+  if (!capabilityPath || attestationDiagnostic(attestation) !== "ok") return false;
   let capability = "";
   try { assertPrivateFile(capabilityPath); capability = fs.readFileSync(capabilityPath, "utf8").trim(); } catch { return false; }
   const response = await request("/api/agent-input/sources/register", capability, {
     method: "POST", body: JSON.stringify({
-      instanceNonce: crypto.createHash("sha256").update("wmux-agent-input\0").update(capability).digest("hex"),
-      kind: "opencode", pluginVersion: runtimeInfo.openCodeVersion, sdkVersion: runtimeInfo.sdkVersion,
-      compatibilityFingerprint: runtimeInfo.compatibilityFingerprint,
+      instanceNonce: attestation.nonce,
+      kind: "opencode",
+      runtimeAttestation: attestation,
     }),
   });
-  const terminal = [201, 400, 401, 403, 409].includes(response.status);
+  const terminal = [201, 400, 401, 403, 404, 409].includes(response.status);
   try {
     if (response.status !== 201 || typeof response.body.sourceId !== "string"
       || typeof response.body.relaySecret !== "string" || typeof response.body.expiresAt !== "number") return false;
@@ -195,8 +286,9 @@ async function register(runtimeInfo) {
       schemaVersion: SCHEMA_VERSION, sourceId: response.body.sourceId, relaySecret: response.body.relaySecret,
       expiresAt: response.body.expiresAt, supported: response.body.supported === true,
       credentialGeneration: response.body.credentialGeneration, cursor: 0,
-      occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
-      streams: {}, receipts: [], outbox: [], quarantines: [],
+       occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
+       lastChallengeDigest: challengeDigest(attestation.nonce),
+       streams: {}, receipts: [], outbox: [], quarantines: [],
     };
     persistCredential();
     return true;
@@ -307,7 +399,7 @@ function quarantine(operation, reason = operation.reason ?? "permanent-failure",
 }
 
 function appendOperation(operation) {
-  if (!credential?.supported || !validOperation(operation)) return;
+  if (!runtimeReady || !credential?.supported || !validOperation(operation)) return;
   const prior = credential.outbox.find((candidate) => candidate.opId === operation.opId);
   if (prior) {
     if (JSON.stringify(prior) !== JSON.stringify(operation)) failClosed("operation-conflict");
@@ -407,6 +499,7 @@ function acceptAsked(message) {
 }
 
 function requestSnapshot() {
+  if (!runtimeReady) return;
   if (snapshotRequested) {
     snapshotRerunPending = true;
     return;
@@ -604,7 +697,7 @@ function consumeOccurrence(occurrenceId, reason, status) {
 async function drainOutbox() {
   if (drainPromise) return drainPromise;
   drainPromise = (async () => {
-    while (!stopping && credential?.supported && credential.outbox.length > 0) {
+    while (!stopping && runtimeReady && credential?.supported && credential.outbox.length > 0) {
       const now = Date.now();
       const candidates = credential.outbox.filter((operation) => !inFlightOperations.has(operation.opId)
         && operationReady(operation) && (retries.get(operation.opId)?.nextAt ?? 0) <= now);
@@ -662,17 +755,20 @@ function waitForDrain(milliseconds) {
 
 function acceptMessage(message) {
   if (!message || typeof message !== "object") return;
-  if (message.type === "runtime") {
-    if (!runtime) { runtime = message; runtimeResolve(message); }
-    else if (JSON.stringify(runtime) !== JSON.stringify(message)) disable("runtime-conflict");
+  if (message.type === "runtime_attestation") {
+    if (attestationSeen) {
+      return disable(JSON.stringify(runtimeAttestation) === JSON.stringify(message)
+        ? "attestation_duplicate" : "attestation_conflict");
+    }
+    attestationSeen = true;
+    const diagnostic = attestationDiagnostic(message);
+    if (diagnostic !== "ok") return disable(diagnostic);
+    runtimeAttestation = message;
+    attestationResolve(message);
     return;
   }
+  if (!runtimeReady || !credential?.supported) return;
   if (message.type === "unsupported") return disable("plugin-unsupported");
-  if (!credential?.supported) {
-    if (pendingMessages.length >= MAX_OUTBOX) return disable("pending-capacity");
-    pendingMessages.push(message);
-    return;
-  }
   if (message.type === "asked") return acceptAsked(message);
   if (message.type === "resolved") return acceptResolved(message);
   if (message.type === "snapshot") return acceptSnapshot(message);
@@ -690,7 +786,7 @@ function clearRawDelivery(delivery) {
 
 async function poll() {
   while (!stopping) {
-    if (!credential?.supported || !(await ensureFreshCredential())) { await sleep(500); continue; }
+    if (!runtimeReady || !credential?.supported || !(await ensureFreshCredential())) { await sleep(500); continue; }
     pollAbort = new AbortController();
     const requestedEpoch = credential.relayEpoch ?? "unbound";
     const response = await request(`/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/deliveries?epoch=${encodeURIComponent(requestedEpoch)}&after=${credential.cursor}&limit=4&waitMs=25000`,
@@ -725,7 +821,7 @@ async function poll() {
 }
 
 async function startDelivery(message) {
-  const valid = credential?.supported && typeof message.deliveryId === "string" && typeof message.id === "string"
+  const valid = runtimeReady && credential?.supported && typeof message.deliveryId === "string" && typeof message.id === "string"
     && Number.isInteger(message.generation) && inFlightDeliveries.has(message.deliveryId);
   if (!valid || !(await ensureFreshCredential())) return emit({ type: "start_result", deliveryId: message?.deliveryId, started: false });
   const response = await request(`/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/deliveries/${encodeURIComponent(message.deliveryId)}/start`,
@@ -735,14 +831,18 @@ async function startDelivery(message) {
   emit({ type: "start_result", deliveryId: message.deliveryId, started });
 }
 
-async function initialize(runtimeInfo) {
-  if (!paneId || !baseUrl || !validRuntime(runtimeInfo) || futureCredential) return false;
+async function initialize(attestation) {
+  if (!paneId || !baseUrl || attestationDiagnostic(attestation) !== "ok" || futureCredential) return false;
   if (credential?.requiresFreshRegistration) {
     persistCredential();
     credential = undefined;
-  } else if (credential && credential.expiresAt > Date.now() && await refresh()) return true;
+  } else if (credential && credential.expiresAt > Date.now() && await refresh()) {
+    credential.lastChallengeDigest = challengeDigest(attestation.nonce);
+    persistCredential();
+    return true;
+  }
   for (let attempt = 0; attempt < 5 && !stopping; attempt += 1) {
-    if (await register(runtimeInfo)) return true;
+    if (await register(attestation)) return true;
     if (!capabilityPath || !fs.existsSync(capabilityPath)) return false;
     await sleep(Math.min(2_000, 100 * (2 ** attempt)));
   }
@@ -756,18 +856,47 @@ async function serve() {
     try { acceptMessage(JSON.parse(line)); } catch { disable("message-failure"); }
   });
   lines.on("close", stop);
-  const runtimeInfo = await Promise.race([runtimePromise, sleep(RUNTIME_WAIT_MS).then(() => undefined)]);
-  const ready = await initialize(runtimeInfo);
-  emit({ type: "ready", supported: ready && credential?.supported === true,
-    sourceId: ready ? credential?.sourceId : undefined,
-    eventSequence: ready && credential ? credential.lastEventSequence : 0 });
-  if (!ready || !credential?.supported) return;
-  for (const message of pendingMessages.splice(0)) acceptMessage(message);
+  if (!contract || !paneId || !baseUrl || !capabilityPath || !credentialPath) {
+    persistStatus("failed", !contract ? "contract_invalid" : "pane_prerequisite_missing");
+    emit({ type: "runtime_ready", supported: false, diagnostic: !contract ? "contract_invalid" : "pane_prerequisite_missing" });
+    return;
+  }
+  const issuedAt = Date.now();
+  challenge = {
+    type: "runtime_challenge",
+    handshakeSchema: contract.handshakeSchema,
+    nonce: crypto.randomBytes(32).toString("base64url"),
+    issuedAt,
+    deadline: issuedAt + HANDSHAKE_TIMEOUT_MS,
+    contractDigest: contract.canonicalContractDigest,
+  };
+  persistStatus("attesting", "challenge_issued");
+  emit(challenge);
+  const attestation = await Promise.race([attestationPromise, sleep(HANDSHAKE_TIMEOUT_MS).then(() => undefined)]);
+  if (!attestation) {
+    disable("attestation_timeout");
+    emit({ type: "runtime_ready", supported: false, diagnostic: "attestation_timeout" });
+    return;
+  }
+  const ready = await initialize(attestation);
+  runtimeReady = ready && credential?.supported === true;
+  const diagnostic = runtimeReady ? "runtime_ready" : (lastDiagnostic ?? "registration_failed");
+  persistStatus(runtimeReady ? "ready" : "failed", diagnostic);
+  emit({ type: "runtime_ready", supported: runtimeReady,
+    eventSequence: runtimeReady && credential ? credential.lastEventSequence : 0,
+    diagnostic });
+  if (!runtimeReady) {
+    stop();
+    return;
+  }
   void drainOutbox();
   await poll();
 }
 
 function disable(reason) {
+  runtimeReady = false;
+  lastDiagnostic = reason;
+  persistStatus("failed", reason);
   if (credential && !futureCredential) {
     credential.supported = false;
     credential.disabledReason = reason;
@@ -786,9 +915,9 @@ function stop() {
 const command = process.argv[2] || "serve";
 if (command === "serve") await serve();
 else if (command === "refresh") {
-  const refreshed = Boolean(contract && credential && await refresh());
-  process.stdout.write(`${JSON.stringify({ refreshed, supported: refreshed && credential?.supported === true })}\n`);
-  process.exitCode = refreshed ? 0 : 1;
+  persistStatus("failed", "attestation_required");
+  process.stdout.write(`${JSON.stringify({ refreshed: false, supported: false, diagnostic: "attestation_required" })}\n`);
+  process.exitCode = 1;
 } else {
   process.stderr.write("usage: wmux-agent-input-broker [serve|refresh]\n");
   process.exitCode = 2;

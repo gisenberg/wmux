@@ -13,9 +13,12 @@ import {
 } from "../src/server/agent-input-relay.js";
 import { AgentInputRequestStore, capturePayloadDigest, nativeOccurrenceKey } from "../src/server/agent-input-request-store.js";
 import {
-  OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  SUPPORTED_OPENCODE_SDK_VERSION,
+  createOpenCodeRuntimeAttestation,
 } from "../src/server/opencode-question-contract.js";
+
+const registrationInput = (nonce: string) => ({
+  instanceNonce: nonce, kind: "opencode" as const, runtimeAttestation: createOpenCodeRuntimeAttestation(nonce),
+});
 
 const setup = (directory: string, timeout = 500) => {
   const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "hash-key" });
@@ -26,10 +29,7 @@ const setup = (directory: string, timeout = 500) => {
   const registrationPrincipal = credentials.authenticate(capability.capability);
   assert.equal(registrationPrincipal?.kind, "agent-input-registration");
   if (registrationPrincipal?.kind !== "agent-input-registration") throw new Error("missing principal");
-  const exchange = credentials.exchange(registrationPrincipal, {
-    instanceNonce: "instance", kind: "opencode", pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-    sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION, compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  });
+  const exchange = credentials.exchange(registrationPrincipal, registrationInput("N".repeat(43)));
   if (exchange.outcome !== "issued") throw new Error("missing source");
   const principal = credentials.authenticate(exchange.relaySecret);
   if (principal?.kind !== "agent-input-source") throw new Error("missing source principal");
@@ -140,10 +140,7 @@ test("poll leases clean up exactly, replace per source, and enforce the global c
       });
       const registration = credentials.authenticate(capability.capability);
       if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-      const exchange = credentials.exchange(registration, {
-        instanceNonce: `i${index}`, kind: "opencode", pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-        sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION, compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-      });
+      const exchange = credentials.exchange(registration, registrationInput(String(index).padStart(43, "0")));
       if (exchange.outcome !== "issued") throw new Error("source unavailable");
       const principal = credentials.authenticate(exchange.relaySecret);
       if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");
@@ -473,10 +470,7 @@ test("one source exhausting its delivery quota cannot deny an unrelated source",
       });
       const registration = credentials.authenticate(capability.capability);
       if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-      const exchange = credentials.exchange(registration, {
-        instanceNonce: `instance-${name}`, kind: "opencode", pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-        sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION, compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-      });
+      const exchange = credentials.exchange(registration, registrationInput(name[0].toUpperCase().padEnd(43, "N")));
       if (exchange.outcome !== "issued") throw new Error("source unavailable");
       const principal = credentials.authenticate(exchange.relaySecret);
       if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");

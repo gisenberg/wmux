@@ -9,8 +9,7 @@ import {
   UnsupportedAgentInputCredentialVersionError,
 } from "../src/server/agent-input-credential-store.js";
 import {
-  OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  SUPPORTED_OPENCODE_SDK_VERSION,
+  createOpenCodeRuntimeAttestation,
 } from "../src/server/opencode-question-contract.js";
 
 const context = {
@@ -20,13 +19,11 @@ const context = {
   machineId: "local",
   sourceKind: "opencode" as const,
 };
-const registration = {
-  instanceNonce: "instance-one",
+const registration = (nonce: string, nowMs: number) => ({
+  instanceNonce: nonce,
   kind: "opencode" as const,
-  pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-  sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-  compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-};
+  runtimeAttestation: createOpenCodeRuntimeAttestation(nonce, nowMs),
+});
 
 test("single-use capability exchange persists hashes only and relay refresh rotates immediately", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-"));
@@ -37,7 +34,7 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     const registrationPrincipal = store.authenticate(issued.capability, 1_001);
     assert.equal(registrationPrincipal?.kind, "agent-input-registration");
     if (registrationPrincipal?.kind !== "agent-input-registration") return;
-    const exchange = store.exchange(registrationPrincipal, registration, 1_002);
+    const exchange = store.exchange(registrationPrincipal, registration("N".repeat(43), 1_002), 1_002);
     assert.equal(exchange.outcome, "issued");
     if (exchange.outcome !== "issued") return;
     assert.notEqual(exchange.relaySecret, issued.capability);
@@ -46,9 +43,9 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     assert.doesNotMatch(persisted, new RegExp(exchange.relaySecret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
     assert.equal(store.authenticate(issued.capability, 1_003), undefined);
-    const recoveredExchange = store.exchange(registrationPrincipal, registration, 1_003);
+    const recoveredExchange = store.exchange(registrationPrincipal, registration("N".repeat(43), 1_003), 1_003);
     assert.deepEqual(recoveredExchange, { outcome: "already_exchanged", sourceId: exchange.sourceId });
-    assert.deepEqual(store.exchange(registrationPrincipal, { ...registration, instanceNonce: "other" }, 1_003), {
+    assert.deepEqual(store.exchange(registrationPrincipal, registration("O".repeat(43), 1_003), 1_003), {
       outcome: "already_exchanged", sourceId: exchange.sourceId,
     });
 
@@ -83,9 +80,12 @@ test("capability and source expiry, unsupported versions, migrations, backup rec
     const principal = store.authenticate(valid.capability, 2_001);
     assert.equal(principal?.kind, "agent-input-registration");
     if (principal?.kind !== "agent-input-registration") return;
-    const unsupported = store.exchange(principal, { ...registration, sdkVersion: "future" }, 2_002);
-    assert.equal(unsupported.outcome === "issued" && unsupported.supported, false);
-    if (unsupported.outcome === "issued") assert.equal(store.isAvailable(unsupported.sourceId, 2_003), false);
+    assert.throws(() => store.exchange(principal, {
+      ...registration("U".repeat(43), 2_002),
+      runtimeAttestation: { ...createOpenCodeRuntimeAttestation("U".repeat(43), 2_002), release: "future" },
+    }, 2_002), /runtime_attestation_invalid/);
+    assert.throws(() => store.exchange(principal, registration("T".repeat(43), 20_000), 2_002),
+      /runtime_attestation_invalid/, "future-dated runtime evidence is not fresh");
 
     const envelope = JSON.parse(fs.readFileSync(filePath, "utf8"));
     const legacyHash = { salt: "00".repeat(16), digest: "00".repeat(32) };
@@ -93,10 +93,14 @@ test("capability and source expiry, unsupported versions, migrations, backup rec
     fs.writeFileSync(migrationPath, JSON.stringify({
       schemaVersion: 0,
       capabilities: envelope.capabilities.map(({ verifier: _verifier, ...value }: any) => ({ ...value, hash: legacyHash })),
-      sources: envelope.sources.map(({ secretVerifier: _verifier, ...value }: any) => ({ ...value, secretHash: legacyHash })),
+      sources: envelope.sources.map(({ secretVerifier: _verifier, runtimeAttestation: _attestation,
+        runtimeReady: _runtimeReady, diagnostic: _diagnostic, ...value }: any) => ({
+        ...value, pluginVersion: "1.18.9", sdkVersion: "1.18.9",
+        compatibilityFingerprint: "legacy", secretHash: legacyHash,
+      })),
     }), { mode: 0o600 });
     const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key" });
-    assert.equal(JSON.parse(fs.readFileSync(migrationPath, "utf8")).schemaVersion, 2);
+    assert.equal(JSON.parse(fs.readFileSync(migrationPath, "utf8")).schemaVersion, 3);
     assert.ok(migrated.snapshot().sources.every((source) => source.revokedAt !== undefined));
 
     store.issueRegistrationCapability(context, 3_000);
@@ -142,6 +146,46 @@ test("credential store refuses unsafe parents and symlinks", () => {
   }
 });
 
+test("schema-2 pre-attestation capabilities and sources migrate disabled and require a fresh pane", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v2-"));
+  const currentPath = path.join(directory, "current.json");
+  const migrationPath = path.join(directory, "migration.json");
+  try {
+    const current = new AgentInputCredentialStore(currentPath, { hashKey: "server-key" });
+    const capability = current.issueRegistrationCapability(context, 1_000);
+    const principal = current.authenticate(capability.capability, 1_001);
+    if (principal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
+    const exchange = current.exchange(principal, registration("V".repeat(43), 1_002), 1_002);
+    if (exchange.outcome !== "issued") throw new Error("source unavailable");
+    const envelope = current.snapshot();
+    const inconsistentPath = path.join(directory, "inconsistent-current.json");
+    fs.writeFileSync(inconsistentPath, `${JSON.stringify({
+      ...envelope,
+      sources: envelope.sources.map(({ runtimeAttestation: _attestation, ...source }) => source),
+    })}\n`, { mode: 0o600 });
+    assert.throws(() => new AgentInputCredentialStore(inconsistentPath, { hashKey: "server-key" }),
+      /credential store is invalid/, "schema 3 cannot load a ready source without its attestation");
+    fs.writeFileSync(migrationPath, `${JSON.stringify({
+      schemaVersion: 2,
+      capabilities: envelope.capabilities,
+      sources: envelope.sources.map(({ runtimeAttestation: _attestation, runtimeReady: _ready,
+        diagnostic: _diagnostic, ...source }) => ({ ...source, pluginVersion: "1.18.9", sdkVersion: "1.18.9",
+        compatibilityFingerprint: "legacy-package-authority" })),
+      capabilityTombstones: envelope.capabilityTombstones,
+    })}\n`, { mode: 0o600 });
+    const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key" });
+    const snapshot = migrated.snapshot();
+    assert.equal(snapshot.schemaVersion, 3);
+    assert.ok(snapshot.capabilities.every((item) => item.usedAt !== undefined));
+    assert.ok(snapshot.sources.every((source) => source.revokedAt !== undefined
+      && !source.runtimeReady && !source.supported && source.diagnostic === "attestation_required"));
+    assert.equal(migrated.authenticate(capability.capability, 1_003), undefined);
+    assert.equal(migrated.authenticate(exchange.relaySecret, 1_003), undefined);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("record-id HMAC authentication keeps malformed bearer floods off the event-loop scrypt path", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-flood-"));
   try {
@@ -177,7 +221,7 @@ test("credential rotation and revoke fsync directory rename boundaries and fail 
     const capability = store.issueRegistrationCapability(context, 1_000);
     const registrationPrincipal = store.authenticate(capability.capability, 1_001);
     if (registrationPrincipal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-    const exchange = store.exchange(registrationPrincipal, registration, 1_002);
+    const exchange = store.exchange(registrationPrincipal, registration("N".repeat(43), 1_002), 1_002);
     if (exchange.outcome !== "issued") throw new Error("source unavailable");
     const principal = store.authenticate(exchange.relaySecret, 1_003);
     if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");
@@ -204,7 +248,7 @@ test("credential rotation and revoke fsync directory rename boundaries and fail 
     const faultCapability = faulted.issueRegistrationCapability(context, 2_000);
     const faultRegistration = faulted.authenticate(faultCapability.capability, 2_001);
     if (faultRegistration?.kind !== "agent-input-registration") throw new Error("fault registration unavailable");
-    const faultExchange = faulted.exchange(faultRegistration, registration, 2_002);
+    const faultExchange = faulted.exchange(faultRegistration, registration("F".repeat(43), 2_002), 2_002);
     if (faultExchange.outcome !== "issued") throw new Error("fault source unavailable");
     const faultPrincipal = faulted.authenticate(faultExchange.relaySecret, 2_003);
     if (faultPrincipal?.kind !== "agent-input-source") throw new Error("fault principal unavailable");
@@ -236,7 +280,7 @@ test("backup recovery invalidates pre-refresh, pre-revoke, and pre-exchange auth
       const capability = store.issueRegistrationCapability(context, 1_000);
       const registrationPrincipal = store.authenticate(capability.capability, 1_001);
       if (registrationPrincipal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-      const exchange = store.exchange(registrationPrincipal, registration, 1_002);
+      const exchange = store.exchange(registrationPrincipal, registration("N".repeat(42) + name[0], 1_002), 1_002);
       if (exchange.outcome !== "issued") throw new Error("source unavailable");
       const principal = store.authenticate(exchange.relaySecret, 1_003);
       if (principal?.kind !== "agent-input-source") throw new Error("principal unavailable");
@@ -278,7 +322,8 @@ test("retired source records compact without allowing an old source ID or creden
       const capability = store.issueRegistrationCapability(context, nowMs);
       const principal = store.authenticate(capability.capability, nowMs + 1);
       if (principal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-      const exchange = store.exchange(principal, { ...registration, instanceNonce: nonce }, nowMs + 2);
+      const runtimeNonce = nonce.slice(0, 1).toUpperCase().padEnd(43, "N");
+      const exchange = store.exchange(principal, registration(runtimeNonce, nowMs + 2), nowMs + 2);
       if (exchange.outcome !== "issued") throw new Error("source unavailable");
       return exchange;
     };

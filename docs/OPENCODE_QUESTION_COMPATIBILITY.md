@@ -23,17 +23,28 @@ The owner-only broker state allocates a monotonic occurrence ordinal for each
 source/session/native-request key and fences snapshot membership and absence at
 that cut.
 
+Before accepting structured events, the generated plugin starts the broker from
+pane-bound runtime-file paths. The broker emits a fresh one-shot nonce challenge
+with handshake schema 1, the canonical contract digest, and a five-second
+deadline. The plugin probes the actual injected client, calls
+`client.global.health()` through that same client, and returns only bounded
+runtime evidence: release, digest, fingerprint, event envelope, method booleans,
+health fields, and challenge timestamps. The broker independently validates the
+nonce, freshness, one-shot state, exact contract, release, health result, and
+methods before exchanging the registration capability. The server validates the
+same sanitized attestation again. Package manifests and package search paths are
+not runtime compatibility authority.
+
 Fixtures under `test/fixtures/opencode-question` are synthetic and sanitized at
 the capture boundary. In particular, `question.replied` is identity-only; its
 SDK `answers` property is dropped before fixture, broker, logging, or durable
 storage. Missing question APIs, version/fingerprint mismatches, malformed
 question events, and unexpected reply result shapes disable structured question
-handling without terminal-input fallback. Generic agent telemetry is unchanged.
-Runtime version discovery reads bounded, owner-safe package manifests directly
-from `${XDG_CONFIG_HOME}/opencode/node_modules` (defaulting to
-`${HOME}/.config/opencode/node_modules`) or bounded plugin-file ancestors; it does
-not execute package code or depend on CommonJS export conditions or `NODE_PATH`.
-Missing, malformed, world-writable, or symlinked manifests fail closed.
+handling without terminal-input fallback. Events arriving before `runtime_ready`
+are dropped; startup reconciliation recovers still-pending native questions only
+after readiness. Snapshot, capture, polling, and delivery remain disabled unless
+the exact attestation and server registration both succeed. Generic agent
+telemetry is unchanged.
 
 ## Setup and verification
 
@@ -53,13 +64,10 @@ updating the plugin. New local and SSH panes receive the broker and a short-live
 pane-bound registration capability. Existing SSH panes are not retroactively
 restaged; open a new pane when the helper or capability is absent.
 
-For an already-staged pane, refresh a valid source credential with:
-
-```bash
-wmux-agent-input-broker refresh
-```
-
-Then restart OpenCode so it reloads the current generated plugin. A plugin
+The standalone broker `refresh` command cannot establish runtime identity and
+therefore fails closed with `attestation_required`. Open a fresh pane after this
+upgrade, then restart OpenCode so it loads the current generated plugin and runs
+the challenge. A plugin
 restart uses `question.list({ directory })`, validates every member and session,
 filters out child sessions, and sends full member metadata. Only a completely
 validated list is an authoritative absence barrier; a partial or failed list
@@ -86,6 +94,11 @@ capability.
 The generated plugin starts the broker with an explicit environment allowlist;
 shared, helper, automation, and registration tokens are not inherited by the
 broker process.
+The broker writes a bounded owner-only sibling status file at
+`<pane-credential>.status.json`. It contains only schema, state, stable diagnostic
+code, and update time. It records challenge, health, registration, and broker
+spawn failures without paths, pane/source IDs, exceptions, content, environment
+values, or credentials.
 
 The desktop reference shelf appears only for requests associated with the
 active pane. It maps questions in source order, retains one submission ID across
@@ -128,14 +141,17 @@ revokes every recovered source before authentication resumes; a fresh pane
 registration is required. Recovery from a request-store backup closes every
 recovered pending request and settles its submission as already resolved,
 because the lost primary may have recorded answer exposure. Generation anchors
-and already-terminal outcomes remain intact. Credential schema 2 uses
+and already-terminal outcomes remain intact. Credential schema 3 uses
 record-ID-scoped HMAC-SHA-256 verifiers and constant-time comparison; plaintext
 capabilities and relay secrets are never stored. Migration from schema 0 or 1
 cannot reconstruct HMAC verifiers from legacy salted hashes, so it deliberately
 marks every legacy capability used and every legacy source revoked. Open a new
-pane to issue fresh credentials after that migration. Request schema 6 preserves
+pane to issue fresh credentials after that migration. Migration from schema 2
+retains bounded source evidence but invalidates every pre-attestation capability,
+revokes every source, and marks it `attestation_required`; a fresh pane is
+mandatory. Request schema 6 preserves
 generation anchors but closes legacy pending records as `migration-unbound`;
-it never fabricates occurrence IDs. Broker schema 8 discards/quarantines old
+it never fabricates occurrence IDs. Broker schema 9 discards/quarantines old
 unbound metadata, disables the old source, and requires fresh registration.
 Future schema files are refused without rewriting them.
 
@@ -217,4 +233,7 @@ separate live HARD SERVER PROOF GATE: a real top-level OpenCode request with
 single-select, multi-select, and custom questions; browser submission; observed
 typed SDK acceptance and session continuation; final client convergence; and
 instrumentation proving zero answer bytes or synthetic Enter events reached
-pane input. Do not infer or claim that live gate from fixture results.
+pane input. Runtime attestation verifies that the generated plugin observed the
+required injected-client methods and exact live OpenCode health release before
+that gate; it does not itself prove end-to-end browser answer acceptance. Do not
+infer or claim that live gate from fixture results.

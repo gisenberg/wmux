@@ -10,8 +10,11 @@ import type { AgentInputQuestion } from "../shared/protocol.js";
 
 export const SUPPORTED_OPENCODE_SDK_VERSION = "1.18.9";
 export const SUPPORTED_OPENCODE_SOURCE_COMMIT = "4da7bb44c84e013fa53e9c5d02ac753d1435c81a";
+export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 1;
 export const OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT =
-  "opencode-question-occurrence-stream-v3-sdk-1.18.9";
+  "opencode-question-occurrence-stream-v4-runtime-attestation-1.18.9";
+export const OPENCODE_QUESTION_CONTRACT_DIGEST = "1feab28627744cac89922c1aaf5177a26f2f290511d1b0e457d0fd8f1671997f";
+export const OPENCODE_QUESTION_EVENT_ENVELOPE = "legacy-properties";
 
 export type OpenCodeQuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0];
 
@@ -28,8 +31,100 @@ const _compileQuestion = (question: QuestionInfo): AgentInputQuestion => ({
   multiple: question.multiple ?? false,
   custom: question.custom ?? false,
 });
+const _compileHealth = (client: OpencodeClient) => client.global.health();
 void _compileReplyInput;
 void _compileQuestion;
+void _compileHealth;
+
+const attestationCapabilitySchema = z.object({
+  globalHealth: z.boolean(),
+  questionList: z.boolean(),
+  questionReply: z.boolean(),
+  sessionGet: z.boolean(),
+}).strict();
+
+export const openCodeRuntimeAttestationSchema = z.object({
+  type: z.literal("runtime_attestation"),
+  handshakeSchema: z.literal(OPENCODE_RUNTIME_HANDSHAKE_SCHEMA),
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  challengeIssuedAt: z.number().int().nonnegative(),
+  challengeDeadline: z.number().int().positive(),
+  observedAt: z.number().int().nonnegative(),
+  contractDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  compatibilityFingerprint: z.string().min(1).max(256),
+  eventEnvelope: z.string().min(1).max(64),
+  release: z.string().max(64),
+  health: z.object({
+    called: z.boolean(),
+    outcome: z.enum(["ok", "missing", "timeout", "error", "malformed", "release_mismatch"]),
+    status: z.number().int().min(0).max(999),
+    healthy: z.boolean(),
+    release: z.string().max(64),
+  }).strict(),
+  capabilities: attestationCapabilitySchema,
+  diagnostic: z.enum([
+    "ok",
+    "health_method_missing",
+    "health_timeout",
+    "health_error",
+    "health_malformed",
+    "health_release_mismatch",
+    "client_method_missing",
+  ]),
+}).strict();
+
+export type OpenCodeRuntimeAttestation = z.infer<typeof openCodeRuntimeAttestationSchema>;
+
+export const isSupportedOpenCodeRuntimeAttestation = (
+  input: unknown,
+  nowMs = Date.now(),
+): input is OpenCodeRuntimeAttestation => {
+  const parsed = openCodeRuntimeAttestationSchema.safeParse(input);
+  if (!parsed.success) return false;
+  const value = parsed.data;
+  const capabilities = value.capabilities;
+  return value.challengeDeadline > value.challengeIssuedAt
+    && value.challengeDeadline - value.challengeIssuedAt <= 10_000
+    && value.observedAt >= value.challengeIssuedAt
+    && value.observedAt <= value.challengeDeadline
+    && value.challengeIssuedAt >= nowMs - 15_000
+    && value.challengeIssuedAt <= nowMs + 15_000
+    && value.observedAt <= nowMs + 15_000
+    && value.challengeDeadline >= nowMs - 1_000
+    && value.contractDigest === OPENCODE_QUESTION_CONTRACT_DIGEST
+    && value.compatibilityFingerprint === OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT
+    && value.eventEnvelope === OPENCODE_QUESTION_EVENT_ENVELOPE
+    && value.release === SUPPORTED_OPENCODE_SDK_VERSION
+    && value.health.called
+    && value.health.outcome === "ok"
+    && value.health.status === 200
+    && value.health.healthy
+    && value.health.release === SUPPORTED_OPENCODE_SDK_VERSION
+    && capabilities.globalHealth
+    && capabilities.questionList
+    && capabilities.questionReply
+    && capabilities.sessionGet
+    && value.diagnostic === "ok";
+};
+
+export const createOpenCodeRuntimeAttestation = (
+  nonce: string,
+  nowMs = Date.now(),
+): OpenCodeRuntimeAttestation => ({
+  type: "runtime_attestation",
+  handshakeSchema: OPENCODE_RUNTIME_HANDSHAKE_SCHEMA,
+  nonce,
+  challengeIssuedAt: nowMs - 1,
+  challengeDeadline: nowMs + 5_000,
+  observedAt: nowMs,
+  contractDigest: OPENCODE_QUESTION_CONTRACT_DIGEST,
+  compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
+  eventEnvelope: OPENCODE_QUESTION_EVENT_ENVELOPE,
+  release: SUPPORTED_OPENCODE_SDK_VERSION,
+  health: { called: true, outcome: "ok", status: 200, healthy: true, release: SUPPORTED_OPENCODE_SDK_VERSION },
+  capabilities: { globalHealth: true, questionList: true, questionReply: true, sessionGet: true },
+  diagnostic: "ok",
+});
 
 const boundedString = (max: number) => z.string().min(1).max(max);
 const questionSchema = z.object({
@@ -128,18 +223,7 @@ export const sanitizeOpenCodeQuestionEvent = (input: unknown): OpenCodeQuestionE
     : { kind: "unsupported", code: "incompatible_event_shape" };
 };
 
-export const isSupportedOpenCodeQuestionRuntime = (input: {
-  client: unknown;
-  sdkVersion: string;
-  pluginVersion: string;
-  compatibilityFingerprint: string;
-}): boolean => {
-  const client = input.client as { question?: { reply?: unknown } } | null;
-  return input.sdkVersion === SUPPORTED_OPENCODE_SDK_VERSION
-    && input.pluginVersion === SUPPORTED_OPENCODE_SDK_VERSION
-    && input.compatibilityFingerprint === OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT
-    && typeof client?.question?.reply === "function";
-};
+export const isSupportedOpenCodeQuestionRuntime = isSupportedOpenCodeRuntimeAttestation;
 
 export type OpenCodeReplyOutcome =
   | { outcome: "applied" }

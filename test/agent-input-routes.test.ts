@@ -14,8 +14,7 @@ import { AgentInputRequestStore, capturePayloadDigest, nativeOccurrenceKey } fro
 import type { AuthConfig } from "../src/server/auth.js";
 import { createHttpServer } from "../src/server/http.js";
 import {
-  OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  SUPPORTED_OPENCODE_SDK_VERSION,
+  createOpenCodeRuntimeAttestation,
 } from "../src/server/opencode-question-contract.js";
 import type { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
@@ -23,6 +22,11 @@ import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+const registrationBody = (nonce: string) => ({
+  instanceNonce: nonce,
+  kind: "opencode" as const,
+  runtimeAttestation: createOpenCodeRuntimeAttestation(nonce),
+});
 const captureBodyFor = (occurrenceId: string, sessionID: string, id: string, questions: any[], ordinal = 1) => ({
   occurrenceId, occurrenceKey: nativeOccurrenceKey(sessionID, id), ordinal,
   payloadDigest: capturePayloadDigest({ openCodeSessionId: sessionID, openCodeRequestId: id, questions }),
@@ -80,12 +84,18 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
       created.tabs[0].panes[0].id,
     );
     assert.throws(() => issueAgentInputRegistrationCapabilityForPane(credentials, state, "other-pane"), /pane_unavailable/);
-    const register = await fetch(`${base}/api/agent-input/sources/register`, {
+    const invalidNonce = "I".repeat(43);
+    const invalidAttestation = await fetch(`${base}/api/agent-input/sources/register`, {
       method: "POST", headers: bearer(capability.capability), body: JSON.stringify({
-        instanceNonce: "instance-one", kind: "opencode",
-        pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION, sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-        compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
+        ...registrationBody(invalidNonce),
+        runtimeAttestation: { ...createOpenCodeRuntimeAttestation(invalidNonce), release: "1.18.8" },
       }),
+    });
+    assert.equal(invalidAttestation.status, 409, "the server independently rejects a non-exact runtime attestation");
+    assert.equal(credentials.authenticate(capability.capability)?.kind, "agent-input-registration",
+      "invalid attestation does not consume the one-shot capability");
+    const register = await fetch(`${base}/api/agent-input/sources/register`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43))),
     });
     assert.equal(register.status, 201);
     assert.equal(register.headers.get("cache-control"), "no-store");
@@ -96,11 +106,7 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     });
     assert.equal(incompleteNativeSnapshot.status, 400, "absence reconciliation requires an explicit complete snapshot");
     const lostRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
-      method: "POST", headers: bearer(capability.capability), body: JSON.stringify({
-        instanceNonce: "instance-one", kind: "opencode",
-        pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION, sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-        compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-      }),
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43))),
     });
     assert.equal(lostRegistrationReplay.status, 401, "a used capability never reconstructs a lost plaintext response");
     assert.equal((await fetch(`${base}/api/agent-input/sources/register?token=${encodeURIComponent(capability.capability)}`, {
@@ -210,9 +216,7 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     const secondPrincipal = credentials.authenticate(secondCapability.capability);
     assert.equal(secondPrincipal?.kind, "agent-input-registration");
     if (secondPrincipal?.kind === "agent-input-registration") {
-      const second = credentials.exchange(secondPrincipal, { instanceNonce: "second", kind: "opencode",
-        pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION, sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-        compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT });
+      const second = credentials.exchange(secondPrincipal, registrationBody("S".repeat(43)));
       if (second.outcome === "issued") {
         assert.equal((await fetch(`${base}/api/agent-input/sources/${source.sourceId}/deliveries`, { headers: bearer(second.relaySecret) })).status, 401);
       }
@@ -252,10 +256,7 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
   });
   const registration = credentials.authenticate(capability.capability);
   if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
-  const exchange = credentials.exchange(registration, {
-    instanceNonce: "limits", kind: "opencode", pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-    sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION, compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  });
+  const exchange = credentials.exchange(registration, registrationBody("L".repeat(43)));
   if (exchange.outcome !== "issued") throw new Error("source unavailable");
   const principal = credentials.authenticate(exchange.relaySecret);
   if (principal?.kind !== "agent-input-source") throw new Error("source principal unavailable");
@@ -327,20 +328,11 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
     });
     const unsupportedRegistration = credentials.authenticate(unsupportedCapability.capability);
     if (unsupportedRegistration?.kind !== "agent-input-registration") throw new Error("unsupported registration unavailable");
-    const unsupported = credentials.exchange(unsupportedRegistration, {
-      instanceNonce: "future", kind: "opencode", pluginVersion: "future", sdkVersion: "future",
-      compatibilityFingerprint: "future",
-    });
-    if (unsupported.outcome !== "issued") throw new Error("unsupported source unavailable");
-    const unsupportedCapture = await fetch(`${base}/api/agent-input/sources/${unsupported.sourceId}/requests`, {
-      method: "POST", headers: bearer(unsupported.relaySecret), body: JSON.stringify(captureBodyFor(
-        "occ-future", "session", "future", [{
-          header: "H", question: "Q", options: [], multiple: false, custom: true,
-        }],
-      )),
-    });
-    assert.equal(unsupportedCapture.status, 409);
-    noStore(unsupportedCapture);
+    const futureNonce = "F".repeat(43);
+    assert.throws(() => credentials.exchange(unsupportedRegistration, {
+      ...registrationBody(futureNonce),
+      runtimeAttestation: { ...createOpenCodeRuntimeAttestation(futureNonce), release: "future" },
+    }), /runtime_attestation_invalid/);
 
     const concurrent = capture("concurrent");
     if (concurrent.outcome !== "created") throw new Error("concurrent request unavailable");

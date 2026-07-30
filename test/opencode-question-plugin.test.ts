@@ -88,6 +88,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     const module = await import(`${pathToFileURL(pluginPath).href}?question=${Date.now()}`);
     const replies: unknown[] = [];
     const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: [
           { id: "question-one", sessionID: "session-one", questions: [
@@ -121,6 +122,19 @@ test("generated plugin allowlists top-level questions and uses only typed questi
       { header: "Note", question: "Write", options: [], multiple: false, custom: true },
     ];
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/source-one/requests"), () => JSON.stringify(captures));
+    const registrationCapture = captures.find((capture) => capture.path === "/api/agent-input/sources/register")!;
+    assert.deepEqual(registrationCapture.body.runtimeAttestation.health, {
+      called: true, outcome: "ok", status: 200, healthy: true, release: "1.18.9",
+    });
+    assert.deepEqual(registrationCapture.body.runtimeAttestation.capabilities, {
+      globalHealth: true, questionList: true, questionReply: true, sessionGet: true,
+    });
+    assert.deepEqual(Object.keys(registrationCapture.body.runtimeAttestation).sort(), [
+      "capabilities", "challengeDeadline", "challengeIssuedAt", "compatibilityFingerprint", "contractDigest",
+      "diagnostic", "eventEnvelope", "handshakeSchema", "health", "nonce", "observedAt", "release", "type",
+    ]);
+    assert.doesNotMatch(JSON.stringify(registrationCapture.body.runtimeAttestation),
+      /pane-one|workspace-one|tab-one|broad-|wmux-question-plugin-|transport details|RAW|ANSWER/);
     if (process.platform === "linux") {
       await waitFor(() => brokerChildIds().length > 0);
       const brokerEnvironment = fs.readFileSync(`/proc/${brokerChildIds()[0]}/environ`, "utf8").split("\0");
@@ -183,18 +197,8 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     assert.equal("permission" in client, false);
     await plugin.event({ event: { type: "question.future", properties: { sessionID: "session-one" } } });
 
-    const structuredCalls = captures.filter((capture) => capture.method !== "GET" && capture.path.includes("/api/agent-input/")).length;
-    const brokerIdsBefore = process.platform === "linux" ? brokerChildIds() : [];
-    fs.writeFileSync(path.join(sdkPackage, "package.json"), '{"name":"@opencode-ai/sdk","version":"future","type":"module","exports":{"./v2/client":"./v2/client.js"}}');
-    const incompatibleModule = await import(`${pathToFileURL(pluginPath).href}?incompatible=${Date.now()}`);
-    const incompatiblePlugin = await incompatibleModule.default({ client, directory: repoRoot });
-    await incompatiblePlugin.event({ event: { id: "event-unsupported-runtime-question", type: "question.asked", properties: {
-      id: "unsupported-runtime-question", sessionID: "session-one", questions: oneCustomQuestion,
-    } } });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(captures.filter((capture) => capture.method !== "GET" && capture.path.includes("/api/agent-input/")).length, structuredCalls,
-      "an unsupported plugin/SDK runtime must make no structured broker calls");
-    if (process.platform === "linux") assert.deepEqual(brokerChildIds(), brokerIdsBefore, "unsupported runtime must not spawn another broker");
+    assert.doesNotMatch(fs.readFileSync(pluginPath, "utf8"), /installedPackageVersion|safePackageManifest|packageSearchRoots/,
+      "package manifests are not compatibility authority in the generated plugin");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: { sessionID: "session-one" } } }).catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -251,6 +255,7 @@ test("new generated plugin fails structured handling closed against an old serve
     const module = await import(`${pathToFileURL(pluginPath).href}?old-server=${Date.now()}`);
     let sdkInvocations = 0;
     const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: [], response: { status: 200 } }),
         reply: async () => { sdkInvocations += 1; return { data: true, error: undefined, response: { status: 200 } }; },
@@ -271,6 +276,8 @@ test("new generated plugin fails structured handling closed against an old serve
     } } });
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-events")
       && captures.some((capture) => capture.path.startsWith("/api/agent-input/")));
+    await waitFor(() => fs.existsSync(`${env.WMUX_AGENT_INPUT_CREDENTIAL_PATH}.status.json`)
+      && JSON.parse(fs.readFileSync(`${env.WMUX_AGENT_INPUT_CREDENTIAL_PATH}.status.json`, "utf8")).diagnostic === "registration_failed");
     assert.ok(captures.some((capture) => capture.path === "/api/agent-events" && capture.body.status === "running"));
     assert.equal(sdkInvocations, 0, "an old server cannot expose an answer for SDK invocation");
   } finally {
@@ -281,6 +288,105 @@ test("new generated plugin fails structured handling closed against an old serve
       else process.env[key] = value;
     }
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("generated plugin reports sanitized injected-health failures while generic telemetry remains available", { skip: process.platform === "win32", timeout: 30_000 }, async (t) => {
+  const variants: Array<[string, string, undefined | (() => Promise<unknown>) ]> = [
+    ["missing", "method_global_health_missing", undefined],
+    ["timeout", "health_timeout", async () => new Promise(() => {})],
+    ["error", "health_error", async () => { throw new Error("RAW_HEALTH_EXCEPTION"); }],
+    ["malformed", "health_malformed", async () => ({ data: { healthy: false, version: "1.18.9" }, response: { status: 200 } })],
+    ["release mismatch", "release_mismatch", async () => ({ data: { healthy: true, version: "1.18.8" }, error: undefined, response: { status: 200 } })],
+  ];
+  for (const [name, diagnostic, health] of variants) {
+    await t.test(name, async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-health-"));
+      const configHome = path.join(home, "config");
+      const inputDirectory = path.join(home, ".wmux", "agent-input");
+      const capabilityPath = path.join(inputDirectory, "pane.cap");
+      const credentialPath = path.join(inputDirectory, "pane.json");
+      fs.mkdirSync(inputDirectory, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+      const calls: Array<{ path: string; body: any }> = [];
+      const server = http.createServer(async (request, response) => {
+        const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+        calls.push({ path: request.url ?? "", body });
+        response.writeHead(201, { "content-type": "application/json" }); response.end("{}");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address(); assert.ok(address && typeof address === "object");
+      const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome,
+        WMUX_URL: `http://127.0.0.1:${address.port}`, WMUX_HELPER_URL: `http://127.0.0.1:${address.port}`,
+        WMUX_PANE_ID: "pane-health", WMUX_WORKSPACE_ID: "workspace-health",
+        WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath, WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath };
+      const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+      Object.assign(process.env, env);
+      let plugin: any;
+      try {
+        await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
+        installFixturePackages(configHome);
+        const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+        const module = await import(`${pathToFileURL(pluginPath).href}?health=${encodeURIComponent(name)}-${Date.now()}`);
+        const client: any = {
+          ...(health ? { global: { health } } : {}),
+          question: { list: async () => ({ data: [], response: { status: 200 } }),
+            reply: async () => ({ data: true, error: undefined, response: { status: 200 } }) },
+          session: { get: async () => ({ data: { title: "Telemetry" }, response: { status: 200 } }),
+            messages: async () => ({ data: [] }) },
+        };
+        plugin = await module.default({ client, directory: repoRoot });
+        await plugin["chat.message"]({ sessionID: "session" }, { message: { id: "message" }, parts: [{ type: "text", text: "generic" }] });
+        await waitFor(() => fs.existsSync(`${credentialPath}.status.json`)
+          && JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8")).diagnostic === diagnostic, () => JSON.stringify(calls), 8_000);
+        await waitFor(() => calls.some((call) => call.path === "/api/agent-events"));
+        assert.equal(calls.some((call) => call.path === "/api/agent-input/sources/register"), false);
+        assert.equal(fs.statSync(`${credentialPath}.status.json`).mode & 0o777, 0o600);
+        assert.doesNotMatch(fs.readFileSync(`${credentialPath}.status.json`, "utf8"), /RAW_HEALTH_EXCEPTION|pane-health|workspace-health/);
+      } finally {
+        if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+        for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
+        server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("generated plugin records broker spawn failure without paths, credentials, or exception text", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-spawn-failure-"));
+  const configHome = path.join(home, "config");
+  const inputDirectory = path.join(home, ".wmux", "agent-input");
+  const capabilityPath = path.join(inputDirectory, "pane.cap");
+  const credentialPath = path.join(inputDirectory, "pane.json");
+  fs.mkdirSync(inputDirectory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, WMUX_URL: "http://127.0.0.1:9",
+    WMUX_PANE_ID: "pane-spawn", WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath, WMUX_TOKEN: "BROAD_TOKEN_SENTINEL" };
+  const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
+    installFixturePackages(configHome);
+    const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+    const source = fs.readFileSync(pluginPath, "utf8").replace(
+      JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")),
+      JSON.stringify(path.join(home, "missing", "broker")),
+    );
+    fs.writeFileSync(pluginPath, source, { mode: 0o600 });
+    const module = await import(`${pathToFileURL(pluginPath).href}?spawn=${Date.now()}`);
+    await module.default({ client: {}, directory: repoRoot });
+    await waitFor(() => fs.existsSync(`${credentialPath}.status.json`));
+    const status = fs.readFileSync(`${credentialPath}.status.json`, "utf8");
+    assert.deepEqual((({ state, diagnostic }) => ({ state, diagnostic }))(JSON.parse(status)), {
+      state: "failed", diagnostic: "broker_spawn_error",
+    });
+    assert.doesNotMatch(status, /missing|pane-spawn|BROAD_TOKEN_SENTINEL|ENOENT/);
+  } finally {
+    for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
@@ -339,6 +445,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       { id: "uncertain-question", sessionID: "unavailable-session", questions: [{ header: "Unknown", question: "Unknown", options: [], multiple: false, custom: true }] },
     ];
     const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: questionList, response: { status: 200 } }),
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -441,6 +548,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
     };
     resetSessionGate();
     const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => new Promise((resolve) => lists.push(resolve)),
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -593,6 +701,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
     };
     let listedRequests = [nativeRequest];
     const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: listedRequests, response: { status: 200 } }),
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -657,6 +766,8 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   const starts: Array<{ deliveryId: string; at: number }> = [];
   const sdkCalls: Array<{ requestID: string; at: number }> = [];
   let cursor = 0;
+  let registered = false;
+  let brokerReady = false;
   const server = http.createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -666,14 +777,17 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
       response.end(JSON.stringify(value));
     };
     if (request.url === "/api/agent-input/sources/register") {
+      registered = true;
       send(201, { sourceId: "source-serial", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
     } else if (request.url === "/api/agent-input/sources/source-serial/requests") {
       cursor += 1;
       pending.push({ deliveryId: `delivery-${body.id}`, cursor, requestId: `input-${body.id}`, expectedGeneration: 1, openCodeRequestId: body.id, answers: [[body.id]] });
       send(201, { id: `input-${body.id}`, generation: 1, state: "pending", eventRevision: cursor });
     } else if (request.url?.includes("/deliveries?") && pending.length) {
+      brokerReady = true;
       send(200, { epoch: "relay-serial", cursor, deliveries: pending.splice(0) });
     } else if (request.url?.includes("/deliveries?")) {
+      brokerReady = true;
       send(200, { epoch: "relay-serial", cursor, deliveries: [] });
     } else if (request.url?.endsWith("/start")) {
       const deliveryId = request.url.split("/").at(-2)!;
@@ -701,6 +815,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const module = await import(`${pathToFileURL(pluginPath).href}?serial=${Date.now()}`);
     const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: [], response: { status: 200 } }),
         reply: async (input: { requestID: string }) => {
@@ -712,6 +827,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
       session: { get: async () => ({ data: { title: "Top" }, response: { status: 200 } }), messages: async () => ({ data: [] }) },
     };
     plugin = await module.default({ client, directory: repoRoot });
+    await waitFor(() => registered && brokerReady);
     const question = (id: string) => ({ id: `event-${id}`, type: "question.asked", properties: {
       id, sessionID: "session", questions: [{ header: "H", question: "Q", options: [], multiple: false, custom: true }],
     } });
@@ -733,7 +849,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   }
 });
 
-test("generated plugin discovers exact XDG OpenCode packages from a separate loader cache and rejects unsafe manifests", { skip: process.platform !== "linux" }, async (t) => {
+test("generated plugin uses injected runtime attestation and never package manifests as compatibility authority", { skip: process.platform !== "linux" }, async (t) => {
   const variants: Array<{
     name: string;
     customXdg?: boolean;
@@ -742,13 +858,13 @@ test("generated plugin discovers exact XDG OpenCode packages from a separate loa
   }> = [
     { name: "default HOME layout", launches: true, mutate: () => undefined },
     { name: "custom XDG base", customXdg: true, launches: true, mutate: () => undefined },
-    { name: "version mismatch", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":"1.18.8"}') },
-    { name: "name mismatch", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/not-sdk","version":"1.18.9"}') },
-    { name: "non-string version", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":1.18}') },
-    { name: "missing", launches: false, mutate: (manifest) => fs.rmSync(manifest) },
-    { name: "malformed", launches: false, mutate: (manifest) => fs.writeFileSync(manifest, '{') },
-    { name: "world writable", launches: false, mutate: (manifest) => fs.chmodSync(manifest, 0o666) },
-    { name: "symlink", launches: false, mutate: (manifest, home) => {
+    { name: "version mismatch", launches: true, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":"1.18.8"}') },
+    { name: "name mismatch", launches: true, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/not-sdk","version":"1.18.9"}') },
+    { name: "non-string version", launches: true, mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":1.18}') },
+    { name: "missing", launches: true, mutate: (manifest) => fs.rmSync(manifest) },
+    { name: "malformed", launches: true, mutate: (manifest) => fs.writeFileSync(manifest, '{') },
+    { name: "world writable", launches: true, mutate: (manifest) => fs.chmodSync(manifest, 0o666) },
+    { name: "symlink", launches: true, mutate: (manifest, home) => {
       const target = path.join(home, "sdk-package.json");
       fs.writeFileSync(target, '{"name":"@opencode-ai/sdk","version":"1.18.9"}', { mode: 0o600 });
       fs.rmSync(manifest);
@@ -780,6 +896,7 @@ test("generated plugin discovers exact XDG OpenCode packages from a separate loa
       fs.writeFileSync(runnerPath, `
         const pluginModule = await import(${JSON.stringify(pathToFileURL(cachedPluginPath).href)});
         const client = {
+          global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
           question: {
             list: async () => ({ data: [], response: { status: 200 } }),
             reply: async () => ({ data: true, response: { status: 200 } }),

@@ -29,9 +29,19 @@ const readJson = (filePath) => {
 function readQuestionContract() {
   try {
     const value = JSON.parse(fs.readFileSync(questionContractPath, "utf8"));
-    if (value?.schemaVersion !== 1 || value.openCodeRelease !== value.sdkVersion
+    const claimed = value?.canonicalContractDigest;
+    const unsigned = structuredClone(value);
+    delete unsigned.canonicalContractDigest;
+    const canonicalize = (input) => Array.isArray(input)
+      ? input.map(canonicalize)
+      : input && typeof input === "object"
+        ? Object.fromEntries(Object.keys(input).sort().map((key) => [key, canonicalize(input[key])]))
+        : input;
+    const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
+    if (value?.schemaVersion !== 2 || value.handshakeSchema !== 1 || value.openCodeRelease !== value.sdkVersion
       || typeof value.sdkVersion !== "string" || typeof value.compatibilityFingerprint !== "string"
-      || value.eventEnvelope !== "legacy-properties") throw new Error("invalid OpenCode question contract");
+      || value.healthCall !== "client.global.health()" || value.eventEnvelope !== "legacy-properties"
+      || !/^[a-f0-9]{64}$/.test(claimed) || claimed !== actual) throw new Error("invalid OpenCode question contract");
     return value;
   } catch {
     return undefined;
@@ -174,7 +184,6 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { performance } from "node:perf_hooks"
-import { fileURLToPath } from "node:url"
 
 const eventScript = ${JSON.stringify(eventScript)}
 const brokerScript = ${JSON.stringify(path.join(scriptDir, "wmux-agent-input-broker"))}
@@ -968,91 +977,49 @@ const validQuestion = (value: any) => value && typeof value === "object"
   && (value.multiple === undefined || typeof value.multiple === "boolean")
   && (value.custom === undefined || typeof value.custom === "boolean")
 
-const MAX_PACKAGE_MANIFEST_BYTES = 64 * 1024
-const MAX_PACKAGE_ANCESTORS = 8
+const questionBrokerPrerequisites = () => {
+  const capabilityPath = process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH ?? ""
+  const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  return Boolean(questionContract && process.env.WMUX_PANE_ID
+    && path.isAbsolute(capabilityPath) && path.isAbsolute(credentialPath)
+    && fs.existsSync(path.dirname(credentialPath)))
+}
 
-const packageSearchRoots = () => {
-  const roots: string[] = []
-  const configuredRoot = process.env.XDG_CONFIG_HOME
-    || (process.env.HOME ? path.join(process.env.HOME, ".config") : "")
-  if (configuredRoot && path.isAbsolute(configuredRoot)) {
-    roots.push(path.join(path.resolve(configuredRoot), "opencode", "node_modules"))
-  }
+const persistBrokerStatus = (state: "failed", diagnostic: string) => {
+  const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  if (!path.isAbsolute(credentialPath)) return
+  const statusPath = credentialPath + ".status.json"
+  const directory = path.dirname(statusPath)
+  let temporary = ""
   try {
-    let current = path.dirname(fileURLToPath(import.meta.url))
-    for (let depth = 0; depth < MAX_PACKAGE_ANCESTORS; depth += 1) {
-      roots.push(path.join(current, "node_modules"))
-      const parent = path.dirname(current)
-      if (parent === current) break
-      current = parent
+    const directoryStat = fs.lstatSync(directory)
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()
+      || fs.realpathSync(directory) !== path.resolve(directory)
+      || (typeof process.getuid === "function" && directoryStat.uid !== process.getuid())
+      || (directoryStat.mode & 0o077) !== 0) return
+    if (fs.existsSync(statusPath)) {
+      const statusStat = fs.lstatSync(statusPath)
+      if (!statusStat.isFile() || statusStat.isSymbolicLink()
+        || fs.realpathSync(statusPath) !== path.resolve(statusPath)
+        || (typeof process.getuid === "function" && statusStat.uid !== process.getuid())
+        || (statusStat.mode & 0o777) !== 0o600) return
     }
-  } catch {}
-  return [...new Set(roots)]
-}
-
-const safePackageDirectory = (directory: string) => {
-  const stat = fs.lstatSync(directory)
-  return stat.isDirectory() && !stat.isSymbolicLink()
-    && fs.realpathSync(directory) === path.resolve(directory)
-    && (typeof process.getuid !== "function" || stat.uid === process.getuid())
-    && (stat.mode & 0o002) === 0
-}
-
-const safePackageManifest = (manifestPath: string) => {
-  let descriptor: number | undefined
-  try {
-    descriptor = fs.openSync(manifestPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
-    const stat = fs.fstatSync(descriptor)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_PACKAGE_MANIFEST_BYTES
-      || fs.realpathSync(manifestPath) !== path.resolve(manifestPath)
-      || (typeof process.getuid === "function" && stat.uid !== process.getuid())
-      || (stat.mode & 0o002) !== 0) return undefined
-    const bytes = Buffer.alloc(stat.size + 1)
-    const length = fs.readSync(descriptor, bytes, 0, bytes.length, 0)
-    if (length !== stat.size) return undefined
-    return JSON.parse(bytes.subarray(0, length).toString("utf8"))
-  } catch {
-    return undefined
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor)
-  }
-}
-
-const installedPackageVersion = (packageName: "@opencode-ai/plugin" | "@opencode-ai/sdk") => {
-  const segments = packageName.split("/")
-  for (const nodeModules of packageSearchRoots()) {
-    const packageDirectory = path.join(nodeModules, ...segments)
-    if (!fs.existsSync(packageDirectory)) continue
+    temporary = path.join(directory, "." + path.basename(statusPath) + "." + process.pid + "." + crypto.randomBytes(8).toString("hex") + ".tmp")
+    const handle = fs.openSync(temporary, "wx", 0o600)
     try {
-      if (![nodeModules, path.join(nodeModules, segments[0]), packageDirectory].every(safePackageDirectory)) return undefined
-      const manifest = safePackageManifest(path.join(packageDirectory, "package.json"))
-      if (manifest?.name !== packageName || typeof manifest.version !== "string") return undefined
-      return manifest.version
-    } catch {
-      return undefined
-    }
+      fs.writeFileSync(handle, JSON.stringify({ schemaVersion: 1, state, diagnostic, updatedAt: Date.now() }) + "\n")
+      fs.fsyncSync(handle)
+    } finally { fs.closeSync(handle) }
+    fs.renameSync(temporary, statusPath)
+    const directoryHandle = fs.openSync(directory, "r")
+    try { fs.fsyncSync(directoryHandle) } finally { fs.closeSync(directoryHandle) }
+  } catch {
+    if (temporary) try { fs.rmSync(temporary, { force: true }) } catch {}
   }
-  return undefined
 }
 
-const questionRuntime = (client: OpencodeClient) => {
-  if (!questionContract || !process.env.WMUX_PANE_ID
-    || typeof client?.question?.reply !== "function" || typeof client?.question?.list !== "function"
-    || typeof client?.session?.get !== "function") return undefined
-  const openCodeVersion = installedPackageVersion("@opencode-ai/plugin")
-  const sdkVersion = installedPackageVersion("@opencode-ai/sdk")
-  if (openCodeVersion !== questionContract.openCodeRelease || sdkVersion !== questionContract.sdkVersion) return undefined
-  return {
-    type: "runtime",
-    openCodeVersion,
-    sdkVersion,
-    eventEnvelope: questionContract.eventEnvelope,
-    compatibilityFingerprint: questionContract.compatibilityFingerprint,
-  } as const
-}
-
-const createQuestionBroker = (client: OpencodeClient, runtime: ReturnType<typeof questionRuntime>) => {
-  if (!runtime) return undefined
+const createQuestionBroker = (client: OpencodeClient) => {
+  if (!questionBrokerPrerequisites()) return undefined
   let child: ReturnType<typeof spawn> | undefined
   const brokerEnvironment = Object.fromEntries([
     "HOME", "PATH", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR", "WMUX_URL", "WMUX_PANE_ID",
@@ -1062,23 +1029,100 @@ const createQuestionBroker = (client: OpencodeClient, runtime: ReturnType<typeof
   try {
     child = spawn(brokerScript, ["serve"], { stdio: ["pipe", "pipe", "ignore"], env: brokerEnvironment })
   } catch {
+    persistBrokerStatus("failed", "broker_spawn_error")
     return undefined
   }
   let buffer = ""
   let deliveryQueue = Promise.resolve()
   let queuedDeliveries = 0
   let snapshotHandler: (() => void) | undefined
-  let readyResolve: (eventSequence: number) => void
-  const ready = new Promise<number>((resolve) => { readyResolve = resolve })
+  let readyResolve: (eventSequence: number | undefined) => void
+  const ready = new Promise<number | undefined>((resolve) => { readyResolve = resolve })
+  let structuredReady = false
+  let attestationSent = false
   const deliveryStates = new Map<string, "running" | "acknowledged">()
   const startWaiters = new Map<string, { resolve: (started: boolean) => void; timer: ReturnType<typeof setTimeout> }>()
-  const write = (message: Record<string, unknown>) => {
+  const writeControl = (message: Record<string, unknown>) => {
     if (!child?.stdin.writable || child.stdin.destroyed) return
     const line = JSON.stringify(message)
     if (Buffer.byteLength(line) > 128 * 1024) return
     child.stdin.write(line + "\n")
   }
-  write(runtime)
+  const write = (message: Record<string, unknown>) => {
+    if (structuredReady) writeControl(message)
+  }
+  const attest = async (message: any) => {
+    if (attestationSent) return
+    attestationSent = true
+    const now = Date.now()
+    if (!message || JSON.stringify(Object.keys(message).sort()) !== JSON.stringify([
+      "type", "handshakeSchema", "nonce", "issuedAt", "deadline", "contractDigest",
+    ].sort()) || message.type !== "runtime_challenge" || message.handshakeSchema !== questionContract?.handshakeSchema
+      || typeof message.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.nonce)
+      || !Number.isSafeInteger(message.issuedAt) || !Number.isSafeInteger(message.deadline)
+      || message.deadline <= message.issuedAt || message.deadline - message.issuedAt > 10_000
+      || now < message.issuedAt || now > message.deadline
+      || message.contractDigest !== questionContract?.canonicalContractDigest) {
+      persistBrokerStatus("failed", "challenge_invalid")
+      return
+    }
+    const capabilities = {
+      globalHealth: typeof (client as any)?.global?.health === "function",
+      questionList: typeof (client as any)?.question?.list === "function",
+      questionReply: typeof (client as any)?.question?.reply === "function",
+      sessionGet: typeof (client as any)?.session?.get === "function",
+    }
+    let health = { called: false, outcome: "missing", status: 0, healthy: false, release: "" }
+    let diagnostic = capabilities.globalHealth ? "health_error" : "health_method_missing"
+    if (capabilities.globalHealth) {
+      const healthResult = Promise.resolve().then(() => client.global.health()).then(
+        (value) => ({ kind: "result" as const, value }),
+        () => ({ kind: "error" as const }),
+      )
+      const outcome = await Promise.race([
+        healthResult,
+        new Promise<{ kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 3_000)),
+      ])
+      if (outcome.kind === "timeout") {
+        health = { ...health, called: true, outcome: "timeout" }
+        diagnostic = "health_timeout"
+      } else if (outcome.kind === "error") {
+        health = { ...health, called: true, outcome: "error" }
+        diagnostic = "health_error"
+      } else {
+        const result: any = outcome.value
+        const release = typeof result?.data?.version === "string" && result.data.version.length <= 64
+          && /^[A-Za-z0-9._+-]*$/.test(result.data.version) ? result.data.version : ""
+        const status = Number.isInteger(result?.response?.status) && result.response.status >= 0 && result.response.status <= 999
+          ? result.response.status : 0
+        if (status !== 200 || result?.data?.healthy !== true || !release || result?.error !== undefined) {
+          health = { called: true, outcome: "malformed", status, healthy: result?.data?.healthy === true, release }
+          diagnostic = "health_malformed"
+        } else if (release !== questionContract?.openCodeRelease) {
+          health = { called: true, outcome: "release_mismatch", status, healthy: true, release }
+          diagnostic = "health_release_mismatch"
+        } else {
+          health = { called: true, outcome: "ok", status, healthy: true, release }
+          diagnostic = Object.values(capabilities).every(Boolean) ? "ok" : "client_method_missing"
+        }
+      }
+    }
+    writeControl({
+      type: "runtime_attestation",
+      handshakeSchema: message.handshakeSchema,
+      nonce: message.nonce,
+      challengeIssuedAt: message.issuedAt,
+      challengeDeadline: message.deadline,
+      observedAt: Date.now(),
+      contractDigest: questionContract!.canonicalContractDigest,
+      compatibilityFingerprint: questionContract!.compatibilityFingerprint,
+      eventEnvelope: questionContract!.eventEnvelope,
+      release: health.outcome === "ok" ? health.release : "",
+      health,
+      capabilities,
+      diagnostic,
+    })
+  }
   const beginDelivery = (delivery: any) => new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       startWaiters.delete(delivery.deliveryId)
@@ -1190,6 +1234,10 @@ const createQuestionBroker = (client: OpencodeClient, runtime: ReturnType<typeof
       buffer = buffer.slice(newline + 1)
       let message: any
       try { message = JSON.parse(line) } catch { continue }
+      if (message?.type === "runtime_challenge") {
+        void attest(message)
+        continue
+      }
       if (message?.type === "start_result" && typeof message.deliveryId === "string") {
         const waiter = startWaiters.get(message.deliveryId)
         if (waiter) {
@@ -1199,8 +1247,10 @@ const createQuestionBroker = (client: OpencodeClient, runtime: ReturnType<typeof
         }
         continue
       }
-      if (message?.type === "ready") {
-        readyResolve(Number.isSafeInteger(message.eventSequence) && message.eventSequence >= 0 ? message.eventSequence : 0)
+      if (message?.type === "runtime_ready") {
+        structuredReady = message.supported === true
+        readyResolve(structuredReady && Number.isSafeInteger(message.eventSequence) && message.eventSequence >= 0
+          ? message.eventSequence : undefined)
         continue
       }
       if (message?.type === "snapshot_request") {
@@ -1218,9 +1268,19 @@ const createQuestionBroker = (client: OpencodeClient, runtime: ReturnType<typeof
       })
     }
   })
-  child.on("error", () => readyResolve(0))
-  child.on("close", () => readyResolve(0))
-  return { send: write, ready, onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler } }
+  child.on("error", () => {
+    structuredReady = false
+    persistBrokerStatus("failed", "broker_spawn_error")
+    readyResolve(undefined)
+  })
+  child.on("close", () => {
+    const wasReady = structuredReady
+    structuredReady = false
+    if (wasReady) persistBrokerStatus("failed", "broker_exited")
+    readyResolve(undefined)
+  })
+  return { send: write, ready, isReady: () => structuredReady,
+    onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler } }
 }
 
 const text = (parts: Array<{ type: string; text?: string }>) =>
@@ -1245,8 +1305,7 @@ const applyPermissionDefaults = (config: any) => {
 export default (async ({ client, directory }) => {
   const active = new Map<string, { messageID: string; prompt: string; title: string; pending: Set<string> }>()
   const titles = new Map<string, string>()
-  const runtime = questionRuntime(client as OpencodeClient)
-  const questionBroker = createQuestionBroker(client as OpencodeClient, runtime)
+  const questionBroker = createQuestionBroker(client as OpencodeClient)
   const normalizeQuestion = (question: any) => ({
     header: question.header,
     question: question.question,
@@ -1256,7 +1315,7 @@ export default (async ({ client, directory }) => {
   })
   let questionEventSequence = 0
   const questionSequenceReady = questionBroker?.ready.then((eventSequence) => {
-    questionEventSequence = Math.max(questionEventSequence, eventSequence)
+    if (eventSequence !== undefined) questionEventSequence = Math.max(questionEventSequence, eventSequence)
   }) ?? Promise.resolve()
   const questionEventTasks = new Map<number, Promise<void>>()
   const forwardQuestion = (request: any, nativePending: boolean, eventId: string, eventSequence: number) => {
@@ -1279,7 +1338,7 @@ export default (async ({ client, directory }) => {
   let snapshotInFlight = false
   let snapshotPending = false
   const sendQuestionSnapshot = () => {
-    if (!questionBroker) return
+    if (!questionBroker?.isReady()) return
     if (snapshotInFlight) {
       snapshotPending = true
       return
@@ -1326,7 +1385,9 @@ export default (async ({ client, directory }) => {
       })
   }
   questionBroker?.onSnapshotRequest(() => { void questionSequenceReady.then(sendQuestionSnapshot) })
-  void questionSequenceReady.then(sendQuestionSnapshot)
+  void questionBroker?.ready.then((eventSequence) => {
+    if (eventSequence !== undefined) sendQuestionSnapshot()
+  })
   const cacheTitle = (sessionID: string, title: unknown) => {
     titles.delete(sessionID)
     titles.set(sessionID, sessionTitle(typeof title === "string" ? title : undefined))
@@ -1366,8 +1427,7 @@ export default (async ({ client, directory }) => {
       const sessionID = event.properties.sessionID
       if (!sessionID) return
       const current = active.get(sessionID)
-      if (questionBroker && (event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected")) {
-        await questionSequenceReady
+      if (questionBroker?.isReady() && (event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected")) {
         if (questionEventSequence >= Number.MAX_SAFE_INTEGER) {
           questionBroker?.send({ type: "unsupported" })
         } else {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
@@ -13,8 +14,7 @@ import { AgentInputRequestStore } from "../src/server/agent-input-request-store.
 import type { AuthConfig } from "../src/server/auth.js";
 import { createHttpServer } from "../src/server/http.js";
 import {
-  OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  SUPPORTED_OPENCODE_SDK_VERSION,
+  createOpenCodeRuntimeAttestation,
 } from "../src/server/opencode-question-contract.js";
 import type { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
@@ -22,11 +22,7 @@ import { StateStore } from "../src/server/state.js";
 import type { AgentInputQuestion, BootstrapPayload, MachineConfig } from "../src/shared/protocol.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const runtime = {
-  type: "runtime", openCodeVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-  sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION, eventEnvelope: "legacy-properties",
-  compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-};
+const runtime = { type: "legacy_runtime_ignored" };
 const question: AgentInputQuestion = {
   header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: true,
 };
@@ -76,7 +72,7 @@ test("isolated reference-to-occurrence-broker-to-SDK harness preserves HTTP answ
       id: "question-a6", sessionID: "session-a6", questions, nativePending: false });
     broker.send({ type: "snapshot", complete: true, cutSequence: 1,
       members: [{ id: "question-a6", sessionID: "session-a6", questions }] });
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === true));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
     await waitFor(() => requests.snapshot().some((request) => request.openCodeRequestId === "question-a6"));
     const request = requests.snapshot().find((candidate) => candidate.openCodeRequestId === "question-a6")!;
     const answers = buildAgentInputAnswers(questions, [["Safe"], ["Tests", "Types"], []], ["", "", sentinel]);
@@ -204,7 +200,7 @@ test("broker occurrence stream converges duplicate events, orders reused IDs, su
     const ordinalThreeCalls = calls.filter((call) => call.path.endsWith("/requests") && call.body.ordinal === 3);
     assert.equal(ordinalThreeCalls.length, 1, "permanent binding 409 is consumed exactly once");
     const persisted = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
-    assert.equal(persisted.schemaVersion, 8);
+    assert.equal(persisted.schemaVersion, 9);
     assert.equal(persisted.streams[Object.keys(persisted.streams)[0]].nextOrdinal, 3);
     assert.equal(persisted.receipts.filter((receipt: any) => receipt.occurrenceId === [...bindings.keys()][0]).length, 2,
       "multiple asked-event receipts converge durably on occurrence one");
@@ -238,7 +234,7 @@ test("identity-only orphan resolution fences an equal-cut stale member until bro
     await broker.stop();
     broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === true));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
     broker.send({ type: "snapshot", complete: true, cutSequence: 1,
       members: [{ id: "missing", sessionID: "session", questions: [question] }] });
     await waitFor(() => calls.some((call) => call.path.endsWith("/requests") && call.body.ordinal === 1));
@@ -311,19 +307,19 @@ test("broker migrations discard unbound metadata, require fresh registration, an
       outbox: [{ type: "resolve", id: "wrong-generation", generation: 9 }] })}\n`, { mode: 0o600 });
     let broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === false));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === false));
     await broker.stop();
     const migrated = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
-    assert.equal(migrated.schemaVersion, 8);
+    assert.equal(migrated.schemaVersion, 9);
     assert.equal(migrated.supported, false);
     assert.deepEqual(migrated.outbox, []);
     assert.equal(calls.length, 0, "legacy unbound metadata performs no capture or resolution call");
 
-    const future = `${JSON.stringify({ schemaVersion: 9, sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: 9e15, cursor: 0 })}\n`;
+    const future = `${JSON.stringify({ schemaVersion: 10, sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: 9e15, cursor: 0 })}\n`;
     fs.writeFileSync(credentialPath, future, { mode: 0o600 });
     broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === false));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === false));
     await broker.stop();
     assert.equal(fs.readFileSync(credentialPath, "utf8"), future);
     assert.equal(calls.length, 0);
@@ -347,14 +343,14 @@ test("broker stale credentials and receipt capacity fail closed without metadata
     writeCredential(credentialPath);
     let broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath);
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === false));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === false));
     await broker.stop();
     assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).disabledReason, "stale-credential");
     assert.equal(calls.filter((call) => call.path.endsWith("/requests")).length, 0);
 
     const key = "a".repeat(64);
     const digest = "b".repeat(64);
-    fs.writeFileSync(credentialPath, `${JSON.stringify({ schemaVersion: 8, sourceId: "source-one", relaySecret: "S".repeat(43),
+    fs.writeFileSync(credentialPath, `${JSON.stringify({ schemaVersion: 9, sourceId: "source-one", relaySecret: "S".repeat(43),
       expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1, cursor: 0,
       occurrenceEpoch: "epoch", relayEpoch: null, lastEventSequence: 512,
       streams: {}, receipts: Array.from({ length: 512 }, (_, index) => ({ eventId: `event-${index}`, occurrenceKey: key,
@@ -363,7 +359,7 @@ test("broker stale credentials and receipt capacity fail closed without metadata
     const fixture = await startSimpleFixture(calls);
     broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === true));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
     broker.send({ type: "asked", eventId: "overflow", eventSequence: 513,
       id: "request", sessionID: "session", questions: [question], nativePending: false });
     await waitFor(() => JSON.parse(fs.readFileSync(credentialPath, "utf8")).supported === false);
@@ -376,7 +372,7 @@ test("broker stale credentials and receipt capacity fail closed without metadata
     const conflictFixture = await startSimpleFixture(calls);
     broker = launchBroker(directory, conflictFixture.base, "pane-one", credentialPath);
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === true));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
     broker.send({ type: "asked", eventId: "first", eventSequence: 1,
       id: "request", sessionID: "session", questions: [question], nativePending: false });
     await waitFor(() => calls.some((call) => call.path.endsWith("/requests")));
@@ -405,7 +401,7 @@ test("complete absence advances broker ordinals and queued orphan reconciliation
   const broker = (writeCredential(credentialPath), launchBroker(directory, fixture.base, "pane-one", credentialPath));
   try {
     broker.send(runtime);
-    await waitFor(() => broker.messages.some((message) => message.type === "ready" && message.supported === true));
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
     broker.send({ type: "asked", eventId: "target-one", eventSequence: 1,
       id: "target", sessionID: "session", questions: [question], nativePending: false });
     await waitFor(() => calls.some((call) => call.path.endsWith("/requests") && call.body.id === "target" && call.body.ordinal === 1));
@@ -536,24 +532,157 @@ test("capture metadata survives more than eight transient failures and recovers 
   }
 });
 
+test("broker runtime attestation rejects every predicate with stable sanitized diagnostics and drops pre-ready events", { skip: process.platform === "win32" }, async (t) => {
+  const baseAttestation = (challenge: any) => ({
+    ...createOpenCodeRuntimeAttestation(challenge.nonce),
+    challengeIssuedAt: challenge.issuedAt,
+    challengeDeadline: challenge.deadline,
+    observedAt: Date.now(),
+    contractDigest: challenge.contractDigest,
+  });
+  const variants: Array<[string, string, (value: any, challenge: any) => any]> = [
+    ["handshake schema", "handshake_schema_mismatch", (value) => ({ ...value, handshakeSchema: 2 })],
+    ["nonce", "attestation_nonce_mismatch", (value) => ({ ...value, nonce: "W".repeat(43) })],
+    ["freshness", "attestation_late", (value, challenge) => ({ ...value, observedAt: challenge.deadline + 1 })],
+    ["digest", "contract_digest_mismatch", (value) => ({ ...value, contractDigest: "0".repeat(64) })],
+    ["fingerprint", "fingerprint_mismatch", (value) => ({ ...value, compatibilityFingerprint: "wrong" })],
+    ["event envelope", "event_envelope_mismatch", (value) => ({ ...value, eventEnvelope: "future" })],
+    ["global health method", "method_global_health_missing", (value) => ({ ...value,
+      capabilities: { ...value.capabilities, globalHealth: false } })],
+    ["question list method", "method_question_list_missing", (value) => ({ ...value,
+      capabilities: { ...value.capabilities, questionList: false } })],
+    ["question reply method", "method_question_reply_missing", (value) => ({ ...value,
+      capabilities: { ...value.capabilities, questionReply: false } })],
+    ["session get method", "method_session_get_missing", (value) => ({ ...value,
+      capabilities: { ...value.capabilities, sessionGet: false } })],
+    ["health missing", "health_missing", (value) => ({ ...value, diagnostic: "health_method_missing",
+      health: { called: false, outcome: "missing", status: 0, healthy: false, release: "" } })],
+    ["health timeout", "health_timeout", (value) => ({ ...value, diagnostic: "health_timeout",
+      health: { called: true, outcome: "timeout", status: 0, healthy: false, release: "" } })],
+    ["health error", "health_error", (value) => ({ ...value, diagnostic: "health_error",
+      health: { called: true, outcome: "error", status: 0, healthy: false, release: "" } })],
+    ["health malformed", "health_malformed", (value) => ({ ...value, diagnostic: "health_malformed",
+      health: { called: true, outcome: "malformed", status: 200, healthy: false, release: "" } })],
+    ["release", "release_mismatch", (value) => ({ ...value, release: "", diagnostic: "health_release_mismatch",
+      health: { called: true, outcome: "release_mismatch", status: 200, healthy: true, release: "1.18.8" } })],
+  ];
+  for (const [name, diagnostic, mutate] of variants) {
+    await t.test(name, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-predicate-"));
+      const credentialPath = path.join(directory, "pane.json");
+      writeCredential(credentialPath);
+      const broker = launchBroker(directory, "http://127.0.0.1:9", "pane", credentialPath, undefined,
+        (challenge) => mutate(baseAttestation(challenge), challenge));
+      const sentinel = ["PRE", "READY", "QUESTION"].join("_");
+      broker.sendRaw({ type: "asked", eventId: "pre-ready", eventSequence: 1, id: "request", sessionID: "session",
+        questions: [{ ...question, question: sentinel }], nativePending: false });
+      try {
+        await broker.exit();
+        const status = JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8"));
+        assert.deepEqual({ state: status.state, diagnostic: status.diagnostic }, { state: "failed", diagnostic });
+        assert.doesNotMatch(fs.readFileSync(credentialPath, "utf8"), new RegExp(sentinel));
+      } finally {
+        await broker.stop(); fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("broker runtime challenge is one-shot and distinguishes replay, duplicate, and conflict", { skip: process.platform === "win32" }, async (t) => {
+  const attestation = (challenge: any) => ({
+    ...createOpenCodeRuntimeAttestation(challenge.nonce),
+    challengeIssuedAt: challenge.issuedAt,
+    challengeDeadline: challenge.deadline,
+    observedAt: Date.now(),
+    contractDigest: challenge.contractDigest,
+  });
+  for (const [name, diagnostic, conflict] of [
+    ["duplicate", "attestation_duplicate", false],
+    ["conflict", "attestation_conflict", true],
+  ] as const) {
+    await t.test(name, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-once-"));
+      const credentialPath = path.join(directory, "pane.json");
+      writeCredential(credentialPath);
+      const server = http.createServer(async (request, _response) => { for await (const _chunk of request) { /* hold */ } });
+      server.listen(0, "127.0.0.1"); await once(server, "listening");
+      const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+      let first: any;
+      const broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane", credentialPath, undefined, (challenge) => {
+        first = attestation(challenge);
+        return first;
+      });
+      try {
+        await waitFor(() => first !== undefined);
+        const second = structuredClone(first);
+        if (conflict) second.diagnostic = "health_error";
+        broker.sendRaw(second);
+        await broker.exit();
+        const status = JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8"));
+        assert.equal(status.diagnostic, diagnostic);
+      } finally {
+        await broker.stop(); server.closeAllConnections(); server.close(); await once(server, "close");
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  await t.test("replay", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-replay-"));
+    const credentialPath = path.join(directory, "pane.json");
+    writeCredential(credentialPath);
+    const oldNonce = "R".repeat(43);
+    const stored = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
+    stored.lastChallengeDigest = crypto.createHash("sha256").update(`wmux-runtime-challenge\0${oldNonce}`).digest("hex");
+    fs.writeFileSync(credentialPath, `${JSON.stringify(stored)}\n`, { mode: 0o600 });
+    const broker = launchBroker(directory, "http://127.0.0.1:9", "pane", credentialPath, undefined, (challenge) => ({
+      ...attestation(challenge), nonce: oldNonce,
+    }));
+    try {
+      await broker.exit();
+      const status = JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8"));
+      assert.equal(status.diagnostic, "attestation_replay");
+    } finally {
+      await broker.stop(); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 function writeCredential(filePath: string): void {
-  fs.writeFileSync(filePath, `${JSON.stringify({ schemaVersion: 8, sourceId: "source-one", relaySecret: "S".repeat(43),
+  fs.writeFileSync(filePath, `${JSON.stringify({ schemaVersion: 9, sourceId: "source-one", relaySecret: "S".repeat(43),
     expiresAt: Date.now() + 60_000, supported: true, credentialGeneration: 1, cursor: 0,
     occurrenceEpoch: "epoch-one", relayEpoch: null, lastEventSequence: 0,
     streams: {}, receipts: [], outbox: [], quarantines: [] })}\n`, { mode: 0o600 });
 }
 
-function launchBroker(home: string, base: string, paneId: string, credentialPath: string, capabilityPath?: string) {
+function launchBroker(
+  home: string,
+  base: string,
+  paneId: string,
+  credentialPath: string,
+  capabilityPath?: string,
+  attest: (challenge: any) => any = (message) => ({
+    ...createOpenCodeRuntimeAttestation(message.nonce),
+    challengeIssuedAt: message.issuedAt,
+    challengeDeadline: message.deadline,
+    observedAt: Date.now(),
+    contractDigest: message.contractDigest,
+  }),
+) {
   const child = spawn(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["serve"], {
     stdio: ["pipe", "pipe", "pipe"], env: { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin", WMUX_URL: base,
       WMUX_PANE_ID: paneId, WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath,
+      WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath ?? `${credentialPath}.cap`,
       WMUX_OPENCODE_QUESTION_CONTRACT_PATH: path.join(repoRoot, "scripts", "opencode-question-contract.json"),
-      ...(capabilityPath ? { WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath } : {}) },
+    },
   });
   const messages: any[] = [];
   const sanitized: string[] = [];
   const stderr: string[] = [];
   let buffer = "";
+  let ready = false;
+  const pending: unknown[] = [];
+  const write = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
   child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => stderr.push(chunk));
   child.stdout.on("data", (chunk: string) => {
@@ -564,15 +693,27 @@ function launchBroker(home: string, base: string, paneId: string, credentialPath
       const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
       const message = JSON.parse(line); messages.push(message);
       sanitized.push(message.type === "delivery" ? JSON.stringify({ type: "delivery", deliveryId: message.deliveryId }) : line);
+      if (message.type === "runtime_challenge") {
+        const response = attest(message);
+        if (response) write(response);
+      } else if (message.type === "runtime_ready" && message.supported === true) {
+        ready = true;
+        for (const queued of pending.splice(0)) write(queued);
+      }
     }
   });
-  const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  const send = (message: any) => {
+    if (message?.type === "legacy_runtime_ignored") return;
+    if (ready) write(message);
+    else pending.push(message);
+  };
+  const sendRaw = write;
   const exit = async () => { if (child.exitCode === null) await once(child, "exit"); };
   const stop = async () => {
     if (child.exitCode !== null) return;
     child.stdin.end(); child.kill("SIGTERM"); await once(child, "exit").catch(() => undefined);
   };
-  return { child, messages, sanitized, stderr, send, exit, stop };
+  return { child, messages, sanitized, stderr, send, sendRaw, exit, stop };
 }
 
 async function startSimpleFixture(calls: Array<{ path: string; body: any }>) {

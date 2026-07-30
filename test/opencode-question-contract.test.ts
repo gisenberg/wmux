@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   classifyOpenCodeQuestionReplyResult,
+  createOpenCodeRuntimeAttestation,
   isSupportedOpenCodeQuestionRuntime,
-  OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
+  OPENCODE_QUESTION_CONTRACT_DIGEST,
   sanitizeOpenCodeQuestionEvent,
-  SUPPORTED_OPENCODE_SDK_VERSION,
   type OpenCodeQuestionReply,
 } from "../src/server/opencode-question-contract.js";
 
@@ -19,6 +20,16 @@ test("supported OpenCode manifest pins the official SDK contract", () => {
   const manifest = fixture("supported-manifest.json") as Record<string, unknown>;
   const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
   assert.equal(manifest.sdkVersion, "1.18.9");
+  assert.equal(manifest.healthCall, "client.global.health()");
+  assert.equal(manifest.canonicalContractDigest, OPENCODE_QUESTION_CONTRACT_DIGEST);
+  const contract = JSON.parse(fs.readFileSync(path.join(process.cwd(), "scripts", "opencode-question-contract.json"), "utf8"));
+  const digest = contract.canonicalContractDigest;
+  delete contract.canonicalContractDigest;
+  const canonicalize = (value: any): any => Array.isArray(value) ? value.map(canonicalize)
+    : value && typeof value === "object"
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+      : value;
+  assert.equal(crypto.createHash("sha256").update(JSON.stringify(canonicalize(contract))).digest("hex"), digest);
   assert.equal(manifest.officialTagCommit, "4da7bb44c84e013fa53e9c5d02ac753d1435c81a");
   assert.equal(packageJson.dependencies["@opencode-ai/sdk"], "1.18.9");
   assert.equal(manifest.questionListCall, "client.question.list({ directory })");
@@ -74,15 +85,11 @@ test("reply input and RequestResult behavior stay derived from OpencodeClient", 
 });
 
 test("runtime compatibility fails closed for missing APIs, versions, fingerprints, and event shapes", () => {
-  const supported = {
-    client: { question: { reply: () => undefined } },
-    sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-    pluginVersion: SUPPORTED_OPENCODE_SDK_VERSION,
-    compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
-  };
+  const supported = createOpenCodeRuntimeAttestation("N".repeat(43));
   assert.equal(isSupportedOpenCodeQuestionRuntime(supported), true);
-  assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, client: {} }), false);
-  assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, sdkVersion: "future" }), false);
+  assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, capabilities: { ...supported.capabilities, questionReply: false } }), false);
+  assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, release: "future" }), false);
+  assert.equal(isSupportedOpenCodeQuestionRuntime(createOpenCodeRuntimeAttestation("F".repeat(43), Date.now() + 60_000)), false);
   assert.equal(isSupportedOpenCodeQuestionRuntime({ ...supported, compatibilityFingerprint: "wrong" }), false);
   assert.deepEqual(sanitizeOpenCodeQuestionEvent({ type: "question.asked", properties: {} }), {
     kind: "unsupported", code: "incompatible_event_shape",
