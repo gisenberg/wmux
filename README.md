@@ -63,6 +63,8 @@ Clients fetch a full bootstrap snapshot only for initial load, reconnect recover
 
 ## Quick Start
 
+> [!IMPORTANT] Active haswell testing deployment: [docs/HASWELL_TEST_DEPLOYMENT.md](docs/HASWELL_TEST_DEPLOYMENT.md)
+
 Server requirements: Linux or macOS, Node.js 22+, npm, and `/bin/sh` with a
 supported local PTY environment. Windows is supported as a remote
 `powershell-ssh` target, but not as the wmux server host. Running the complete
