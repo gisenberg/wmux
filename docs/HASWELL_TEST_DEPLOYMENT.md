@@ -46,17 +46,18 @@ If your manifest fields differ, read the JSON directly and do not assume a fixed
 Current candidate expectation:
 
 - Candidate build deployed here is schema **7** and must only be started against schema-7 state.
-- The server-challenge runtime-attestation candidate uses agent-input credential schema **5** and broker schema **10**. Schema-3 and schema-4 source credentials survive only as refresh authority and must reattest; schema-2 credentials and pre-schema-9 broker files remain deliberately disabled during migration. Schema 5 binds health evidence to the plugin-provided `serverUrl` and exact `/global/health` route rather than requiring injected `client.global.health`.
+- The server-challenge runtime-attestation candidate uses agent-input credential schema **6**, handshake schema **4**, and broker schema **10**. Schema-3 through schema-5 source credentials survive only as refresh authority and must reattest; schema-2 credentials and pre-schema-9 broker files remain deliberately disabled during migration. Schema 6 binds health evidence to the injected root client's exact in-process HeyAPI transport and v2 `global.health` wrapper; it does not depend on `serverUrl` or a TCP listener.
 - Legacy commit `c0ceb73` is schema **6** and **must not** be selected against live schema-7 state.
 
 After deploying the runtime-attestation candidate, run `wmux-hooks install
 opencode` on each OpenCode host/account, verify `wmux-hooks status` reports
-`opencodeParity: true`, and open a fresh wmux pane. Existing panes do not have a
-usable post-migration registration capability. Start OpenCode in the fresh pane
-and inspect the owner-only `~/.wmux/agent-input/<pane>.json.status.json` sibling
-for `runtime_ready` before attempting HARD SERVER PROOF. A failed status contains
+`opencodeParity: true`, and restart OpenCode so the process loads handshake
+schema 4. A schema-5 source credential can refresh in place; open a fresh wmux
+pane only if the existing source credential is absent or invalid. Inspect the
+owner-only `~/.wmux/agent-input/<pane>.json.status.json` sibling for
+`runtime_ready` before attempting HARD SERVER PROOF. A failed status contains
 only a stable diagnostic code; do not bypass it with the broker `refresh`
-command, which now returns `attestation_required`.
+command, which returns `attestation_required` without runtime identity.
 
 ## 2) Fixed systemd unit location and required invariants
 

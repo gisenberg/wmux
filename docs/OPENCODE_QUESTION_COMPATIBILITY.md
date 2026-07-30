@@ -3,17 +3,24 @@
 wmux supports the legacy `properties` question events from OpenCode release and
 `@opencode-ai/sdk` **1.18.9**, official tag commit
 `4da7bb44c84e013fa53e9c5d02ac753d1435c81a`. Production code imports event
-types and dynamically imports `createOpencodeClient` plus the `OpencodeClient`
-type from `@opencode-ai/sdk/v2/client`.
+types and the `OpencodeClient` type, then runtime-imports the v2
+`OpencodeClient` class from `@opencode-ai/sdk/v2/client`.
 
-The generated plugin validates the plugin-provided HTTP(S) `serverUrl` and
-constructs one dedicated v2 client with
-`createOpencodeClient({ baseUrl: serverUrl.origin })`. Only that client performs
-`question.list({ directory })`, `question.reply({ requestID, answers },
-{ signal })`, and structured `session.get({ sessionID, directory })` calls. The
+OpenCode initializes plugins before it has to expose a TCP listener. Its
+injected root SDK client already owns the authoritative HeyAPI transport, whose
+custom fetch dispatches into `Server.Default().app.fetch`. The generated plugin
+accepts only the injected root client's own `_client` data property and requires
+that transport to have own `get` and `post` functions. It constructs exactly one
+v2 client with `new OpencodeClient({ client: injectedTransport })`. That client
+performs `global.health({ signal })`, `question.list({ directory })`,
+`question.reply({ requestID, answers }, { signal })`, and structured
+`session.get({ sessionID, directory })` calls. It does not create a URL-backed
+client, read global/default SDK clients, or retry through external fetch. The
 injected root SDK client remains the authority for existing generic lifecycle,
 title, and delegation behavior. The reply input type is
-`Parameters<OpencodeClient["question"]["reply"]>[0]`. The generated client
+`Parameters<OpencodeClient["question"]["reply"]>[0]`. The shared transport is
+passed through unchanged: wmux does not call its configuration setters, add
+headers, or copy credentials. The generated client
 returns a `RequestResult<QuestionReplyResponses, QuestionReplyErrors, false,
 "fields">`
 object rather than necessarily throwing: HTTP 200 contains a boolean, HTTP 400
@@ -32,23 +39,27 @@ Before accepting structured events, the generated plugin starts the broker from
 pane-bound runtime-file paths. The broker first obtains a cryptographically
 random, one-shot server challenge using either the exact pane registration
 capability or the current source credential. It then emits that challenge inside
-a separate broker nonce challenge with handshake schema 3, the canonical contract
+a separate broker nonce challenge with handshake schema 4, the canonical contract
 digest, and a five-second deadline. The plugin requires the actual dedicated v2
-client's `question.list`, `question.reply`, and `session.get` methods, validates
-the plugin-provided `serverUrl` as an HTTP(S) `URL`, and performs a credential-free,
-no-redirect, body-bounded fetch of the fixed `/global/health` route. It returns
-only bounded runtime evidence: release, digest, fingerprint, event envelope,
-method booleans, health fields, and challenge timestamps. A successful health
-result must be an HTTP 200 plain JSON object whose only own properties are
-`healthy: true` and the exact supported `version`. Its attestation source is
-exactly `plugin.serverUrl:/global/health`. The broker independently validates the
+client's `global.health`, `question.list`, `question.reply`, and `session.get`
+methods and calls the fixed health wrapper through the extracted transport. It
+returns only bounded runtime evidence: release, digest, fingerprint, event
+envelope, method booleans, health fields, and challenge timestamps. A successful
+health result must be an exact SDK RequestResult with HTTP status 200, no error,
+and a plain data object whose only own properties are `healthy: true` and the
+exact supported `version`. Its attestation source is exactly
+`plugin.injectedTransport:/global/health`. The broker independently validates the
 local nonce, freshness, exact contract, release, health result, and methods
 before exchanging or refreshing.
 The server atomically validates and consumes its challenge under the exact
 capability/source, immutable pane context, and source credential generation, then
-stores only the nonce-free sanitized evidence. Injected `client.global.health`,
-the injected root client's structured methods, package manifests, and package
-search paths are not runtime compatibility authority.
+stores only the nonce-free sanitized evidence. The root client's `_client` field
+is a pinned SDK internal, not a general extension API: wmux accepts it only under
+the 1.18.9 digest/fingerprint contract and tests its own-property shape and
+in-process behavior. A changed, inherited, accessor-backed, absent, or malformed
+field fails closed. Package manifests, package search paths, `NODE_PATH`, tokens,
+guessed URLs, and SDK global/default clients are not runtime compatibility
+authority or fallback sources.
 
 This runtime attestation is a trusted same-UID plugin compatibility check, not
 cryptographic proof against a compromised OpenCode process, plugin host, or user
@@ -64,8 +75,9 @@ response cannot later be replayed.
 Fixtures under `test/fixtures/opencode-question` are synthetic and sanitized at
 the capture boundary. In particular, `question.replied` is identity-only; its
 SDK `answers` property is dropped before fixture, broker, logging, or durable
-storage. A missing/failed v2 import, client construction failure, missing question
-APIs, version/fingerprint mismatches, malformed question events, and unexpected
+storage. A missing/malformed injected transport, missing/failed v2 import,
+client construction failure, missing structured APIs, version/fingerprint
+mismatches, malformed question events, and unexpected
 reply result shapes disable structured question handling without terminal-input
 fallback. Events arriving before `runtime_ready`
 are dropped; startup reconciliation recovers still-pending native questions only
@@ -123,7 +135,7 @@ shared, helper, automation, and registration tokens are not inherited by the
 broker process.
 The broker writes a bounded owner-only sibling status file at
 `<pane-credential>.status.json`. It contains only schema, state, stable diagnostic
-code, and update time. It records challenge, health, registration, and broker
+code, and update time. It records transport-shape, challenge, health, registration, and broker
 spawn failures without paths, pane/source IDs, exceptions, content, environment
 values, or credentials.
 
@@ -170,7 +182,7 @@ revokes every recovered source before authentication resumes; a fresh pane
 registration is required. Recovery from a request-store backup closes every
 recovered pending request and settles its submission as already resolved,
 because the lost primary may have recorded answer exposure. Generation anchors
-and already-terminal outcomes remain intact. Credential schema 5 uses
+and already-terminal outcomes remain intact. Credential schema 6 uses
 record-ID-scoped HMAC-SHA-256 verifiers and constant-time comparison; plaintext
 capabilities, relay secrets, and challenge nonces are never stored. Migration from schema 0 or 1
 cannot reconstruct HMAC verifiers from legacy salted hashes, so it deliberately
@@ -181,9 +193,11 @@ revokes every source, and marks it `attestation_required`; a fresh pane is
 mandatory. Migration from schema 3 preserves valid source credentials but removes
 the old unbound attestation and marks each source `attestation_required`; the
 current broker can source-authenticate a fresh challenge and refresh without a
-new pane. Migration from schema 4 likewise preserves source refresh authority,
-removes injected-client health evidence, clears pending challenges, and requires
-fresh `plugin.serverUrl:/global/health` attestation. Request schema 6 preserves
+new pane. Migration from credential schema 4 likewise preserves source refresh
+authority, removes old injected-client health evidence, clears pending
+challenges, and requires reattestation. Credential schema 6 migrates schema-5
+`serverUrl` health evidence the same way and requires fresh
+`plugin.injectedTransport:/global/health` attestation. Request schema 6 preserves
 generation anchors but closes legacy pending records as `migration-unbound`;
 it never fabricates occurrence IDs. Broker schema 10 migrates schema-9 source
 credentials to require fresh source-authenticated attestation while older unbound
@@ -240,13 +254,16 @@ capabilities, resolves pending requests as unavailable, and leaves generic
 OpenCode lifecycle telemetry operational. Remove that setting and start a new
 pane to roll forward, run `wmux-hooks install opencode` to refresh the generated
 plugin, and require `wmux-hooks status` to report `opencodeParity: true` (or
-compare `wmux-hooks hash opencode` with the reported expected hash). Rolling
-back to a build without structured-question routes is compatible: the generated
-plugin's structured path fails closed while generic lifecycle events continue;
-an old plugin continues to use the unchanged agent-event route against a new
-server, and old browser clients ignore the additive bootstrap field. Do not
-delete state files while wmux is running, and do not reuse schema-2 files with a
-binary that only understands an older credential schema.
+compare `wmux-hooks hash opencode` with the reported expected hash). Rollout must
+update wmux, install the generated plugin, and restart each OpenCode process so
+it loads handshake schema 4; old processes fail structured handling closed while
+generic lifecycle events continue. Credential schema 6 is downgrade-refused.
+Before starting the upgraded server, retain an owner-only schema-5 credential
+store backup if binary rollback is required. Otherwise, rollback requires
+stopping wmux and replacing the schema-6 credential store with a fresh empty
+store, then opening fresh panes; never hand-edit or down-convert it. Old browser
+clients still ignore the additive bootstrap field. Do not delete or replace
+state files while wmux is running.
 
 ## Automated and live proof boundary
 
@@ -256,7 +273,11 @@ generated-plugin refresh/parity, typed SDK result classification, credential
 authority, storage/recovery,
 CAS/idempotency races, restart boundaries, projection convergence, notification
 redaction, and an isolated reference-to-real-server-to-broker SDK harness with
-pane-input call/byte instrumentation. Run the complete repository gate with:
+pane-input call/byte instrumentation. The generated-plugin integration uses a
+real root 1.18.9 client with a custom in-process HeyAPI fetch and no OpenCode TCP
+listener; it exercises health, list, reply, and structured session wrappers plus
+generic root-client hooks, asserts the shared config is unchanged, and rejects
+any external OpenCode fetch fallback. Run the complete repository gate with:
 
 ```bash
 npm run check
@@ -269,7 +290,7 @@ single-select, multi-select, and custom questions; browser submission; observed
 typed SDK acceptance and session continuation; final client convergence; and
 instrumentation proving zero answer bytes or synthetic Enter events reached
 pane input. Runtime attestation verifies that the generated plugin observed the
-required injected-client methods and exact live OpenCode health release from the
-plugin-provided server origin before that gate; it does not itself prove
+required injected transport and v2 methods plus the exact live OpenCode health
+release through that transport before that gate; it does not itself prove
 end-to-end browser answer acceptance. Do not
 infer or claim that live gate from fixture results.

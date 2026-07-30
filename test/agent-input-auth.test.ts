@@ -202,7 +202,8 @@ test("capability and source expiry, unsupported versions, migrations, backup rec
       })),
     }), { mode: 0o600 });
     const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key" });
-    assert.equal(JSON.parse(fs.readFileSync(migrationPath, "utf8")).schemaVersion, 5);
+    assert.equal(JSON.parse(fs.readFileSync(migrationPath, "utf8")).schemaVersion,
+      CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
     assert.ok(migrated.snapshot().sources.every((source) => source.revokedAt !== undefined));
 
     store.issueRegistrationCapability(context, 3_000);
@@ -266,7 +267,7 @@ test("schema-2 pre-attestation capabilities and sources migrate disabled and req
       sources: envelope.sources.map(({ runtimeAttestation: _attestation, ...source }) => source),
     })}\n`, { mode: 0o600 });
     assert.throws(() => new AgentInputCredentialStore(inconsistentPath, { hashKey: "server-key" }),
-      /credential store is invalid/, "schema 5 cannot load a ready source without its attestation");
+      /credential store is invalid/, "current schema cannot load a ready source without its attestation");
     fs.writeFileSync(migrationPath, `${JSON.stringify({
       schemaVersion: 2,
       capabilities: envelope.capabilities,
@@ -277,7 +278,7 @@ test("schema-2 pre-attestation capabilities and sources migrate disabled and req
     })}\n`, { mode: 0o600 });
     const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key" });
     const snapshot = migrated.snapshot();
-    assert.equal(snapshot.schemaVersion, 5);
+    assert.equal(snapshot.schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
     assert.ok(snapshot.capabilities.every((item) => item.usedAt !== undefined));
     assert.ok(snapshot.sources.every((source) => source.revokedAt !== undefined
       && !source.runtimeReady && !source.supported && source.diagnostic === "attestation_required"));
@@ -295,7 +296,7 @@ test("authentic parent schema-3 primary migrates with only source refresh author
     fs.writeFileSync(migrationPath, schema3Fixture, { mode: 0o600 });
 
     const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "schema3-fixture-key" });
-    assert.equal(migrated.snapshot().schemaVersion, 5);
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
     assert.equal(fs.statSync(migrationPath).mode & 0o777, 0o600);
     assert.equal(migrated.authenticate(schema3UnusedCapability, 1_003), undefined,
       "unexchanged schema-3 registration capability must not survive the challenge boundary");
@@ -353,7 +354,7 @@ test("schema-4 injected-client health evidence migrates to source-authenticated 
     fs.writeFileSync(migrationPath, `${JSON.stringify(old)}\n`, { mode: 0o600 });
 
     const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key", relayTtlMs: 10_000 });
-    assert.equal(migrated.snapshot().schemaVersion, 5);
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
     const disabled = migrated.source(exchange.sourceId)!;
     assert.equal(disabled.runtimeReady, false);
     assert.equal(disabled.supported, false);
@@ -366,7 +367,61 @@ test("schema-4 injected-client health evidence migrates to source-authenticated 
     assert.equal(migrated.authenticate(refreshed.relaySecret, 1_005)?.kind, "agent-input-source");
     const ready = migrated.source(exchange.sourceId)!;
     assert.equal(ready.runtimeReady, true);
-    assert.equal(ready.runtimeAttestation?.health.source, "plugin.serverUrl:/global/health");
+    assert.equal(ready.runtimeAttestation?.health.source, "plugin.injectedTransport:/global/health");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("schema-5 serverUrl health evidence migrates to injected-transport reattestation", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v5-"));
+  const seedPath = path.join(directory, "seed.json");
+  const migrationPath = path.join(directory, "migration.json");
+  try {
+    const seed = new AgentInputCredentialStore(seedPath, { hashKey: "server-key", relayTtlMs: 10_000 });
+    const capability = seed.issueRegistrationCapability(context, 1_000);
+    const registrationPrincipal = seed.authenticate(capability.capability, 1_001);
+    if (registrationPrincipal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
+    const exchange = seed.exchange(registrationPrincipal,
+      registration(seed, registrationPrincipal, "V".repeat(43), 1_002), 1_002);
+    if (exchange.outcome !== "issued") throw new Error("source unavailable");
+    const current = seed.snapshot();
+    const old = {
+      ...current,
+      schemaVersion: 5,
+      sources: current.sources.map((source) => ({
+        ...source,
+        runtimeAttestation: {
+          type: "runtime_attestation",
+          handshakeSchema: 3,
+          observedAt: 1_002,
+          contractDigest: "eedf100f6c031ef0695eaf110d943d0493154fd729a3e74475c5b95ee7f554be",
+          compatibilityFingerprint: "opencode-question-occurrence-stream-v7-dedicated-v2-client-plugin.serverUrl:/global/health-server-challenge-1.18.9",
+          eventEnvelope: "legacy-properties",
+          release: "1.18.9",
+          health: { source: "plugin.serverUrl:/global/health", called: true, outcome: "ok",
+            status: 200, healthy: true, release: "1.18.9" },
+          capabilities: { questionList: true, questionReply: true, sessionGet: true },
+          diagnostic: "ok",
+        },
+      })),
+    };
+    fs.writeFileSync(migrationPath, `${JSON.stringify(old)}\n`, { mode: 0o600 });
+
+    const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "server-key", relayTtlMs: 10_000 });
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
+    const disabled = migrated.source(exchange.sourceId)!;
+    assert.equal(disabled.runtimeReady, false);
+    assert.equal(disabled.supported, false);
+    assert.equal(disabled.diagnostic, "attestation_required");
+    assert.equal(disabled.runtimeAttestation, undefined);
+    const sourcePrincipal = migrated.authenticate(exchange.relaySecret, 1_003);
+    if (sourcePrincipal?.kind !== "agent-input-source") throw new Error("migration lost refresh authority");
+    const refreshed = migrated.refresh(sourcePrincipal,
+      registration(migrated, sourcePrincipal, "W".repeat(43), 1_004), 1_004);
+    assert.equal(migrated.authenticate(refreshed.relaySecret, 1_005)?.kind, "agent-input-source");
+    assert.equal(migrated.source(exchange.sourceId)?.runtimeAttestation?.health.source,
+      "plugin.injectedTransport:/global/health");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -380,7 +435,7 @@ test("authentic parent schema-3 backup recovery revokes all recovered authority"
     fs.writeFileSync(`${migrationPath}.bak`, schema3Fixture, { mode: 0o600 });
     const recovered = new AgentInputCredentialStore(migrationPath, { hashKey: "schema3-fixture-key" });
     const persisted = JSON.parse(fs.readFileSync(migrationPath, "utf8"));
-    assert.equal(persisted.schemaVersion, 5);
+    assert.equal(persisted.schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
     assert.equal(fs.statSync(migrationPath).mode & 0o777, 0o600);
     assert.equal(recovered.authenticate(schema3UnusedCapability, 1_003), undefined);
     assert.equal(recovered.authenticate(schema3RelaySecret, 1_003), undefined);
@@ -404,7 +459,7 @@ test("schema-3 malformed attestation is rejected and future primary refuses vali
     assert.equal(fs.readFileSync(malformedPath, "utf8"), malformedBytes);
 
     const futurePath = path.join(directory, "future.json");
-    const futureBytes = `${JSON.stringify({ schemaVersion: 6, preserve: true })}\n`;
+    const futureBytes = `${JSON.stringify({ schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION + 1, preserve: true })}\n`;
     fs.writeFileSync(futurePath, futureBytes, { mode: 0o600 });
     fs.writeFileSync(`${futurePath}.bak`, schema3Fixture, { mode: 0o600 });
     assert.throws(() => new AgentInputCredentialStore(futurePath, { hashKey: "schema3-fixture-key" }),

@@ -20,8 +20,8 @@ test("supported OpenCode manifest pins the official SDK contract", () => {
   const manifest = fixture("supported-manifest.json") as Record<string, unknown>;
   const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
   assert.equal(manifest.sdkVersion, "1.18.9");
-  assert.equal(manifest.healthSource, "plugin.serverUrl:/global/health");
-  assert.equal(manifest.healthCall, "fetch(new URL(\"/global/health\", plugin.serverUrl))");
+  assert.equal(manifest.healthSource, "plugin.injectedTransport:/global/health");
+  assert.equal(manifest.healthCall, "structuredClient.global.health({ signal })");
   assert.equal(manifest.canonicalContractDigest, OPENCODE_QUESTION_CONTRACT_DIGEST);
   const contract = JSON.parse(fs.readFileSync(path.join(process.cwd(), "scripts", "opencode-question-contract.json"), "utf8"));
   const digest = contract.canonicalContractDigest;
@@ -34,7 +34,9 @@ test("supported OpenCode manifest pins the official SDK contract", () => {
   assert.equal(manifest.officialTagCommit, "4da7bb44c84e013fa53e9c5d02ac753d1435c81a");
   assert.equal(packageJson.dependencies["@opencode-ai/sdk"], "1.18.9");
   assert.equal(manifest.structuredClientSource,
-    "createOpencodeClient({ baseUrl: plugin.serverUrl.origin }) from @opencode-ai/sdk/v2/client");
+    "new OpencodeClient({ client: plugin.client own _client }) from @opencode-ai/sdk/v2/client");
+  assert.equal(manifest.transportContract,
+    "pinned 1.18.9 generated root own _client with own get/post functions; no mutation or fallback");
   assert.equal(manifest.questionListCall, "structuredClient.question.list({ directory })");
   assert.equal(manifest.questionReplyCall, "structuredClient.question.reply({ requestID, answers }, { signal })");
   assert.equal(manifest.sessionGetCall, "structuredClient.session.get({ sessionID, directory })");

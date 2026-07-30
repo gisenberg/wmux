@@ -10,11 +10,11 @@ import type { AgentInputQuestion } from "../shared/protocol.js";
 
 export const SUPPORTED_OPENCODE_SDK_VERSION = "1.18.9";
 export const SUPPORTED_OPENCODE_SOURCE_COMMIT = "4da7bb44c84e013fa53e9c5d02ac753d1435c81a";
-export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 3;
-export const OPENCODE_HEALTH_EVIDENCE_SOURCE = "plugin.serverUrl:/global/health" as const;
+export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 4;
+export const OPENCODE_HEALTH_EVIDENCE_SOURCE = "plugin.injectedTransport:/global/health" as const;
 export const OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT =
-  "opencode-question-occurrence-stream-v7-dedicated-v2-client-plugin.serverUrl:/global/health-server-challenge-1.18.9";
-export const OPENCODE_QUESTION_CONTRACT_DIGEST = "eedf100f6c031ef0695eaf110d943d0493154fd729a3e74475c5b95ee7f554be";
+  "opencode-question-occurrence-stream-v8-injected-transport-global-health-server-challenge-1.18.9";
+export const OPENCODE_QUESTION_CONTRACT_DIGEST = "b9f1e1abb1960a499256f33b8630c73b56088f030802865728b32e0f4022a449";
 export const OPENCODE_QUESTION_EVENT_ENVELOPE = "legacy-properties";
 
 export type OpenCodeQuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0];
@@ -36,6 +36,7 @@ void _compileReplyInput;
 void _compileQuestion;
 
 const attestationCapabilitySchema = z.object({
+  globalHealth: z.boolean(),
   questionList: z.boolean(),
   questionReply: z.boolean(),
   sessionGet: z.boolean(),
@@ -67,14 +68,10 @@ export const openCodeRuntimeAttestationSchema = z.object({
     called: z.boolean(),
     outcome: z.enum([
       "ok",
-      "server_url_missing",
-      "server_url_invalid",
+      "unavailable",
       "timeout",
-      "network_error",
-      "redirect",
+      "transport_error",
       "status",
-      "body_too_large",
-      "json_invalid",
       "shape_invalid",
       "release_mismatch",
     ]),
@@ -85,14 +82,11 @@ export const openCodeRuntimeAttestationSchema = z.object({
   capabilities: attestationCapabilitySchema,
   diagnostic: z.enum([
     "ok",
-    "server_url_missing",
-    "server_url_invalid",
+    "injected_transport_missing",
+    "injected_transport_invalid",
     "health_timeout",
-    "health_network_error",
-    "health_redirect",
+    "health_transport_error",
     "health_status",
-    "health_body_too_large",
-    "health_json_invalid",
     "health_shape_invalid",
     "health_release_mismatch",
     "v2_client_import_error",
@@ -156,6 +150,7 @@ export const isSupportedOpenCodeRuntimeAttestation = (
     && value.health.healthy
     && value.health.release === SUPPORTED_OPENCODE_SDK_VERSION
     && value.health.source === OPENCODE_HEALTH_EVIDENCE_SOURCE
+    && capabilities.globalHealth
     && capabilities.questionList
     && capabilities.questionReply
     && capabilities.sessionGet
@@ -191,7 +186,7 @@ export const createOpenCodeRuntimeAttestation = (
     healthy: true,
     release: SUPPORTED_OPENCODE_SDK_VERSION,
   },
-  capabilities: { questionList: true, questionReply: true, sessionGet: true },
+  capabilities: { globalHealth: true, questionList: true, questionReply: true, sessionGet: true },
   diagnostic: "ok",
 });
 

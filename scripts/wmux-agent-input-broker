@@ -67,14 +67,14 @@ function loadContract() {
     const unsigned = structuredClone(parsed);
     delete unsigned.canonicalContractDigest;
     const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
-    return parsed?.schemaVersion === 3 && parsed.handshakeSchema === 3
+    return parsed?.schemaVersion === 4 && parsed.handshakeSchema === 4
       && parsed.openCodeRelease === "1.18.9" && parsed.openCodeRelease === parsed.sdkVersion
-      && parsed.healthSource === "plugin.serverUrl:/global/health"
-      && parsed.healthCall === "fetch(new URL(\"/global/health\", plugin.serverUrl))"
+      && parsed.healthSource === "plugin.injectedTransport:/global/health"
+      && parsed.healthCall === "structuredClient.global.health({ signal })"
       && parsed.eventEnvelope === "legacy-properties"
       && Array.isArray(parsed.requiredClientMethods)
       && JSON.stringify(parsed.requiredClientMethods) === JSON.stringify([
-        "question.list", "question.reply", "session.get",
+        "global.health", "question.list", "question.reply", "session.get",
       ])
       && typeof parsed.compatibilityFingerprint === "string"
       && /^[a-f0-9]{64}$/.test(claimed) && claimed === actual ? parsed : undefined;
@@ -255,32 +255,32 @@ function attestationDiagnostic(value) {
   if (value.compatibilityFingerprint !== contract.compatibilityFingerprint) return "fingerprint_mismatch";
   if (value.eventEnvelope !== contract.eventEnvelope) return "event_envelope_mismatch";
   const capabilities = value.capabilities;
-  if (!exactKeys(capabilities, ["questionList", "questionReply", "sessionGet"])) return "capabilities_malformed";
+  if (!exactKeys(capabilities, ["globalHealth", "questionList", "questionReply", "sessionGet"])) return "capabilities_malformed";
   if (!exactKeys(value.health, ["source", "called", "outcome", "status", "healthy", "release"])) return "health_shape_invalid";
   if (value.health.source !== contract.healthSource) return "health_source_mismatch";
   if (!Number.isInteger(value.health.status) || value.health.status < 0 || value.health.status > 999
     || typeof value.health.healthy !== "boolean" || typeof value.health.release !== "string"
     || value.health.release.length > 64 || typeof value.health.outcome !== "string") return "health_shape_invalid";
-  if (value.health.called !== true) return value.health.outcome === "server_url_missing"
-    ? "server_url_missing" : value.health.outcome === "server_url_invalid" ? "server_url_invalid" : "health_shape_invalid";
-  if (value.health.outcome === "timeout" || value.diagnostic === "health_timeout") return "health_timeout";
-  if (value.health.outcome === "network_error" || value.diagnostic === "health_network_error") return "health_network_error";
-  if (value.health.outcome === "redirect" || value.diagnostic === "health_redirect") return "health_redirect";
-  if (value.health.outcome === "status" || value.diagnostic === "health_status") return "health_status";
-  if (value.health.outcome === "body_too_large" || value.diagnostic === "health_body_too_large") return "health_body_too_large";
-  if (value.health.outcome === "json_invalid" || value.diagnostic === "health_json_invalid") return "health_json_invalid";
-  if (value.health.outcome === "shape_invalid" || value.diagnostic === "health_shape_invalid") return "health_shape_invalid";
-  if (value.health.outcome === "release_mismatch" || value.diagnostic === "health_release_mismatch") return "release_mismatch";
-  if (value.health.outcome !== "ok" || value.health.status !== 200 || value.health.healthy !== true) return "health_shape_invalid";
-  if (value.release !== contract.openCodeRelease || value.health.release !== contract.openCodeRelease) return "release_mismatch";
+  if (value.diagnostic === "injected_transport_missing" || value.diagnostic === "injected_transport_invalid") {
+    return value.diagnostic;
+  }
   if (value.diagnostic === "v2_client_import_error" || value.diagnostic === "v2_client_construction_error") {
     return value.diagnostic;
   }
   for (const [name, diagnostic] of [
+    ["globalHealth", "method_global_health_missing"],
     ["questionList", "method_question_list_missing"],
     ["questionReply", "method_question_reply_missing"],
     ["sessionGet", "method_session_get_missing"],
   ]) if (capabilities[name] !== true) return diagnostic;
+  if (value.health.called !== true) return "health_shape_invalid";
+  if (value.health.outcome === "timeout" || value.diagnostic === "health_timeout") return "health_timeout";
+  if (value.health.outcome === "transport_error" || value.diagnostic === "health_transport_error") return "health_transport_error";
+  if (value.health.outcome === "status" || value.diagnostic === "health_status") return "health_status";
+  if (value.health.outcome === "shape_invalid" || value.diagnostic === "health_shape_invalid") return "health_shape_invalid";
+  if (value.health.outcome === "release_mismatch" || value.diagnostic === "health_release_mismatch") return "release_mismatch";
+  if (value.health.outcome !== "ok" || value.health.status !== 200 || value.health.healthy !== true) return "health_shape_invalid";
+  if (value.release !== contract.openCodeRelease || value.health.release !== contract.openCodeRelease) return "release_mismatch";
   if (value.diagnostic !== "ok") return "health_shape_invalid";
   return "ok";
 }

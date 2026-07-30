@@ -14,7 +14,7 @@ import {
   type OpenCodeRuntimeAttestation,
 } from "./opencode-question-contract.js";
 
-export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 5;
+export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 6;
 export const DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS = 5 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_RELAY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_CHALLENGE_TTL_MS = 15_000;
@@ -206,6 +206,62 @@ const sourceV4Schema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "inconsistent runtime attestation state" });
   }
 });
+// Credential schema 5 stored handshake-schema-3 serverUrl health evidence.
+// Preserve source refresh authority, but require the pinned injected transport
+// contract to attest again before structured handling resumes.
+const historicalSanitizedRuntimeAttestationV3Schema = z.object({
+  type: z.literal("runtime_attestation"),
+  handshakeSchema: z.literal(3),
+  observedAt: z.number().int().nonnegative(),
+  contractDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  compatibilityFingerprint: z.string().min(1).max(256),
+  eventEnvelope: z.string().min(1).max(64),
+  release: z.string().max(64),
+  health: z.object({
+    source: z.literal("plugin.serverUrl:/global/health"),
+    called: z.boolean(),
+    outcome: z.enum([
+      "ok", "server_url_missing", "server_url_invalid", "timeout", "network_error", "redirect", "status",
+      "body_too_large", "json_invalid", "shape_invalid", "release_mismatch",
+    ]),
+    status: z.number().int().min(0).max(999),
+    healthy: z.boolean(),
+    release: z.string().max(64),
+  }).strict(),
+  capabilities: z.object({
+    questionList: z.boolean(),
+    questionReply: z.boolean(),
+    sessionGet: z.boolean(),
+  }).strict(),
+  diagnostic: z.enum([
+    "ok", "server_url_missing", "server_url_invalid", "health_timeout", "health_network_error",
+    "health_redirect", "health_status", "health_body_too_large", "health_json_invalid", "health_shape_invalid",
+    "health_release_mismatch", "v2_client_import_error", "v2_client_construction_error", "client_method_missing",
+  ]),
+}).strict();
+const sourceV5Schema = z.object({
+  id: value(),
+  credentialId: z.string().uuid(),
+  secretVerifier: verifierSchema,
+  credentialGeneration: z.number().int().positive(),
+  context: contextSchema,
+  instanceNonce: value(),
+  runtimeAttestation: historicalSanitizedRuntimeAttestationV3Schema.optional(),
+  runtimeReady: z.boolean(),
+  supported: z.boolean(),
+  diagnostic: z.enum(["runtime_ready", "attestation_required", "recovery_invalidated"]),
+  issuedAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().positive(),
+  refreshedAt: z.number().int().nonnegative(),
+  revokedAt: z.number().int().nonnegative().optional(),
+}).strict().superRefine((source, ctx) => {
+  const ready = source.runtimeReady && source.supported
+    && source.diagnostic === "runtime_ready" && source.runtimeAttestation !== undefined;
+  const disabled = !source.runtimeReady && !source.supported && source.diagnostic !== "runtime_ready";
+  if (!ready && !disabled) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "inconsistent runtime attestation state" });
+  }
+});
 const capabilityTombstoneSchema = z.object({
   id: z.string().uuid(),
   sourceId: value(),
@@ -270,6 +326,13 @@ const envelopeV4Schema = z.object({
   schemaVersion: z.literal(4),
   capabilities: z.array(capabilitySchema).max(4_000),
   sources: z.array(sourceV4Schema).max(2_000),
+  capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
+  challenges: z.array(challengeSchema).max(4_000),
+}).strict();
+const envelopeV5Schema = z.object({
+  schemaVersion: z.literal(5),
+  capabilities: z.array(capabilitySchema).max(4_000),
+  sources: z.array(sourceV5Schema).max(2_000),
   capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
   challenges: z.array(challengeSchema).max(4_000),
 }).strict();
@@ -780,6 +843,13 @@ export class AgentInputCredentialStore extends EventEmitter {
           migrated: true,
         };
       }
+      if (version === 5) {
+        const old = envelopeV5Schema.parse(input);
+        return {
+          data: migrateInjectedTransportHealthEnvelope(old),
+          migrated: true,
+        };
+      }
       const parsed = envelopeSchema.safeParse(input);
       return parsed.success ? { data: parsed.data, migrated: false } : undefined;
     } catch (error) {
@@ -977,6 +1047,22 @@ const migrateChallengeBoundEnvelope = (input: z.infer<typeof envelopeV3Schema>):
 });
 
 const migrateServerUrlHealthEnvelope = (input: z.infer<typeof envelopeV4Schema>): Envelope => ({
+  schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
+  capabilities: structuredClone(input.capabilities),
+  sources: input.sources.map((source) => {
+    const { runtimeAttestation: _runtimeAttestation, ...rest } = source;
+    return {
+      ...rest,
+      runtimeReady: false,
+      supported: false,
+      diagnostic: "attestation_required" as const,
+    };
+  }),
+  capabilityTombstones: structuredClone(input.capabilityTombstones),
+  challenges: [],
+});
+
+const migrateInjectedTransportHealthEnvelope = (input: z.infer<typeof envelopeV5Schema>): Envelope => ({
   schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
   capabilities: structuredClone(input.capabilities),
   sources: input.sources.map((source) => {
