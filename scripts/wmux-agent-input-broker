@@ -67,13 +67,14 @@ function loadContract() {
     const unsigned = structuredClone(parsed);
     delete unsigned.canonicalContractDigest;
     const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
-    return parsed?.schemaVersion === 2 && parsed.handshakeSchema === 2
+    return parsed?.schemaVersion === 3 && parsed.handshakeSchema === 3
       && parsed.openCodeRelease === "1.18.9" && parsed.openCodeRelease === parsed.sdkVersion
-      && parsed.healthCall === "client.global.health()"
+      && parsed.healthSource === "plugin.serverUrl:/global/health"
+      && parsed.healthCall === "fetch(new URL(\"/global/health\", plugin.serverUrl))"
       && parsed.eventEnvelope === "legacy-properties"
       && Array.isArray(parsed.requiredClientMethods)
       && JSON.stringify(parsed.requiredClientMethods) === JSON.stringify([
-        "global.health", "question.list", "question.reply", "session.get",
+        "question.list", "question.reply", "session.get",
       ])
       && typeof parsed.compatibilityFingerprint === "string"
       && /^[a-f0-9]{64}$/.test(claimed) && claimed === actual ? parsed : undefined;
@@ -254,24 +255,29 @@ function attestationDiagnostic(value) {
   if (value.compatibilityFingerprint !== contract.compatibilityFingerprint) return "fingerprint_mismatch";
   if (value.eventEnvelope !== contract.eventEnvelope) return "event_envelope_mismatch";
   const capabilities = value.capabilities;
-  if (!exactKeys(capabilities, ["globalHealth", "questionList", "questionReply", "sessionGet"])) return "capabilities_malformed";
+  if (!exactKeys(capabilities, ["questionList", "questionReply", "sessionGet"])) return "capabilities_malformed";
   for (const [name, diagnostic] of [
-    ["globalHealth", "method_global_health_missing"],
     ["questionList", "method_question_list_missing"],
     ["questionReply", "method_question_reply_missing"],
     ["sessionGet", "method_session_get_missing"],
   ]) if (capabilities[name] !== true) return diagnostic;
-  if (!exactKeys(value.health, ["called", "outcome", "status", "healthy", "release"])
-    || !Number.isInteger(value.health.status) || value.health.status < 0 || value.health.status > 999
+  if (!exactKeys(value.health, ["source", "called", "outcome", "status", "healthy", "release"])) return "health_shape_invalid";
+  if (value.health.source !== contract.healthSource) return "health_source_mismatch";
+  if (!Number.isInteger(value.health.status) || value.health.status < 0 || value.health.status > 999
     || typeof value.health.healthy !== "boolean" || typeof value.health.release !== "string"
-    || value.health.release.length > 64 || typeof value.health.outcome !== "string") return "health_malformed";
-  if (value.health.called !== true) return "health_missing";
+    || value.health.release.length > 64 || typeof value.health.outcome !== "string") return "health_shape_invalid";
+  if (value.health.called !== true) return value.health.outcome === "server_url_missing"
+    ? "server_url_missing" : value.health.outcome === "server_url_invalid" ? "server_url_invalid" : "health_shape_invalid";
   if (value.health.outcome === "timeout" || value.diagnostic === "health_timeout") return "health_timeout";
-  if (value.health.outcome === "error" || value.diagnostic === "health_error") return "health_error";
-  if (value.health.outcome === "missing" || value.diagnostic === "health_method_missing") return "health_missing";
+  if (value.health.outcome === "network_error" || value.diagnostic === "health_network_error") return "health_network_error";
+  if (value.health.outcome === "redirect" || value.diagnostic === "health_redirect") return "health_redirect";
+  if (value.health.outcome === "status" || value.diagnostic === "health_status") return "health_status";
+  if (value.health.outcome === "body_too_large" || value.diagnostic === "health_body_too_large") return "health_body_too_large";
+  if (value.health.outcome === "json_invalid" || value.diagnostic === "health_json_invalid") return "health_json_invalid";
+  if (value.health.outcome === "shape_invalid" || value.diagnostic === "health_shape_invalid") return "health_shape_invalid";
   if (value.health.outcome === "release_mismatch" || value.diagnostic === "health_release_mismatch") return "release_mismatch";
   if (value.health.outcome !== "ok" || value.health.status !== 200 || value.health.healthy !== true
-    || value.diagnostic !== "ok") return "health_malformed";
+    || value.diagnostic !== "ok") return "health_shape_invalid";
   if (value.release !== contract.openCodeRelease || value.health.release !== contract.openCodeRelease) return "release_mismatch";
   return "ok";
 }

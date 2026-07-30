@@ -12,11 +12,21 @@ import { pathToFileURL } from "node:url";
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const serverChallenge = () => ({
-  type: "server_challenge", handshakeSchema: 2,
-  contractDigest: "e40431c973b2be0db6ffe684669e3fe2cfd03477203bae08015d2a6736452334",
+  type: "server_challenge", handshakeSchema: 3,
+  contractDigest: "318924573c6e241cd5a223cc041b420adf2f9e076ed17ad3d66c2f5ecd499f37",
   id: crypto.randomUUID(), nonce: crypto.randomBytes(32).toString("base64url"),
   issuedAt: Date.now(), deadline: Date.now() + 15_000,
 });
+const serveOpenCodeHealth = (
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  body = '{"healthy":true,"version":"1.18.9"}',
+): boolean => {
+  if (request.url !== "/global/health") return false;
+  response.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+  response.end(body);
+  return true;
+};
 
 test("generated plugin allowlists top-level questions and uses only typed question.reply delivery", { skip: process.platform === "win32" }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-plugin-"));
@@ -26,11 +36,17 @@ test("generated plugin allowlists top-level questions and uses only typed questi
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; method?: string; body: any; authorization?: string }> = [];
+  const healthHeaders: http.IncomingHttpHeaders[] = [];
   let plugin: any;
   const deliveredQuestions = new Set<string>();
   const pendingDeliveries: Array<{ deliveryId: string; cursor: number; requestId: string; expectedGeneration: number; openCodeRequestId: string; answers: string[][] }> = [];
   let cursor = 0;
   const server = http.createServer(async (request, response) => {
+    if (request.url === "/global/health") {
+      healthHeaders.push(request.headers);
+      serveOpenCodeHealth(request, response);
+      return;
+    }
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
@@ -92,12 +108,10 @@ test("generated plugin allowlists top-level questions and uses only typed questi
   try {
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
     installFixturePackages(configHome);
-    const sdkPackage = path.join(configHome, "opencode", "node_modules", "@opencode-ai", "sdk");
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const module = await import(`${pathToFileURL(pluginPath).href}?question=${Date.now()}`);
     const replies: unknown[] = [];
     const client = {
-      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: [
           { id: "question-one", sessionID: "session-one", questions: [
@@ -124,7 +138,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
         messages: async () => ({ data: [] }),
       },
     };
-    plugin = await module.default({ client, directory: repoRoot });
+    plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     const questions = [
       { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
       { header: "Checks", question: "Choose", options: [{ label: "Tests", description: "Tests" }, { label: "Types", description: "Types" }], multiple: true, custom: false },
@@ -133,11 +147,15 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/source-one/requests"), () => JSON.stringify(captures));
     const registrationCapture = captures.find((capture) => capture.path === "/api/agent-input/sources/register")!;
     assert.deepEqual(registrationCapture.body.runtimeAttestation.health, {
-      called: true, outcome: "ok", status: 200, healthy: true, release: "1.18.9",
+      source: "plugin.serverUrl:/global/health", called: true, outcome: "ok", status: 200,
+      healthy: true, release: "1.18.9",
     });
     assert.deepEqual(registrationCapture.body.runtimeAttestation.capabilities, {
-      globalHealth: true, questionList: true, questionReply: true, sessionGet: true,
+      questionList: true, questionReply: true, sessionGet: true,
     });
+    assert.equal(healthHeaders.length, 1);
+    assert.equal(healthHeaders[0].authorization, undefined);
+    assert.equal(healthHeaders[0].cookie, undefined);
     assert.deepEqual(Object.keys(registrationCapture.body.runtimeAttestation).sort(), [
       "capabilities", "challengeDeadline", "challengeIssuedAt", "compatibilityFingerprint", "contractDigest",
       "diagnostic", "eventEnvelope", "handshakeSchema", "health", "nonce", "observedAt", "release",
@@ -229,6 +247,7 @@ test("new generated plugin fails structured handling closed against an old serve
   fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; body: any }> = [];
   const server = http.createServer(async (request, response) => {
+    if (serveOpenCodeHealth(request, response)) return;
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
@@ -265,7 +284,6 @@ test("new generated plugin fails structured handling closed against an old serve
     const module = await import(`${pathToFileURL(pluginPath).href}?old-server=${Date.now()}`);
     let sdkInvocations = 0;
     const client = {
-      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: [], response: { status: 200 } }),
         reply: async () => { sdkInvocations += 1; return { data: true, error: undefined, response: { status: 200 } }; },
@@ -275,7 +293,7 @@ test("new generated plugin fails structured handling closed against an old serve
         messages: async () => ({ data: [] }),
       },
     };
-    plugin = await module.default({ client, directory: repoRoot });
+    plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await plugin["chat.message"](
       { sessionID: "session-one" },
       { message: { id: "message-one" }, parts: [{ type: "text", text: "continue" }] },
@@ -302,22 +320,52 @@ test("new generated plugin fails structured handling closed against an old serve
   }
 });
 
-test("generated plugin reports sanitized injected-health failures while generic telemetry remains available", { skip: process.platform === "win32", timeout: 30_000 }, async (t) => {
-  const variants: Array<[string, string, undefined | (() => Promise<unknown>) ]> = [
-    ["missing", "method_global_health_missing", undefined],
-    ["timeout", "health_timeout", async () => new Promise(() => {})],
-    ["error", "health_error", async () => { throw new Error("RAW_HEALTH_EXCEPTION"); }],
-    ["malformed", "health_malformed", async () => ({ data: { healthy: false, version: "1.18.9" }, response: { status: 200 } })],
-    ["extra health data", "health_malformed", async () => ({ data: { healthy: true, version: "1.18.9", extra: true }, error: undefined, response: { status: 200 } })],
-    ["missing health data", "health_malformed", async () => ({ data: { healthy: true }, error: undefined, response: { status: 200 } })],
-    ["prototyped health data", "health_malformed", async () => ({
-      data: Object.assign(Object.create({ inherited: true }), { healthy: true, version: "1.18.9" }),
-      error: undefined, response: { status: 200 },
-    })],
-    ["release mismatch", "release_mismatch", async () => ({ data: { healthy: true, version: "1.18.8" }, error: undefined, response: { status: 200 } })],
+test("generated plugin reports sanitized serverUrl health and method failures while generic telemetry remains available", { skip: process.platform === "win32", timeout: 60_000 }, async (t) => {
+  type Variant = {
+    name: string;
+    diagnostic: string;
+    serverUrl?: "missing" | "invalid" | "file" | "ftp" | "network";
+    health?: (request: http.IncomingMessage, response: http.ServerResponse, crossOrigin: string) => void;
+    omitMethod?: "question.list" | "question.reply" | "session.get";
+  };
+  const json = (response: http.ServerResponse, status: number, body: string, headers: Record<string, string> = {}) => {
+    response.writeHead(status, { "content-type": "application/json", ...headers });
+    response.end(body);
+  };
+  const variants: Variant[] = [
+    { name: "serverUrl missing", diagnostic: "server_url_missing", serverUrl: "missing" },
+    { name: "serverUrl invalid", diagnostic: "server_url_invalid", serverUrl: "invalid" },
+    { name: "file protocol", diagnostic: "server_url_invalid", serverUrl: "file" },
+    { name: "ftp protocol", diagnostic: "server_url_invalid", serverUrl: "ftp" },
+    { name: "network", diagnostic: "health_network_error", serverUrl: "network" },
+    { name: "timeout", diagnostic: "health_timeout", health: () => { /* handshake aborts the pending response */ } },
+    { name: "same-origin redirect", diagnostic: "health_redirect", health: (_request, response) => {
+      response.writeHead(302, { location: "/redirected" }); response.end();
+    } },
+    { name: "cross-origin redirect", diagnostic: "health_redirect", health: (_request, response, crossOrigin) => {
+      response.writeHead(302, { location: `${crossOrigin}/global/health` }); response.end();
+    } },
+    { name: "status", diagnostic: "health_status", health: (_request, response) => json(response, 503, "{}") },
+    { name: "oversized body", diagnostic: "health_body_too_large", health: (_request, response) => {
+      const body = "x".repeat(4097); json(response, 200, body, { "content-length": String(Buffer.byteLength(body)) });
+    } },
+    { name: "malformed JSON", diagnostic: "health_json_invalid", health: (_request, response) => json(response, 200, "{") },
+    { name: "extra key", diagnostic: "health_shape_invalid", health: (_request, response) =>
+      json(response, 200, '{"healthy":true,"version":"1.18.9","extra":true}') },
+    { name: "prototype key", diagnostic: "health_shape_invalid", health: (_request, response) =>
+      json(response, 200, '{"healthy":true,"version":"1.18.9","__proto__":{"polluted":true}}') },
+    { name: "missing key", diagnostic: "health_shape_invalid", health: (_request, response) =>
+      json(response, 200, '{"healthy":true}') },
+    { name: "unhealthy", diagnostic: "health_shape_invalid", health: (_request, response) =>
+      json(response, 200, '{"healthy":false,"version":"1.18.9"}') },
+    { name: "release mismatch", diagnostic: "release_mismatch", health: (_request, response) =>
+      json(response, 200, '{"healthy":true,"version":"1.18.8"}') },
+    { name: "question.list missing", diagnostic: "method_question_list_missing", omitMethod: "question.list" },
+    { name: "question.reply missing", diagnostic: "method_question_reply_missing", omitMethod: "question.reply" },
+    { name: "session.get missing", diagnostic: "method_session_get_missing", omitMethod: "session.get" },
   ];
-  for (const [name, diagnostic, health] of variants) {
-    await t.test(name, async () => {
+  for (const variant of variants) {
+    await t.test(variant.name, async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-health-"));
       const configHome = path.join(home, "config");
       const inputDirectory = path.join(home, ".wmux", "agent-input");
@@ -333,6 +381,22 @@ test("generated plugin reports sanitized injected-health failures while generic 
         response.writeHead(201, { "content-type": "application/json" });
         response.end(JSON.stringify(request.url?.endsWith("/challenge") ? serverChallenge() : {}));
       });
+      const crossOriginRequests: string[] = [];
+      const crossOriginServer = http.createServer((request, response) => {
+        crossOriginRequests.push(request.url ?? "");
+        serveOpenCodeHealth(request, response);
+      });
+      await new Promise<void>((resolve) => crossOriginServer.listen(0, "127.0.0.1", resolve));
+      const crossAddress = crossOriginServer.address(); assert.ok(crossAddress && typeof crossAddress === "object");
+      const crossOrigin = `http://127.0.0.1:${crossAddress.port}`;
+      const healthRequests: http.IncomingMessage[] = [];
+      const healthServer = http.createServer((request, response) => {
+        healthRequests.push(request);
+        if (variant.health) variant.health(request, response, crossOrigin);
+        else serveOpenCodeHealth(request, response);
+      });
+      await new Promise<void>((resolve) => healthServer.listen(0, "127.0.0.1", resolve));
+      const healthAddress = healthServer.address(); assert.ok(healthAddress && typeof healthAddress === "object");
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address(); assert.ok(address && typeof address === "object");
       const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome,
@@ -346,26 +410,53 @@ test("generated plugin reports sanitized injected-health failures while generic 
         await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
         installFixturePackages(configHome);
         const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
-        const module = await import(`${pathToFileURL(pluginPath).href}?health=${encodeURIComponent(name)}-${Date.now()}`);
+        const module = await import(`${pathToFileURL(pluginPath).href}?health=${encodeURIComponent(variant.name)}-${Date.now()}`);
         const client: any = {
-          ...(health ? { global: { health } } : {}),
           question: { list: async () => ({ data: [], response: { status: 200 } }),
             reply: async () => ({ data: true, error: undefined, response: { status: 200 } }) },
           session: { get: async () => ({ data: { title: "Telemetry" }, response: { status: 200 } }),
             messages: async () => ({ data: [] }) },
         };
-        plugin = await module.default({ client, directory: repoRoot });
-        await plugin["chat.message"]({ sessionID: "session" }, { message: { id: "message" }, parts: [{ type: "text", text: "generic" }] });
+        if (variant.omitMethod === "question.list") delete client.question.list;
+        if (variant.omitMethod === "question.reply") delete client.question.reply;
+        if (variant.omitMethod === "session.get") delete client.session.get;
+        const input: any = { client, directory: repoRoot };
+        if (variant.serverUrl !== "missing") {
+          input.serverUrl = variant.serverUrl === "invalid" ? "http://not-a-URL-object"
+            : variant.serverUrl === "file" ? new URL("file:///tmp/opencode")
+              : variant.serverUrl === "ftp" ? new URL("ftp://127.0.0.1/opencode")
+                : variant.serverUrl === "network" ? new URL("http://127.0.0.1:1")
+                  : new URL(`http://127.0.0.1:${healthAddress.port}/ignored/base/path?ignored=1`);
+        }
+        plugin = await module.default(input);
+        if (variant.omitMethod !== "session.get") {
+          await plugin["chat.message"]({ sessionID: "session" }, { message: { id: "message" }, parts: [{ type: "text", text: "generic" }] });
+        }
         await waitFor(() => fs.existsSync(`${credentialPath}.status.json`)
-          && JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8")).diagnostic === diagnostic, () => JSON.stringify(calls), 8_000);
-        await waitFor(() => calls.some((call) => call.path === "/api/agent-events"));
+          && JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8")).diagnostic === variant.diagnostic,
+        () => JSON.stringify(calls), 8_000);
+        if (variant.omitMethod !== "session.get") {
+          await waitFor(() => calls.some((call) => call.path === "/api/agent-events"));
+        }
         assert.equal(calls.some((call) => call.path === "/api/agent-input/sources/register"), false);
         assert.equal(fs.statSync(`${credentialPath}.status.json`).mode & 0o777, 0o600);
-        assert.doesNotMatch(fs.readFileSync(`${credentialPath}.status.json`, "utf8"), /RAW_HEALTH_EXCEPTION|pane-health|workspace-health/);
+        const status = fs.readFileSync(`${credentialPath}.status.json`, "utf8");
+        assert.doesNotMatch(status, /127\.0\.0\.1|global\/health|pane-health|workspace-health/);
+        for (const request of healthRequests) {
+          assert.equal(request.url, "/global/health");
+          assert.equal(request.headers.authorization, undefined);
+          assert.equal(request.headers.cookie, undefined);
+        }
+        assert.deepEqual(crossOriginRequests, [], "manual redirect handling must not reach a cross-origin target");
       } finally {
         if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
         for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
-        server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
+        server.closeAllConnections(); healthServer.closeAllConnections(); crossOriginServer.closeAllConnections();
+        await Promise.all([
+          new Promise<void>((resolve) => server.close(() => resolve())),
+          new Promise<void>((resolve) => healthServer.close(() => resolve())),
+          new Promise<void>((resolve) => crossOriginServer.close(() => resolve())),
+        ]);
         fs.rmSync(home, { recursive: true, force: true });
       }
     });
@@ -395,7 +486,7 @@ test("generated plugin records broker spawn failure without paths, credentials, 
     );
     fs.writeFileSync(pluginPath, source, { mode: 0o600 });
     const module = await import(`${pathToFileURL(pluginPath).href}?spawn=${Date.now()}`);
-    await module.default({ client: {}, directory: repoRoot });
+    await module.default({ client: {}, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => fs.existsSync(`${credentialPath}.status.json`));
     const status = fs.readFileSync(`${credentialPath}.status.json`, "utf8");
     assert.deepEqual((({ state, diagnostic }) => ({ state, diagnostic }))(JSON.parse(status)), {
@@ -417,6 +508,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
   fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; body: any }> = [];
   const server = http.createServer(async (request, response) => {
+    if (serveOpenCodeHealth(request, response)) return;
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
@@ -466,7 +558,6 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       { id: "uncertain-question", sessionID: "unavailable-session", questions: [{ header: "Unknown", question: "Unknown", options: [], multiple: false, custom: true }] },
     ];
     const client = {
-      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: questionList, response: { status: 200 } }),
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -479,7 +570,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
         messages: async () => ({ data: [] }),
       },
     };
-    plugin = await module.default({ client, directory: repoRoot });
+    plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/register"), () => JSON.stringify(captures));
     await new Promise((resolve) => setTimeout(resolve, 250));
     const capturedIds = captures
@@ -491,7 +582,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
 
     const listCallsBefore = captures.length;
     const failingListClient = { ...client, question: { ...client.question, list: async () => { throw new Error("list unavailable"); } } };
-    secondPlugin = await module.default({ client: failingListClient, directory: repoRoot });
+    secondPlugin = await module.default({ client: failingListClient, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await new Promise((resolve) => setTimeout(resolve, 250));
     assert.equal(captures.slice(listCallsBefore).some((capture) => capture.path.endsWith("/native-list")), false,
       "question.list failure cannot produce a complete barrier or close absent requests");
@@ -518,6 +609,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
   const calls: Array<{ path: string; body: any }> = [];
   const bindings = new Map<string, { id: string; generation: number; state: string }>();
   const server = http.createServer(async (request, response) => {
+    if (serveOpenCodeHealth(request, response)) return;
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const requestPath = request.url ?? ""; calls.push({ path: requestPath, body });
@@ -570,7 +662,6 @@ test("snapshot cut fencing survives delayed list and session validation for new 
     };
     resetSessionGate();
     const client = {
-      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => new Promise((resolve) => lists.push(resolve)),
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -580,7 +671,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
         messages: async () => ({ data: [] }),
       },
     };
-    plugin = await module.default({ client, directory: repoRoot });
+    plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => lists.length === 1);
     const newEvent = plugin.event({ event: { id: "event-fresh", type: "question.asked", properties: {
       id: "fresh", sessionID: "session", questions: freshQuestions,
@@ -658,6 +749,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
   let currentGeneration = 0;
   let pendingGeneration: number | undefined;
   const server = http.createServer(async (request, response) => {
+    if (serveOpenCodeHealth(request, response)) return;
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
@@ -730,7 +822,6 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
     };
     let listedRequests = [nativeRequest];
     const client = {
-      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: listedRequests, response: { status: 200 } }),
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -740,7 +831,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
         messages: async () => ({ data: [] }),
       },
     };
-    firstPlugin = await module.default({ client, directory: repoRoot });
+    firstPlugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.length === 1, () => JSON.stringify(captures));
     await firstPlugin.event({ event: {
       type: "question.replied", properties: { requestID: "reused-request", sessionID: "session-reuse", answers: [["redacted"]] },
@@ -765,7 +856,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
       await waitFor(() => brokerChildIds().length === 0);
     }
 
-    secondPlugin = await module.default({ client, directory: repoRoot });
+    secondPlugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.length === 2, () => JSON.stringify(captures));
     assert.deepEqual(captures.map((capture) => capture.requestId), ["reused-request", "reused-request"]);
     assert.deepEqual(captures.map((capture) => capture.generation), [1, 2]);
@@ -803,6 +894,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   let registered = false;
   let brokerReady = false;
   const server = http.createServer(async (request, response) => {
+    if (serveOpenCodeHealth(request, response)) return;
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
@@ -851,7 +943,6 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const module = await import(`${pathToFileURL(pluginPath).href}?serial=${Date.now()}`);
     const client = {
-      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
       question: {
         list: async () => ({ data: [], response: { status: 200 } }),
         reply: async (input: { requestID: string }) => {
@@ -862,7 +953,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
       },
       session: { get: async () => ({ data: { title: "Top" }, response: { status: 200 } }), messages: async () => ({ data: [] }) },
     };
-    plugin = await module.default({ client, directory: repoRoot });
+    plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => registered && brokerReady);
     const question = (id: string) => ({ id: `event-${id}`, type: "question.asked", properties: {
       id, sessionID: "session", questions: [{ header: "H", question: "Q", options: [], multiple: false, custom: true }],
@@ -885,7 +976,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   }
 });
 
-test("generated plugin uses injected runtime attestation and never package manifests as compatibility authority", { skip: process.platform !== "linux" }, async (t) => {
+test("generated plugin uses serverUrl attestation from a separate import/cache context and never package manifests as authority", { skip: process.platform !== "linux" }, async (t) => {
   const variants: Array<{
     name: string;
     customXdg?: boolean;
@@ -914,8 +1005,11 @@ test("generated plugin uses injected runtime attestation and never package manif
       const capabilityPath = path.join(home, "pane.cap");
       fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
       let requests = 0;
+      const requestPaths: string[] = [];
       const server = http.createServer((request, response) => {
         requests += 1;
+        requestPaths.push(request.url ?? "");
+        if (serveOpenCodeHealth(request, response)) return;
         response.writeHead(201, { "content-type": "application/json" });
         response.end(JSON.stringify(request.url?.endsWith("/challenge") ? serverChallenge() : {
           sourceId: "unexpected", relaySecret: "S".repeat(43), expiresAt: Date.now() + 60_000,
@@ -932,7 +1026,6 @@ test("generated plugin uses injected runtime attestation and never package manif
       fs.writeFileSync(runnerPath, `
         const pluginModule = await import(${JSON.stringify(pathToFileURL(cachedPluginPath).href)});
         const client = {
-          global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, error: undefined, response: { status: 200 } }) },
           question: {
             list: async () => ({ data: [], response: { status: 200 } }),
             reply: async () => ({ data: true, response: { status: 200 } }),
@@ -942,7 +1035,8 @@ test("generated plugin uses injected runtime attestation and never package manif
             messages: async () => ({ data: [] }),
           },
         };
-        const plugin = await pluginModule.default({ client, directory: ${JSON.stringify(repoRoot)} });
+        const plugin = await pluginModule.default({ client, directory: ${JSON.stringify(repoRoot)},
+          serverUrl: new URL(${JSON.stringify(`http://127.0.0.1:${address.port}/cache-context`)}) });
         process.stdout.write("READY\\n");
         await new Promise((resolve) => setTimeout(resolve, 750));
         await plugin.event({ event: { type: "question.future", properties: {} } });
@@ -988,7 +1082,8 @@ test("generated plugin uses injected runtime attestation and never package manif
         child.stderr.on("data", (chunk) => { errors += chunk.toString(); });
         await waitFor(() => output.includes("READY"), () => errors);
         if (variant.launches) {
-          await waitFor(() => requests > 0 && brokerChildIds(child!.pid).length > 0, () => JSON.stringify({ requests, errors }));
+          await waitFor(() => requestPaths.includes("/api/agent-input/sources/register")
+            && brokerChildIds(child!.pid).length > 0, () => JSON.stringify({ requestPaths, errors }));
           const environment = fs.readFileSync(`/proc/${brokerChildIds(child.pid)[0]}/environ`, "utf8").split("\0");
           for (const key of ["WMUX_TOKEN", "WMUX_HELPER_TOKEN", "WMUX_AUTOMATION_TOKEN", "WMUX_REGISTRATION_TOKEN"]) {
             assert.equal(environment.some((entry) => entry.startsWith(`${key}=`)), false, `${key} crossed the broker allowlist`);

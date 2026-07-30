@@ -14,7 +14,7 @@ import {
   type OpenCodeRuntimeAttestation,
 } from "./opencode-question-contract.js";
 
-export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 4;
+export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 5;
 export const DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS = 5 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_RELAY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_CHALLENGE_TTL_MS = 15_000;
@@ -149,6 +149,63 @@ const sourceV3Schema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "inconsistent runtime attestation state" });
   }
 });
+// Credential schema 4 stored the challenge-bound injected-client health
+// evidence. Preserve only its source credential while requiring the new
+// plugin.serverUrl health probe before readiness.
+const historicalSanitizedRuntimeAttestationV2Schema = z.object({
+  type: z.literal("runtime_attestation"),
+  handshakeSchema: z.literal(2),
+  observedAt: z.number().int().nonnegative(),
+  contractDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  compatibilityFingerprint: z.string().min(1).max(256),
+  eventEnvelope: z.string().min(1).max(64),
+  release: z.string().max(64),
+  health: z.object({
+    called: z.boolean(),
+    outcome: z.enum(["ok", "missing", "timeout", "error", "malformed", "release_mismatch"]),
+    status: z.number().int().min(0).max(999),
+    healthy: z.boolean(),
+    release: z.string().max(64),
+  }).strict(),
+  capabilities: z.object({
+    globalHealth: z.boolean(),
+    questionList: z.boolean(),
+    questionReply: z.boolean(),
+    sessionGet: z.boolean(),
+  }).strict(),
+  diagnostic: z.enum([
+    "ok",
+    "health_method_missing",
+    "health_timeout",
+    "health_error",
+    "health_malformed",
+    "health_release_mismatch",
+    "client_method_missing",
+  ]),
+}).strict();
+const sourceV4Schema = z.object({
+  id: value(),
+  credentialId: z.string().uuid(),
+  secretVerifier: verifierSchema,
+  credentialGeneration: z.number().int().positive(),
+  context: contextSchema,
+  instanceNonce: value(),
+  runtimeAttestation: historicalSanitizedRuntimeAttestationV2Schema.optional(),
+  runtimeReady: z.boolean(),
+  supported: z.boolean(),
+  diagnostic: z.enum(["runtime_ready", "attestation_required", "recovery_invalidated"]),
+  issuedAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().positive(),
+  refreshedAt: z.number().int().nonnegative(),
+  revokedAt: z.number().int().nonnegative().optional(),
+}).strict().superRefine((source, ctx) => {
+  const ready = source.runtimeReady && source.supported
+    && source.diagnostic === "runtime_ready" && source.runtimeAttestation !== undefined;
+  const disabled = !source.runtimeReady && !source.supported && source.diagnostic !== "runtime_ready";
+  if (!ready && !disabled) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "inconsistent runtime attestation state" });
+  }
+});
 const capabilityTombstoneSchema = z.object({
   id: z.string().uuid(),
   sourceId: value(),
@@ -208,6 +265,13 @@ const envelopeV3Schema = z.object({
   capabilities: z.array(capabilitySchema).max(4_000),
   sources: z.array(sourceV3Schema).max(2_000),
   capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
+}).strict();
+const envelopeV4Schema = z.object({
+  schemaVersion: z.literal(4),
+  capabilities: z.array(capabilitySchema).max(4_000),
+  sources: z.array(sourceV4Schema).max(2_000),
+  capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
+  challenges: z.array(challengeSchema).max(4_000),
 }).strict();
 type Envelope = z.infer<typeof envelopeSchema>;
 export type AgentInputSourceRecord = z.infer<typeof sourceSchema>;
@@ -709,6 +773,13 @@ export class AgentInputCredentialStore extends EventEmitter {
           migrated: true,
         };
       }
+      if (version === 4) {
+        const old = envelopeV4Schema.parse(input);
+        return {
+          data: migrateServerUrlHealthEnvelope(old),
+          migrated: true,
+        };
+      }
       const parsed = envelopeSchema.safeParse(input);
       return parsed.success ? { data: parsed.data, migrated: false } : undefined;
     } catch (error) {
@@ -804,7 +875,7 @@ export const issueAgentInputRegistrationCapabilityForPane = (
 };
 
 const emptyEnvelope = (): Envelope => ({
-  schemaVersion: 4,
+  schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
   capabilities: [],
   sources: [],
   capabilityTombstones: [],
@@ -822,7 +893,7 @@ const invalidateLegacyEnvelope = (
     digest: crypto.createHmac("sha256", hashKey).update(`invalidated-${kind}\0${id}`).digest("hex"),
   });
   return {
-    schemaVersion: 4,
+    schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
     capabilities: capabilities.map(({ hash: _hash, ...capability }) => ({
       ...capability,
       verifier: invalid("capability", capability.id),
@@ -859,7 +930,7 @@ const invalidateAttestationlessEnvelope = (
     digest: crypto.createHmac("sha256", hashKey).update(`attestation-required-${kind}\0${id}`).digest("hex"),
   });
   return {
-    schemaVersion: 4,
+    schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
     capabilities: input.capabilities.map((capability) => ({
       ...capability,
       verifier: invalid("capability", capability.id),
@@ -887,11 +958,27 @@ const invalidateAttestationlessEnvelope = (
 };
 
 const migrateChallengeBoundEnvelope = (input: z.infer<typeof envelopeV3Schema>): Envelope => ({
-  schemaVersion: 4,
+  schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
   capabilities: input.capabilities.map((capability) => ({
     ...capability,
     usedAt: capability.usedAt ?? capability.issuedAt,
   })),
+  sources: input.sources.map((source) => {
+    const { runtimeAttestation: _runtimeAttestation, ...rest } = source;
+    return {
+      ...rest,
+      runtimeReady: false,
+      supported: false,
+      diagnostic: "attestation_required" as const,
+    };
+  }),
+  capabilityTombstones: structuredClone(input.capabilityTombstones),
+  challenges: [],
+});
+
+const migrateServerUrlHealthEnvelope = (input: z.infer<typeof envelopeV4Schema>): Envelope => ({
+  schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
+  capabilities: structuredClone(input.capabilities),
   sources: input.sources.map((source) => {
     const { runtimeAttestation: _runtimeAttestation, ...rest } = source;
     return {

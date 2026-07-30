@@ -27,19 +27,22 @@ Before accepting structured events, the generated plugin starts the broker from
 pane-bound runtime-file paths. The broker first obtains a cryptographically
 random, one-shot server challenge using either the exact pane registration
 capability or the current source credential. It then emits that challenge inside
-a separate broker nonce challenge with handshake schema 2, the canonical contract
-digest, and a five-second deadline. The plugin probes the actual injected client, calls
-`client.global.health()` through that same client, and returns only bounded
-runtime evidence: release, digest, fingerprint, event envelope, method booleans,
-health fields, and challenge timestamps. A successful health result must be the
-typed status-200 `RequestResult`, with an explicit `error: undefined` and a plain
-data object whose only own properties are `healthy: true` and the exact supported
-`version`. The broker independently validates the local nonce, freshness, exact
-contract, release, health result, and methods before exchanging or refreshing.
+a separate broker nonce challenge with handshake schema 3, the canonical contract
+digest, and a five-second deadline. The plugin requires the actual injected
+`question.list`, `question.reply`, and `session.get` methods, validates the
+plugin-provided `serverUrl` as an HTTP(S) `URL`, and performs a credential-free,
+no-redirect, body-bounded fetch of the fixed `/global/health` route. It returns
+only bounded runtime evidence: release, digest, fingerprint, event envelope,
+method booleans, health fields, and challenge timestamps. A successful health
+result must be an HTTP 200 plain JSON object whose only own properties are
+`healthy: true` and the exact supported `version`. Its attestation source is
+exactly `plugin.serverUrl:/global/health`. The broker independently validates the
+local nonce, freshness, exact contract, release, health result, and methods
+before exchanging or refreshing.
 The server atomically validates and consumes its challenge under the exact
 capability/source, immutable pane context, and source credential generation, then
-stores only the nonce-free sanitized evidence. Package manifests and package
-search paths are not runtime compatibility authority.
+stores only the nonce-free sanitized evidence. Injected `client.global.health`,
+package manifests, and package search paths are not runtime compatibility authority.
 
 This runtime attestation is a trusted same-UID plugin compatibility check, not
 cryptographic proof against a compromised OpenCode process, plugin host, or user
@@ -160,7 +163,7 @@ revokes every recovered source before authentication resumes; a fresh pane
 registration is required. Recovery from a request-store backup closes every
 recovered pending request and settles its submission as already resolved,
 because the lost primary may have recorded answer exposure. Generation anchors
-and already-terminal outcomes remain intact. Credential schema 4 uses
+and already-terminal outcomes remain intact. Credential schema 5 uses
 record-ID-scoped HMAC-SHA-256 verifiers and constant-time comparison; plaintext
 capabilities, relay secrets, and challenge nonces are never stored. Migration from schema 0 or 1
 cannot reconstruct HMAC verifiers from legacy salted hashes, so it deliberately
@@ -171,7 +174,9 @@ revokes every source, and marks it `attestation_required`; a fresh pane is
 mandatory. Migration from schema 3 preserves valid source credentials but removes
 the old unbound attestation and marks each source `attestation_required`; the
 current broker can source-authenticate a fresh challenge and refresh without a
-new pane. Request schema 6 preserves
+new pane. Migration from schema 4 likewise preserves source refresh authority,
+removes injected-client health evidence, clears pending challenges, and requires
+fresh `plugin.serverUrl:/global/health` attestation. Request schema 6 preserves
 generation anchors but closes legacy pending records as `migration-unbound`;
 it never fabricates occurrence IDs. Broker schema 10 migrates schema-9 source
 credentials to require fresh source-authenticated attestation while older unbound
@@ -257,6 +262,7 @@ single-select, multi-select, and custom questions; browser submission; observed
 typed SDK acceptance and session continuation; final client convergence; and
 instrumentation proving zero answer bytes or synthetic Enter events reached
 pane input. Runtime attestation verifies that the generated plugin observed the
-required injected-client methods and exact live OpenCode health release before
-that gate; it does not itself prove end-to-end browser answer acceptance. Do not
+required injected-client methods and exact live OpenCode health release from the
+plugin-provided server origin before that gate; it does not itself prove
+end-to-end browser answer acceptance. Do not
 infer or claim that live gate from fixture results.

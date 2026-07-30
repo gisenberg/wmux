@@ -10,10 +10,11 @@ import type { AgentInputQuestion } from "../shared/protocol.js";
 
 export const SUPPORTED_OPENCODE_SDK_VERSION = "1.18.9";
 export const SUPPORTED_OPENCODE_SOURCE_COMMIT = "4da7bb44c84e013fa53e9c5d02ac753d1435c81a";
-export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 2;
+export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 3;
+export const OPENCODE_HEALTH_EVIDENCE_SOURCE = "plugin.serverUrl:/global/health" as const;
 export const OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT =
-  "opencode-question-occurrence-stream-v5-server-challenge-1.18.9";
-export const OPENCODE_QUESTION_CONTRACT_DIGEST = "e40431c973b2be0db6ffe684669e3fe2cfd03477203bae08015d2a6736452334";
+  "opencode-question-occurrence-stream-v6-plugin.serverUrl:/global/health-server-challenge-1.18.9";
+export const OPENCODE_QUESTION_CONTRACT_DIGEST = "318924573c6e241cd5a223cc041b420adf2f9e076ed17ad3d66c2f5ecd499f37";
 export const OPENCODE_QUESTION_EVENT_ENVELOPE = "legacy-properties";
 
 export type OpenCodeQuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0];
@@ -31,13 +32,10 @@ const _compileQuestion = (question: QuestionInfo): AgentInputQuestion => ({
   multiple: question.multiple ?? false,
   custom: question.custom ?? false,
 });
-const _compileHealth = (client: OpencodeClient) => client.global.health();
 void _compileReplyInput;
 void _compileQuestion;
-void _compileHealth;
 
 const attestationCapabilitySchema = z.object({
-  globalHealth: z.boolean(),
   questionList: z.boolean(),
   questionReply: z.boolean(),
   sessionGet: z.boolean(),
@@ -65,8 +63,21 @@ export const openCodeRuntimeAttestationSchema = z.object({
   eventEnvelope: z.string().min(1).max(64),
   release: z.string().max(64),
   health: z.object({
+    source: z.enum([OPENCODE_HEALTH_EVIDENCE_SOURCE]),
     called: z.boolean(),
-    outcome: z.enum(["ok", "missing", "timeout", "error", "malformed", "release_mismatch"]),
+    outcome: z.enum([
+      "ok",
+      "server_url_missing",
+      "server_url_invalid",
+      "timeout",
+      "network_error",
+      "redirect",
+      "status",
+      "body_too_large",
+      "json_invalid",
+      "shape_invalid",
+      "release_mismatch",
+    ]),
     status: z.number().int().min(0).max(999),
     healthy: z.boolean(),
     release: z.string().max(64),
@@ -74,10 +85,15 @@ export const openCodeRuntimeAttestationSchema = z.object({
   capabilities: attestationCapabilitySchema,
   diagnostic: z.enum([
     "ok",
-    "health_method_missing",
+    "server_url_missing",
+    "server_url_invalid",
     "health_timeout",
-    "health_error",
-    "health_malformed",
+    "health_network_error",
+    "health_redirect",
+    "health_status",
+    "health_body_too_large",
+    "health_json_invalid",
+    "health_shape_invalid",
     "health_release_mismatch",
     "client_method_missing",
   ]),
@@ -137,7 +153,7 @@ export const isSupportedOpenCodeRuntimeAttestation = (
     && value.health.status === 200
     && value.health.healthy
     && value.health.release === SUPPORTED_OPENCODE_SDK_VERSION
-    && capabilities.globalHealth
+    && value.health.source === OPENCODE_HEALTH_EVIDENCE_SOURCE
     && capabilities.questionList
     && capabilities.questionReply
     && capabilities.sessionGet
@@ -165,8 +181,15 @@ export const createOpenCodeRuntimeAttestation = (
   compatibilityFingerprint: OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT,
   eventEnvelope: OPENCODE_QUESTION_EVENT_ENVELOPE,
   release: SUPPORTED_OPENCODE_SDK_VERSION,
-  health: { called: true, outcome: "ok", status: 200, healthy: true, release: SUPPORTED_OPENCODE_SDK_VERSION },
-  capabilities: { globalHealth: true, questionList: true, questionReply: true, sessionGet: true },
+  health: {
+    source: OPENCODE_HEALTH_EVIDENCE_SOURCE,
+    called: true,
+    outcome: "ok",
+    status: 200,
+    healthy: true,
+    release: SUPPORTED_OPENCODE_SDK_VERSION,
+  },
+  capabilities: { questionList: true, questionReply: true, sessionGet: true },
   diagnostic: "ok",
 });
 

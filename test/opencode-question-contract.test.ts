@@ -20,7 +20,8 @@ test("supported OpenCode manifest pins the official SDK contract", () => {
   const manifest = fixture("supported-manifest.json") as Record<string, unknown>;
   const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
   assert.equal(manifest.sdkVersion, "1.18.9");
-  assert.equal(manifest.healthCall, "client.global.health()");
+  assert.equal(manifest.healthSource, "plugin.serverUrl:/global/health");
+  assert.equal(manifest.healthCall, "fetch(new URL(\"/global/health\", plugin.serverUrl))");
   assert.equal(manifest.canonicalContractDigest, OPENCODE_QUESTION_CONTRACT_DIGEST);
   const contract = JSON.parse(fs.readFileSync(path.join(process.cwd(), "scripts", "opencode-question-contract.json"), "utf8"));
   const digest = contract.canonicalContractDigest;

@@ -38,9 +38,11 @@ function readQuestionContract() {
         ? Object.fromEntries(Object.keys(input).sort().map((key) => [key, canonicalize(input[key])]))
         : input;
     const actual = crypto.createHash("sha256").update(JSON.stringify(canonicalize(unsigned))).digest("hex");
-    if (value?.schemaVersion !== 2 || value.handshakeSchema !== 2 || value.openCodeRelease !== value.sdkVersion
+    if (value?.schemaVersion !== 3 || value.handshakeSchema !== 3 || value.openCodeRelease !== value.sdkVersion
       || typeof value.sdkVersion !== "string" || typeof value.compatibilityFingerprint !== "string"
-      || value.healthCall !== "client.global.health()" || value.eventEnvelope !== "legacy-properties"
+      || value.healthSource !== "plugin.serverUrl:/global/health"
+      || value.healthCall !== "fetch(new URL(\"/global/health\", plugin.serverUrl))"
+      || value.eventEnvelope !== "legacy-properties"
       || !/^[a-f0-9]{64}$/.test(claimed) || claimed !== actual) throw new Error("invalid OpenCode question contract");
     return value;
   } catch {
@@ -1018,8 +1020,106 @@ const persistBrokerStatus = (state: "failed", diagnostic: string) => {
   }
 }
 
-const createQuestionBroker = (client: OpencodeClient) => {
+const healthEndpointFromPluginInput = (serverUrl: unknown) => {
+  if (serverUrl === undefined || serverUrl === null) return { diagnostic: "server_url_missing" as const }
+  if (!(serverUrl instanceof URL) || (serverUrl.protocol !== "http:" && serverUrl.protocol !== "https:")
+    || serverUrl.username !== "" || serverUrl.password !== "") return { diagnostic: "server_url_invalid" as const }
+  try {
+    const endpoint = new URL("/global/health", serverUrl)
+    if (endpoint.origin !== serverUrl.origin || endpoint.pathname !== "/global/health"
+      || endpoint.search !== "" || endpoint.hash !== "") return { diagnostic: "server_url_invalid" as const }
+    return { endpoint }
+  } catch {
+    return { diagnostic: "server_url_invalid" as const }
+  }
+}
+
+const HEALTH_SOURCE = "plugin.serverUrl:/global/health" as const
+const MAX_HEALTH_BODY_BYTES = 4096
+const HEALTH_ATTESTATION_REPORT_MARGIN_MS = 100
+const failedHealth = (outcome: string, status = 0) => ({
+  source: HEALTH_SOURCE, called: outcome !== "server_url_missing" && outcome !== "server_url_invalid",
+  outcome, status, healthy: false, release: "",
+})
+
+const probeOpenCodeHealth = async (endpoint: URL, deadline: number) => {
+  const controller = new AbortController()
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) return failedHealth("timeout")
+  const timer = setTimeout(() => controller.abort(), Math.max(1, remaining - HEALTH_ATTESTATION_REPORT_MARGIN_MS))
+  try {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      redirect: "manual",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    })
+    if (Date.now() > deadline) return failedHealth("timeout")
+    if (response.redirected || (response.status >= 300 && response.status < 400)
+      || response.url !== endpoint.href) return failedHealth("redirect", response.status)
+    if (response.status !== 200) return failedHealth("status", response.status)
+    const declaredLength = response.headers.get("content-length")
+    if (declaredLength !== null && /^\d+$/.test(declaredLength)
+      && Number(declaredLength) > MAX_HEALTH_BODY_BYTES) {
+      await response.body?.cancel().catch(() => {})
+      return failedHealth("body_too_large", response.status)
+    }
+    if (!response.body) return failedHealth("json_invalid", response.status)
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let length = 0
+    for (;;) {
+      const part = await reader.read()
+      if (part.done) break
+      length += part.value.byteLength
+      if (length > MAX_HEALTH_BODY_BYTES) {
+        await reader.cancel().catch(() => {})
+        return failedHealth("body_too_large", response.status)
+      }
+      chunks.push(part.value)
+    }
+    if (Date.now() > deadline) return failedHealth("timeout")
+    let data: unknown
+    try {
+      data = JSON.parse(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), length).toString("utf8"))
+    } catch {
+      return failedHealth("json_invalid", response.status)
+    }
+    const keys = data !== null && typeof data === "object" ? Reflect.ownKeys(data) : []
+    const healthyDescriptor = data !== null && typeof data === "object"
+      ? Object.getOwnPropertyDescriptor(data, "healthy") : undefined
+    const versionDescriptor = data !== null && typeof data === "object"
+      ? Object.getOwnPropertyDescriptor(data, "version") : undefined
+    const exact = data !== null && typeof data === "object" && !Array.isArray(data)
+      && Object.getPrototypeOf(data) === Object.prototype
+      && keys.length === 2 && keys.every((key) => key === "healthy" || key === "version")
+      && healthyDescriptor !== undefined && "value" in healthyDescriptor
+      && versionDescriptor !== undefined && "value" in versionDescriptor
+      && healthyDescriptor.value === true && typeof versionDescriptor.value === "string"
+      && versionDescriptor.value.length <= 64 && /^[A-Za-z0-9._+-]+$/.test(versionDescriptor.value)
+    if (!exact) return failedHealth("shape_invalid", response.status)
+    if (versionDescriptor.value !== questionContract?.openCodeRelease) {
+      return { source: HEALTH_SOURCE, called: true, outcome: "release_mismatch", status: 200,
+        healthy: true, release: versionDescriptor.value }
+    }
+    return { source: HEALTH_SOURCE, called: true, outcome: "ok", status: 200,
+      healthy: true, release: versionDescriptor.value }
+  } catch {
+    return failedHealth(controller.signal.aborted || Date.now() >= deadline ? "timeout" : "network_error")
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const createQuestionBroker = (client: OpencodeClient, serverUrl: unknown) => {
   if (!questionBrokerPrerequisites()) return undefined
+  const healthEndpoint = healthEndpointFromPluginInput(serverUrl)
+  if (!("endpoint" in healthEndpoint)) {
+    persistBrokerStatus("failed", healthEndpoint.diagnostic)
+    return undefined
+  }
   let child: ReturnType<typeof spawn> | undefined
   const brokerEnvironment = Object.fromEntries([
     "HOME", "PATH", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR", "WMUX_URL", "WMUX_PANE_ID",
@@ -1077,61 +1177,19 @@ const createQuestionBroker = (client: OpencodeClient) => {
     if (attestedChallenges.size >= 16) attestedChallenges.delete(attestedChallenges.values().next().value!)
     attestedChallenges.add(challengeKey)
     const capabilities = {
-      globalHealth: typeof (client as any)?.global?.health === "function",
       questionList: typeof (client as any)?.question?.list === "function",
       questionReply: typeof (client as any)?.question?.reply === "function",
       sessionGet: typeof (client as any)?.session?.get === "function",
     }
-    let health = { called: false, outcome: "missing", status: 0, healthy: false, release: "" }
-    let diagnostic = capabilities.globalHealth ? "health_error" : "health_method_missing"
-    if (capabilities.globalHealth) {
-      const healthResult = Promise.resolve().then(() => client.global.health()).then(
-        (value) => ({ kind: "result" as const, value }),
-        () => ({ kind: "error" as const }),
-      )
-      const outcome = await Promise.race([
-        healthResult,
-        new Promise<{ kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 3_000)),
-      ])
-      if (outcome.kind === "timeout") {
-        health = { ...health, called: true, outcome: "timeout" }
-        diagnostic = "health_timeout"
-      } else if (outcome.kind === "error") {
-        health = { ...health, called: true, outcome: "error" }
-        diagnostic = "health_error"
-      } else {
-        const result: any = outcome.value
-        const resultIsObject = result !== null && typeof result === "object"
-        const dataDescriptor = resultIsObject ? Object.getOwnPropertyDescriptor(result, "data") : undefined
-        const errorDescriptor = resultIsObject ? Object.getOwnPropertyDescriptor(result, "error") : undefined
-        const data = dataDescriptor && "value" in dataDescriptor ? dataDescriptor.value : undefined
-        const dataKeys = data !== null && typeof data === "object" ? Reflect.ownKeys(data) : []
-        const healthyDescriptor = data !== null && typeof data === "object" ? Object.getOwnPropertyDescriptor(data, "healthy") : undefined
-        const versionDescriptor = data !== null && typeof data === "object" ? Object.getOwnPropertyDescriptor(data, "version") : undefined
-        const dataIsExact = data !== null && typeof data === "object" && !Array.isArray(data)
-          && Object.getPrototypeOf(data) === Object.prototype
-          && dataKeys.length === 2 && dataKeys.every((key) => key === "healthy" || key === "version")
-          && healthyDescriptor !== undefined && "value" in healthyDescriptor
-          && versionDescriptor !== undefined && "value" in versionDescriptor
-        const healthyValue = dataIsExact && healthyDescriptor && "value" in healthyDescriptor ? healthyDescriptor.value : false
-        const versionValue = dataIsExact && versionDescriptor && "value" in versionDescriptor ? versionDescriptor.value : ""
-        const release = typeof versionValue === "string" && versionValue.length <= 64
-          && /^[A-Za-z0-9._+-]*$/.test(versionValue) ? versionValue : ""
-        const status = Number.isInteger(result?.response?.status) && result.response.status >= 0 && result.response.status <= 999
-          ? result.response.status : 0
-        const errorIsExact = Boolean(errorDescriptor && "value" in errorDescriptor && errorDescriptor.value === undefined)
-        if (status !== 200 || !dataIsExact || healthyValue !== true || !release || !errorIsExact) {
-          health = { called: true, outcome: "malformed", status, healthy: dataIsExact && healthyValue === true, release }
-          diagnostic = "health_malformed"
-        } else if (release !== questionContract?.openCodeRelease) {
-          health = { called: true, outcome: "release_mismatch", status, healthy: true, release }
-          diagnostic = "health_release_mismatch"
-        } else {
-          health = { called: true, outcome: "ok", status, healthy: true, release }
-          diagnostic = Object.values(capabilities).every(Boolean) ? "ok" : "client_method_missing"
-        }
-      }
+    const health = await probeOpenCodeHealth(healthEndpoint.endpoint, message.deadline)
+    const healthDiagnostics: Record<string, string> = {
+      timeout: "health_timeout", network_error: "health_network_error", redirect: "health_redirect",
+      status: "health_status", body_too_large: "health_body_too_large", json_invalid: "health_json_invalid",
+      shape_invalid: "health_shape_invalid", release_mismatch: "health_release_mismatch",
     }
+    const diagnostic = health.outcome === "ok"
+      ? Object.values(capabilities).every(Boolean) ? "ok" : "client_method_missing"
+      : healthDiagnostics[health.outcome] ?? "health_shape_invalid"
     writeControl({
       type: "runtime_attestation",
       handshakeSchema: message.handshakeSchema,
@@ -1328,10 +1386,10 @@ const applyPermissionDefaults = (config: any) => {
   config.permission = permission
 }
 
-export default (async ({ client, directory }) => {
+export default (async ({ client, directory, serverUrl }) => {
   const active = new Map<string, { messageID: string; prompt: string; title: string; pending: Set<string> }>()
   const titles = new Map<string, string>()
-  const questionBroker = createQuestionBroker(client as OpencodeClient)
+  const questionBroker = createQuestionBroker(client as OpencodeClient, serverUrl)
   const normalizeQuestion = (question: any) => ({
     header: question.header,
     question: question.question,
