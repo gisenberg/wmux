@@ -26,7 +26,7 @@ const runtime = { type: "legacy_runtime_ignored" };
 const serverChallenge = () => ({
   type: "server_challenge",
   handshakeSchema: 3,
-  contractDigest: "318924573c6e241cd5a223cc041b420adf2f9e076ed17ad3d66c2f5ecd499f37",
+  contractDigest: "eedf100f6c031ef0695eaf110d943d0493154fd729a3e74475c5b95ee7f554be",
   id: crypto.randomUUID(),
   nonce: crypto.randomBytes(32).toString("base64url"),
   issuedAt: Date.now(),

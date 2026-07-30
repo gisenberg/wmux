@@ -256,11 +256,6 @@ function attestationDiagnostic(value) {
   if (value.eventEnvelope !== contract.eventEnvelope) return "event_envelope_mismatch";
   const capabilities = value.capabilities;
   if (!exactKeys(capabilities, ["questionList", "questionReply", "sessionGet"])) return "capabilities_malformed";
-  for (const [name, diagnostic] of [
-    ["questionList", "method_question_list_missing"],
-    ["questionReply", "method_question_reply_missing"],
-    ["sessionGet", "method_session_get_missing"],
-  ]) if (capabilities[name] !== true) return diagnostic;
   if (!exactKeys(value.health, ["source", "called", "outcome", "status", "healthy", "release"])) return "health_shape_invalid";
   if (value.health.source !== contract.healthSource) return "health_source_mismatch";
   if (!Number.isInteger(value.health.status) || value.health.status < 0 || value.health.status > 999
@@ -276,9 +271,17 @@ function attestationDiagnostic(value) {
   if (value.health.outcome === "json_invalid" || value.diagnostic === "health_json_invalid") return "health_json_invalid";
   if (value.health.outcome === "shape_invalid" || value.diagnostic === "health_shape_invalid") return "health_shape_invalid";
   if (value.health.outcome === "release_mismatch" || value.diagnostic === "health_release_mismatch") return "release_mismatch";
-  if (value.health.outcome !== "ok" || value.health.status !== 200 || value.health.healthy !== true
-    || value.diagnostic !== "ok") return "health_shape_invalid";
+  if (value.health.outcome !== "ok" || value.health.status !== 200 || value.health.healthy !== true) return "health_shape_invalid";
   if (value.release !== contract.openCodeRelease || value.health.release !== contract.openCodeRelease) return "release_mismatch";
+  if (value.diagnostic === "v2_client_import_error" || value.diagnostic === "v2_client_construction_error") {
+    return value.diagnostic;
+  }
+  for (const [name, diagnostic] of [
+    ["questionList", "method_question_list_missing"],
+    ["questionReply", "method_question_reply_missing"],
+    ["sessionGet", "method_session_get_missing"],
+  ]) if (capabilities[name] !== true) return diagnostic;
+  if (value.diagnostic !== "ok") return "health_shape_invalid";
   return "ok";
 }
 

@@ -11,9 +11,18 @@ import { pathToFileURL } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const fixtureClientFactoryKey = "__wmuxCreateStructuredOpencodeClient";
+const fixtureImportFailureKey = "__wmuxFailStructuredOpencodeImport";
+const setFixtureStructuredClient = (factory: (config: unknown) => unknown): void => {
+  (globalThis as any)[fixtureClientFactoryKey] = factory;
+};
+const clearFixtureStructuredClient = (): void => {
+  delete (globalThis as any)[fixtureClientFactoryKey];
+  delete (globalThis as any)[fixtureImportFailureKey];
+};
 const serverChallenge = () => ({
   type: "server_challenge", handshakeSchema: 3,
-  contractDigest: "318924573c6e241cd5a223cc041b420adf2f9e076ed17ad3d66c2f5ecd499f37",
+  contractDigest: "eedf100f6c031ef0695eaf110d943d0493154fd729a3e74475c5b95ee7f554be",
   id: crypto.randomUUID(), nonce: crypto.randomBytes(32).toString("base64url"),
   issuedAt: Date.now(), deadline: Date.now() + 15_000,
 });
@@ -111,7 +120,8 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const module = await import(`${pathToFileURL(pluginPath).href}?question=${Date.now()}`);
     const replies: unknown[] = [];
-    const client = {
+    const structuredSessionInputs: unknown[] = [];
+    const structuredClient = {
       question: {
         list: async () => ({ data: [
           { id: "question-one", sessionID: "session-one", questions: [
@@ -131,14 +141,29 @@ test("generated plugin allowlists top-level questions and uses only typed questi
         },
       },
       session: {
-        get: async (input: { path: { id: string } }) => ({ data: {
-          title: input.path.id === "child-session" ? "Child" : "Top level",
-          ...(input.path.id === "child-session" ? { parentID: "session-one" } : {}),
-        } }),
-        messages: async () => ({ data: [] }),
+        get: async (input: { sessionID: string }) => {
+          structuredSessionInputs.push(structuredClone(input));
+          return { data: {
+            title: input.sessionID === "child-session" ? "Child" : "Top level",
+            ...(input.sessionID === "child-session" ? { parentID: "session-one" } : {}),
+          } };
+        },
       },
     };
+    const genericCalls = { get: 0, messages: 0 };
+    const client = {
+      session: {
+        get: async () => { genericCalls.get += 1; return { data: { title: "Generic lifecycle" } }; },
+        messages: async () => { genericCalls.messages += 1; return { data: [] }; },
+      },
+    };
+    const clientConfigs: unknown[] = [];
+    setFixtureStructuredClient((config) => { clientConfigs.push(structuredClone(config)); return structuredClient; });
     plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
+    await plugin["chat.message"](
+      { sessionID: "session-one" },
+      { message: { id: "message-one" }, parts: [{ type: "text", text: "generic lifecycle" }] },
+    );
     const questions = [
       { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
       { header: "Checks", question: "Choose", options: [{ label: "Tests", description: "Tests" }, { label: "Types", description: "Types" }], multiple: true, custom: false },
@@ -153,6 +178,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     assert.deepEqual(registrationCapture.body.runtimeAttestation.capabilities, {
       questionList: true, questionReply: true, sessionGet: true,
     });
+    assert.deepEqual(clientConfigs, [{ baseUrl: env.WMUX_URL }]);
     assert.equal(healthHeaders.length, 1);
     assert.equal(healthHeaders[0].authorization, undefined);
     assert.equal(healthHeaders[0].cookie, undefined);
@@ -181,6 +207,8 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     assert.ok(questionOneCaptures.every((capture) => typeof capture.body.occurrenceId === "string"
       && capture.body["capture" + "OperationId"] === undefined), "the plugin never chooses a server generation identity");
     assert.doesNotMatch(JSON.stringify(captures), /child-question|Ignore/);
+    assert.ok(structuredSessionInputs.some((input: any) => input.sessionID === "child-session"
+      && input.directory === repoRoot && input.path === undefined && input.query === undefined));
     await waitFor(() => captures.some((capture) => capture.path.endsWith("/ack")));
     const ack = captures.find((capture) => capture.path.endsWith("/ack"));
     assert.deepEqual(ack?.body, { id: "input-one", generation: 1, outcome: "applied" });
@@ -225,6 +253,11 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     assert.equal("permission" in client, false);
     await plugin.event({ event: { type: "question.future", properties: { sessionID: "session-one" } } });
 
+    await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session-one" } } });
+    assert.ok(genericCalls.get >= 2, "generic lifecycle session.get stays on the injected root client");
+    assert.equal(genericCalls.messages, 1, "generic lifecycle session.messages stays on the injected root client");
+    assert.equal("question" in client, false, "the injected root client does not receive structured calls");
+
     assert.doesNotMatch(fs.readFileSync(pluginPath, "utf8"), /installedPackageVersion|safePackageManifest|packageSearchRoots/,
       "package manifests are not compatibility authority in the generated plugin");
   } finally {
@@ -234,6 +267,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    clearFixtureStructuredClient();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -293,6 +327,7 @@ test("new generated plugin fails structured handling closed against an old serve
         messages: async () => ({ data: [] }),
       },
     };
+    setFixtureStructuredClient(() => client);
     plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await plugin["chat.message"](
       { sessionID: "session-one" },
@@ -315,6 +350,7 @@ test("new generated plugin fails structured handling closed against an old serve
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    clearFixtureStructuredClient();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -324,9 +360,10 @@ test("generated plugin reports sanitized serverUrl health and method failures wh
   type Variant = {
     name: string;
     diagnostic: string;
-    serverUrl?: "missing" | "invalid" | "file" | "ftp" | "network";
+    serverUrl?: "missing" | "invalid" | "file" | "ftp" | "credentials" | "network";
     health?: (request: http.IncomingMessage, response: http.ServerResponse, crossOrigin: string) => void;
     omitMethod?: "question.list" | "question.reply" | "session.get";
+    clientFailure?: "import" | "construction";
   };
   const json = (response: http.ServerResponse, status: number, body: string, headers: Record<string, string> = {}) => {
     response.writeHead(status, { "content-type": "application/json", ...headers });
@@ -337,6 +374,7 @@ test("generated plugin reports sanitized serverUrl health and method failures wh
     { name: "serverUrl invalid", diagnostic: "server_url_invalid", serverUrl: "invalid" },
     { name: "file protocol", diagnostic: "server_url_invalid", serverUrl: "file" },
     { name: "ftp protocol", diagnostic: "server_url_invalid", serverUrl: "ftp" },
+    { name: "URL credentials", diagnostic: "server_url_invalid", serverUrl: "credentials" },
     { name: "network", diagnostic: "health_network_error", serverUrl: "network" },
     { name: "timeout", diagnostic: "health_timeout", health: () => { /* handshake aborts the pending response */ } },
     { name: "same-origin redirect", diagnostic: "health_redirect", health: (_request, response) => {
@@ -360,6 +398,8 @@ test("generated plugin reports sanitized serverUrl health and method failures wh
       json(response, 200, '{"healthy":false,"version":"1.18.9"}') },
     { name: "release mismatch", diagnostic: "release_mismatch", health: (_request, response) =>
       json(response, 200, '{"healthy":true,"version":"1.18.8"}') },
+    { name: "v2 import failure", diagnostic: "v2_client_import_error", clientFailure: "import" },
+    { name: "v2 construction failure", diagnostic: "v2_client_construction_error", clientFailure: "construction" },
     { name: "question.list missing", diagnostic: "method_question_list_missing", omitMethod: "question.list" },
     { name: "question.reply missing", diagnostic: "method_question_reply_missing", omitMethod: "question.reply" },
     { name: "session.get missing", diagnostic: "method_session_get_missing", omitMethod: "session.get" },
@@ -411,45 +451,58 @@ test("generated plugin reports sanitized serverUrl health and method failures wh
         installFixturePackages(configHome);
         const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
         const module = await import(`${pathToFileURL(pluginPath).href}?health=${encodeURIComponent(variant.name)}-${Date.now()}`);
-        const client: any = {
+        const structuredClient: any = {
           question: { list: async () => ({ data: [], response: { status: 200 } }),
             reply: async () => ({ data: true, error: undefined, response: { status: 200 } }) },
-          session: { get: async () => ({ data: { title: "Telemetry" }, response: { status: 200 } }),
-            messages: async () => ({ data: [] }) },
+          session: { get: async () => ({ data: { title: "Structured" }, response: { status: 200 } }) },
         };
-        if (variant.omitMethod === "question.list") delete client.question.list;
-        if (variant.omitMethod === "question.reply") delete client.question.reply;
-        if (variant.omitMethod === "session.get") delete client.session.get;
+        if (variant.omitMethod === "question.list") delete structuredClient.question.list;
+        if (variant.omitMethod === "question.reply") delete structuredClient.question.reply;
+        if (variant.omitMethod === "session.get") delete structuredClient.session.get;
+        const client: any = { session: {
+          get: async () => ({ data: { title: "Telemetry" }, response: { status: 200 } }),
+          messages: async () => ({ data: [] }),
+        } };
+        if (variant.clientFailure === "import") (globalThis as any)[fixtureImportFailureKey] = true;
+        const structuredClientConfigs: unknown[] = [];
+        setFixtureStructuredClient((config) => {
+          structuredClientConfigs.push(structuredClone(config));
+          if (variant.clientFailure === "construction") throw new Error("fixture construction details");
+          return structuredClient;
+        });
         const input: any = { client, directory: repoRoot };
         if (variant.serverUrl !== "missing") {
           input.serverUrl = variant.serverUrl === "invalid" ? "http://not-a-URL-object"
             : variant.serverUrl === "file" ? new URL("file:///tmp/opencode")
               : variant.serverUrl === "ftp" ? new URL("ftp://127.0.0.1/opencode")
+                : variant.serverUrl === "credentials" ? new URL(`http://user:secret@127.0.0.1:${healthAddress.port}`)
                 : variant.serverUrl === "network" ? new URL("http://127.0.0.1:1")
-                  : new URL(`http://127.0.0.1:${healthAddress.port}/ignored/base/path?ignored=1`);
+                  : new URL(`http://127.0.0.1:${healthAddress.port}/ignored/base/path?query-sentinel=1`);
         }
         plugin = await module.default(input);
-        if (variant.omitMethod !== "session.get") {
-          await plugin["chat.message"]({ sessionID: "session" }, { message: { id: "message" }, parts: [{ type: "text", text: "generic" }] });
-        }
+        await plugin["chat.message"]({ sessionID: "session" }, { message: { id: "message" }, parts: [{ type: "text", text: "generic" }] });
         await waitFor(() => fs.existsSync(`${credentialPath}.status.json`)
           && JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8")).diagnostic === variant.diagnostic,
         () => JSON.stringify(calls), 8_000);
-        if (variant.omitMethod !== "session.get") {
-          await waitFor(() => calls.some((call) => call.path === "/api/agent-events"));
-        }
+        await waitFor(() => calls.some((call) => call.path === "/api/agent-events"));
         assert.equal(calls.some((call) => call.path === "/api/agent-input/sources/register"), false);
         assert.equal(fs.statSync(`${credentialPath}.status.json`).mode & 0o777, 0o600);
         const status = fs.readFileSync(`${credentialPath}.status.json`, "utf8");
-        assert.doesNotMatch(status, /127\.0\.0\.1|global\/health|pane-health|workspace-health/);
+        assert.doesNotMatch(status, /127\.0\.0\.1|global\/health|pane-health|workspace-health|fixture construction/);
         for (const request of healthRequests) {
           assert.equal(request.url, "/global/health");
           assert.equal(request.headers.authorization, undefined);
           assert.equal(request.headers.cookie, undefined);
         }
         assert.deepEqual(crossOriginRequests, [], "manual redirect handling must not reach a cross-origin target");
+        for (const config of structuredClientConfigs) {
+          assert.deepEqual(config, { baseUrl: variant.serverUrl === "network"
+            ? "http://127.0.0.1:1" : `http://127.0.0.1:${healthAddress.port}` });
+          assert.doesNotMatch(JSON.stringify(config), /query-sentinel|user|secret|broad-|pane-health/);
+        }
       } finally {
         if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+        clearFixtureStructuredClient();
         for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
         server.closeAllConnections(); healthServer.closeAllConnections(); crossOriginServer.closeAllConnections();
         await Promise.all([
@@ -570,6 +623,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
         messages: async () => ({ data: [] }),
       },
     };
+    setFixtureStructuredClient(() => client);
     plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/register"), () => JSON.stringify(captures));
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -582,6 +636,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
 
     const listCallsBefore = captures.length;
     const failingListClient = { ...client, question: { ...client.question, list: async () => { throw new Error("list unavailable"); } } };
+    setFixtureStructuredClient(() => failingListClient);
     secondPlugin = await module.default({ client: failingListClient, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await new Promise((resolve) => setTimeout(resolve, 250));
     assert.equal(captures.slice(listCallsBefore).some((capture) => capture.path.endsWith("/native-list")), false,
@@ -589,6 +644,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     if (secondPlugin) await secondPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
@@ -671,6 +727,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
         messages: async () => ({ data: [] }),
       },
     };
+    setFixtureStructuredClient(() => client);
     plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => lists.length === 1);
     const newEvent = plugin.event({ event: { id: "event-fresh", type: "question.asked", properties: {
@@ -727,6 +784,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
       "the cut-scoped barrier excludes the post-cut replacement key instead of replaying stale list metadata");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -831,6 +889,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
         messages: async () => ({ data: [] }),
       },
     };
+    setFixtureStructuredClient(() => client);
     firstPlugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.length === 1, () => JSON.stringify(captures));
     await firstPlugin.event({ event: {
@@ -871,6 +930,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
   } finally {
     if (firstPlugin) await firstPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     if (secondPlugin) await secondPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
@@ -953,6 +1013,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
       },
       session: { get: async () => ({ data: { title: "Top" }, response: { status: 200 } }), messages: async () => ({ data: [] }) },
     };
+    setFixtureStructuredClient(() => client);
     plugin = await module.default({ client, directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => registered && brokerReady);
     const question = (id: string) => ({ id: `event-${id}`, type: "question.asked", properties: {
@@ -966,6 +1027,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
     assert.ok(Math.abs(sdkCalls[0].at - starts[0].at) < 500, "the accepted start is adjacent to actual SDK invocation");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
@@ -1035,6 +1097,7 @@ test("generated plugin uses serverUrl attestation from a separate import/cache c
             messages: async () => ({ data: [] }),
           },
         };
+        globalThis.${fixtureClientFactoryKey} = () => client;
         const plugin = await pluginModule.default({ client, directory: ${JSON.stringify(repoRoot)},
           serverUrl: new URL(${JSON.stringify(`http://127.0.0.1:${address.port}/cache-context`)}) });
         process.stdout.write("READY\\n");
@@ -1074,6 +1137,11 @@ test("generated plugin uses serverUrl attestation from a separate import/cache c
           path.join(configHome, "opencode", "node_modules", "effect"),
           path.join(cachedModules, "effect"),
           "dir",
+        );
+        fs.cpSync(
+          path.join(configHome, "opencode", "node_modules", "@opencode-ai", "sdk"),
+          path.join(cachedModules, "@opencode-ai", "sdk"),
+          { recursive: true },
         );
         const sdkManifest = path.join(configHome, "opencode", "node_modules", "@opencode-ai", "sdk", "package.json");
         variant.mutate(sdkManifest, home);
@@ -1122,7 +1190,14 @@ const installFixturePackages = (configHome: string, importOnly = false): void =>
   fs.writeFileSync(path.join(sdkPackage, "package.json"), importOnly
     ? '{"name":"@opencode-ai/sdk","version":"1.18.9","type":"module","exports":{"./v2/client":{"import":"./v2/client.js"}}}'
     : '{"name":"@opencode-ai/sdk","version":"1.18.9","type":"module","exports":{"./v2/client":"./v2/client.js"}}');
-  fs.writeFileSync(path.join(sdkPackage, "v2", "client.js"), 'export {};\n');
+  fs.writeFileSync(path.join(sdkPackage, "v2", "client.js"), `
+    if (globalThis.${fixtureImportFailureKey}) throw new Error("fixture import details");
+    export const createOpencodeClient = (config) => {
+      const factory = globalThis.${fixtureClientFactoryKey};
+      if (typeof factory !== "function") throw new Error("fixture client factory missing");
+      return factory(config);
+    };
+  `);
 };
 
 const waitFor = async (predicate: () => boolean, detail: () => string = () => "", timeoutMs = 5_000): Promise<void> => {

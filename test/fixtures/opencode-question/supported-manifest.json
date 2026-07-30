@@ -10,8 +10,10 @@
   "healthCall": "fetch(new URL(\"/global/health\", plugin.serverUrl))",
   "healthResult": "HTTP 200 JSON { healthy: true, version: \"1.18.9\" }",
   "eventEnvelope": "legacy-properties",
-  "questionListCall": "client.question.list({ directory })",
-  "questionReplyCall": "client.question.reply({ requestID, answers }, { signal })",
+  "structuredClientSource": "createOpencodeClient({ baseUrl: plugin.serverUrl.origin }) from @opencode-ai/sdk/v2/client",
+  "questionListCall": "structuredClient.question.list({ directory })",
+  "questionReplyCall": "structuredClient.question.reply({ requestID, answers }, { signal })",
+  "sessionGetCall": "structuredClient.session.get({ sessionID, directory })",
   "questionReplyResult": "RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, fields>",
   "questionIdentityOwner": "broker-occurrence-stream",
   "questionSnapshotAuthority": "complete-validated-top-level-members",
@@ -21,6 +23,6 @@
     "question.reply",
     "session.get"
   ],
-  "compatibilityFingerprint": "opencode-question-occurrence-stream-v6-plugin.serverUrl:/global/health-server-challenge-1.18.9",
-  "canonicalContractDigest": "318924573c6e241cd5a223cc041b420adf2f9e076ed17ad3d66c2f5ecd499f37"
+  "compatibilityFingerprint": "opencode-question-occurrence-stream-v7-dedicated-v2-client-plugin.serverUrl:/global/health-server-challenge-1.18.9",
+  "canonicalContractDigest": "eedf100f6c031ef0695eaf110d943d0493154fd729a3e74475c5b95ee7f554be"
 }

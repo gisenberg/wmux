@@ -2,15 +2,20 @@
 
 wmux supports the legacy `properties` question events from OpenCode release and
 `@opencode-ai/sdk` **1.18.9**, official tag commit
-`4da7bb44c84e013fa53e9c5d02ac753d1435c81a`. Production code imports
-`OpencodeClient` and event types from `@opencode-ai/sdk/v2/client`.
+`4da7bb44c84e013fa53e9c5d02ac753d1435c81a`. Production code imports event
+types and dynamically imports `createOpencodeClient` plus the `OpencodeClient`
+type from `@opencode-ai/sdk/v2/client`.
 
-The list and reply inputs are derived from `OpencodeClient`: wmux calls
-`client.question.list({ directory })` and
-`client.question.reply({ requestID, answers }, { signal })`, where the reply
-input type is `Parameters<OpencodeClient["question"]["reply"]>[0]`. The generated
-client returns a
-`RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, "fields">`
+The generated plugin validates the plugin-provided HTTP(S) `serverUrl` and
+constructs one dedicated v2 client with
+`createOpencodeClient({ baseUrl: serverUrl.origin })`. Only that client performs
+`question.list({ directory })`, `question.reply({ requestID, answers },
+{ signal })`, and structured `session.get({ sessionID, directory })` calls. The
+injected root SDK client remains the authority for existing generic lifecycle,
+title, and delegation behavior. The reply input type is
+`Parameters<OpencodeClient["question"]["reply"]>[0]`. The generated client
+returns a `RequestResult<QuestionReplyResponses, QuestionReplyErrors, false,
+"fields">`
 object rather than necessarily throwing: HTTP 200 contains a boolean, HTTP 400
 contains `BadRequest` or `InvalidRequest`, and HTTP 404 contains
 `QuestionNotFound`. wmux classifies the typed result; 404 is already resolved.
@@ -28,9 +33,9 @@ pane-bound runtime-file paths. The broker first obtains a cryptographically
 random, one-shot server challenge using either the exact pane registration
 capability or the current source credential. It then emits that challenge inside
 a separate broker nonce challenge with handshake schema 3, the canonical contract
-digest, and a five-second deadline. The plugin requires the actual injected
-`question.list`, `question.reply`, and `session.get` methods, validates the
-plugin-provided `serverUrl` as an HTTP(S) `URL`, and performs a credential-free,
+digest, and a five-second deadline. The plugin requires the actual dedicated v2
+client's `question.list`, `question.reply`, and `session.get` methods, validates
+the plugin-provided `serverUrl` as an HTTP(S) `URL`, and performs a credential-free,
 no-redirect, body-bounded fetch of the fixed `/global/health` route. It returns
 only bounded runtime evidence: release, digest, fingerprint, event envelope,
 method booleans, health fields, and challenge timestamps. A successful health
@@ -42,7 +47,8 @@ before exchanging or refreshing.
 The server atomically validates and consumes its challenge under the exact
 capability/source, immutable pane context, and source credential generation, then
 stores only the nonce-free sanitized evidence. Injected `client.global.health`,
-package manifests, and package search paths are not runtime compatibility authority.
+the injected root client's structured methods, package manifests, and package
+search paths are not runtime compatibility authority.
 
 This runtime attestation is a trusted same-UID plugin compatibility check, not
 cryptographic proof against a compromised OpenCode process, plugin host, or user
@@ -58,9 +64,10 @@ response cannot later be replayed.
 Fixtures under `test/fixtures/opencode-question` are synthetic and sanitized at
 the capture boundary. In particular, `question.replied` is identity-only; its
 SDK `answers` property is dropped before fixture, broker, logging, or durable
-storage. Missing question APIs, version/fingerprint mismatches, malformed
-question events, and unexpected reply result shapes disable structured question
-handling without terminal-input fallback. Events arriving before `runtime_ready`
+storage. A missing/failed v2 import, client construction failure, missing question
+APIs, version/fingerprint mismatches, malformed question events, and unexpected
+reply result shapes disable structured question handling without terminal-input
+fallback. Events arriving before `runtime_ready`
 are dropped; startup reconciliation recovers still-pending native questions only
 after readiness. Snapshot, capture, polling, and delivery remain disabled unless
 the exact attestation and server registration both succeed. Generic agent

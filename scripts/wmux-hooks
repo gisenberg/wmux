@@ -1028,10 +1028,35 @@ const healthEndpointFromPluginInput = (serverUrl: unknown) => {
     const endpoint = new URL("/global/health", serverUrl)
     if (endpoint.origin !== serverUrl.origin || endpoint.pathname !== "/global/health"
       || endpoint.search !== "" || endpoint.hash !== "") return { diagnostic: "server_url_invalid" as const }
-    return { endpoint }
+    return { endpoint, baseUrl: serverUrl.origin }
   } catch {
     return { diagnostic: "server_url_invalid" as const }
   }
+}
+
+type StructuredClientState = {
+  client?: OpencodeClient
+  diagnostic?: "v2_client_import_error" | "v2_client_construction_error"
+}
+
+const createStructuredClient = async (baseUrl: string): Promise<StructuredClientState> => {
+  let createClient: typeof import("@opencode-ai/sdk/v2/client")["createOpencodeClient"]
+  try {
+    const sdk = await import("@opencode-ai/sdk/v2/client")
+    if (typeof sdk.createOpencodeClient !== "function") return { diagnostic: "v2_client_import_error" }
+    createClient = sdk.createOpencodeClient
+  } catch {
+    return { diagnostic: "v2_client_import_error" }
+  }
+  try {
+    return { client: createClient({ baseUrl }) }
+  } catch {
+    return { diagnostic: "v2_client_construction_error" }
+  }
+}
+
+const hasClientMethod = (read: () => unknown) => {
+  try { return typeof read() === "function" } catch { return false }
 }
 
 const HEALTH_SOURCE = "plugin.serverUrl:/global/health" as const
@@ -1113,13 +1138,8 @@ const probeOpenCodeHealth = async (endpoint: URL, deadline: number) => {
   }
 }
 
-const createQuestionBroker = (client: OpencodeClient, serverUrl: unknown) => {
+const createQuestionBroker = (serverUrl: unknown) => {
   if (!questionBrokerPrerequisites()) return undefined
-  const healthEndpoint = healthEndpointFromPluginInput(serverUrl)
-  if (!("endpoint" in healthEndpoint)) {
-    persistBrokerStatus("failed", healthEndpoint.diagnostic)
-    return undefined
-  }
   let child: ReturnType<typeof spawn> | undefined
   const brokerEnvironment = Object.fromEntries([
     "HOME", "PATH", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR", "WMUX_URL", "WMUX_PANE_ID",
@@ -1132,6 +1152,14 @@ const createQuestionBroker = (client: OpencodeClient, serverUrl: unknown) => {
     persistBrokerStatus("failed", "broker_spawn_error")
     return undefined
   }
+  // Start the broker before loading the optional structured SDK path so generic
+  // plugin hooks remain available when that import or construction fails.
+  const healthEndpoint = healthEndpointFromPluginInput(serverUrl)
+  let structuredClient: OpencodeClient | undefined
+  const structuredClientState: Promise<StructuredClientState> = "endpoint" in healthEndpoint
+    ? createStructuredClient(healthEndpoint.baseUrl)
+    : Promise.resolve({})
+  void structuredClientState.then((state) => { structuredClient = state.client })
   let buffer = ""
   let deliveryQueue = Promise.resolve()
   let queuedDeliveries = 0
@@ -1176,19 +1204,23 @@ const createQuestionBroker = (client: OpencodeClient, serverUrl: unknown) => {
     if (attestedChallenges.has(challengeKey)) return
     if (attestedChallenges.size >= 16) attestedChallenges.delete(attestedChallenges.values().next().value!)
     attestedChallenges.add(challengeKey)
+    const clientState = await structuredClientState
     const capabilities = {
-      questionList: typeof (client as any)?.question?.list === "function",
-      questionReply: typeof (client as any)?.question?.reply === "function",
-      sessionGet: typeof (client as any)?.session?.get === "function",
+      questionList: hasClientMethod(() => clientState.client?.question?.list),
+      questionReply: hasClientMethod(() => clientState.client?.question?.reply),
+      sessionGet: hasClientMethod(() => clientState.client?.session?.get),
     }
-    const health = await probeOpenCodeHealth(healthEndpoint.endpoint, message.deadline)
+    const health = "endpoint" in healthEndpoint
+      ? await probeOpenCodeHealth(healthEndpoint.endpoint, message.deadline)
+      : failedHealth(healthEndpoint.diagnostic)
     const healthDiagnostics: Record<string, string> = {
+      server_url_missing: "server_url_missing", server_url_invalid: "server_url_invalid",
       timeout: "health_timeout", network_error: "health_network_error", redirect: "health_redirect",
       status: "health_status", body_too_large: "health_body_too_large", json_invalid: "health_json_invalid",
       shape_invalid: "health_shape_invalid", release_mismatch: "health_release_mismatch",
     }
     const diagnostic = health.outcome === "ok"
-      ? Object.values(capabilities).every(Boolean) ? "ok" : "client_method_missing"
+      ? clientState.diagnostic ?? (Object.values(capabilities).every(Boolean) ? "ok" : "client_method_missing")
       : healthDiagnostics[health.outcome] ?? "health_shape_invalid"
     writeControl({
       type: "runtime_attestation",
@@ -1253,7 +1285,8 @@ const createQuestionBroker = (client: OpencodeClient, serverUrl: unknown) => {
       controller.abort()
     }, 15_000)
     try {
-      const result = await client.question.reply(input, { signal: controller.signal })
+      if (!structuredClient) throw new Error("structured client unavailable")
+      const result = await structuredClient.question.reply(input, { signal: controller.signal })
       if (result?.response?.status === 200 && result.data === true && result.error === undefined) {
         outcome = "applied"
         code = ""
@@ -1363,7 +1396,7 @@ const createQuestionBroker = (client: OpencodeClient, serverUrl: unknown) => {
     if (wasReady) persistBrokerStatus("failed", "broker_exited")
     readyResolve(undefined)
   })
-  return { send: write, ready, isReady: () => structuredReady,
+  return { send: write, ready, isReady: () => structuredReady, structuredClient: () => structuredClient,
     onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler } }
 }
 
@@ -1389,7 +1422,7 @@ const applyPermissionDefaults = (config: any) => {
 export default (async ({ client, directory, serverUrl }) => {
   const active = new Map<string, { messageID: string; prompt: string; title: string; pending: Set<string> }>()
   const titles = new Map<string, string>()
-  const questionBroker = createQuestionBroker(client as OpencodeClient, serverUrl)
+  const questionBroker = createQuestionBroker(serverUrl)
   const normalizeQuestion = (question: any) => ({
     header: question.header,
     question: question.question,
@@ -1428,8 +1461,13 @@ export default (async ({ client, directory, serverUrl }) => {
       return
     }
     const cutSequence = questionEventSequence
+    const structuredClient = questionBroker.structuredClient()
+    if (!structuredClient) {
+      questionBroker.send({ type: "unsupported" })
+      return
+    }
     snapshotInFlight = true
-    void client.question.list({ directory }).then(async (result) => {
+    void structuredClient.question.list({ directory }).then(async (result) => {
       if ((result?.response?.status !== undefined && result.response.status !== 200) || !Array.isArray(result?.data)) {
         questionBroker.send({ type: "snapshot", complete: false, cutSequence, members: [] })
         return
@@ -1443,7 +1481,7 @@ export default (async ({ client, directory, serverUrl }) => {
           complete = false
           continue
         }
-        const session = await client.session.get({ path: { id: request.sessionID }, query: { directory } }).catch(() => undefined)
+        const session = await structuredClient.session.get({ sessionID: request.sessionID, directory }).catch(() => undefined)
         if (!session?.data || (session.response?.status !== undefined && session.response.status !== 200)) {
           complete = false
           continue
@@ -1517,7 +1555,12 @@ export default (async ({ client, directory, serverUrl }) => {
         } else {
           const eventSequence = ++questionEventSequence
           const structuredTask = (async () => {
-            const topLevel = current || await client.session.get({ path: { id: sessionID }, query: { directory } })
+            const structuredClient = questionBroker.structuredClient()
+            if (!structuredClient) {
+              questionBroker.send({ type: "unsupported" })
+              return
+            }
+            const topLevel = current || await structuredClient.session.get({ sessionID, directory })
               .then((session) => session?.data && !session.data.parentID)
               .catch(() => false)
             if (topLevel && event.type === "question.asked") {

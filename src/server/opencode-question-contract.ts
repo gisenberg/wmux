@@ -13,8 +13,8 @@ export const SUPPORTED_OPENCODE_SOURCE_COMMIT = "4da7bb44c84e013fa53e9c5d02ac753
 export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 3;
 export const OPENCODE_HEALTH_EVIDENCE_SOURCE = "plugin.serverUrl:/global/health" as const;
 export const OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT =
-  "opencode-question-occurrence-stream-v6-plugin.serverUrl:/global/health-server-challenge-1.18.9";
-export const OPENCODE_QUESTION_CONTRACT_DIGEST = "318924573c6e241cd5a223cc041b420adf2f9e076ed17ad3d66c2f5ecd499f37";
+  "opencode-question-occurrence-stream-v7-dedicated-v2-client-plugin.serverUrl:/global/health-server-challenge-1.18.9";
+export const OPENCODE_QUESTION_CONTRACT_DIGEST = "eedf100f6c031ef0695eaf110d943d0493154fd729a3e74475c5b95ee7f554be";
 export const OPENCODE_QUESTION_EVENT_ENVELOPE = "legacy-properties";
 
 export type OpenCodeQuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0];
@@ -95,6 +95,8 @@ export const openCodeRuntimeAttestationSchema = z.object({
     "health_json_invalid",
     "health_shape_invalid",
     "health_release_mismatch",
+    "v2_client_import_error",
+    "v2_client_construction_error",
     "client_method_missing",
   ]),
 }).strict();

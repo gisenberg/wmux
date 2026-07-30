@@ -33,8 +33,11 @@ test("supported OpenCode manifest pins the official SDK contract", () => {
   assert.equal(crypto.createHash("sha256").update(JSON.stringify(canonicalize(contract))).digest("hex"), digest);
   assert.equal(manifest.officialTagCommit, "4da7bb44c84e013fa53e9c5d02ac753d1435c81a");
   assert.equal(packageJson.dependencies["@opencode-ai/sdk"], "1.18.9");
-  assert.equal(manifest.questionListCall, "client.question.list({ directory })");
-  assert.equal(manifest.questionReplyCall, "client.question.reply({ requestID, answers }, { signal })");
+  assert.equal(manifest.structuredClientSource,
+    "createOpencodeClient({ baseUrl: plugin.serverUrl.origin }) from @opencode-ai/sdk/v2/client");
+  assert.equal(manifest.questionListCall, "structuredClient.question.list({ directory })");
+  assert.equal(manifest.questionReplyCall, "structuredClient.question.reply({ requestID, answers }, { signal })");
+  assert.equal(manifest.sessionGetCall, "structuredClient.session.get({ sessionID, directory })");
   assert.equal(manifest.questionReplyResult, "RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, fields>");
   assert.equal(manifest.questionIdentityOwner, "broker-occurrence-stream");
   assert.equal(manifest.questionSnapshotAuthority, "complete-validated-top-level-members");
