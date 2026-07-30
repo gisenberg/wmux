@@ -140,6 +140,9 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await expect(mainCard.getByRole("checkbox")).toHaveCount(2);
     await expect(mainCard.getByRole("checkbox").nth(0)).toHaveAccessibleName(/Tests/);
     await expect(mainCard.getByRole("checkbox").nth(1)).toHaveAccessibleName(/Types/);
+    await expect(mainCard.getByRole("textbox")).toHaveCount(1);
+    await expect(mainCard.getByRole("textbox", { name: "Mode custom answer" })).toHaveCount(0);
+    await expect(mainCard.getByRole("textbox", { name: "Checks custom answer" })).toHaveCount(0);
     await expect(mainCard.getByRole("textbox", { name: "Note custom answer" })).toHaveAttribute("maxlength", "4096");
 
     await mainCard.locator("fieldset").nth(0).getByRole("radio").check();

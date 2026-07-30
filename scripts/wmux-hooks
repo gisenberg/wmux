@@ -1411,7 +1411,7 @@ export default (async ({ client, directory }) => {
     question: question.question,
     options: question.options.map((option: any) => ({ label: option.label, description: option.description })),
     multiple: question.multiple ?? false,
-    custom: question.custom ?? false,
+    custom: question.custom ?? true,
   })
   let questionEventSequence = 0
   const questionSequenceReady = questionBroker?.ready.then((eventSequence) => {

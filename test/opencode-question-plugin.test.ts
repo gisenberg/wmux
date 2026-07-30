@@ -88,7 +88,9 @@ test("generated plugin allowlists top-level questions and uses only typed questi
         pendingDeliveries.push({
           deliveryId: `delivery-${questionId}`, cursor, requestId, expectedGeneration: 1,
           openCodeRequestId: questionId,
-          answers: questionId === "question-one" ? [["Safe"], ["Tests", "Types"], ["custom note"]] : [["answer"]],
+          answers: questionId === "question-one" ? [["Safe"], ["Tests", "Types"], ["custom note"]]
+            : questionId === "question-event-projection" ? [["Safe"], ["Tests"], ["event note"]]
+              : [["answer"]],
         });
       }
       send(duplicate ? 200 : 201, { id: requestId, generation: 1, state: "pending", eventRevision: cursor });
@@ -135,7 +137,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     const opencodeRequests: Array<{ method: string; pathname: string; search: string }> = [];
     const pendingQuestions = [
           { id: "question-one", sessionID: "session-one", questions: [
-            { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
+            { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false },
             { header: "Checks", question: "Choose", options: [{ label: "Tests", description: "Tests" }, { label: "Types", description: "Types" }], multiple: true, custom: false },
             { header: "Note", question: "Write", options: [], multiple: false, custom: true },
           ] },
@@ -196,11 +198,19 @@ test("generated plugin allowlists top-level questions and uses only typed questi
       { message: { id: "message-one" }, parts: [{ type: "text", text: "generic lifecycle" }] },
     );
     const questions = [
-      { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
+      { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false },
       { header: "Checks", question: "Choose", options: [{ label: "Tests", description: "Tests" }, { label: "Types", description: "Types" }], multiple: true, custom: false },
       { header: "Note", question: "Write", options: [], multiple: false, custom: true },
     ];
+    const normalizedQuestions = [
+      { ...questions[0], custom: true },
+      questions[1],
+      questions[2],
+    ];
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/source-one/requests"), () => JSON.stringify(captures));
+    const snapshotCapture = captures.find((capture) => capture.path === "/api/agent-input/sources/source-one/requests")!;
+    assert.deepEqual(snapshotCapture.body.questions, normalizedQuestions,
+      "complete snapshots project absent/false/true custom values in exact question order");
     await waitFor(() => fs.existsSync(`${credentialPath}.status.json`)
       && JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8")).diagnostic === "runtime_ready");
     const registrationCapture = captures.find((capture) => capture.path === "/api/agent-input/sources/register")!;
@@ -238,6 +248,10 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     await waitFor(() => replies.length === 1, () => JSON.stringify(captures));
     assert.deepEqual(replies, [{ requestID: "question-one", answers: [["Safe"], ["Tests", "Types"], ["custom note"]] }]);
     const questionOneCaptures = captures.filter((capture) => capture.path === "/api/agent-input/sources/source-one/requests");
+    for (const capture of questionOneCaptures) {
+      assert.deepEqual(capture.body.questions, normalizedQuestions,
+        "snapshot uses the absent/false/true projection");
+    }
     assert.deepEqual([...new Set(questionOneCaptures.map((capture) => capture.body.ordinal))], [1],
       "a distinct same-payload ask while pending deduplicates to the current occurrence");
     assert.ok(questionOneCaptures.every((capture) => typeof capture.body.occurrenceId === "string"
@@ -251,11 +265,24 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     assert.equal(replies.filter((reply: any) => reply.requestID === "question-one").length, 1,
       "an exposed request generation invokes the real fixture SDK at most once");
 
+    await plugin.event({ event: { id: "event-question-projection", type: "question.asked", properties: {
+      id: "question-event-projection", sessionID: "session-one", questions,
+    } } });
+    await waitFor(() => captures.some((capture) => capture.body.id === "question-event-projection"));
+    const askedCapture = captures.find((capture) => capture.body.id === "question-event-projection")!;
+    assert.deepEqual(askedCapture.body.questions, normalizedQuestions,
+      "asked events use the same absent/false/true projection in exact question order");
+    await waitFor(() => captures.some((capture) => capture.path.endsWith("/ack")
+      && capture.body.id === "input-question-event-projection"));
+    assert.deepEqual(replies.find((reply: any) => reply.requestID === "question-event-projection"), {
+      requestID: "question-event-projection", answers: [["Safe"], ["Tests"], ["event note"]],
+    });
+
     const oneCustomQuestion = [{ header: "Note", question: "Write", options: [], multiple: false, custom: true }];
     for (const id of ["question-not-found", "question-invalid", "question-transport"]) {
       await plugin.event({ event: { id: `event-${id}`, type: "question.asked", properties: { id, sessionID: "session-one", questions: oneCustomQuestion } } });
     }
-    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/ack")).length === 4,
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/ack")).length === 5,
       () => JSON.stringify(captures.filter((capture) => capture.path.endsWith("/ack")).slice(-20)));
     const classified = new Map(captures.filter((capture) => capture.path.endsWith("/ack"))
       .map((capture) => [capture.body.id, capture.body]));

@@ -30,7 +30,7 @@ const _compileQuestion = (question: QuestionInfo): AgentInputQuestion => ({
   question: question.question,
   options: question.options,
   multiple: question.multiple ?? false,
-  custom: question.custom ?? false,
+  custom: question.custom ?? true,
 });
 void _compileReplyInput;
 void _compileQuestion;

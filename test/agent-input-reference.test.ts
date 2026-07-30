@@ -20,6 +20,13 @@ test("reference harness maps single, multi, and custom answers in exact question
   assert.equal(questions.every((question, index) => validAgentInputAnswer(question, answers[index])), true);
   assert.equal(validAgentInputAnswer(questions[0], []), false);
   assert.equal(validAgentInputAnswer(questions[1], ["Tests", "Tests"]), false);
+  assert.equal(validAgentInputAnswer(questions[0], ["custom mode"]), false,
+    "explicit custom false rejects values outside the option set");
+  assert.equal(validAgentInputAnswer(questions[2], ["custom note"]), true,
+    "projected custom true accepts one custom value");
+  assert.deepEqual(buildAgentInputAnswers(questions, [[], [], []], ["blocked", "blocked", "allowed"]), [
+    [], [], ["allowed"],
+  ], "the browser maps custom text only for questions projected with custom true");
 });
 
 test("reference harness creates a stable caller-owned submission id", () => {

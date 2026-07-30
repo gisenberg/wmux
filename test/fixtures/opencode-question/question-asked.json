@@ -9,8 +9,7 @@
         "header": "Mode",
         "question": "Choose one mode",
         "options": [{ "label": "Safe", "description": "Use conservative defaults" }],
-        "multiple": false,
-        "custom": false
+        "multiple": false
       },
       {
         "header": "Checks",

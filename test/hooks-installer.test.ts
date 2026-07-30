@@ -34,6 +34,7 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.match(plugin, /question\.asked/);
     assert.match(plugin, /question\.replied/);
     assert.match(plugin, /question\.rejected/);
+    assert.match(plugin, /custom: question\.custom \?\? true/);
     assert.match(plugin, /permission\.asked/);
     assert.match(plugin, /permission\.replied/);
     assert.match(plugin, /event\.type === "session\.updated"/);

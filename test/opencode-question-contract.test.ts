@@ -51,8 +51,13 @@ test("question fixtures validate and replied answers are dropped before the brok
   assert.equal(asked.kind, "supported");
   if (asked.kind === "supported" && asked.event.type === "question.asked") {
     assert.equal(asked.event.properties.questions.length, 3);
-    assert.deepEqual(asked.event.properties.questions.map((question) => [question.multiple ?? false, question.custom ?? false]), [
-      [false, false], [true, false], [false, true],
+    assert.deepEqual(asked.event.properties.questions.map((question) => ({
+      customPresent: Object.hasOwn(question, "custom"),
+      effectiveCustom: question.custom ?? true,
+    })), [
+      { customPresent: false, effectiveCustom: true },
+      { customPresent: true, effectiveCustom: false },
+      { customPresent: true, effectiveCustom: true },
     ]);
   }
   assert.equal(sanitizeOpenCodeQuestionEvent(fixture("question-replied-identity.json")).kind, "supported");
