@@ -257,6 +257,8 @@ export interface TerminalNotification {
   body: string;
   createdAt: string;
   read: boolean;
+  agentInputRequestId?: string;
+  href?: string;
 }
 
 export interface TerminalMedia {
@@ -292,6 +294,48 @@ export interface AgentActivity {
   message?: string;
   createdAt: string;
 }
+
+export interface AgentInputQuestion {
+  header: string;
+  question: string;
+  options: Array<{ label: string; description: string }>;
+  multiple: boolean;
+  custom: boolean;
+}
+
+export type AgentInputRequestState =
+  | "pending"
+  | "answered"
+  | "rejected"
+  | "cancelled"
+  | "closed";
+
+export interface AgentInputRequest {
+  id: string;
+  sourceId: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  machineId?: string;
+  openCodeSessionId: string;
+  openCodeRequestId: string;
+  generation: number;
+  questions: AgentInputQuestion[];
+  state: AgentInputRequestState;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  resolution?: "user" | "terminal" | "plugin" | "pane-closed" | "source-revoked" | "migration-unbound";
+}
+
+export type AgentInputAnswerResult =
+  | { outcome: "delivered" }
+  | { outcome: "already_resolved" }
+  | { outcome: "conflict"; code: string }
+  | { outcome: "invalid_answers" }
+  | { outcome: "source_unavailable" }
+  | { outcome: "delivery_timeout" }
+  | { outcome: "sdk_error"; code: string; retryable: boolean };
 
 export type DelegationState =
   | "running"
@@ -459,6 +503,7 @@ export interface BootstrapPayload {
   keybindings: KeybindingMap;
   settingsDefaults: WmuxSettings;
   streams: StreamStatus[];
+  agentInputRequests: AgentInputRequest[];
 }
 
 export interface EventCollectionDelta<T> {
@@ -490,6 +535,7 @@ export interface EventStateDelta {
   agents?: EventDelegationDelta;
   runs?: EventCollectionDelta<TerminalRun>;
   settings?: WmuxSettings;
+  agentInputRequests?: EventCollectionDelta<AgentInputRequest>;
 }
 
 export interface DurableSessionAuditRow {

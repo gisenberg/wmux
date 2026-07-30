@@ -1,0 +1,15 @@
+{
+  "openCodeRelease": "1.18.9",
+  "sdkPackage": "@opencode-ai/sdk",
+  "sdkVersion": "1.18.9",
+  "sdkImport": "@opencode-ai/sdk/v2/client",
+  "officialTagCommit": "4da7bb44c84e013fa53e9c5d02ac753d1435c81a",
+  "eventEnvelope": "legacy-properties",
+  "questionListCall": "client.question.list({ directory })",
+  "questionReplyCall": "client.question.reply({ requestID, answers }, { signal })",
+  "questionReplyResult": "RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, fields>",
+  "questionIdentityOwner": "broker-occurrence-stream",
+  "questionSnapshotAuthority": "complete-validated-top-level-members",
+  "questionResolutionBinding": "exact-occurrence-public-id-generation",
+  "compatibilityFingerprint": "opencode-question-occurrence-stream-v3-sdk-1.18.9"
+}

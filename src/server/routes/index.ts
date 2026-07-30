@@ -1,4 +1,5 @@
 import { agentFollowUpRoutes } from "./agent-follow-up-routes.js";
+import { agentInputRoutes } from "./agent-input-routes.js";
 import { authRoutes } from "./auth-routes.js";
 import { bootstrapRoutes } from "./bootstrap-routes.js";
 import { eventIngestRoutes } from "./event-ingest-routes.js";
@@ -11,6 +12,7 @@ import { workspaceRoutes } from "./workspace-routes.js";
 import type { HttpRoutePolicy } from "./route.js";
 
 export const apiRoutes = [
+  ...agentInputRoutes,
   ...agentFollowUpRoutes,
   ...authRoutes,
   ...bootstrapRoutes,

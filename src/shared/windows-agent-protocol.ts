@@ -4,7 +4,10 @@ export const WINDOWS_AGENT_CAPABILITIES = [
   "paste-images-v1",
   "registration-heartbeat-v1",
   "stream-supervision-v1",
+  "posix-runtime-files-v1",
 ] as const;
+
+export const POSIX_AGENT_RUNTIME_FILE_CAPABILITY = "posix-runtime-files-v1" as const;
 
 export const WINDOWS_AGENT_PATHS = {
   health: "/health",
@@ -119,6 +122,11 @@ export interface WindowsAgentCreateRequest {
     bundleVersion: string;
     files: Array<{ name: string; dataBase64: string; sha256: string }>;
   };
+  runtimeFiles?: Array<{
+    purpose: "agent-input-capability";
+    dataBase64: string;
+    sha256: string;
+  }>;
   env: Record<string, string>;
 }
 

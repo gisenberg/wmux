@@ -45,6 +45,7 @@ export const sessionBackendCapabilitiesForMachine = (machine: MachineConfig): Ba
 
 export type {
   BackendCapabilities,
+  BackendRuntimeFile,
   BackendSession,
   BackendSpawnSpec,
   SessionBackend,

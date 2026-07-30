@@ -36,6 +36,16 @@ const routeCases: Array<[string, string, string]> = [
   ["bootstrap", "GET", "/api/bootstrap"],
   ["agent-session-timeline", "GET", "/api/agent-sessions/session"],
   ["agent-session-follow-up", "POST", "/api/agent-sessions/session/turns"],
+  ["agent-input-source-register", "POST", "/api/agent-input/sources/register"],
+  ["agent-input-source-refresh", "POST", "/api/agent-input/sources/source/refresh"],
+  ["agent-input-request-capture", "POST", "/api/agent-input/sources/source/requests"],
+  ["agent-input-native-list-reconcile", "POST", "/api/agent-input/sources/source/native-list"],
+  ["agent-input-delivery-poll", "GET", "/api/agent-input/sources/source/deliveries"],
+  ["agent-input-delivery-start", "POST", "/api/agent-input/sources/source/deliveries/delivery/start"],
+  ["agent-input-delivery-ack", "POST", "/api/agent-input/sources/source/deliveries/delivery/ack"],
+  ["agent-input-native-pending-reconcile", "POST", "/api/agent-input/sources/source/requests/request/pending"],
+  ["agent-input-native-resolve", "POST", "/api/agent-input/sources/source/requests/request/resolve"],
+  ["agent-input-answer", "POST", "/api/agent-input/requests/request/answer"],
   ["delegation-status", "GET", "/api/delegations/run"],
   ["machine-management-list", "GET", "/api/machines/manage"],
   ["machine-management-create", "POST", "/api/machines"],
@@ -117,6 +127,14 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/auth/credentials/helper/rotate")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("legacy-shared"), policy("GET", "/api/bootstrap")), false);
   assert.equal(authorizeHttpPrincipal({ ...auth, browserAuthMode: "shared-or-login" }, principal("legacy-shared"), policy("GET", "/api/bootstrap")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-registration"), policy("POST", "/api/agent-input/sources/register")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("POST", "/api/agent-input/sources/register")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("GET", "/api/agent-input/sources/source/deliveries")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("GET", "/api/agent-input/sources/source/deliveries")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("agent-input-source"), policy("POST", "/api/agent-input/requests/request/answer")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/agent-input/requests/request/answer")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/agent-input/requests/request/answer")), false);
+  assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/agent-input/requests/request/answer")), false);
 });
 
 test("WebSocket classes deny unknown paths and reserve output-only access for automation", () => {
@@ -127,6 +145,8 @@ test("WebSocket classes deny unknown paths and reserve output-only access for au
   assert.equal(authorizeWebSocketPrincipal(auth, principal("automation"), "pane-output"), true);
   assert.equal(authorizeWebSocketPrincipal(auth, principal("automation"), "events"), false);
   assert.equal(authorizeWebSocketPrincipal(auth, principal("helper"), "pane-output"), false);
+  assert.equal(authorizeWebSocketPrincipal(auth, principal("agent-input-source"), "pane-output"), false);
+  assert.equal(authorizeWebSocketPrincipal(auth, principal("agent-input-source"), "events"), false);
   assert.equal(authorizeWebSocketPrincipal(auth, principal("browser-session"), "pane-interactive"), true);
   assert.equal(authorizeWebSocketPrincipal(auth, principal("legacy-shared"), "events"), false);
   assert.equal(authorizeWebSocketPrincipal({ ...auth, browserAuthMode: "shared-or-login" }, principal("legacy-shared"), "events"), true);

@@ -1,12 +1,17 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { WebSocket } from "ws";
 import { isTerminalProtocolResponse } from "../shared/terminal-protocol.js";
 import type { BrowserAuthMode } from "./auth.js";
 import { AgentSessionService } from "./agent-sessions.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
+import type { AgentInputRegistrationCapability } from "./agent-input-credential-store.js";
 import {
   createSessionBackend,
+  type BackendRuntimeFile,
   type BackendSession,
   type SessionBackend,
 } from "./backends/index.js";
@@ -135,6 +140,7 @@ export class SessionManager {
   private readonly currentMachines: () => MachineConfig[];
   private readonly terminalCheckpoints: TerminalCheckpointStore;
   private readonly durableEndpoints: DurableEndpointStore;
+  private agentInputCapabilityIssuer?: (paneId: string) => AgentInputRegistrationCapability;
 
   constructor(
     private readonly state: StateStore,
@@ -176,6 +182,12 @@ export class SessionManager {
 
   hasLiveSessionsForMachine(machineId: string): boolean {
     return [...this.sessions.values()].some((session) => session.pane.machineId === machineId && !session.isExited);
+  }
+
+  setAgentInputCapabilityIssuer(
+    issuer: ((paneId: string) => AgentInputRegistrationCapability) | undefined,
+  ): void {
+    this.agentInputCapabilityIssuer = issuer;
   }
 
   hasLivePaneSession(paneId: string): boolean {
@@ -438,6 +450,24 @@ export class SessionManager {
       void previousBackend.dispose(pane.id, undefined, { kill: false });
     }
     const context = this.state.findPaneContext(pane.id);
+    let agentInputEnvironment: Record<string, string> = {};
+    let runtimeFiles: BackendRuntimeFile[] | undefined;
+    if (this.agentInputCapabilityIssuer && (machine.kind === "local" || machine.kind === "ssh")) {
+      try {
+        const issued = this.agentInputCapabilityIssuer(pane.id);
+        if (machine.sessionBackend === "agent") {
+          runtimeFiles = [{ purpose: "agent-input-capability", data: Buffer.from(`${issued.capability}\n`, "utf8") }];
+        } else {
+          agentInputEnvironment = machine.kind === "local"
+            ? stageLocalAgentInputCapability(pane.id, issued.capability)
+            : { WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: issued.capability };
+        }
+      } catch {
+        // Structured questions fail closed; terminal startup remains available.
+      }
+    } else if (machine.kind === "local") {
+      removeLocalAgentInputCapability(pane.id);
+    }
     const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
     const streamPath = streamPathForMachine(machine.id);
     const sessionEnv = {
@@ -450,6 +480,7 @@ export class SessionManager {
           : this.helperToken,
         this.browserAuthMode,
       ),
+      ...agentInputEnvironment,
       WMUX_URL: resolveHelperUrl(`http://${process.env.WMUX_HOST ?? "127.0.0.1"}:${process.env.WMUX_PORT ?? "3478"}`),
       WMUX_WORKSPACE_ID: context?.workspace.id ?? "",
       WMUX_WORKSPACE_NAME: context?.workspace.name ?? "",
@@ -477,6 +508,7 @@ export class SessionManager {
       cols,
       rows,
       env: sessionEnv,
+      ...(runtimeFiles ? { runtimeFiles } : {}),
       ...(restoredCheckpoint ? { restoredCheckpoint } : {}),
     });
     const startedAt = Date.now();
@@ -995,6 +1027,57 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
     return null;
   }
   return null;
+};
+
+const stageLocalAgentInputCapability = (
+  paneId: string,
+  capability: string,
+): Record<string, string> => {
+  const directory = path.join(os.homedir(), ".wmux", "agent-input");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const directoryStat = fs.lstatSync(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()
+    || fs.realpathSync(directory) !== path.resolve(directory)
+    || (typeof process.getuid === "function" && directoryStat.uid !== process.getuid())
+    || (directoryStat.mode & 0o077) !== 0) {
+    throw new Error("agent input staging directory is unsafe");
+  }
+  const capabilityPath = path.join(directory, `${paneId}.cap`);
+  const credentialPath = path.join(directory, `${paneId}.json`);
+  const temporary = `${capabilityPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  try {
+    if (fs.existsSync(capabilityPath)) {
+      const existing = fs.lstatSync(capabilityPath);
+      if (!existing.isFile() || existing.isSymbolicLink()
+        || (typeof process.getuid === "function" && existing.uid !== process.getuid())) {
+        throw new Error("agent input capability path is unsafe");
+      }
+    }
+    fs.writeFileSync(temporary, `${capability}\n`, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, capabilityPath);
+    fs.chmodSync(capabilityPath, 0o600);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+  return {
+    WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath,
+  };
+};
+
+const removeLocalAgentInputCapability = (paneId: string): void => {
+  if (!/^[A-Za-z0-9._-]{1,256}$/.test(paneId)) return;
+  const candidate = path.join(os.homedir(), ".wmux", "agent-input", `${paneId}.cap`);
+  try {
+    const stat = fs.lstatSync(candidate);
+    if (!stat.isFile() || stat.isSymbolicLink()) return;
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return;
+    fs.rmSync(candidate);
+  } catch {
+    // Absence or an unsafe path is already fail-closed.
+  }
 };
 
 export const isTerminalProtocolResponseInput = isTerminalProtocolResponse;

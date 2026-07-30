@@ -1,17 +1,20 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import {
   WINDOWS_AGENT_LONG_POLL,
   WINDOWS_AGENT_PATHS,
+  POSIX_AGENT_RUNTIME_FILE_CAPABILITY,
   type WindowsAgentHealth,
   type WindowsAgentOutputResponse as AgentOutputResponse,
   type WindowsAgentPasteImageResponse,
   type WindowsAgentSessionListResponse as AgentSessionListResponse,
   type WindowsAgentSessionResponse as AgentSessionResponse,
 } from "../shared/windows-agent-protocol.js";
+import type { BackendRuntimeFile } from "./backends/backend.js";
 import type { MachineConfig, PaneStartupPhase, PaneState } from "./types.js";
 import {
   buildWindowsHelperBundle,
@@ -320,6 +323,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     private readonly activateUpdate: WindowsAgentUpdateActivator = activateWindowsAgentUpdate,
     private readonly updateRestartTimeoutMs = UPDATE_RESTART_TIMEOUT_MS,
     private readonly restoredCheckpoint?: AttachReplay,
+    private readonly runtimeFiles: BackendRuntimeFile[] = [],
   ) {
     super();
     this.checkpoint = new TerminalCheckpoint(cols, rows, extraEnv);
@@ -464,6 +468,11 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         ) {
           throw new Error("POSIX agent protocol is unavailable or outdated");
         }
+        if (this.runtimeFiles.length > 0
+          && !health.capabilities?.includes(POSIX_AGENT_RUNTIME_FILE_CAPABILITY)) {
+          for (const file of this.runtimeFiles) file.data.fill(0);
+          this.runtimeFiles.length = 0;
+        }
       }
       this.reportPhase(
         "creating-session",
@@ -471,6 +480,13 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
           ? `Opening PowerShell on ${this.machine.name}…`
           : `Opening shell on ${this.machine.name}…`,
       );
+      const wireRuntimeFiles = this.runtimeFiles.map((file) => ({
+        purpose: file.purpose,
+        dataBase64: file.data.toString("base64"),
+        sha256: crypto.createHash("sha256").update(file.data).digest("hex"),
+      }));
+      for (const file of this.runtimeFiles) file.data.fill(0);
+      this.runtimeFiles.length = 0;
       const response = await this.post<AgentSessionResponse>(
         WINDOWS_AGENT_PATHS.session(this.pane.id),
         {
@@ -484,6 +500,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
             bundleVersion: helperBundle?.bundleVersion ?? "",
             files: helperBundle?.files ?? [],
           },
+          runtimeFiles: wireRuntimeFiles,
           env: {
             WMUX_MACHINE_ID: this.machine.id,
             WMUX_MACHINE_NAME: this.machine.name,

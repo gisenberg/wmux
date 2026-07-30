@@ -528,6 +528,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-media` | Render images, audio, or video through the browser |
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
 | `wmux-hooks` | Install Claude, Codex, or OpenCode lifecycle hooks |
+| `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
 | `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, or Claude TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
 | `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
@@ -576,6 +577,21 @@ trust step.
 parity is not included.
 An interactive OpenCode session rename appears in wmux on its next prompt;
 wmux preserves a user-owned workspace title.
+
+On POSIX, the generated OpenCode plugin can also project supported interactive
+questions into a desktop browser shelf and return an answer through OpenCode's
+typed question API without terminal typing. This integration is pinned to
+OpenCode SDK `1.18.9`, fails closed on incompatible event/SDK shapes, and does
+not retry a request generation after answer exposure; ambiguous delivery stays
+quarantined for native reconciliation. A durable broker-owned occurrence stream
+binds reused native request IDs to exact server generations; only a fully
+validated top-level `question.list` snapshot can close absent requests. Snapshot
+cuts, per-source request/byte quotas, monotonic backup recovery, and per-key
+metadata FIFO prevent one stale or saturated source from advancing another
+source's state. It does not replace the private-network
+boundary. Setup, refresh, privacy, rollback,
+and compatibility details are in
+[OpenCode question compatibility](docs/OPENCODE_QUESTION_COMPATIBILITY.md).
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
