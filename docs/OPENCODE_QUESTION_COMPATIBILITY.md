@@ -29,6 +29,11 @@ SDK `answers` property is dropped before fixture, broker, logging, or durable
 storage. Missing question APIs, version/fingerprint mismatches, malformed
 question events, and unexpected reply result shapes disable structured question
 handling without terminal-input fallback. Generic agent telemetry is unchanged.
+Runtime version discovery reads bounded, owner-safe package manifests directly
+from the configured OpenCode `node_modules` or bounded plugin-file ancestors; it
+does not execute package code or depend on CommonJS export conditions or
+`NODE_PATH`. Missing, malformed, world-writable, or symlinked manifests fail
+closed.
 
 ## Setup and verification
 

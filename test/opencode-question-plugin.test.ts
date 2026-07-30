@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -82,18 +82,8 @@ test("generated plugin allowlists top-level questions and uses only typed questi
   Object.assign(process.env, env);
   try {
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
-    const pluginPackage = path.join(configHome, "node_modules", "@opencode-ai", "plugin");
-    const effectPackage = path.join(configHome, "node_modules", "effect");
-    fs.mkdirSync(pluginPackage, { recursive: true });
-    fs.mkdirSync(effectPackage, { recursive: true });
-    fs.writeFileSync(path.join(pluginPackage, "package.json"), '{"name":"@opencode-ai/plugin","version":"1.18.9","type":"module","exports":"./index.js"}');
-    fs.writeFileSync(path.join(pluginPackage, "index.js"), 'export const tool=Object.assign((v)=>v,{schema:{string:()=>({optional:()=>({})}),number:()=>({optional:()=>({})}),boolean:()=>({optional:()=>({})})}});\n');
-    fs.writeFileSync(path.join(effectPackage, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(path.join(effectPackage, "index.js"), 'export const Effect={runPromise:(v)=>v()};\n');
+    installFixturePackages(configHome);
     const sdkPackage = path.join(configHome, "node_modules", "@opencode-ai", "sdk");
-    fs.mkdirSync(path.join(sdkPackage, "v2"), { recursive: true });
-    fs.writeFileSync(path.join(sdkPackage, "package.json"), '{"name":"@opencode-ai/sdk","version":"1.18.9","type":"module","exports":{"./v2/client":"./v2/client.js"}}');
-    fs.writeFileSync(path.join(sdkPackage, "v2", "client.js"), 'export {};\n');
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
     const module = await import(`${pathToFileURL(pluginPath).href}?question=${Date.now()}`);
     const replies: unknown[] = [];
@@ -743,18 +733,122 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   }
 });
 
-const installFixturePackages = (configHome: string): void => {
+test("generated plugin discovers import-only ESM packages and rejects unsafe manifests", { skip: process.platform !== "linux" }, async (t) => {
+  const variants: Array<{ name: string; mutate: (manifest: string, home: string) => void }> = [
+    { name: "supported", mutate: () => undefined },
+    { name: "version mismatch", mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":"1.18.8"}') },
+    { name: "name mismatch", mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/not-sdk","version":"1.18.9"}') },
+    { name: "non-string version", mutate: (manifest) => fs.writeFileSync(manifest, '{"name":"@opencode-ai/sdk","version":1.18}') },
+    { name: "missing", mutate: (manifest) => fs.rmSync(manifest) },
+    { name: "malformed", mutate: (manifest) => fs.writeFileSync(manifest, '{') },
+    { name: "world writable", mutate: (manifest) => fs.chmodSync(manifest, 0o666) },
+    { name: "symlink", mutate: (manifest, home) => {
+      const target = path.join(home, "sdk-package.json");
+      fs.writeFileSync(target, '{"name":"@opencode-ai/sdk","version":"1.18.9"}', { mode: 0o600 });
+      fs.rmSync(manifest);
+      fs.symlinkSync(target, manifest);
+    } },
+  ];
+  for (const variant of variants) {
+    await t.test(variant.name, async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-package-"));
+      const configHome = path.join(home, "config");
+      const capabilityPath = path.join(home, "pane.cap");
+      fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+      let requests = 0;
+      const server = http.createServer((_request, response) => {
+        requests += 1;
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          sourceId: "unexpected", relaySecret: "S".repeat(43), expiresAt: Date.now() + 60_000,
+          supported: true, credentialGeneration: 1,
+        }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const runnerPath = path.join(home, "run-plugin.mjs");
+      fs.writeFileSync(runnerPath, `
+        const pluginModule = await import(${JSON.stringify(pathToFileURL(path.join(configHome, "opencode", "plugins", "wmux.ts")).href)});
+        const client = {
+          question: {
+            list: async () => ({ data: [], response: { status: 200 } }),
+            reply: async () => ({ data: true, response: { status: 200 } }),
+          },
+          session: {
+            get: async () => ({ data: { title: "Top" } }),
+            messages: async () => ({ data: [] }),
+          },
+        };
+        const plugin = await pluginModule.default({ client, directory: ${JSON.stringify(repoRoot)} });
+        process.stdout.write("READY\\n");
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        await plugin.event({ event: { type: "question.future", properties: {} } });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      `, { mode: 0o600 });
+      const env = {
+        ...process.env,
+        HOME: home,
+        XDG_CONFIG_HOME: configHome,
+        WMUX_URL: `http://127.0.0.1:${address.port}`,
+        WMUX_PANE_ID: `pane-${variant.name}`,
+        WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+        WMUX_AGENT_INPUT_CREDENTIAL_PATH: path.join(home, "pane.json"),
+        WMUX_TOKEN: "broad-shared-token-must-not-cross",
+        WMUX_HELPER_TOKEN: "broad-helper-token-must-not-cross",
+        WMUX_AUTOMATION_TOKEN: "broad-automation-token-must-not-cross",
+        WMUX_REGISTRATION_TOKEN: "broad-registration-token-must-not-cross",
+      };
+      let child: ReturnType<typeof spawn> | undefined;
+      let output = "";
+      let errors = "";
+      try {
+        await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
+        installFixturePackages(configHome, true);
+        variant.mutate(path.join(configHome, "node_modules", "@opencode-ai", "sdk", "package.json"), home);
+        child = spawn(process.execPath, ["--experimental-transform-types", runnerPath], { env, stdio: ["ignore", "pipe", "pipe"] });
+        child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+        child.stderr.on("data", (chunk) => { errors += chunk.toString(); });
+        await waitFor(() => output.includes("READY"), () => errors);
+        if (variant.name === "supported") {
+          await waitFor(() => requests > 0 && brokerChildIds(child!.pid).length > 0, () => JSON.stringify({ requests, errors }));
+          const environment = fs.readFileSync(`/proc/${brokerChildIds(child.pid)[0]}/environ`, "utf8").split("\0");
+          for (const key of ["WMUX_TOKEN", "WMUX_HELPER_TOKEN", "WMUX_AUTOMATION_TOKEN", "WMUX_REGISTRATION_TOKEN"]) {
+            assert.equal(environment.some((entry) => entry.startsWith(`${key}=`)), false, `${key} crossed the broker allowlist`);
+          }
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          assert.deepEqual(brokerChildIds(child.pid), [], `${variant.name} launched a broker`);
+          assert.equal(requests, 0, `${variant.name} reached broker bootstrap`);
+        }
+        const exitCode = child.exitCode ?? await new Promise<number | null>((resolve) => child!.once("exit", resolve));
+        assert.equal(exitCode, 0, errors);
+      } finally {
+        if (child?.exitCode === null) child.kill("SIGTERM");
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+const installFixturePackages = (configHome: string, importOnly = false): void => {
   const pluginPackage = path.join(configHome, "node_modules", "@opencode-ai", "plugin");
   const effectPackage = path.join(configHome, "node_modules", "effect");
   const sdkPackage = path.join(configHome, "node_modules", "@opencode-ai", "sdk");
   fs.mkdirSync(pluginPackage, { recursive: true });
   fs.mkdirSync(effectPackage, { recursive: true });
   fs.mkdirSync(path.join(sdkPackage, "v2"), { recursive: true });
-  fs.writeFileSync(path.join(pluginPackage, "package.json"), '{"name":"@opencode-ai/plugin","version":"1.18.9","type":"module","exports":"./index.js"}');
+  fs.writeFileSync(path.join(pluginPackage, "package.json"), importOnly
+    ? '{"name":"@opencode-ai/plugin","version":"1.18.9","type":"module","exports":{".":{"import":"./index.js"}}}'
+    : '{"name":"@opencode-ai/plugin","version":"1.18.9","type":"module","exports":"./index.js"}');
   fs.writeFileSync(path.join(pluginPackage, "index.js"), 'export const tool=Object.assign((v)=>v,{schema:{string:()=>({optional:()=>({})}),number:()=>({optional:()=>({})}),boolean:()=>({optional:()=>({})})}});\n');
   fs.writeFileSync(path.join(effectPackage, "package.json"), '{"type":"module"}');
   fs.writeFileSync(path.join(effectPackage, "index.js"), 'export const Effect={runPromise:(v)=>v()};\n');
-  fs.writeFileSync(path.join(sdkPackage, "package.json"), '{"name":"@opencode-ai/sdk","version":"1.18.9","type":"module","exports":{"./v2/client":"./v2/client.js"}}');
+  fs.writeFileSync(path.join(sdkPackage, "package.json"), importOnly
+    ? '{"name":"@opencode-ai/sdk","version":"1.18.9","type":"module","exports":{"./v2/client":{"import":"./v2/client.js"}}}'
+    : '{"name":"@opencode-ai/sdk","version":"1.18.9","type":"module","exports":{"./v2/client":"./v2/client.js"}}');
   fs.writeFileSync(path.join(sdkPackage, "v2", "client.js"), 'export {};\n');
 };
 
@@ -766,8 +860,8 @@ const waitFor = async (predicate: () => boolean, detail: () => string = () => ""
   }
 };
 
-const brokerChildIds = (): number[] => {
-  const childrenPath = `/proc/${process.pid}/task/${process.pid}/children`;
+const brokerChildIds = (parentId = process.pid): number[] => {
+  const childrenPath = `/proc/${parentId}/task/${parentId}/children`;
   let ids: number[] = [];
   try {
     ids = fs.readFileSync(childrenPath, "utf8").trim().split(/\s+/).filter(Boolean).map(Number);

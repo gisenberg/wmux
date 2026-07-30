@@ -173,8 +173,8 @@ import { spawn } from "node:child_process"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { createRequire } from "node:module"
 import { performance } from "node:perf_hooks"
+import { fileURLToPath } from "node:url"
 
 const eventScript = ${JSON.stringify(eventScript)}
 const brokerScript = ${JSON.stringify(path.join(scriptDir, "wmux-agent-input-broker"))}
@@ -968,31 +968,77 @@ const validQuestion = (value: any) => value && typeof value === "object"
   && (value.multiple === undefined || typeof value.multiple === "boolean")
   && (value.custom === undefined || typeof value.custom === "boolean")
 
-const installedPackageVersion = (packageName: string, entry: string) => {
+const MAX_PACKAGE_MANIFEST_BYTES = 64 * 1024
+const MAX_PACKAGE_ANCESTORS = 8
+
+const packageSearchRoots = () => {
+  const roots: string[] = []
+  const configuredRoot = process.env.XDG_CONFIG_HOME
+    || (process.env.HOME ? path.join(process.env.HOME, ".config") : "")
+  if (configuredRoot && path.isAbsolute(configuredRoot)) roots.push(path.join(path.resolve(configuredRoot), "node_modules"))
   try {
-    const require = createRequire(import.meta.url)
-    let current = path.dirname(require.resolve(entry))
-    for (;;) {
-      const manifestPath = path.join(current, "package.json")
-      if (fs.existsSync(manifestPath)) {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
-        if (manifest?.name === packageName && typeof manifest.version === "string") return manifest.version
-      }
+    let current = path.dirname(fileURLToPath(import.meta.url))
+    for (let depth = 0; depth < MAX_PACKAGE_ANCESTORS; depth += 1) {
+      roots.push(path.join(current, "node_modules"))
       const parent = path.dirname(current)
-      if (parent === current) return undefined
+      if (parent === current) break
       current = parent
     }
+  } catch {}
+  return [...new Set(roots)]
+}
+
+const safePackageDirectory = (directory: string) => {
+  const stat = fs.lstatSync(directory)
+  return stat.isDirectory() && !stat.isSymbolicLink()
+    && fs.realpathSync(directory) === path.resolve(directory)
+    && (typeof process.getuid !== "function" || stat.uid === process.getuid())
+    && (stat.mode & 0o002) === 0
+}
+
+const safePackageManifest = (manifestPath: string) => {
+  let descriptor: number | undefined
+  try {
+    descriptor = fs.openSync(manifestPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const stat = fs.fstatSync(descriptor)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_PACKAGE_MANIFEST_BYTES
+      || fs.realpathSync(manifestPath) !== path.resolve(manifestPath)
+      || (typeof process.getuid === "function" && stat.uid !== process.getuid())
+      || (stat.mode & 0o002) !== 0) return undefined
+    const bytes = Buffer.alloc(stat.size + 1)
+    const length = fs.readSync(descriptor, bytes, 0, bytes.length, 0)
+    if (length !== stat.size) return undefined
+    return JSON.parse(bytes.subarray(0, length).toString("utf8"))
   } catch {
     return undefined
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
   }
+}
+
+const installedPackageVersion = (packageName: "@opencode-ai/plugin" | "@opencode-ai/sdk") => {
+  const segments = packageName.split("/")
+  for (const nodeModules of packageSearchRoots()) {
+    const packageDirectory = path.join(nodeModules, ...segments)
+    if (!fs.existsSync(packageDirectory)) continue
+    try {
+      if (![nodeModules, path.join(nodeModules, segments[0]), packageDirectory].every(safePackageDirectory)) return undefined
+      const manifest = safePackageManifest(path.join(packageDirectory, "package.json"))
+      if (manifest?.name !== packageName || typeof manifest.version !== "string") return undefined
+      return manifest.version
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 const questionRuntime = (client: OpencodeClient) => {
   if (!questionContract || !process.env.WMUX_PANE_ID
     || typeof client?.question?.reply !== "function" || typeof client?.question?.list !== "function"
     || typeof client?.session?.get !== "function") return undefined
-  const openCodeVersion = installedPackageVersion("@opencode-ai/plugin", "@opencode-ai/plugin")
-  const sdkVersion = installedPackageVersion("@opencode-ai/sdk", "@opencode-ai/sdk/v2/client")
+  const openCodeVersion = installedPackageVersion("@opencode-ai/plugin")
+  const sdkVersion = installedPackageVersion("@opencode-ai/sdk")
   if (openCodeVersion !== questionContract.openCodeRelease || sdkVersion !== questionContract.sdkVersion) return undefined
   return {
     type: "runtime",
