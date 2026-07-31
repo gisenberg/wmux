@@ -8,6 +8,34 @@ const waitForLifeFrameWindow = async (
   await page.waitForTimeout(milliseconds);
 };
 
+const openDelayedRetroBoot = async ({
+  browser,
+  currentPage,
+  mobile,
+  randomValue,
+}: {
+  browser: import("@playwright/test").Browser;
+  currentPage: import("@playwright/test").Page;
+  mobile: boolean;
+  randomValue: number;
+}) => {
+  const context = await browser.newContext({
+    reducedMotion: "no-preference",
+    viewport: mobile ? { width: 412, height: 915 } : { width: 1440, height: 900 },
+  });
+  const page = await context.newPage();
+  await page.addInitScript((selectionRandom) => {
+    Math.random = () => selectionRandom;
+  }, randomValue);
+  await page.routeWebSocket("**/ws/events", (webSocket) => webSocket.close());
+  await page.route("**/api/bootstrap", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 8_000));
+    await route.continue();
+  }, { times: 1 });
+  await page.goto(new URL("/", currentPage.url()).href, { waitUntil: "domcontentloaded" });
+  return { context, page };
+};
+
 test("legacy query parameters canonicalize to the canvas chrome", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "canvas desktop routing coverage");
   test.setTimeout(60_000);
@@ -146,4 +174,105 @@ test("mobile boot exits without a decorative delay once bootstrap is ready", asy
   await page.goto("/");
   await bootstrapReady;
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 2_000 });
+});
+
+test("Spectrum tape phases animate their native palettes and stop under reduced motion", async ({
+  browser,
+  page: currentPage,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop boot-effect coverage");
+  const boot = await openDelayedRetroBoot({
+    browser,
+    currentPage,
+    mobile: false,
+    randomValue: 0.212_765_957_446_808_5,
+  });
+  try {
+    const screen = boot.page.locator('[data-boot-profile="zx-spectrum"]');
+    await expect.poll(async () => screen.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return element.getAttribute("data-tape-border") === "header"
+        && style.animationName === "retro-tape-border-shift"
+        && style.backgroundImage.includes("rgb(0, 215, 215)")
+        && style.backgroundImage.includes("rgb(215, 0, 0)");
+    }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
+    await boot.page.screenshot({ path: testInfo.outputPath("zx-spectrum-header.png") });
+
+    await boot.page.emulateMedia({ reducedMotion: "reduce" });
+    await expect.poll(() => screen.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
+    await boot.page.emulateMedia({ reducedMotion: "no-preference" });
+
+    await expect.poll(async () => screen.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return element.getAttribute("data-tape-border") === "data"
+        && style.animationDuration === "0.11s"
+        && style.backgroundImage.includes("rgb(22, 59, 215)")
+        && style.backgroundImage.includes("rgb(230, 219, 0)");
+    }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
+  } finally {
+    await boot.context.close();
+  }
+});
+
+test("mobile tape borders stay inside browser safe-area chrome", async ({ browser, page: currentPage }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile boot-effect coverage");
+  const boot = await openDelayedRetroBoot({
+    browser,
+    currentPage,
+    mobile: true,
+    randomValue: 0.212_765_957_446_808_5,
+  });
+  try {
+    const screen = boot.page.locator('[data-boot-profile="zx-spectrum"]');
+    await expect.poll(async () => screen.evaluate((element) => {
+      const bezel = element.querySelector<HTMLElement>(".retro-boot-bezel")!;
+      const screenStyle = getComputedStyle(element);
+      const bezelStyle = getComputedStyle(bezel);
+      return element.getAttribute("data-tape-border") === "header"
+        && screenStyle.backgroundColor === "rgb(12, 13, 15)"
+        && screenStyle.backgroundImage === "none"
+        && bezelStyle.backgroundImage.includes("rgb(0, 215, 215)");
+    }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
+    await boot.page.screenshot({ path: testInfo.outputPath("zx-spectrum-mobile-header.png") });
+  } finally {
+    await boot.context.close();
+  }
+});
+
+test("TRS-80 Model 4 keeps all 80 columns inside the mobile framebuffer", async ({
+  browser,
+  page: currentPage,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile 80-column coverage");
+  const boot = await openDelayedRetroBoot({
+    browser,
+    currentPage,
+    mobile: true,
+    randomValue: 0.184_397_163_120_567_36,
+  });
+  try {
+    const screen = boot.page.locator('[data-boot-profile="trs-80-model-4"]');
+    await expect(screen.locator(".retro-boot-terminal canvas")).toBeVisible({ timeout: 20_000 });
+    const bounds = await screen.evaluate((element) => {
+      const framebuffer = element.querySelector<HTMLElement>(".retro-boot-framebuffer")!.getBoundingClientRect();
+      const terminal = element.querySelector<HTMLElement>(".retro-boot-terminal")!;
+      const canvas = terminal.querySelector("canvas")!.getBoundingClientRect();
+      return {
+        canvasLeft: canvas.left,
+        canvasRight: canvas.right,
+        framebufferLeft: framebuffer.left,
+        framebufferRight: framebuffer.right,
+        overflowX: getComputedStyle(terminal).overflowX,
+        scrollWidth: terminal.scrollWidth,
+        clientWidth: terminal.clientWidth,
+      };
+    });
+    expect(bounds.canvasLeft).toBeGreaterThanOrEqual(bounds.framebufferLeft - 0.5);
+    expect(bounds.canvasRight).toBeLessThanOrEqual(bounds.framebufferRight + 0.5);
+    expect(bounds.overflowX).toBe("hidden");
+    expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth);
+    await boot.page.screenshot({ path: testInfo.outputPath("trs-80-model-4-mobile.png") });
+  } finally {
+    await boot.context.close();
+  }
 });

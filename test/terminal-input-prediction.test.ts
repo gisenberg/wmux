@@ -8,6 +8,7 @@ import {
   layoutPredictedTerminalInput,
   predictedTerminalInput,
   terminalPredictionCellPaint,
+  terminalPredictionCursorMatches,
   terminalPredictionEchoProbeMatches,
   terminalPredictionStyleAtCursor,
 } from "../src/client/src/terminal-input-prediction.js";
@@ -36,6 +37,15 @@ test("terminal prediction accepts bounded printable input and backspace only", (
   assert.equal(predictedTerminalInput(3, "\r"), null);
   assert.equal(predictedTerminalInput(4, "ab"), null);
   assert.equal(predictedTerminalInput(5, "λ"), null);
+});
+
+test("terminal prediction remains armed only at its verified visible cursor", () => {
+  const anchor = { x: 12, y: 4 };
+  assert.equal(terminalPredictionCursorMatches({ ...anchor, visible: true }, anchor), true);
+  assert.equal(terminalPredictionCursorMatches({ x: 13, y: 4, visible: true }, anchor), false);
+  assert.equal(terminalPredictionCursorMatches({ ...anchor, visible: false }, anchor), false);
+  assert.equal(terminalPredictionCursorMatches(undefined, anchor), false);
+  assert.equal(terminalPredictionCursorMatches({ ...anchor, visible: true }, undefined), false);
 });
 
 test("terminal prediction verifies an acknowledged rendered-cell echo", () => {

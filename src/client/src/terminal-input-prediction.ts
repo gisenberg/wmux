@@ -18,6 +18,12 @@ export interface PredictedTerminalLayout {
   authoritativeCursor: { col: number; row: number };
 }
 
+export interface TerminalPredictionCursor {
+  x: number;
+  y: number;
+  visible?: boolean;
+}
+
 export interface TerminalPredictionCellStyle {
   foreground: string;
   background: string;
@@ -131,8 +137,18 @@ export const predictedTerminalInput = (sequence: number, data: string): Predicte
   return null;
 };
 
+export const terminalPredictionCursorMatches = (
+  cursor: TerminalPredictionCursor | null | undefined,
+  anchor: Pick<TerminalPredictionCursor, "x" | "y"> | null | undefined,
+): boolean => Boolean(
+  cursor?.visible
+  && anchor
+  && cursor.x === anchor.x
+  && cursor.y === anchor.y
+);
+
 export const layoutPredictedTerminalInput = (
-  cursor: { x: number; y: number; visible?: boolean },
+  cursor: TerminalPredictionCursor,
   cols: number,
   rows: number,
   predictions: readonly PredictedTerminalInput[],

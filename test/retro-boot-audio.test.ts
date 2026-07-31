@@ -17,3 +17,21 @@ test("every retro boot profile has a short POST sound", () => {
     }
   }
 });
+
+test("recognizable POST cues use the machine-specific tone shape", () => {
+  assert.deepEqual(RETRO_POST_SOUNDS["apple-iie"], [
+    { frequency: 1000, durationMs: 100, offsetMs: 0, type: "square" },
+  ]);
+  assert.deepEqual(RETRO_POST_SOUNDS["atari-st"], [
+    { frequency: 880, durationMs: 150, offsetMs: 0, type: "sine" },
+  ]);
+  assert.deepEqual(RETRO_POST_SOUNDS["nec-pc-9801"], [
+    { frequency: 2000, durationMs: 80, offsetMs: 0, type: "square" },
+  ]);
+  assert.equal(RETRO_POST_SOUNDS["amiga-workbench"].length, 3);
+  assert.ok(
+    RETRO_POST_SOUNDS["amiga-workbench"].every(
+      (postTone) => postTone.filterFrequency === 520 && postTone.volume === 0.012,
+    ),
+  );
+});

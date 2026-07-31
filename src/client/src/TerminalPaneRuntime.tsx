@@ -32,6 +32,7 @@ import {
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionCursorMatches,
   terminalPredictionCellPaint,
   terminalPredictionStyleAtCursor,
   terminalPredictionEchoProbeMatches,
@@ -57,7 +58,7 @@ import {
   safeRows,
   sendInput,
   createTerminalFitter,
-  sendResizeMessage,
+  sendResizeDimensions,
   isForegroundTerminal,
   inputMayLeaveShellPrompt,
   MAX_SYNCHRONIZED_OUTPUT_HOLD_MS,
@@ -318,6 +319,10 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
     let nextInputSequence = 0;
     let predictedInputs: PredictedTerminalInput[] = [];
     let predictionArmedScreen: TerminalPredictionScreen | undefined;
+    // Full-screen applications can repaint asynchronously and move the real
+    // cursor into a footer or status row. Prediction is safe only at the exact
+    // cursor position whose authoritative echo was verified.
+    let predictionArmedCursor: { x: number; y: number } | undefined;
     let predictionProbe: TerminalPredictionEchoProbe | undefined;
     let predictionProbeAcknowledgedSequence: number | undefined;
     let pendingLatencyKeyEvent: { eventAt: number; observedAt: number } | undefined;
@@ -391,7 +396,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
 
     const disarmPrediction = () => {
       predictionArmedScreen = undefined;
-      if (predictionCanvasRef.current) delete predictionCanvasRef.current.dataset.armedScreen;
+      predictionArmedCursor = undefined;
+      if (predictionCanvasRef.current) {
+        delete predictionCanvasRef.current.dataset.armedScreen;
+        delete predictionCanvasRef.current.dataset.armedCursor;
+      }
       clearPredictionProbe();
       clearPredictions();
     };
@@ -468,7 +477,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         return;
       }
       predictionArmedScreen = screen;
-      if (predictionCanvasRef.current) predictionCanvasRef.current.dataset.armedScreen = screen;
+      predictionArmedCursor = { x: cursor.x, y: cursor.y };
+      if (predictionCanvasRef.current) {
+        predictionCanvasRef.current.dataset.armedScreen = screen;
+        predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(predictionArmedCursor);
+      }
       clearPredictionProbe();
     }
 
@@ -484,11 +497,14 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const renderer = predictionRenderer;
       const metrics = term.renderer?.getMetrics();
       const cursor = term.wasmTerm?.getCursor();
+      const anchor = predictionArmedCursor;
       const currentDevicePixelRatio = terminalRendererDevicePixelRatio(window.devicePixelRatio);
       if (
         !renderer
         || !metrics
         || !cursor
+        || !anchor
+        || !terminalPredictionCursorMatches(cursor, anchor)
         || predictionMetricsStale
         || currentDevicePixelRatio !== rendererDevicePixelRatio
         || predictionArmedScreen !== predictionScreen(term)
@@ -498,7 +514,12 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         disarmPrediction();
         return;
       }
-      const layout = layoutPredictedTerminalInput(cursor, safeCols(term.cols), safeRows(term.rows), predictedInputs);
+      const layout = layoutPredictedTerminalInput(
+        { ...anchor, visible: true },
+        safeCols(term.cols),
+        safeRows(term.rows),
+        predictedInputs,
+      );
       if (!layout) {
         disarmPrediction();
         return;
@@ -514,7 +535,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const predictionStyle = terminalPredictionStyleAtCursor(
         viewport,
         cols,
-        cursor,
+        anchor,
         (row) => term.wasmTerm?.isRowWrapped(row) ?? false,
       );
       const authoritativeCanvas = term.renderer?.getCanvas();
@@ -541,7 +562,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       if (sequence === undefined || predictedInputs.length === 0) return;
       predictionAcknowledgedSequence = Math.max(predictionAcknowledgedSequence ?? 0, sequence);
       if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
-      predictionExpiryTimer = window.setTimeout(clearPredictions, 2000);
+      predictionExpiryTimer = window.setTimeout(disarmPrediction, 2000);
     };
 
     const settlePredictionsAfterRender = (term: Terminal) => {
@@ -552,6 +573,30 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       if (predictionAcknowledgedSequence !== undefined) {
         const acknowledgedSequence = predictionAcknowledgedSequence;
         predictionAcknowledgedSequence = undefined;
+        const acknowledged = predictedInputs.filter((prediction) => prediction.sequence <= acknowledgedSequence);
+        const anchor = predictionArmedCursor;
+        const cursor = term.wasmTerm?.getCursor();
+        if (acknowledged.length > 0) {
+          const acknowledgedLayout = anchor
+            ? layoutPredictedTerminalInput(
+              { ...anchor, visible: true },
+              safeCols(term.cols),
+              safeRows(term.rows),
+              acknowledged,
+            )
+            : null;
+          const nextAnchor = acknowledgedLayout
+            ? { x: acknowledgedLayout.cursor.col, y: acknowledgedLayout.cursor.row }
+            : undefined;
+          if (!nextAnchor || !terminalPredictionCursorMatches(cursor, nextAnchor)) {
+            disarmPrediction();
+            return;
+          }
+          predictionArmedCursor = nextAnchor;
+          if (predictionCanvasRef.current) {
+            predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(nextAnchor);
+          }
+        }
         predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > acknowledgedSequence);
         if (predictedInputs.length === 0) {
           clearPredictions();
@@ -903,12 +948,21 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
     };
 
     const foreground = () => isForegroundTerminal(activeRef.current);
+    const proposedDimensions = (term: Terminal) =>
+      fitAddonRef.current?.proposedDimensions() ?? { cols: term.cols, rows: term.rows };
 
     const announceResizeState = () => {
       const term = terminalRef.current;
       if (!term) return;
+      const isForeground = foreground();
+      fitAddonRef.current?.setForeground(isForeground);
       if (activeRef.current && document.visibilityState === "visible") fitAddonRef.current?.fit();
-      sendResizeMessage(socketRef.current, activeRef.current ? "activate" : "resize", term, foreground());
+      sendResizeDimensions(
+        socketRef.current,
+        activeRef.current ? "activate" : "resize",
+        proposedDimensions(term),
+        isForeground,
+      );
     };
 
     const announceResizeStateSoon = () => requestAnimationFrame(announceResizeState);
@@ -934,7 +988,10 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       return new PaneSocketController({
         paneId: pane.id,
-        url: () => `${protocol}//${window.location.host}/ws/panes/${pane.id}?cols=${safeCols(term.cols)}&rows=${safeRows(term.rows)}`,
+        url: () => {
+          const size = proposedDimensions(term);
+          return `${protocol}//${window.location.host}/ws/panes/${pane.id}?cols=${safeCols(size.cols)}&rows=${safeRows(size.rows)}`;
+        },
         onSocketChange: (socket) => {
           socketRef.current = socket;
         },
@@ -951,7 +1008,15 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           }
         },
         onOpen: (socket) => {
-          sendResizeMessage(socket, activeRef.current ? "activate" : "resize", term, foreground());
+          const isForeground = foreground();
+          fitAddonRef.current?.setForeground(isForeground);
+          fitAddonRef.current?.fit();
+          sendResizeDimensions(
+            socket,
+            activeRef.current ? "activate" : "resize",
+            proposedDimensions(term),
+            isForeground,
+          );
         },
         onMessage: (message) => {
           if (cancelled) return;
@@ -959,6 +1024,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             setStartupLabel(message.label);
           }
           if (message.type === "ready") {
+            fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
             setStartupLabel(message.replay ? "Restoring terminal state…" : "Preparing terminal…");
             setTerminalReady(false);
             resetPendingOutput();
@@ -968,6 +1034,12 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             if (message.replay) startReplayDrain(term, message.replay);
             else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
             else revealTerminal();
+          }
+          if (message.type === "size") {
+            rectangularSelection?.clear();
+            disarmPrediction();
+            fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
+            refreshMetrics(term);
           }
           if (message.type === "output") {
             terminalLatency.recordOutput(pane.id, message.inputSequence, message.data.length, performance.now());
@@ -1103,8 +1175,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         requestAnimationFrame(() => term.focus());
       }
       await waitForVisibleBox(containerRef.current);
-      fitAddon = createTerminalFitter(term, containerRef.current);
+      fitAddon = createTerminalFitter(term, containerRef.current, (dimensions) => {
+        sendResizeDimensions(socketRef.current, "resize", dimensions, foreground());
+      });
       fitAddonRef.current = fitAddon;
+      fitAddon.setForeground(foreground());
       fitAddon.fit();
       refreshMetrics(term);
       if ("fonts" in document) {
@@ -1403,6 +1478,8 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           lastInteractiveInputAt = Date.now();
           const prediction = predictedTerminalInput(sequence, data);
           const screen = predictionScreen(term);
+          const cursor = term.wasmTerm?.getCursor();
+          const predictionAnchorMatches = terminalPredictionCursorMatches(cursor, predictionArmedCursor);
           const canPredict = connectedRef.current
             && activeRef.current
             && !replayingTerminalOutput
@@ -1412,6 +1489,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           if (
             prediction
             && predictionArmedScreen === screen
+            && predictionAnchorMatches
             && canPredict
             && !clearPredictionsAfterRender
           ) {
@@ -1423,7 +1501,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           } else if (!awaitingAuthoritativeRender) {
             clearPredictions();
             if (prediction && canPredict) {
-              if (predictionArmedScreen && predictionArmedScreen !== screen) disarmPrediction();
+              if (predictionArmedScreen) disarmPrediction();
               probePredictionEcho(prediction, term, screen);
             }
             else disarmPrediction();
@@ -1506,10 +1584,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       term.onResize(() => {
         rectangularSelection?.clear();
         disarmPrediction();
-        const ws = socketRef.current;
-        if (ws?.readyState === WebSocket.OPEN) {
-          sendResizeMessage(ws, "resize", term, foreground());
-        }
+        refreshMetrics(term);
       });
       socketController = createSocketController(term);
       socketControllerRef.current = socketController;
@@ -1592,14 +1667,17 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
 
   useEffect(() => {
     const term = terminalRef.current;
-    if (!active || !term) return;
+    if (!term) return;
     requestAnimationFrame(() => {
-      if (focusSignal > appliedFocusSignalRef.current) {
+      const foreground = isForegroundTerminal(activeRef.current);
+      fitAddonRef.current?.setForeground(foreground);
+      if (active && focusSignal > appliedFocusSignalRef.current) {
         appliedFocusSignalRef.current = focusSignal;
         term.focus();
       }
-      fitAddonRef.current?.fit();
-      sendResizeMessage(socketRef.current, "activate", term, isForegroundTerminal(activeRef.current));
+      if (active) fitAddonRef.current?.fit();
+      const dimensions = fitAddonRef.current?.proposedDimensions() ?? { cols: term.cols, rows: term.rows };
+      sendResizeDimensions(socketRef.current, "activate", dimensions, foreground);
     });
   }, [active, focusSignal]);
 

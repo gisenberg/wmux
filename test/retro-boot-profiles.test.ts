@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { RETRO_BOOT_PROFILES, selectRetroBootProfile } from "../src/client/src/retro-boot-profiles";
+import {
+  parseRetroBootProfileHistory,
+  RETRO_BOOT_PROFILES,
+  selectRetroBootProfile,
+  updateRetroBootProfileHistory,
+} from "../src/client/src/retro-boot-profiles";
+
+const profileById = (profileId: string) => {
+  const profile = RETRO_BOOT_PROFILES.find((candidate) => candidate.id === profileId);
+  assert.ok(profile, profileId);
+  return profile;
+};
 
 test("retro boot profiles cover the requested computer families", () => {
   const ids = new Set(RETRO_BOOT_PROFILES.map((profile) => profile.id));
@@ -81,13 +92,100 @@ test("every configured retro font family has a matching local font-face", () => 
   }
 });
 
-test("profile selection spans the pool and avoids an immediate repeat", () => {
+test("profile selection is deterministic, excludes recent profiles, and honors weights", () => {
   assert.equal(selectRetroBootProfile(0).id, RETRO_BOOT_PROFILES[0].id);
   assert.equal(selectRetroBootProfile(0.999999).id, RETRO_BOOT_PROFILES.at(-1)?.id);
 
-  const previousId = RETRO_BOOT_PROFILES[0].id;
-  assert.notEqual(selectRetroBootProfile(0, previousId).id, previousId);
-  assert.notEqual(selectRetroBootProfile(0.999999, previousId).id, previousId);
+  const previousIds = RETRO_BOOT_PROFILES.slice(0, 5).map((profile) => profile.id);
+  assert.ok(!previousIds.includes(selectRetroBootProfile(0, previousIds).id));
+  assert.ok(!previousIds.includes(selectRetroBootProfile(0.999999, previousIds).id));
+  assert.equal(
+    selectRetroBootProfile(0, RETRO_BOOT_PROFILES.map((profile) => profile.id)).id,
+    RETRO_BOOT_PROFILES[0].id,
+  );
+
+  const guruIndex = RETRO_BOOT_PROFILES.findIndex((profile) => profile.id === "amiga-guru-meditation");
+  const guru = RETRO_BOOT_PROFILES[guruIndex];
+  assert.ok(guru);
+  const guruWeight = guru.weight ?? 1;
+  assert.equal(guruWeight, 0.25);
+  const totalWeight = RETRO_BOOT_PROFILES.reduce((total, profile) => total + (profile.weight ?? 1), 0);
+  const weightBeforeGuru = RETRO_BOOT_PROFILES.slice(0, guruIndex).reduce(
+    (total, profile) => total + (profile.weight ?? 1),
+    0,
+  );
+  assert.equal(selectRetroBootProfile((weightBeforeGuru + guruWeight / 2) / totalWeight).id, guru.id);
+  assert.notEqual(selectRetroBootProfile((weightBeforeGuru + guruWeight + 0.01) / totalWeight).id, guru.id);
+});
+
+test("retro profile history migrates the legacy id and retains five unique choices", () => {
+  assert.deepEqual(parseRetroBootProfileHistory("commodore-64"), ["commodore-64"]);
+  assert.deepEqual(
+    parseRetroBootProfileHistory('["zx-spectrum","commodore-64","zx-spectrum","bbc-micro","msx2","apple-iie","nextcube"]'),
+    ["zx-spectrum", "commodore-64", "bbc-micro", "msx2", "apple-iie"],
+  );
+  assert.deepEqual(
+    updateRetroBootProfileHistory(["zx-spectrum", "commodore-64", "bbc-micro", "msx2", "apple-iie"], "nextcube"),
+    ["nextcube", "zx-spectrum", "commodore-64", "bbc-micro", "msx2"],
+  );
+  assert.deepEqual(updateRetroBootProfileHistory(["zx-spectrum", "commodore-64"], "commodore-64"), [
+    "commodore-64",
+    "zx-spectrum",
+  ]);
+});
+
+test("historical boot details match the machines and operating-system eras", () => {
+  assert.match(profileById("commodore-64").boot.map((bootStep) => bootStep.text).join(""), /664 BLOCKS FREE/);
+  assert.match(profileById("commodore-128").boot.map((bootStep) => bootStep.text).join(""), /\(C\)1985 COMMODORE/);
+  assert.deepEqual(profileById("commodore-128").colors, {
+    page: "#b0e0b8",
+    border: "#b0e0b8",
+    background: "#5a5a5a",
+    foreground: "#b0e0b8",
+  });
+  assert.equal(profileById("trs-80-model-4").columns, 80);
+  assert.match(profileById("trs-80-model-4").boot.map((bootStep) => bootStep.text).join(""), /TRSDOS Ready/);
+  assert.match(profileById("bbc-micro").boot.map((bootStep) => bootStep.text).join(""), /Option 0 \(off\)/);
+  assert.match(profileById("msx2").boot.map((bootStep) => bootStep.text).join(""), /version 2\.0[\s\S]*23430 Bytes free/);
+  assert.equal(profileById("sgi-irix").name, "SGI Indigo2 IRIX");
+  assert.match(profileById("pdp-11-rt11").boot.map((bootStep) => bootStep.text).join(""), /MACHIN\.DAT[\s\S]*SESSON\.DAT/);
+  assert.match(profileById("vax-vms").auth.granted, /version V5\.5-2/);
+  assert.match(profileById("sun-sparcstation").auth.granted, /PDT 1998/);
+  assert.match(profileById("ti-99-4a").boot.map((bootStep) => bootStep.text).join(""), /©1981[\s\S]*PRESS:/);
+  assert.match(
+    profileById("trs-80-coco").boot.map((bootStep) => bootStep.text).join(""),
+    /COPR\. 1982 BY TANDY[\s\S]*UNDER LICENSE FROM MICROSOFT[\s\S]*CLOADM"WMUX"[\s\S]*EXEC/,
+  );
+  assert.match(
+    profileById("amstrad-cpc").boot.map((bootStep) => bootStep.text).join(""),
+    /Amstrad 64K Microcomputer  \(v1\)[\s\S]*Locomotive Software/,
+  );
+  for (const profileId of ["amiga-workbench", "amiga-guru-meditation"]) {
+    const profile = profileById(profileId);
+    assert.equal(profile.colors.background, "#0055aa");
+    assert.equal(profile.colors.foreground, "#ffffff");
+    assert.match(profile.boot.map((bootStep) => bootStep.text).join(""), /New Shell process 1[\s\S]*1\.SYS:>/);
+  }
+});
+
+test("lower-confidence profiles use the verified native interpreter and prompt conventions", () => {
+  assert.match(profileById("sam-coupe").boot.map((bootStep) => bootStep.text).join(""), /SAM BASIC[\s\S]*MILES GORDON/);
+  const memotechCommand = profileById("memotech-mtx").boot.find((bootStep) => bootStep.typedFrom !== undefined);
+  assert.equal(memotechCommand?.text, 'RUN "WMUX"\n');
+  assert.match(profileById("tatung-einstein").boot.map((bootStep) => bootStep.text).join(""), /XTAL DOS SYSTEM DISC/);
+  const sharpCommands = profileById("sharp-x68000").boot.filter((bootStep) => bootStep.typedFrom !== undefined);
+  assert.ok(sharpCommands.every((bootStep) => bootStep.text.startsWith("A>")));
+});
+
+test("tape boots declare both border phases and styles honor reduced motion", () => {
+  for (const profileId of ["zx-spectrum", "amstrad-cpc", "oric-atmos"]) {
+    const phases = new Set(profileById(profileId).boot.map((bootStep) => bootStep.tapeBorder).filter(Boolean));
+    assert.deepEqual([...phases].sort(), ["data", "header"], profileId);
+  }
+  const styles = readFileSync(new URL("../src/client/src/styles.css", import.meta.url), "utf8");
+  assert.match(styles, /\.retro-boot-framebuffer::after/);
+  assert.doesNotMatch(styles, /\.retro-graphical-framebuffer::after/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*retro-tape-border-header/);
 });
 
 test("boot text stays within each machine's native line width", () => {

@@ -2,12 +2,14 @@ export interface RetroBootStep {
   text: string;
   delay: number;
   typedFrom?: number;
+  tapeBorder?: "header" | "data";
 }
 
 export interface RetroBootProfile {
   id: string;
   name: string;
   ariaLabel: string;
+  weight?: number;
   columns: number;
   rows: number;
   fontFamily: string;
@@ -42,6 +44,11 @@ const typed = (text: string, delay = 90, prompt = ""): RetroBootStep => ({
   delay,
   typedFrom: prompt.length,
 });
+const tapeStep = (text: string, delay: number, tapeBorder: NonNullable<RetroBootStep["tapeBorder"]>): RetroBootStep => ({
+  text,
+  delay,
+  tapeBorder,
+});
 const centeredLine = (text: string, columns: number) => `${" ".repeat(Math.max(0, Math.floor((columns - text.length) / 2)))}${text}\n`;
 
 const standardAuth = {
@@ -55,6 +62,27 @@ const standardAuth = {
   granted: "\nACCESS GRANTED.\n",
   ready: "WMUX READY.\n",
 } as const;
+
+export const RETRO_BOOT_PROFILE_HISTORY_LIMIT = 5;
+
+export const parseRetroBootProfileHistory = (storedValue: string | null): string[] => {
+  if (!storedValue) return [];
+  try {
+    const parsed = JSON.parse(storedValue);
+    if (Array.isArray(parsed)) {
+      return [
+        ...new Set(parsed.filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 128)),
+      ].slice(0, RETRO_BOOT_PROFILE_HISTORY_LIMIT);
+    }
+    if (typeof parsed === "string" && parsed.length > 0 && parsed.length <= 128) return [parsed];
+  } catch {
+    // Values written before the history format are plain profile ids.
+  }
+  return storedValue.length <= 128 ? [storedValue] : [];
+};
+
+export const updateRetroBootProfileHistory = (previousIds: readonly string[], profileId: string): string[] =>
+  [profileId, ...previousIds.filter((previousId) => previousId !== profileId)].slice(0, RETRO_BOOT_PROFILE_HISTORY_LIMIT);
 
 export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
   {
@@ -80,7 +108,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       step('8    "MACHINES"         SEQ\n', 45),
       step('12   "WORKSPACES"       SEQ\n', 45),
       step('16   "SESSIONS"         PRG\n', 45),
-      step("644 BLOCKS FREE.\n\nREADY.\n", 90),
+      step("664 BLOCKS FREE.\n\nREADY.\n", 90),
       typed('LOAD "*",8\n\n', 90),
       step("SEARCHING FOR *\nLOADING\nREADY.\n", 110),
       typed("RUN\n", 80),
@@ -95,12 +123,12 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     rows: 25,
     fontFamily: '"C64 Pro Mono", monospace',
     fontSize: { desktop: 17, mobile: 9 },
-    colors: { page: "#99a1ff", border: "#99a1ff", background: "#3436a8", foreground: "#aeb5ff" },
+    colors: { page: "#b0e0b8", border: "#b0e0b8", background: "#5a5a5a", foreground: "#b0e0b8" },
     bootStatus: "Starting Commodore 128 CP/M services",
     showBootArtwork: false,
     boot: [
       step(centeredLine("COMMODORE BASIC V7.0 122365 BYTES FREE", 40), 110),
-      step(centeredLine("(C)1986 COMMODORE ELECTRONICS, LTD.", 40)),
+      step(centeredLine("(C)1985 COMMODORE ELECTRONICS, LTD.", 40)),
       step(centeredLine("(C)1977 MICROSOFT CORP.", 40)),
       step(`${centeredLine("ALL RIGHTS RESERVED", 40)}\n`, 120),
       step("READY.\n", 100),
@@ -141,6 +169,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     ],
     auth: { ...standardAuth, failed: "?ACCESS DENIED\n]" },
   },
+  // The storage id predates the profile's more precise 386-class display name.
   {
     id: "ibm-pc-at",
     name: "386-class PC",
@@ -181,7 +210,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       step("BBC Computer 32K\n\n", 130),
       step("Acorn DFS\n\nBASIC\n\n>"),
       typed("*CAT\n\n", 80),
-      step("Drive 0             Option 0\n", 100),
+      step("Drive 0             Option 0 (off)\n", 100),
       step("Dir. :0.$           Lib. :0.$\n\n"),
       step("    GHOSTTY      MACHINES\n", 50),
       step("    SESSIONS     WORKSPACE\n", 50),
@@ -223,10 +252,10 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     id: "trs-80-model-4",
     name: "TRS-80 Model 4",
     ariaLabel: "TRS-80 Model 4 authentication console",
-    columns: 64,
+    columns: 80,
     rows: 24,
     fontFamily: '"Retro IBM 2915", monospace',
-    fontSize: { desktop: 16, mobile: 8 },
+    fontSize: { desktop: 15, mobile: 6 },
     colors: { page: "#0b120c", border: "#111d12", background: "#020703", foreground: "#82c98a" },
     bootStatus: "Booting TRSDOS",
     showBootArtwork: false,
@@ -234,14 +263,14 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       step("TRS-80 MODEL 4\n", 140),
       step("RADIO SHACK TRSDOS 6.2\n\n", 100),
       step("DATE? 07/10/86\nTIME? 12:00:00\n\n", 80),
-      step("TRSDOS READY\n", 80),
+      step("TRSDOS Ready\n", 80),
       typed("DIR :0\n", 70),
       step("GHOSTTY/CMD   MACHINES/DAT   SESSION/DAT\n", 55),
       step("WMUX/CMD      WORKSPAC/DAT\n", 55),
       typed("WMUX\n", 90),
       step("WMUX RS-232 HOST LINK\n", 70),
     ],
-    auth: { ...standardAuth, failed: "PASSWORD ERROR\nTRSDOS READY\n" },
+    auth: { ...standardAuth, failed: "PASSWORD ERROR\nTRSDOS Ready\n" },
   },
   {
     id: "zx-spectrum",
@@ -257,11 +286,11 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     boot: [
       step("\n (C) 1982 Sinclair Research Ltd\n\n", 150),
       typed('LOAD ""\n', 110),
-      step("Program: WMUX\n", 90),
-      step("Bytes: GHOSTTY\n", 55),
-      step("Bytes: MACHINES\n", 55),
-      step("Bytes: SESSIONS\n", 55),
-      step("Bytes: WORKSPACE\n", 55),
+      tapeStep("Program: WMUX\n", 650, "header"),
+      tapeStep("Bytes: GHOSTTY\n", 350, "data"),
+      tapeStep("Bytes: MACHINES\n", 350, "data"),
+      tapeStep("Bytes: SESSIONS\n", 350, "data"),
+      tapeStep("Bytes: WORKSPACE\n", 350, "data"),
       step("\n0 OK, 0:1\n", 100),
       typed("RUN\n", 80),
       step("WMUX TERMINAL LINK\n", 70),
@@ -301,13 +330,13 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     rows: 25,
     fontFamily: '"Retro Amiga Topaz", monospace',
     fontSize: { desktop: 16, mobile: 9 },
-    colors: { page: "#ffffff", border: "#ffffff", background: "#aaaaaa", foreground: "#111111" },
+    colors: { page: "#ffffff", border: "#ffffff", background: "#0055aa", foreground: "#ffffff" },
     bootStatus: "Opening AmigaShell",
     boot: [
-      step("AmigaShell\n", 130),
+      step("New Shell process 1\n", 130),
       step("Copyright 1987 Commodore-Amiga, Inc.\n\n", 90),
-      typed("assign WMUX: NET:wmux\n", 75, "1.System:> "),
-      typed("WMUX:wmux\n", 100, "1.System:> "),
+      typed("assign WMUX: NET:wmux\n", 75, "1.SYS:> "),
+      typed("WMUX:wmux\n", 100, "1.SYS:> "),
       step("wmux-handler ............. loaded\n", 55),
       step("workspace.library ........ loaded\n", 55),
     ],
@@ -317,7 +346,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       usernamePrompt: "User name: ",
       passwordPrompt: "Password: ",
       verifying: "Checking...\n",
-      failed: "Login incorrect\n1.System:> ",
+      failed: "Login incorrect\n1.SYS:> ",
       granted: "\nAccess granted.\n",
       ready: "WMUX ready.\n",
     },
@@ -326,18 +355,19 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     id: "amiga-guru-meditation",
     name: "Amiga Guru Meditation",
     ariaLabel: "Amiga Guru Meditation recovery and AmigaShell authentication console",
+    weight: 0.25,
     columns: 40,
     rows: 25,
     fontFamily: '"Retro Amiga Topaz", monospace',
     fontSize: { desktop: 16, mobile: 9 },
-    colors: { page: "#000000", border: "#000000", background: "#aaaaaa", foreground: "#111111" },
+    colors: { page: "#000000", border: "#000000", background: "#0055aa", foreground: "#ffffff" },
     bootStatus: "Recovering Amiga Workbench",
     specialBoot: "amiga-guru",
     boot: [
-      step("AmigaShell\n", 130),
+      step("New Shell process 1\n", 130),
       step("Copyright 1987 Commodore-Amiga, Inc.\n\n", 90),
-      typed("assign WMUX: NET:wmux\n", 75, "1.System:> "),
-      typed("WMUX:wmux\n", 100, "1.System:> "),
+      typed("assign WMUX: NET:wmux\n", 75, "1.SYS:> "),
+      typed("WMUX:wmux\n", 100, "1.SYS:> "),
       step("wmux-handler ............. loaded\n", 55),
       step("workspace.library ........ loaded\n", 55),
     ],
@@ -347,7 +377,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       usernamePrompt: "User name: ",
       passwordPrompt: "Password: ",
       verifying: "Checking...\n",
-      failed: "Login incorrect\n1.System:> ",
+      failed: "Login incorrect\n1.SYS:> ",
       granted: "\nAccess granted.\n",
       ready: "WMUX ready.\n",
     },
@@ -412,13 +442,14 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     bootStatus: "Loading Amstrad cassette",
     showBootArtwork: false,
     boot: [
-      step("Amstrad 64K Microcomputer\n", 130),
-      step("(v1)\n\n", 80),
+      step(" Amstrad 64K Microcomputer  (v1)\n", 130),
+      step(" ©1984 Amstrad Consumer Electronics plc\n", 80),
+      step("            and Locomotive Software Ltd.\n\n", 80),
       step("BASIC 1.0\n\nReady\n", 100),
       typed('RUN"WMUX\n', 100),
-      step("Press PLAY then any key:\n", 100),
-      step("Loading WMUX block 1\n", 70),
-      step("Loading WMUX block 2\n", 70),
+      tapeStep("Press PLAY then any key:\n", 350, "header"),
+      tapeStep("Loading WMUX block 1\n", 260, "data"),
+      tapeStep("Loading WMUX block 2\n", 260, "data"),
       step("WMUX HOST TERMINAL\n", 80),
     ],
     auth: { ...standardAuth, failed: "Login error\nReady\n" },
@@ -434,9 +465,9 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     colors: { page: "#2466aa", border: "#2466aa", background: "#2466aa", foreground: "#ffffff" },
     bootStatus: "Starting MSX BASIC",
     boot: [
-      step("MSX BASIC version 2.1\n", 130),
+      step("MSX BASIC version 2.0\n", 130),
       step("Copyright 1985 by Microsoft\n", 80),
-      step("28815 Bytes free\n\nOk\n", 100),
+      step("23430 Bytes free\n\nOk\n", 100),
       typed("FILES\n", 70),
       step('GHOSTTY BAS   MACHINE DAT   WMUX    BAS\n', 55),
       step('SESSION DAT   WORKSPAC DAT\n', 55),
@@ -495,7 +526,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       usernamePrompt: "Username: ",
       passwordPrompt: "Password: ",
       failed: "%LOGIN-F-USERAUTH, authorization failure\n",
-      granted: "\nWelcome to VAX/VMS\n",
+      granted: "\nWelcome to VAX/VMS version V5.5-2\n",
     },
   },
   {
@@ -529,13 +560,13 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       passwordPrompt: "Password: ",
       verifying: "\n",
       failed: "Login incorrect\n",
-      granted: "\nLast login: Fri Jul 10 12:00:00\n",
+      granted: "\nLast login: Fri Jul 10 12:00:00 PDT 1998\n",
     },
   },
   {
     id: "sgi-irix",
-    name: "SGI Indigo IRIX",
-    ariaLabel: "SGI Indigo IRIX authentication console",
+    name: "SGI Indigo2 IRIX",
+    ariaLabel: "SGI Indigo2 IRIX authentication console",
     columns: 80,
     rows: 30,
     fontFamily: '"Retro IBM 2915", monospace',
@@ -616,8 +647,8 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       typed("DATE 10-JUL-86\n", 65, "."),
       typed("TIME 12:00:00\n", 65, "."),
       typed("DIR SY:\n", 70, "."),
-      step("GHOSTY.SAV    MACHINE.DAT    SESSION.DAT\n", 55),
-      step("WMUX.SAV      WORKSPC.DAT\n", 55),
+      step("GHOSTY.SAV    MACHIN.DAT    SESSON.DAT\n", 55),
+      step("WMUX.SAV      WRKSPC.DAT\n", 55),
       typed("R WMUX\n", 90, "."),
       step("WMUX DL11 TERMINAL LINK\n", 75),
     ],
@@ -666,9 +697,11 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     showBootArtwork: false,
     boot: [
       step("TEXAS INSTRUMENTS\n", 140),
-      step("HOME COMPUTER\n\n", 90),
-      step("1 FOR TI BASIC\n", 70),
-      step("2 FOR WMUX TERMINAL\n\n", 70),
+      step("HOME COMPUTER\n", 90),
+      step("©1981 TEXAS INSTRUMENTS\n\n", 70),
+      step("PRESS:\n", 70),
+      step("  1 FOR TI BASIC\n", 70),
+      step("  2 FOR WMUX TERMINAL\n\n", 70),
       typed("2\n", 90),
       step("WMUX RS232 TERMINAL\n", 80),
     ],
@@ -682,14 +715,17 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     rows: 16,
     fontFamily: '"Retro Tatung Einstein", monospace',
     fontSize: { desktop: 18, mobile: 10 },
-    colors: { page: "#0b1510", border: "#14231a", background: "#0b120d", foreground: "#76d789" },
+    colors: { page: "#151515", border: "#202020", background: "#66d366", foreground: "#071207" },
     bootStatus: "Starting Extended Color BASIC",
     showBootArtwork: false,
     boot: [
       step("EXTENDED COLOR BASIC 1.1\n", 140),
-      step("COPYRIGHT 1982 TANDY\n\n", 90),
+      step("COPR. 1982 BY TANDY\n", 90),
+      step("UNDER LICENSE FROM MICROSOFT\n\n", 90),
       step("OK\n", 80),
-      typed('RUN "WMUX"\n', 100),
+      typed('CLOADM"WMUX"\n', 100),
+      step("SEARCHING\nLOADING\nOK\n", 100),
+      typed("EXEC\n", 90),
       step("WMUX SERIAL LINK\n", 75),
     ],
     auth: { ...standardAuth, usernamePrompt: "USER? ", passwordPrompt: "PASS? ", failed: "?SN ERROR\nOK\n" },
@@ -728,11 +764,11 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     boot: [
       step("Human68k version 3.02\n", 140),
       step("Copyright 1987-1993 SHARP/Hudson\n\n", 90),
-      typed("path A:\\BIN\n", 60, "A:\\>"),
-      typed("wmux.x\n", 90, "A:\\>"),
+      typed("path A:\\BIN\n", 60, "A>"),
+      typed("wmux.x\n", 90, "A>"),
       step("WMUX RS-232C terminal\n", 70),
     ],
-    auth: { ...standardAuth, usernamePrompt: "login: ", passwordPrompt: "password: ", failed: "Login incorrect\n" },
+    auth: { ...standardAuth, usernamePrompt: "login: ", passwordPrompt: "password: ", failed: "Login incorrect\nA>" },
   },
   {
     id: "nec-pc-9801",
@@ -811,7 +847,8 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       step("(C) 1983 TANGERINE\n\n", 90),
       step("Ready\n", 80),
       typed('CLOAD"WMUX"\n', 100),
-      step("Searching...\n", 75),
+      tapeStep("Searching...\n", 350, "header"),
+      tapeStep("Loading WMUX...\n", 300, "data"),
       step("Ready\n", 80),
       typed("RUN\n", 80),
     ],
@@ -874,7 +911,8 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     showBootArtwork: false,
     boot: [
       step("SAM COUPE 256K\n", 140),
-      step("MASTER BASIC 2.1\n\n", 90),
+      step("SAM BASIC\n", 90),
+      step("(C) 1989 MILES GORDON\nTECHNOLOGY PLC\n\n", 90),
       typed("BOOT 1\n", 80, "> "),
       step("Loading WMUX...\n", 100),
       step("WMUX serial terminal\n", 70),
@@ -895,7 +933,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     boot: [
       step("MEMOTECH MTX BASIC\n", 140),
       step("READY\n", 90),
-      typed('RUN "WMUX"\n', 90, "USER "),
+      typed('RUN "WMUX"\n', 90),
       step("WMUX RS232 CHANNEL OPEN\n", 75),
     ],
     auth: { ...standardAuth, usernamePrompt: "USER> ", passwordPrompt: "PASS> ", failed: "ERROR\nREADY\n" },
@@ -903,17 +941,18 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
   {
     id: "tatung-einstein",
     name: "Tatung Einstein",
-    ariaLabel: "Tatung Einstein MOS authentication console",
+    ariaLabel: "Tatung Einstein Xtal DOS authentication console",
     columns: 40,
     rows: 24,
     fontFamily: '"Retro Tatung Einstein", monospace',
     fontSize: { desktop: 17, mobile: 9 },
     colors: { page: "#0c1d44", border: "#142b62", background: "#09205c", foreground: "#f1f1d4" },
-    bootStatus: "Booting MOS",
+    bootStatus: "Booting Xtal DOS",
     showBootArtwork: false,
     boot: [
       step("TATUNG EINSTEIN TC-01\n", 140),
-      step("MOS SYSTEM DISC\n\n", 90),
+      step("MOS 1.2\n", 90),
+      step("XTAL DOS SYSTEM DISC\n\n", 90),
       typed("DIR\n", 75, "A>"),
       step("WMUX     COM    TERMINAL COM\n", 65),
       typed("WMUX\n", 90, "A>"),
@@ -943,10 +982,17 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
 
 export const selectRetroBootProfile = (
   randomValue = Math.random(),
-  previousId?: string | null,
+  previousIds?: string | readonly string[] | null,
 ): RetroBootProfile => {
-  const candidates = RETRO_BOOT_PROFILES.filter((profile) => profile.id !== previousId);
+  const excludedIds = new Set(typeof previousIds === "string" ? [previousIds] : previousIds ?? []);
+  const candidates = RETRO_BOOT_PROFILES.filter((profile) => !excludedIds.has(profile.id));
   const pool = candidates.length > 0 ? candidates : RETRO_BOOT_PROFILES;
   const normalized = Number.isFinite(randomValue) ? Math.max(0, Math.min(randomValue, 0.999999999)) : 0;
-  return pool[Math.floor(normalized * pool.length)] ?? RETRO_BOOT_PROFILES[0];
+  const totalWeight = pool.reduce((total, profile) => total + (profile.weight ?? 1), 0);
+  let cursor = normalized * totalWeight;
+  for (const profile of pool) {
+    cursor -= profile.weight ?? 1;
+    if (cursor < 0) return profile;
+  }
+  return pool.at(-1) ?? RETRO_BOOT_PROFILES[0];
 };

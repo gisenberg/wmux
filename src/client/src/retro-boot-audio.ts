@@ -3,6 +3,7 @@ export interface RetroPostTone {
   durationMs: number;
   offsetMs?: number;
   endFrequency?: number;
+  filterFrequency?: number;
   type?: OscillatorType;
   volume?: number;
 }
@@ -15,17 +16,23 @@ const tone = (
   endFrequency?: number,
 ): RetroPostTone => ({ frequency, durationMs, offsetMs, type, ...(endFrequency ? { endFrequency } : {}) });
 
+const floppyClunk = (frequency: number, offsetMs: number): RetroPostTone => ({
+  ...tone(frequency, 65, offsetMs),
+  filterFrequency: 520,
+  volume: 0.012,
+});
+
 export const RETRO_POST_SOUNDS: Readonly<Record<string, readonly RetroPostTone[]>> = {
   "commodore-64": [tone(262, 70), tone(330, 70, 75), tone(392, 110, 150)],
   "commodore-128": [tone(196, 70), tone(262, 70, 65), tone(330, 70, 130), tone(392, 120, 195)],
-  "apple-iie": [tone(880, 95, 0, "square", 1320)],
+  "apple-iie": [tone(1000, 100)],
   "ibm-pc-at": [tone(1000, 120)],
   "bbc-micro": [tone(1047, 85), tone(1319, 95, 95)],
   "acorn-archimedes": [tone(523, 75, 0, "sine"), tone(784, 120, 85, "sine")],
   "trs-80-model-4": [tone(780, 130)],
   "zx-spectrum": [tone(1200, 45), tone(2400, 45, 48), tone(1200, 55, 96)],
-  "atari-st": [tone(620, 90), tone(930, 105, 100)],
-  "amiga-workbench": [tone(220, 35), tone(440, 35, 45), tone(660, 35, 90), tone(880, 120, 135)],
+  "atari-st": [tone(880, 150, 0, "sine")],
+  "amiga-workbench": [floppyClunk(115, 80), floppyClunk(105, 360), floppyClunk(120, 720)],
   "amiga-guru-meditation": [tone(130, 180, 0, "sawtooth"), tone(110, 260, 170, "sawtooth")],
   "osborne-1": [tone(880, 145, 0, "sine")],
   "sinclair-ql": [tone(698, 65), tone(932, 100, 75)],
@@ -42,7 +49,7 @@ export const RETRO_POST_SOUNDS: Readonly<Record<string, readonly RetroPostTone[]
   "trs-80-coco": [tone(784, 110)],
   "amstrad-pcw": [tone(880, 90, 0, "sine")],
   "sharp-x68000": [tone(440, 80, 0, "sine"), tone(880, 120, 90, "sine")],
-  "nec-pc-9801": [tone(1000, 100)],
+  "nec-pc-9801": [tone(2000, 80)],
   "os2-warp": [tone(330, 90, 0, "sine"), tone(494, 130, 100, "sine")],
   "enterprise-128": [tone(523, 65), tone(659, 65, 70), tone(784, 110, 140)],
   "oric-atmos": [tone(660, 80), tone(990, 100, 90)],
@@ -61,8 +68,7 @@ const audioContextConstructor = (): AudioContextConstructor | undefined => {
   return window.AudioContext ?? audioWindow.webkitAudioContext;
 };
 
-export const playRetroPostSound = (profileId: string): (() => void) => {
-  const tones = RETRO_POST_SOUNDS[profileId];
+const playRetroSound = (tones: readonly RetroPostTone[] | undefined): (() => void) => {
   const AudioContextClass = audioContextConstructor();
   if (!tones || !AudioContextClass || document.visibilityState !== "visible") return () => undefined;
 
@@ -110,7 +116,14 @@ export const playRetroPostSound = (profileId: string): (() => void) => {
         gain.gain.setValueAtTime(0.0001, toneStart);
         gain.gain.exponentialRampToValueAtTime(postTone.volume ?? 0.025, toneStart + 0.008);
         gain.gain.exponentialRampToValueAtTime(0.0001, toneEnd);
-        oscillator.connect(gain).connect(context.destination);
+        if (postTone.filterFrequency) {
+          const filter = context.createBiquadFilter();
+          filter.type = "lowpass";
+          filter.frequency.setValueAtTime(postTone.filterFrequency, toneStart);
+          oscillator.connect(filter).connect(gain).connect(context.destination);
+        } else {
+          oscillator.connect(gain).connect(context.destination);
+        }
         oscillator.start(toneStart);
         oscillator.stop(toneEnd + 0.01);
         oscillators.push(oscillator);
@@ -129,3 +142,8 @@ export const playRetroPostSound = (profileId: string): (() => void) => {
     close();
   };
 };
+
+export const playRetroPostSound = (profileId: string): (() => void) => playRetroSound(RETRO_POST_SOUNDS[profileId]);
+
+export const playRetroFloppySound = (): (() => void) =>
+  playRetroSound([floppyClunk(115, 60), floppyClunk(105, 330), floppyClunk(120, 690)]);
