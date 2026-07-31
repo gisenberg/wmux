@@ -263,6 +263,8 @@ class WmuxClient:
         if automatic_cleanup:
             body["cleanupPolicy"] = "on-success"
             body["cleanupTtlSeconds"] = DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS
+        else:
+            body["cleanupPolicy"] = "retain"
         result = self.request("POST", "/api/workspaces", body)
         return result["workspace"], result["state"]
 
@@ -796,7 +798,13 @@ def maybe_record_running_event(client: WmuxClient, args: argparse.Namespace, inf
 
 
 def cmd_open(client: WmuxClient, args: argparse.Namespace) -> int:
-    workspace, reused = get_or_create_workspace(client, args.machine, args.title, args.new)
+    workspace, reused = get_or_create_workspace(
+        client,
+        args.machine,
+        args.title,
+        args.new,
+        not args.retain_workspace,
+    )
     info = describe_workspace(client.url, workspace, args.tab, args.pane)
     info["reused"] = reused
     info["activeTabId"] = workspace.get("activeTabId")
@@ -1586,7 +1594,7 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     public_base = safe_public_url(args.public_url, client.url)
     initial_machine = require_posix_machine(client, args.machine)
     initial_identity = machine_identity(initial_machine)
-    workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id())
+    workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id(), False)
     info = describe_workspace(client.url, workspace)
     info.update(urls(client.url, public_base, info["workspaceId"], info["tabId"]))
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,
@@ -2423,6 +2431,11 @@ def build_parser() -> argparse.ArgumentParser:
     open_workspace.add_argument("--new", action="store_true", help="force a new workspace even when --title already exists")
     open_workspace.add_argument("--tab", default="", help="select a specific existing tab")
     open_workspace.add_argument("--pane", default="", help="select a specific existing pane")
+    open_workspace.add_argument(
+        "--retain-workspace",
+        action="store_true",
+        help="keep the workspace indefinitely instead of applying its 24-hour expiry",
+    )
     open_workspace.set_defaults(func=cmd_open)
 
     tabs = subparsers.add_parser("tabs", help="list tabs and direct URLs for a workspace")

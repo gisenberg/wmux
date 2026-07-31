@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { SessionBackend } from "./backends/index.js";
 import type { MachineConfig } from "./types.js";
 
-export const CURRENT_DURABLE_ENDPOINT_SCHEMA_VERSION = 1;
+export const CURRENT_DURABLE_ENDPOINT_SCHEMA_VERSION = 2;
 const MAX_DURABLE_ENDPOINT_RECORDS = 10_000;
 
 export type DurableEndpointBackend = Extract<
@@ -14,7 +14,7 @@ export type DurableEndpointBackend = Extract<
 >;
 export type DurableEndpointStatus = "active" | "stranded";
 
-const storedMachineSchema = z.object({
+const storedMachineFields = {
   id: z.string().min(1).max(120),
   name: z.string().min(1).max(500),
   kind: z.enum(["local", "ssh", "powershell", "powershell-ssh", "service"]),
@@ -29,17 +29,40 @@ const storedMachineSchema = z.object({
   agentUrl: z.string().max(2048).url().optional(),
   agentPort: z.number().int().min(1).max(65535).optional(),
   agentToken: z.string().min(1).max(4096).optional(),
+};
+
+const storedMachineSchemaV1 = z.object({
+  ...storedMachineFields,
   source: z.literal("registered"),
 }).strict();
 
-const recordSchema = z.object({
+const storedMachineSchema = z.object({
+  ...storedMachineFields,
+  source: z.enum(["config", "registered"]),
+}).strict();
+
+const recordFields = {
   id: z.string().uuid(),
   paneId: z.string().min(1).max(120),
   backend: z.enum(["durable-multiplexer", "windows-agent"]),
   status: z.enum(["active", "stranded"]),
-  machine: storedMachineSchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+};
+
+const recordSchemaV1 = z.object({
+  ...recordFields,
+  machine: storedMachineSchemaV1,
+}).strict();
+
+const recordSchema = z.object({
+  ...recordFields,
+  machine: storedMachineSchema,
+}).strict();
+
+const envelopeSchemaV1 = z.object({
+  schemaVersion: z.literal(1),
+  records: z.array(recordSchemaV1).max(MAX_DURABLE_ENDPOINT_RECORDS),
 }).strict();
 
 const envelopeSchema = z.object({
@@ -52,7 +75,7 @@ export interface DurableEndpointRecord {
   paneId: string;
   backend: DurableEndpointBackend;
   status: DurableEndpointStatus;
-  machine: MachineConfig & { source: "registered" };
+  machine: MachineConfig & { source: "config" | "registered" };
   createdAt: string;
   updatedAt: string;
 }
@@ -99,10 +122,7 @@ export class DurableEndpointStore {
     machine: MachineConfig,
     backend: SessionBackend["id"],
   ): DurableEndpointRecord | undefined {
-    if (
-      machine.source !== "registered"
-      || (backend !== "durable-multiplexer" && backend !== "windows-agent")
-    ) {
+    if (!shouldPersistDurableEndpoint(machine, backend)) {
       this.markPaneStranded(paneId);
       return undefined;
     }
@@ -153,7 +173,7 @@ export class DurableEndpointStore {
 
   updateActive(paneId: string, machine: MachineConfig): void {
     const active = this.activeForPane(paneId);
-    if (!active || machine.source !== "registered") return;
+    if (!active) return;
     this.records.set(active.id, {
       ...active,
       machine: storedMachine(machine),
@@ -175,7 +195,6 @@ export class DurableEndpointStore {
       if (
         paneIds.has(record.paneId)
         && current
-        && current.source === "registered"
         && sameDisposalEndpoint(record.machine, current)
       ) {
         continue;
@@ -219,16 +238,20 @@ export class DurableEndpointStore {
     if (!fs.existsSync(this.filePath)) return;
     const primary = this.readEnvelope(this.filePath);
     if (primary) {
-      this.install(primary);
+      this.install(primary.envelope);
+      if (primary.migrated) this.persist();
       return;
     }
     const backup = this.readEnvelope(`${this.filePath}.bak`);
     if (!backup) throw new Error(`wmux durable endpoint ledger is invalid: ${this.filePath}`);
-    this.install(backup);
+    this.install(backup.envelope);
     this.persist();
   }
 
-  private readEnvelope(filePath: string): z.infer<typeof envelopeSchema> | undefined {
+  private readEnvelope(filePath: string): {
+    envelope: z.infer<typeof envelopeSchema>;
+    migrated: boolean;
+  } | undefined {
     if (!fs.existsSync(filePath)) return undefined;
     this.assertSecureFile(filePath);
     try {
@@ -244,7 +267,16 @@ export class DurableEndpointStore {
         throw new UnsupportedDurableEndpointVersionError(version);
       }
       const parsed = envelopeSchema.safeParse(input);
-      return parsed.success ? parsed.data : undefined;
+      if (parsed.success) return { envelope: parsed.data, migrated: false };
+      const legacy = envelopeSchemaV1.safeParse(input);
+      if (!legacy.success) return undefined;
+      return {
+        envelope: {
+          schemaVersion: CURRENT_DURABLE_ENDPOINT_SCHEMA_VERSION,
+          records: legacy.data.records,
+        },
+        migrated: true,
+      };
     } catch (error) {
       if (error instanceof UnsupportedDurableEndpointVersionError) throw error;
       return undefined;
@@ -359,7 +391,7 @@ const disposalIdentity = (machine: MachineConfig) => ({
 
 const storedMachine = (
   machine: MachineConfig,
-): MachineConfig & { source: "registered" } => {
+): MachineConfig & { source: "config" | "registered" } => {
   const candidate = {
     id: machine.id,
     name: machine.name,
@@ -375,7 +407,7 @@ const storedMachine = (
     agentUrl: machine.agentUrl,
     agentPort: machine.agentPort,
     agentToken: machine.agentToken,
-    source: "registered",
+    source: machine.source === "registered" ? "registered" : "config",
   };
   const parsed = storedMachineSchema.parse(
     Object.fromEntries(
@@ -383,4 +415,14 @@ const storedMachine = (
     ),
   );
   return parsed;
+};
+
+const shouldPersistDurableEndpoint = (
+  machine: MachineConfig,
+  backend: SessionBackend["id"],
+): backend is DurableEndpointBackend => {
+  if (backend !== "durable-multiplexer" && backend !== "windows-agent") return false;
+  if (machine.source === "registered") return true;
+  if (backend === "windows-agent") return true;
+  return machine.kind !== "local";
 };

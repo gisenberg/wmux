@@ -83,7 +83,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 ## Architecture Notes
 
 - Server state lives in `~/.wmux/state.json` unless `WMUX_STATE_PATH` is set.
-- Registered-pane disposal endpoints live in the server-only `~/.wmux/session-endpoints.json` ledger unless `WMUX_SESSION_ENDPOINT_PATH` is set.
+- Registered-pane, configured remote durable-multiplexer, and configured session-agent disposal endpoints live in the server-only `~/.wmux/session-endpoints.json` ledger unless `WMUX_SESSION_ENDPOINT_PATH` is set.
   The schema-versioned, owner-only atomic store retains old endpoint snapshots across dynamic ID reassignment so session audit and explicit cleanup cannot be redirected to the replacement host.
   Never expose stored agent tokens or other disposal credentials through bootstrap, audit, helper, or browser payloads.
 - Durable agent turn history lives in `~/.wmux/agent-timelines.json` unless `WMUX_AGENT_TIMELINE_PATH` is set.

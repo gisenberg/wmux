@@ -702,7 +702,9 @@ const delegate = tool({
         ...(automaticCleanup ? {
           cleanupPolicy: "on-success",
           cleanupTtlSeconds: 24 * 60 * 60,
-        } : {}),
+        } : {
+          cleanupPolicy: "retain",
+        }),
         ...(parentPaneId ? { parentPaneId } : {}),
       }),
       signal: context.abort,

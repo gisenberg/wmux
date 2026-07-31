@@ -17,6 +17,7 @@ const clientIdPattern = (prefix: string): RegExp =>
 
 const MIN_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS = 60;
 const MAX_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS = 24 * 60 * 60;
 
 const parseWorkspaceCleanup = (
   policy: unknown,
@@ -38,6 +39,20 @@ const parseWorkspaceCleanup = (
     policy,
     cleanupAt: new Date(Date.now() + ttlSeconds * 1_000).toISOString(),
   };
+};
+
+const parseWorkspaceCreationCleanup = (
+  policy: unknown,
+  ttlSeconds: unknown,
+): WorkspaceCleanupOptions | undefined => {
+  if (policy === "retain" && ttlSeconds === undefined) return undefined;
+  if (policy === undefined && ttlSeconds === undefined) {
+    return parseWorkspaceCleanup(
+      "on-success",
+      DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS,
+    );
+  }
+  return parseWorkspaceCleanup(policy, ttlSeconds);
 };
 
 const parseClientCreationIds = (
@@ -102,10 +117,12 @@ export const workspaceRoutes: readonly ApiRoute[] = [
         sendJson(400, { error: "workspace_cleanup_requires_agent" });
         return;
       }
-      const cleanup = parseWorkspaceCleanup(
-        body.cleanupPolicy,
-        body.cleanupTtlSeconds,
-      );
+      const cleanup = body.createdBy === "agent"
+        ? parseWorkspaceCreationCleanup(
+          body.cleanupPolicy,
+          body.cleanupTtlSeconds,
+        )
+        : undefined;
       const parentPane = body.parentPaneId
         ? deps.state.findPane(body.parentPaneId) ?? undefined
         : undefined;

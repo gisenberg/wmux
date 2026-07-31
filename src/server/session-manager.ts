@@ -21,6 +21,7 @@ import {
   type StagedPasteImage,
 } from "./paste-image-staging.js";
 import { DurableEndpointStore } from "./durable-endpoint-store.js";
+import { cleanupStrandedDurableEndpoints } from "./durable-endpoint-cleanup.js";
 import {
   KittyGraphicsSourceError,
   readKittyGraphicsSource,
@@ -118,6 +119,7 @@ const sameMachineEndpoint = (left: MachineConfig, right: MachineConfig): boolean
 const BACKPRESSURE_HIGH_WATER = 4 * 1024 * 1024;
 const BACKPRESSURE_LOW_WATER = 1 * 1024 * 1024;
 const AGENT_WORKSPACE_CLEANUP_SWEEP_MS = 5_000;
+const STRANDED_ENDPOINT_CLEANUP_SWEEP_MS = 60_000;
 
 export class SessionManager {
   private sessions = new Map<string, BackendSession>();
@@ -137,6 +139,8 @@ export class SessionManager {
   private durableCwdRefreshInFlight = new Set<string>();
   private durableCwdLastReadAt = new Map<string, number>();
   private readonly agentWorkspaceCleanupTimer: ReturnType<typeof setInterval>;
+  private readonly strandedEndpointCleanupTimer: ReturnType<typeof setInterval>;
+  private strandedEndpointCleanupRunning = false;
   private readonly currentMachines: () => MachineConfig[];
   private readonly terminalCheckpoints: TerminalCheckpointStore;
   private readonly durableEndpoints: DurableEndpointStore;
@@ -183,6 +187,12 @@ export class SessionManager {
       AGENT_WORKSPACE_CLEANUP_SWEEP_MS,
     );
     this.agentWorkspaceCleanupTimer.unref?.();
+    this.sweepStrandedEndpoints();
+    this.strandedEndpointCleanupTimer = setInterval(
+      () => this.sweepStrandedEndpoints(),
+      STRANDED_ENDPOINT_CLEANUP_SWEEP_MS,
+    );
+    this.strandedEndpointCleanupTimer.unref?.();
   }
 
   hasLiveSessionsForMachine(machineId: string): boolean {
@@ -436,6 +446,15 @@ export class SessionManager {
       if (this.closeWorkspace(workspaceId)) closed.push(workspaceId);
     }
     return closed;
+  }
+
+  private sweepStrandedEndpoints(): void {
+    if (this.strandedEndpointCleanupRunning) return;
+    this.strandedEndpointCleanupRunning = true;
+    void cleanupStrandedDurableEndpoints(this.durableEndpoints)
+      .finally(() => {
+        this.strandedEndpointCleanupRunning = false;
+      });
   }
 
   writePane(paneId: string, data: string, cols = 96, rows = 32): boolean {
@@ -728,6 +747,7 @@ export class SessionManager {
   /** Detach every live client and clear timers. Called on process shutdown. */
   disposeAll(): void {
     clearInterval(this.agentWorkspaceCleanupTimer);
+    clearInterval(this.strandedEndpointCleanupTimer);
     try {
       this.terminalCheckpoints.flush();
     } catch (error) {
@@ -955,6 +975,7 @@ export class SessionManager {
     const backend = this.backends.get(paneId);
     const sessionMachine = this.sessionMachines.get(paneId);
     const endpointRecords = this.durableEndpoints.recordsForPane(paneId);
+    this.durableEndpoints.markPaneStranded(paneId);
     this.cancelPaneCwdRefresh(paneId);
     this.sessions.delete(paneId);
     this.backends.delete(paneId);
