@@ -207,6 +207,7 @@ Give automated work a descriptive `--title`.
 Workspaces created by `wmuxctl` are persisted with `createdBy: "agent"`, which gives them a stable `AI` badge in the workspace rail.
 `wmuxctl open`, `run`, and `ps` reuse the latest agent-created workspace with the same machine/title by default, which prevents a diagnostic loop from creating many generic workspaces.
 Pass `--new` only for intentionally separate sessions.
+All three commands apply a 24-hour fallback expiry unless `--retain-workspace` is selected.
 
 For a newly created workspace, `run` and `ps` wait until the shell prompt is visible before sending input. This avoids losing or duplicating input during SSH/PowerShell bootstrap. Use `--no-wait-ready` only when deliberately testing that startup path.
 
@@ -236,7 +237,7 @@ Keep encoded scripts short: Windows Defender may reject encoded commands, and lo
 
 `wmuxctl run` and `wmuxctl ps` intentionally do not create a `running` agent event unless `--agent-event` is passed.
 For spawned process progress, wrap the pane command with `wmux-run -- ...`; that records start/completion/exit status and automatically schedules a successful one-shot workspace for cleanup.
-Both commands apply a 24-hour fallback expiry to new or reused one-shot workspaces.
+Agent-created workspaces are disposable by default at the API boundary, and both commands explicitly apply that 24-hour fallback expiry to new or reused one-shot workspaces.
 Use `--retain-workspace` for interactive or deliberately long-lived work.
 Use `--agent-event` only for agent-level work that will call `wmuxctl finish` or post a final `wmux-agent-event completed|failed|stopped`.
 
@@ -276,7 +277,8 @@ Use `--retain-workspace` when debugging evidence, interactive work, or a user-mo
 ## Other Useful Endpoints
 
 - `GET /api/bootstrap`: machines, workspaces, notifications, agent events, runs, settings, streams.
-- `POST /api/workspaces`: body `{ "machineId": "linux-box", "createdBy": "agent", "cleanupPolicy": "on-success", "cleanupTtlSeconds": 86400 }`; omit the cleanup fields and `createdBy` for browser/user-created workspaces.
+- `POST /api/workspaces`: body `{ "machineId": "linux-box", "createdBy": "agent", "cleanupPolicy": "on-success", "cleanupTtlSeconds": 86400 }`; agent-created workspaces default to the same 24-hour policy when cleanup fields are omitted, while `{ "cleanupPolicy": "retain" }` opts out at creation.
+  Omit cleanup fields and `createdBy` for browser/user-created workspaces.
 - `POST /api/workspaces/:workspaceId/cleanup`: automation-only body `{ "cleanupPolicy": "on-success", "cleanupTtlSeconds": 86400 }` or `{ "cleanupPolicy": "retain" }` for an agent-created workspace.
 - `DELETE /api/workspaces/:workspaceId`: close a workspace and kill its pane sessions.
 - `POST /api/workspaces/:workspaceId/tabs`: body `{ "machineId": "local" }`.

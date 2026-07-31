@@ -624,7 +624,6 @@ test("wmuxctl shared workspace consumers parent only newly created workspaces", 
     await cli(url, ["run", "linux-box", "--title", "Retained", "--line", "true", "--no-wait-ready", "--retain-workspace"], { WMUX_PANE_ID: "pane_parent" });
     await cli(url, ["ps", "linux-box", "--title", "Ps", "--script", "Write-Output ok", "--no-wait-ready"], { WMUX_PANE_ID: "pane_parent" });
     assert.deepEqual(workspaceRequests, [
-      { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
       {
         machineId: "linux-box",
         createdBy: "agent",
@@ -632,7 +631,19 @@ test("wmuxctl shared workspace consumers parent only newly created workspaces", 
         cleanupPolicy: "on-success",
         cleanupTtlSeconds: 86_400,
       },
-      { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" },
+      {
+        machineId: "linux-box",
+        createdBy: "agent",
+        parentPaneId: "pane_parent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
+      },
+      {
+        machineId: "linux-box",
+        createdBy: "agent",
+        parentPaneId: "pane_parent",
+        cleanupPolicy: "retain",
+      },
       {
         machineId: "linux-box",
         createdBy: "agent",
@@ -677,8 +688,18 @@ test("wmuxctl omits empty or missing workspace parents", async () => {
     delete env.WMUX_PANE_ID;
     await execFileAsync("python3", args, { cwd: repoRoot, env });
     assert.deepEqual(workspaceRequests, [
-      { machineId: "linux-box", createdBy: "agent" },
-      { machineId: "linux-box", createdBy: "agent" },
+      {
+        machineId: "linux-box",
+        createdBy: "agent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
+      },
+      {
+        machineId: "linux-box",
+        createdBy: "agent",
+        cleanupPolicy: "on-success",
+        cleanupTtlSeconds: 86_400,
+      },
     ]);
   } finally {
     await close(server);
@@ -688,6 +709,7 @@ test("wmuxctl omits empty or missing workspace parents", async () => {
 test("wmuxctl reuse never reparents, while --new creates a child and preserves parent errors", async () => {
   const workspace = { id: "ws_existing", name: "Shared", createdBy: "agent", machineId: "linux-box", activeTabId: "tab", tabs: [{ id: "tab", activePaneId: "pane", panes: [{ id: "pane", machineId: "linux-box" }] }] };
   const workspaceRequests: Array<Record<string, unknown>> = [];
+  const cleanupRequests: Array<Record<string, unknown>> = [];
   let rejectParent = false;
   const server = http.createServer((request, response) => {
     if (request.method === "GET" && request.url === "/api/bootstrap") {
@@ -706,6 +728,16 @@ test("wmuxctl reuse never reparents, while --new creates a child and preserves p
       });
       return;
     }
+    if (request.method === "POST" && request.url === "/api/workspaces/ws_existing/cleanup") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        cleanupRequests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ workspace, state: {} }));
+      });
+      return;
+    }
     if (request.method === "POST" && request.url?.includes("/title")) { request.resume(); request.on("end", () => response.end("{}")); return; }
     response.writeHead(404).end();
   });
@@ -713,18 +745,30 @@ test("wmuxctl reuse never reparents, while --new creates a child and preserves p
   try {
     await cli(url, ["open", "linux-box", "--title", "Shared"], { WMUX_PANE_ID: "pane_parent" });
     assert.equal(workspaceRequests.length, 0);
+    assert.deepEqual(cleanupRequests, [{
+      cleanupPolicy: "on-success",
+      cleanupTtlSeconds: 86_400,
+    }]);
     await cli(url, ["open", "linux-box", "--title", "Shared", "--new"], { WMUX_PANE_ID: "pane_parent" });
     assert.deepEqual(workspaceRequests, [{
       machineId: "linux-box",
       createdBy: "agent",
       parentPaneId: "pane_parent",
+      cleanupPolicy: "on-success",
+      cleanupTtlSeconds: 86_400,
     }]);
     rejectParent = true;
     await assert.rejects(cli(url, ["open", "linux-box", "--title", "Rejected", "--new"], { WMUX_PANE_ID: "pane_invalid" }), (error: { stderr?: string }) => {
       assert.match(error.stderr ?? "", /wmuxctl: HTTP 422 for \/api\/workspaces: {"error":"invalid parent"}/);
       return true;
     });
-    assert.deepEqual(workspaceRequests.at(-1), { machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_invalid" });
+    assert.deepEqual(workspaceRequests.at(-1), {
+      machineId: "linux-box",
+      createdBy: "agent",
+      parentPaneId: "pane_invalid",
+      cleanupPolicy: "on-success",
+      cleanupTtlSeconds: 86_400,
+    });
   } finally {
     await close(server);
   }
@@ -2216,7 +2260,12 @@ test("wmuxctl tui nests fresh workspaces from its invoking pane and otherwise cr
   const nested = await startTuiFixture();
   try {
     await cli(nested.url, args, { WMUX_PANE_ID: "pane_parent" });
-    assert.deepEqual(nested.workspaceRequests, [{ machineId: "linux-box", createdBy: "agent", parentPaneId: "pane_parent" }]);
+    assert.deepEqual(nested.workspaceRequests, [{
+      machineId: "linux-box",
+      createdBy: "agent",
+      parentPaneId: "pane_parent",
+      cleanupPolicy: "retain",
+    }]);
   } finally {
     await nested.stop();
   }
@@ -2226,7 +2275,11 @@ test("wmuxctl tui nests fresh workspaces from its invoking pane and otherwise cr
   delete rootEnv.WMUX_PANE_ID;
   try {
     await execFileAsync("python3", [wmuxctl, "--url", root.url, ...args], { cwd: repoRoot, env: rootEnv });
-    assert.deepEqual(root.workspaceRequests, [{ machineId: "linux-box", createdBy: "agent" }]);
+    assert.deepEqual(root.workspaceRequests, [{
+      machineId: "linux-box",
+      createdBy: "agent",
+      cleanupPolicy: "retain",
+    }]);
   } finally {
     await root.stop();
   }

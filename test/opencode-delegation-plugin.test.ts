@@ -730,7 +730,7 @@ posixTest("retain_workspace keeps a successful delegation available", async () =
       assert.equal(api.requests.some((request) => request.method === "DELETE"), false);
       assert.deepEqual(
         api.requests.find((request) => request.pathname === "/api/workspaces")?.body,
-        { machineId: "posix-1", createdBy: "agent" },
+        { machineId: "posix-1", createdBy: "agent", cleanupPolicy: "retain" },
       );
     } finally {
       (globalThis as any).WebSocket = originalWebSocket;

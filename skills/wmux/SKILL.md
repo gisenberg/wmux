@@ -60,6 +60,9 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
 - Registered panes intentionally lack the broad `WMUX_TOKEN`. Before relying on `wmux-notify`, `wmux-run`, media, clipboard, or agent hooks there, verify that separate normal/scoped helper auth was provisioned; otherwise those helpers return `401`.
 - Helpers prefer `WMUX_HELPER_TOKEN`/`WMUX_HELPER_TOKEN_PATH`; POSIX and Windows staging follow the same rule. Never use automation auth as helper fallback.
 - Always give automated work a descriptive `--title`; `wmuxctl open`, `run`, and `ps` reuse an existing workspace with that exact title by default. Use `--new` only when a genuinely separate workspace is wanted.
+- Agent-created workspaces are disposable by default and receive a 24-hour fallback expiry even when a caller omits cleanup fields.
+  Use `--retain-workspace` only for deliberately long-lived `open`, `run`, or `ps` workspaces.
+  Interactive `tui` and durable `delegate --session` workspaces send an explicit retain policy.
 - Treat visibility as a contract. If the user asked for visible work, start substantive and long-lived processes in the wmux pane, not through direct SSH. Direct SSH remains appropriate for quick diagnostics only.
 - Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, or Claude task, or add `--session` for a durable Codex conversation on POSIX or Windows.
   Pass the prompt through `--prompt-file` or stdin, never as a shell argument.
@@ -84,7 +87,8 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
 - Reused workspaces with multiple tabs require `--tab` or `--pane` for `run` and `ps`. Name support tabs when creating them, close task-owned abandoned tabs, and hand off the direct URL for the actual agent tab.
 - `wmuxctl run` and `ps` wait for a newly created shell prompt before sending input.
   Keep that guard enabled unless intentionally testing startup behavior; `--no-wait-ready` can reproduce the raw race.
-- `wmuxctl run` and `ps` arm one-shot workspaces for cleanup after a successful `wmux-run` lifecycle event and for fallback cleanup after 24 hours.
+- `wmuxctl open`, `run`, and `ps` arm agent workspaces for fallback cleanup after 24 hours.
+  `run` and `ps` additionally accelerate cleanup after a successful `wmux-run` lifecycle event.
   Use `run --close-on-match` or `ps --close-on-complete` when the helper itself observes the definitive completion marker.
   Use `--retain-workspace` for an interactive shell, a user-monitored service, or evidence that must outlive the fallback window.
 - `wmuxctl run`, `send`, and `ps` submit Enter separately from the command text so PSReadLine can consume the final pasted bytes. Keep this behavior when extending the helper; combining a long Windows line and `\r` in one input request can truncate the tail or leave the command unsubmitted.

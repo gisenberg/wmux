@@ -832,9 +832,10 @@ Set `WMUX_AGENT_TIMELINE_PATH` to override that location.
 Working-tree snapshots linked from a timeline are archived as owner-only versioned files under `~/.wmux/repository-snapshots/`.
 Each pane's current VT screen is stored under `~/.wmux/pane-checkpoints/` as a bounded, versioned, owner-only ANSI checkpoint with an atomic rolling backup.
 Set `WMUX_TERMINAL_CHECKPOINT_DIR` to override that directory.
-Registered panes persist their server-only disposal endpoints in `~/.wmux/session-endpoints.json` with the same schema-versioned, atomic, owner-only, rolling-backup discipline.
+Registered panes, configured remote durable multiplexers, and configured session-agent panes persist their server-only disposal endpoints in `~/.wmux/session-endpoints.json` with the same schema-versioned, atomic, owner-only, rolling-backup discipline.
 Set `WMUX_SESSION_ENDPOINT_PATH` to override that location.
 The ledger can retain multiple endpoints for one pane when a dynamic machine ID is reassigned, and it is never included in browser bootstrap state.
+When an endpoint no longer belongs to persisted workspace state, wmux reconciles the exact recorded endpoint and removes its owned session automatically once the endpoint is reachable.
 
 | Backend | Survives browser refresh | Survives wmux restart |
 | --- | --- | --- |

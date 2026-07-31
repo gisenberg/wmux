@@ -174,6 +174,36 @@ test("agent workspace cleanup API validates, persists, and disarms bounded polic
 
   try {
     const before = Date.now();
+    const defaultResponse = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        machineId: "local",
+        createdBy: "agent",
+      }),
+    });
+    assert.equal(defaultResponse.status, 201);
+    const defaulted = await defaultResponse.json() as { workspace: BootstrapPayload["workspaces"][number] };
+    assert.equal(defaulted.workspace.cleanupPolicy, "on-success");
+    assert.ok(Date.parse(defaulted.workspace.cleanupAt ?? "") >= before + 86_399_000);
+    assert.ok(Date.parse(defaulted.workspace.cleanupAt ?? "") <= Date.now() + 86_401_000);
+
+    const retainedOnCreateResponse = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        machineId: "local",
+        createdBy: "agent",
+        cleanupPolicy: "retain",
+      }),
+    });
+    assert.equal(retainedOnCreateResponse.status, 201);
+    const retainedOnCreate = await retainedOnCreateResponse.json() as {
+      workspace: BootstrapPayload["workspaces"][number];
+    };
+    assert.equal(retainedOnCreate.workspace.cleanupPolicy, undefined);
+    assert.equal(retainedOnCreate.workspace.cleanupAt, undefined);
+
     const createdResponse = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -253,6 +283,18 @@ test("agent workspace cleanup API validates, persists, and disarms bounded polic
       }),
     });
     assert.equal(invalidResponse.status, 400);
+
+    const invalidRetainResponse = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        machineId: "local",
+        createdBy: "agent",
+        cleanupPolicy: "retain",
+        cleanupTtlSeconds: 3_600,
+      }),
+    });
+    assert.equal(invalidRetainResponse.status, 400);
   } finally {
     state.flush();
     await close(server);
