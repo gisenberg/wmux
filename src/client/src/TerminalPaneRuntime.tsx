@@ -32,6 +32,7 @@ import {
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  terminalPredictionCursorMatches,
   terminalPredictionCellPaint,
   terminalPredictionStyleAtCursor,
   terminalPredictionEchoProbeMatches,
@@ -318,6 +319,10 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
     let nextInputSequence = 0;
     let predictedInputs: PredictedTerminalInput[] = [];
     let predictionArmedScreen: TerminalPredictionScreen | undefined;
+    // Full-screen applications can repaint asynchronously and move the real
+    // cursor into a footer or status row. Prediction is safe only at the exact
+    // cursor position whose authoritative echo was verified.
+    let predictionArmedCursor: { x: number; y: number } | undefined;
     let predictionProbe: TerminalPredictionEchoProbe | undefined;
     let predictionProbeAcknowledgedSequence: number | undefined;
     let pendingLatencyKeyEvent: { eventAt: number; observedAt: number } | undefined;
@@ -391,7 +396,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
 
     const disarmPrediction = () => {
       predictionArmedScreen = undefined;
-      if (predictionCanvasRef.current) delete predictionCanvasRef.current.dataset.armedScreen;
+      predictionArmedCursor = undefined;
+      if (predictionCanvasRef.current) {
+        delete predictionCanvasRef.current.dataset.armedScreen;
+        delete predictionCanvasRef.current.dataset.armedCursor;
+      }
       clearPredictionProbe();
       clearPredictions();
     };
@@ -468,7 +477,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         return;
       }
       predictionArmedScreen = screen;
-      if (predictionCanvasRef.current) predictionCanvasRef.current.dataset.armedScreen = screen;
+      predictionArmedCursor = { x: cursor.x, y: cursor.y };
+      if (predictionCanvasRef.current) {
+        predictionCanvasRef.current.dataset.armedScreen = screen;
+        predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(predictionArmedCursor);
+      }
       clearPredictionProbe();
     }
 
@@ -484,11 +497,14 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const renderer = predictionRenderer;
       const metrics = term.renderer?.getMetrics();
       const cursor = term.wasmTerm?.getCursor();
+      const anchor = predictionArmedCursor;
       const currentDevicePixelRatio = terminalRendererDevicePixelRatio(window.devicePixelRatio);
       if (
         !renderer
         || !metrics
         || !cursor
+        || !anchor
+        || !terminalPredictionCursorMatches(cursor, anchor)
         || predictionMetricsStale
         || currentDevicePixelRatio !== rendererDevicePixelRatio
         || predictionArmedScreen !== predictionScreen(term)
@@ -498,7 +514,12 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         disarmPrediction();
         return;
       }
-      const layout = layoutPredictedTerminalInput(cursor, safeCols(term.cols), safeRows(term.rows), predictedInputs);
+      const layout = layoutPredictedTerminalInput(
+        { ...anchor, visible: true },
+        safeCols(term.cols),
+        safeRows(term.rows),
+        predictedInputs,
+      );
       if (!layout) {
         disarmPrediction();
         return;
@@ -514,7 +535,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const predictionStyle = terminalPredictionStyleAtCursor(
         viewport,
         cols,
-        cursor,
+        anchor,
         (row) => term.wasmTerm?.isRowWrapped(row) ?? false,
       );
       const authoritativeCanvas = term.renderer?.getCanvas();
@@ -541,7 +562,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       if (sequence === undefined || predictedInputs.length === 0) return;
       predictionAcknowledgedSequence = Math.max(predictionAcknowledgedSequence ?? 0, sequence);
       if (predictionExpiryTimer !== undefined) window.clearTimeout(predictionExpiryTimer);
-      predictionExpiryTimer = window.setTimeout(clearPredictions, 2000);
+      predictionExpiryTimer = window.setTimeout(disarmPrediction, 2000);
     };
 
     const settlePredictionsAfterRender = (term: Terminal) => {
@@ -552,6 +573,30 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       if (predictionAcknowledgedSequence !== undefined) {
         const acknowledgedSequence = predictionAcknowledgedSequence;
         predictionAcknowledgedSequence = undefined;
+        const acknowledged = predictedInputs.filter((prediction) => prediction.sequence <= acknowledgedSequence);
+        const anchor = predictionArmedCursor;
+        const cursor = term.wasmTerm?.getCursor();
+        if (acknowledged.length > 0) {
+          const acknowledgedLayout = anchor
+            ? layoutPredictedTerminalInput(
+              { ...anchor, visible: true },
+              safeCols(term.cols),
+              safeRows(term.rows),
+              acknowledged,
+            )
+            : null;
+          const nextAnchor = acknowledgedLayout
+            ? { x: acknowledgedLayout.cursor.col, y: acknowledgedLayout.cursor.row }
+            : undefined;
+          if (!nextAnchor || !terminalPredictionCursorMatches(cursor, nextAnchor)) {
+            disarmPrediction();
+            return;
+          }
+          predictionArmedCursor = nextAnchor;
+          if (predictionCanvasRef.current) {
+            predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(nextAnchor);
+          }
+        }
         predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > acknowledgedSequence);
         if (predictedInputs.length === 0) {
           clearPredictions();
@@ -1403,6 +1448,8 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           lastInteractiveInputAt = Date.now();
           const prediction = predictedTerminalInput(sequence, data);
           const screen = predictionScreen(term);
+          const cursor = term.wasmTerm?.getCursor();
+          const predictionAnchorMatches = terminalPredictionCursorMatches(cursor, predictionArmedCursor);
           const canPredict = connectedRef.current
             && activeRef.current
             && !replayingTerminalOutput
@@ -1412,6 +1459,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           if (
             prediction
             && predictionArmedScreen === screen
+            && predictionAnchorMatches
             && canPredict
             && !clearPredictionsAfterRender
           ) {
@@ -1423,7 +1471,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           } else if (!awaitingAuthoritativeRender) {
             clearPredictions();
             if (prediction && canPredict) {
-              if (predictionArmedScreen && predictionArmedScreen !== screen) disarmPrediction();
+              if (predictionArmedScreen) disarmPrediction();
               probePredictionEcho(prediction, term, screen);
             }
             else disarmPrediction();
