@@ -58,7 +58,7 @@ import {
   safeRows,
   sendInput,
   createTerminalFitter,
-  sendResizeMessage,
+  sendResizeDimensions,
   isForegroundTerminal,
   inputMayLeaveShellPrompt,
   MAX_SYNCHRONIZED_OUTPUT_HOLD_MS,
@@ -948,12 +948,21 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
     };
 
     const foreground = () => isForegroundTerminal(activeRef.current);
+    const proposedDimensions = (term: Terminal) =>
+      fitAddonRef.current?.proposedDimensions() ?? { cols: term.cols, rows: term.rows };
 
     const announceResizeState = () => {
       const term = terminalRef.current;
       if (!term) return;
+      const isForeground = foreground();
+      fitAddonRef.current?.setForeground(isForeground);
       if (activeRef.current && document.visibilityState === "visible") fitAddonRef.current?.fit();
-      sendResizeMessage(socketRef.current, activeRef.current ? "activate" : "resize", term, foreground());
+      sendResizeDimensions(
+        socketRef.current,
+        activeRef.current ? "activate" : "resize",
+        proposedDimensions(term),
+        isForeground,
+      );
     };
 
     const announceResizeStateSoon = () => requestAnimationFrame(announceResizeState);
@@ -979,7 +988,10 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       return new PaneSocketController({
         paneId: pane.id,
-        url: () => `${protocol}//${window.location.host}/ws/panes/${pane.id}?cols=${safeCols(term.cols)}&rows=${safeRows(term.rows)}`,
+        url: () => {
+          const size = proposedDimensions(term);
+          return `${protocol}//${window.location.host}/ws/panes/${pane.id}?cols=${safeCols(size.cols)}&rows=${safeRows(size.rows)}`;
+        },
         onSocketChange: (socket) => {
           socketRef.current = socket;
         },
@@ -996,7 +1008,15 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           }
         },
         onOpen: (socket) => {
-          sendResizeMessage(socket, activeRef.current ? "activate" : "resize", term, foreground());
+          const isForeground = foreground();
+          fitAddonRef.current?.setForeground(isForeground);
+          fitAddonRef.current?.fit();
+          sendResizeDimensions(
+            socket,
+            activeRef.current ? "activate" : "resize",
+            proposedDimensions(term),
+            isForeground,
+          );
         },
         onMessage: (message) => {
           if (cancelled) return;
@@ -1004,6 +1024,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             setStartupLabel(message.label);
           }
           if (message.type === "ready") {
+            fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
             setStartupLabel(message.replay ? "Restoring terminal state…" : "Preparing terminal…");
             setTerminalReady(false);
             resetPendingOutput();
@@ -1013,6 +1034,12 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             if (message.replay) startReplayDrain(term, message.replay);
             else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
             else revealTerminal();
+          }
+          if (message.type === "size") {
+            rectangularSelection?.clear();
+            disarmPrediction();
+            fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
+            refreshMetrics(term);
           }
           if (message.type === "output") {
             terminalLatency.recordOutput(pane.id, message.inputSequence, message.data.length, performance.now());
@@ -1148,8 +1175,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         requestAnimationFrame(() => term.focus());
       }
       await waitForVisibleBox(containerRef.current);
-      fitAddon = createTerminalFitter(term, containerRef.current);
+      fitAddon = createTerminalFitter(term, containerRef.current, (dimensions) => {
+        sendResizeDimensions(socketRef.current, "resize", dimensions, foreground());
+      });
       fitAddonRef.current = fitAddon;
+      fitAddon.setForeground(foreground());
       fitAddon.fit();
       refreshMetrics(term);
       if ("fonts" in document) {
@@ -1554,10 +1584,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       term.onResize(() => {
         rectangularSelection?.clear();
         disarmPrediction();
-        const ws = socketRef.current;
-        if (ws?.readyState === WebSocket.OPEN) {
-          sendResizeMessage(ws, "resize", term, foreground());
-        }
+        refreshMetrics(term);
       });
       socketController = createSocketController(term);
       socketControllerRef.current = socketController;
@@ -1640,14 +1667,17 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
 
   useEffect(() => {
     const term = terminalRef.current;
-    if (!active || !term) return;
+    if (!term) return;
     requestAnimationFrame(() => {
-      if (focusSignal > appliedFocusSignalRef.current) {
+      const foreground = isForegroundTerminal(activeRef.current);
+      fitAddonRef.current?.setForeground(foreground);
+      if (active && focusSignal > appliedFocusSignalRef.current) {
         appliedFocusSignalRef.current = focusSignal;
         term.focus();
       }
-      fitAddonRef.current?.fit();
-      sendResizeMessage(socketRef.current, "activate", term, isForegroundTerminal(activeRef.current));
+      if (active) fitAddonRef.current?.fit();
+      const dimensions = fitAddonRef.current?.proposedDimensions() ?? { cols: term.cols, rows: term.rows };
+      sendResizeDimensions(socketRef.current, "activate", dimensions, foreground);
     });
   }, [active, focusSignal]);
 
