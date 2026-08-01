@@ -22,6 +22,7 @@ import {
 } from "./paste-image-staging.js";
 import { DurableEndpointStore } from "./durable-endpoint-store.js";
 import { cleanupStrandedDurableEndpoints } from "./durable-endpoint-cleanup.js";
+import { WORKSPACE_CLOSE_GRACE_MS } from "../shared/workspace-close.js";
 import {
   KittyGraphicsSourceError,
   readKittyGraphicsSource,
@@ -138,6 +139,10 @@ export class SessionManager {
   private durableCwdRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private durableCwdRefreshInFlight = new Set<string>();
   private durableCwdLastReadAt = new Map<string, number>();
+  private pendingWorkspaceCloses = new Map<string, {
+    closeAt: string;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   private readonly agentWorkspaceCleanupTimer: ReturnType<typeof setInterval>;
   private readonly strandedEndpointCleanupTimer: ReturnType<typeof setInterval>;
   private strandedEndpointCleanupRunning = false;
@@ -433,11 +438,44 @@ export class SessionManager {
   }
 
   closeWorkspace(workspaceId: string): boolean {
+    this.cancelWorkspaceClose(workspaceId);
     const machineIds = this.machineIdsForWorkspace(workspaceId);
     const paneIds = this.state.removeWorkspace(workspaceId);
     for (const paneId of paneIds) this.disposePaneProcess(paneId, machineIds.get(paneId));
     if (paneIds.length > 0) this.onPaneReferencesChanged();
     return paneIds.length > 0;
+  }
+
+  scheduleWorkspaceClose(
+    workspaceId: string,
+    delayMs = WORKSPACE_CLOSE_GRACE_MS,
+  ): string | undefined {
+    const workspaceExists = this.state.snapshot().workspaces.some(
+      (workspace) => workspace.id === workspaceId,
+    );
+    if (!workspaceExists) return undefined;
+    const existing = this.pendingWorkspaceCloses.get(workspaceId);
+    if (existing) return existing.closeAt;
+    if (!Number.isFinite(delayMs) || delayMs < 0) {
+      throw new RangeError("workspace close delay must be a non-negative finite number");
+    }
+
+    const closeAt = new Date(Date.now() + delayMs).toISOString();
+    const timer = setTimeout(() => {
+      this.pendingWorkspaceCloses.delete(workspaceId);
+      this.closeWorkspace(workspaceId);
+    }, delayMs);
+    timer.unref?.();
+    this.pendingWorkspaceCloses.set(workspaceId, { closeAt, timer });
+    return closeAt;
+  }
+
+  cancelWorkspaceClose(workspaceId: string): boolean {
+    const pending = this.pendingWorkspaceCloses.get(workspaceId);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this.pendingWorkspaceCloses.delete(workspaceId);
+    return true;
   }
 
   sweepExpiredAgentWorkspaces(nowMs = Date.now()): string[] {
@@ -615,6 +653,7 @@ export class SessionManager {
       } else if (context.workspace.tabs.length > 1) {
         this.state.removeTab(context.workspace.id, context.tab.id);
       } else {
+        this.cancelWorkspaceClose(context.workspace.id);
         this.state.closeWorkspaceAfterExit(context.workspace.id);
       }
       this.onPaneReferencesChanged();
@@ -764,6 +803,8 @@ export class SessionManager {
     this.durableCwdLastReadAt.clear();
     for (const timer of this.pausedSessions.values()) clearInterval(timer);
     this.pausedSessions.clear();
+    for (const pending of this.pendingWorkspaceCloses.values()) clearTimeout(pending.timer);
+    this.pendingWorkspaceCloses.clear();
     for (const session of this.sessions.values()) {
       this.ignoredSessionExits.add(session);
       this.backends.get(session.pane.id)?.detach(session);

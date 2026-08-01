@@ -69,6 +69,42 @@ test("pane disposal prefers the live session's pre-heartbeat machine snapshot", 
   assert.equal(resolveDisposalMachine(undefined, [movedMachine], oldMachine.id)?.host, "100.70.0.9");
 });
 
+test("workspace close grace can be cancelled and otherwise closes at its deadline", async () => {
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-workspace-close-grace-"));
+  const machine: MachineConfig = {
+    id: "local",
+    name: "Local",
+    kind: "local",
+    command: ["/bin/sh"],
+    sessionBackend: "pty",
+  };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const workspace = state.snapshot().workspaces[0] ?? state.createWorkspace(machine.id);
+  const manager = new SessionManager(state, [machine]);
+  try {
+    const firstCloseAt = manager.scheduleWorkspaceClose(workspace.id, 30);
+    assert.ok(firstCloseAt);
+    assert.equal(manager.scheduleWorkspaceClose(workspace.id, 1), firstCloseAt);
+    assert.equal(manager.cancelWorkspaceClose(workspace.id), true);
+    assert.equal(manager.cancelWorkspaceClose(workspace.id), false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(
+      state.snapshot().workspaces.some((candidate) => candidate.id === workspace.id),
+      true,
+    );
+
+    assert.ok(manager.scheduleWorkspaceClose(workspace.id, 20));
+    await waitForCondition(
+      () => !state.snapshot().workspaces.some((candidate) => candidate.id === workspace.id),
+    );
+    assert.equal(manager.scheduleWorkspaceClose(workspace.id, 20), undefined);
+  } finally {
+    manager.disposeAll();
+    state.flush();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("idle durable-client recycle detaches only the transient client and keeps the old endpoint snapshot", () => {
   const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-recycle-"));
   let machine: MachineConfig = {

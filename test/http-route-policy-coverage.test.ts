@@ -21,6 +21,8 @@ const documentedRoutes = [
   ["registry-delete", "DELETE", "/api/registry/hosts/linux-box"],
   ["workspace-create", "POST", "/api/workspaces"],
   ["workspace-cleanup-configure", "POST", "/api/workspaces/workspace/cleanup"],
+  ["workspace-close-schedule", "POST", "/api/workspaces/workspace/pending-close"],
+  ["workspace-close-cancel", "DELETE", "/api/workspaces/workspace/pending-close"],
   ["workspace-close", "DELETE", "/api/workspaces/workspace"],
   ["workspace-title", "POST", "/api/workspaces/workspace/title"],
   ["tab-create", "POST", "/api/workspaces/workspace/tabs"],

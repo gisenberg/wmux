@@ -287,6 +287,38 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     },
   },
   {
+    id: "workspace-close-schedule",
+    method: "POST",
+    pattern: /^\/api\/workspaces\/([^/]+)\/pending-close$/,
+    policy: routePolicy(
+      "workspace-close-schedule",
+      "POST",
+      /^\/api\/workspaces\/[^/]+\/pending-close$/,
+    ),
+    handler: async ({ deps, match, sendJson }) => {
+      if (!match) throw new Error("workspace close schedule route matched without captures");
+      const closeAt = deps.sessions.scheduleWorkspaceClose(match[1]);
+      sendJson(closeAt ? 202 : 404, closeAt
+        ? { scheduled: true, closeAt }
+        : { error: "workspace_not_found" });
+    },
+  },
+  {
+    id: "workspace-close-cancel",
+    method: "DELETE",
+    pattern: /^\/api\/workspaces\/([^/]+)\/pending-close$/,
+    policy: routePolicy(
+      "workspace-close-cancel",
+      "DELETE",
+      /^\/api\/workspaces\/[^/]+\/pending-close$/,
+    ),
+    handler: async ({ deps, match, sendJson }) => {
+      if (!match) throw new Error("workspace close cancel route matched without captures");
+      const cancelled = deps.sessions.cancelWorkspaceClose(match[1]);
+      sendJson(200, { cancelled, state: deps.currentPayload() });
+    },
+  },
+  {
     id: "workspace-close",
     method: "DELETE",
     pattern: /^\/api\/workspaces\/([^/]+)$/,

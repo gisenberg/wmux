@@ -1,0 +1,1 @@
+export const WORKSPACE_CLOSE_GRACE_MS = 10_000;
