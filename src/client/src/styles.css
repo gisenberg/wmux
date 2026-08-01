@@ -7097,24 +7097,26 @@ button.active-tool {
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-width: min(420px, calc(100vw - 32px));
+  gap: 6px;
+  width: min(560px, calc(100vw - 32px));
   pointer-events: none;
 }
 
 .wmux-toast {
   pointer-events: auto;
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 0;
   border: 1px solid var(--line);
-  background: var(--panel-2);
+  background: var(--black);
   color: var(--ivory);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  font-size: 13px;
-  line-height: 1.4;
+  box-shadow: none;
+  font-family: var(--wmux-mono-font);
+  font-size: 12px;
+  line-height: 1.25;
   animation: wmux-toast-in 140ms ease-out;
 }
 
@@ -7128,25 +7130,47 @@ button.active-tool {
   border-left-width: 3px;
 }
 
+.wmux-toast-status {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wmux-toast-error .wmux-toast-status {
+  color: var(--red);
+}
+
 .wmux-toast-message {
   flex: 1;
   word-break: break-word;
 }
 
+.wmux-toast-action,
 .wmux-toast-dismiss {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--muted);
+  color: var(--ivory);
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
   cursor: pointer;
-  padding: 0;
-  margin-top: 1px;
+  padding: 2px 3px;
+  text-transform: uppercase;
 }
 
+.wmux-toast-action:hover,
+.wmux-toast-action:focus-visible,
+.wmux-toast-dismiss:focus-visible,
 .wmux-toast-dismiss:hover {
-  color: var(--ivory);
+  color: var(--black);
+  background: var(--ivory);
+  outline: none;
 }
 
 @keyframes wmux-toast-in {
@@ -7293,7 +7317,17 @@ button.active-tool {
     right: calc(8px + var(--wmux-mobile-right-inset, 0px));
     bottom: calc(8px + env(safe-area-inset-bottom));
     left: calc(8px + var(--wmux-mobile-left-inset, 0px));
+    width: auto;
     max-width: none;
+  }
+
+  .wmux-toast {
+    min-height: 44px;
+  }
+
+  .wmux-toast-action,
+  .wmux-toast-dismiss {
+    min-height: 32px;
   }
 
   .wmux-toast-dismiss {

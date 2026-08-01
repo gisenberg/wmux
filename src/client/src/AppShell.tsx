@@ -40,6 +40,8 @@ import { compactMiddlePath, normalizeUserPath } from "./path-display";
 import { formatSessionReference } from "./session-reference";
 import { ScreenStreamViewer } from "./ScreenStream";
 import { Toasts, useToasts } from "./Toasts";
+import { hidePendingWorkspaceCloses } from "./workspace-close";
+import { WORKSPACE_CLOSE_GRACE_MS } from "../../shared/workspace-close";
 import { useAppRouting } from "./useAppRouting";
 import { useStoreLifecycle } from "./store/use-store-lifecycle";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -117,10 +119,23 @@ interface PendingAction {
   label: string;
 }
 
+interface PendingWorkspaceClose {
+  request: ReturnType<typeof api.scheduleWorkspaceClose>;
+  toastId: number;
+}
+
 export function AppShell() {
   const mobileViewport = useMobileViewportState();
   const store = useAppStore();
-  const state = useAppState();
+  const authoritativeState = useAppState();
+  const [pendingWorkspaceIds, setPendingWorkspaceIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const pendingWorkspaceCloses = useRef(new Map<string, PendingWorkspaceClose>());
+  const state = useMemo(
+    () => hidePendingWorkspaceCloses(authoritativeState, pendingWorkspaceIds),
+    [authoritativeState, pendingWorkspaceIds],
+  );
   useEffect(() => {
     const url = new URL(window.location.href);
     if (!url.searchParams.has("legacy")) return;
@@ -130,6 +145,26 @@ export function AppShell() {
   const [newMachineId, setNewMachineId] = useState(() => loadMachineTargetId(window.localStorage));
   const [bootComplete, setBootComplete] = useState(false);
   const { toasts, pushToast, dismissToast } = useToasts();
+  useEffect(() => {
+    if (!authoritativeState) return;
+    const authoritativeWorkspaceIds = new Set(
+      authoritativeState.workspaces.map((workspace) => workspace.id),
+    );
+    const closedWorkspaceIds = [...pendingWorkspaceCloses.current.keys()].filter(
+      (workspaceId) => !authoritativeWorkspaceIds.has(workspaceId),
+    );
+    if (closedWorkspaceIds.length === 0) return;
+    for (const workspaceId of closedWorkspaceIds) {
+      const pending = pendingWorkspaceCloses.current.get(workspaceId);
+      if (pending) dismissToast(pending.toastId);
+      pendingWorkspaceCloses.current.delete(workspaceId);
+    }
+    setPendingWorkspaceIds((current) => {
+      const next = new Set(current);
+      for (const workspaceId of closedWorkspaceIds) next.delete(workspaceId);
+      return next;
+    });
+  }, [authoritativeState, dismissToast]);
   const {
     sidebarCollapsed,
     sidebarWidth,
@@ -660,19 +695,39 @@ export function AppShell() {
   }, [persistFavoriteWorkspaceIds, store]);
 
   useEffect(() => {
-    if (!state) return;
+    if (!authoritativeState) return;
     if (desiredCollapsedWorkspaceIds.current) return;
-    let desired = pruneCollapsedWorkspaceIds(state.workspaces, state.settings.collapsedWorkspaceIds);
-    if (activeWorkspace) desired = expandWorkspaceAncestors(state.workspaces, desired, activeWorkspace.id);
-    if (!sameWorkspaceIds(desired, state.settings.collapsedWorkspaceIds)) void persistCollapsedWorkspaceIds(desired);
-  }, [activeWorkspace?.id, persistCollapsedWorkspaceIds, state?.settings.collapsedWorkspaceIds, state?.workspaces]);
+    let desired = pruneCollapsedWorkspaceIds(
+      authoritativeState.workspaces,
+      authoritativeState.settings.collapsedWorkspaceIds,
+    );
+    if (activeWorkspace) {
+      desired = expandWorkspaceAncestors(
+        authoritativeState.workspaces,
+        desired,
+        activeWorkspace.id,
+      );
+    }
+    if (!sameWorkspaceIds(desired, authoritativeState.settings.collapsedWorkspaceIds)) {
+      void persistCollapsedWorkspaceIds(desired);
+    }
+  }, [
+    activeWorkspace?.id,
+    authoritativeState?.settings.collapsedWorkspaceIds,
+    authoritativeState?.workspaces,
+    persistCollapsedWorkspaceIds,
+  ]);
 
   useEffect(() => {
-    if (!state || desiredFavoriteWorkspaceIds.current) return;
-    const currentIds = state.settings.favoriteWorkspaceIds ?? [];
-    const desired = pruneFavoriteWorkspaceIds(state.workspaces, currentIds);
+    if (!authoritativeState || desiredFavoriteWorkspaceIds.current) return;
+    const currentIds = authoritativeState.settings.favoriteWorkspaceIds ?? [];
+    const desired = pruneFavoriteWorkspaceIds(authoritativeState.workspaces, currentIds);
     if (!sameWorkspaceIds(desired, currentIds)) void persistFavoriteWorkspaceIds(desired);
-  }, [persistFavoriteWorkspaceIds, state?.settings.favoriteWorkspaceIds, state?.workspaces]);
+  }, [
+    authoritativeState?.settings.favoriteWorkspaceIds,
+    authoritativeState?.workspaces,
+    persistFavoriteWorkspaceIds,
+  ]);
 
   const activeWorkspaceUnreadCount = activeWorkspace ? unreadByWorkspaceId.get(activeWorkspace.id) ?? 0 : 0;
   useEffect(() => {
@@ -950,6 +1005,72 @@ export function AppShell() {
     await refresh(response.state);
   });
 
+  const revealPendingWorkspace = useCallback((workspaceId: string) => {
+    setPendingWorkspaceIds((current) => {
+      if (!current.has(workspaceId)) return current;
+      const next = new Set(current);
+      next.delete(workspaceId);
+      return next;
+    });
+  }, []);
+
+  const undoWorkspaceClose = useCallback(async (workspaceId: string): Promise<void> => {
+    const pending = pendingWorkspaceCloses.current.get(workspaceId);
+    if (!pending) return;
+    pendingWorkspaceCloses.current.delete(workspaceId);
+    revealPendingWorkspace(workspaceId);
+    dismissToast(pending.toastId);
+
+    await pending.request.catch(() => undefined);
+    try {
+      const response = await api.cancelWorkspaceClose(workspaceId);
+      await refresh(response.state);
+      if (!response.cancelled) {
+        pushToast("The workspace close deadline had already passed.", "info", {
+          status: "closed",
+        });
+      }
+    } catch (error) {
+      pushToast(`Undo close failed: ${describeActionError(error)}`);
+      void loadBootstrapRef.current();
+    }
+  }, [dismissToast, pushToast, refresh, revealPendingWorkspace]);
+
+  const scheduleWorkspaceClose = useCallback((workspaceId: string): void => {
+    if (pendingWorkspaceCloses.current.has(workspaceId)) return;
+    const workspace = store.get()?.workspaces.find(
+      (candidate) => candidate.id === workspaceId,
+    );
+    if (!workspace) return;
+
+    setPendingWorkspaceIds((current) => new Set(current).add(workspaceId));
+    const request = api.scheduleWorkspaceClose(workspaceId);
+    const toastId = pushToast(
+      `${workspace.name} hidden. Closing in 10 seconds.`,
+      "info",
+      {
+        action: {
+          label: "[U] UNDO",
+          accessibleLabel: `Undo close ${workspace.name}`,
+          run: () => void undoWorkspaceClose(workspaceId),
+        },
+        dismissible: false,
+        durationMs: WORKSPACE_CLOSE_GRACE_MS,
+        status: "pending",
+      },
+    );
+    pendingWorkspaceCloses.current.set(workspaceId, { request, toastId });
+
+    void request.catch((error) => {
+      const pending = pendingWorkspaceCloses.current.get(workspaceId);
+      if (!pending || pending.request !== request) return;
+      pendingWorkspaceCloses.current.delete(workspaceId);
+      revealPendingWorkspace(workspaceId);
+      dismissToast(toastId);
+      pushToast(`Close workspace failed: ${describeActionError(error)}`);
+    });
+  }, [dismissToast, pushToast, revealPendingWorkspace, store, undoWorkspaceClose]);
+
   const closeActiveTab = () => {
     if (!activeWorkspace || !activeTab) return;
     const run = () => closeTabById(activeWorkspace.id, activeTab.id);
@@ -968,7 +1089,7 @@ export function AppShell() {
   const requestCloseWorkspace = (workspaceId: string, returnFocus?: HTMLElement | null) => {
     const workspace = store.get()?.workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace) return;
-    const run = () => closeWorkspaceById(workspace.id);
+    const run = () => scheduleWorkspaceClose(workspace.id);
     if (!mobileViewport.isMobile) {
       void run();
       return;

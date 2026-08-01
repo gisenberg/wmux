@@ -290,6 +290,16 @@ export const api = {
     }),
   closeWorkspace: (workspaceId: string) =>
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}`, { method: "DELETE" }),
+  scheduleWorkspaceClose: (workspaceId: string) =>
+    json<{ scheduled: true; closeAt: string }>(
+      `/api/workspaces/${workspaceId}/pending-close`,
+      { method: "POST" },
+    ),
+  cancelWorkspaceClose: (workspaceId: string) =>
+    json<{ cancelled: boolean; state: BootstrapPayload }>(
+      `/api/workspaces/${workspaceId}/pending-close`,
+      { method: "DELETE" },
+    ),
   reorderWorkspace: async (
     workspaceId: string,
     targetWorkspaceId: string | undefined,

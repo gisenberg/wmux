@@ -59,6 +59,8 @@ const routeCases: Array<[string, string, string]> = [
   ["pane-attachment-create", "POST", "/api/panes/pane/attachments"],
   ["notification-read", "POST", "/api/notifications/n/read"],
   ["workspace-notifications-read", "POST", "/api/workspaces/ws/notifications/read"],
+  ["workspace-close-schedule", "POST", "/api/workspaces/ws/pending-close"],
+  ["workspace-close-cancel", "DELETE", "/api/workspaces/ws/pending-close"],
   ["workspace-close", "DELETE", "/api/workspaces/ws"], ["workspace-title", "POST", "/api/workspaces/ws/title"],
   ["workspace-auto-title", "POST", "/api/workspaces/ws/auto-title"], ["tab-create", "POST", "/api/workspaces/ws/tabs"],
   ["tab-close", "DELETE", "/api/workspaces/ws/tabs/tab"], ["tab-title", "POST", "/api/workspaces/ws/tabs/tab/title"],
@@ -87,6 +89,8 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("GET", "/api/helpers/windows/win")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("GET", "/api/helpers/windows/win/bootstrap")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("GET", "/api/bootstrap")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/workspaces/ws/pending-close")), true);
+  assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/workspaces/ws/pending-close")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/workspaces/ws/cleanup")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy("POST", "/api/workspaces/ws/cleanup")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("GET", "/api/delegations/run")), true);

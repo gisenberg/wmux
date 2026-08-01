@@ -30,6 +30,31 @@ test("create requests carry browser-local source pane context", async () => {
   ]);
 });
 
+test("workspace close grace requests use distinct schedule and undo methods", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ path: string; method: string | undefined }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ path: String(input), method: init?.method });
+    return new Response(JSON.stringify(
+      init?.method === "POST"
+        ? { scheduled: true, closeAt: "2026-01-01T00:00:10.000Z" }
+        : { cancelled: true, state: {} },
+    ), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    await api.scheduleWorkspaceClose("ws_target");
+    await api.cancelWorkspaceClose("ws_target");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requests, [
+    { path: "/api/workspaces/ws_target/pending-close", method: "POST" },
+    { path: "/api/workspaces/ws_target/pending-close", method: "DELETE" },
+  ]);
+});
+
 test("workspace tree mutations carry revisions, optional outdent targets, and navigation settings", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ path: string; body: unknown }> = [];

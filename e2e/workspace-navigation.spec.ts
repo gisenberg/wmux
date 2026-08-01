@@ -14,6 +14,32 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
   const rootItem = () => page.locator(`a[role="treeitem"][href^="/workspaces/${root.id}/"]`);
   const childItem = () => page.locator(`a[role="treeitem"][href^="/workspaces/${child.id}/"]`);
   const childActionName = isMobile ? `Workspace options for ${child.name}` : `Move ${child.name}`;
+  const undoChildClose = async () => {
+    await expect(childItem()).toHaveCount(0);
+    const toast = page.locator(".wmux-toast").filter({ hasText: child.name });
+    await expect(toast).toContainText("[PENDING]");
+    await expect(toast).toContainText("Closing in 10 seconds");
+    await expect.poll(async () => {
+      const response = await request.get("/api/bootstrap");
+      const payload = await response.json() as { workspaces: E2eWorkspace[] };
+      return payload.workspaces.some((workspace) => workspace.id === child.id);
+    }).toBe(true);
+    expect(await toast.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+        fontFamily: style.fontFamily,
+      };
+    })).toMatchObject({
+      borderRadius: "0px",
+      boxShadow: "none",
+      fontFamily: expect.stringContaining("Fira Code"),
+    });
+    await toast.getByRole("button", { name: `Undo close ${child.name}` }).click();
+    await expect(childItem()).toBeVisible();
+    await expect(toast).toHaveCount(0);
+  };
 
   try {
     await page.goto(rootPath);
@@ -94,12 +120,7 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
       await moveDialog.getByRole("button", { name: "Close workspace", exact: true }).click();
       const closeDialog = page.getByRole("dialog", { name: "Close workspace?" });
       await closeDialog.getByRole("button", { name: "Close workspace" }).click();
-      await expect.poll(async () => {
-        const response = await request.get("/api/bootstrap");
-        const payload = await response.json() as { workspaces: E2eWorkspace[] };
-        return payload.workspaces.some((workspace) => workspace.id === child.id);
-      }).toBe(false);
-      await expect(childItem()).toHaveCount(0);
+      await undoChildClose();
     } else {
       await childItem().press("Shift+F10");
       const agentMenu = page.getByRole("menu", { name: `Agent actions: ${child.name}` });
@@ -123,16 +144,56 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
       await childItem().press("Shift+F10");
       await expect(agentMenu.getByRole("menuitem", { name: /Unfavorite$/ })).toBeVisible();
       await agentMenu.getByRole("menuitem", { name: "Close agent" }).click();
-      await expect.poll(async () => {
-        const response = await request.get("/api/bootstrap");
-        const payload = await response.json() as { workspaces: E2eWorkspace[] };
-        return payload.workspaces.some((workspace) => workspace.id === child.id);
-      }).toBe(false);
-      await expect(childItem()).toHaveCount(0);
+      await undoChildClose();
     }
   } finally {
     await request.delete(`/api/workspaces/${child.id}`);
     await request.delete(`/api/workspaces/${root.id}`);
+  }
+});
+
+test("workspace close grace hides immediately, restores on undo, and closes after its deadline", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "one desktop deadline run covers the server-owned timer");
+  test.setTimeout(45_000);
+  const targetResponse = await request.post("/api/workspaces", { data: { machineId: "local" } });
+  expect(targetResponse.ok()).toBeTruthy();
+  const target = (await targetResponse.json() as { workspace: E2eWorkspace }).workspace;
+  const targetPath = `/workspaces/${target.id}/tabs/${target.activeTabId}`;
+  const targetItem = page.locator(`a[role="treeitem"][href^="/workspaces/${target.id}/"]`);
+  const closeFromPalette = async () => {
+    await page.keyboard.press("Control+K");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.locator("input").fill("Close current workspace");
+    await page.keyboard.press("Enter");
+  };
+
+  try {
+    await page.goto(targetPath);
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await expect(targetItem).toBeVisible();
+
+    await closeFromPalette();
+    await expect(targetItem).toHaveCount(0);
+    const firstToast = page.locator(".wmux-toast").filter({ hasText: target.name });
+    await expect(firstToast).toContainText("[PENDING]");
+    await expect.poll(async () => {
+      const payload = await (await request.get("/api/bootstrap")).json() as { workspaces: E2eWorkspace[] };
+      return payload.workspaces.some((workspace) => workspace.id === target.id);
+    }).toBe(true);
+
+    await firstToast.getByRole("button", { name: `Undo close ${target.name}` }).click();
+    await expect(targetItem).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${targetPath}$`));
+
+    await closeFromPalette();
+    await expect(targetItem).toHaveCount(0);
+    await expect.poll(async () => {
+      const payload = await (await request.get("/api/bootstrap")).json() as { workspaces: E2eWorkspace[] };
+      return payload.workspaces.some((workspace) => workspace.id === target.id);
+    }, { timeout: 15_000 }).toBe(false);
+    await expect(page.locator(".wmux-toast").filter({ hasText: target.name })).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/workspaces/${target.id}`).catch(() => undefined);
   }
 });
 
