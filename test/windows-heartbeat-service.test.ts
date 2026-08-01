@@ -58,6 +58,19 @@ test("Windows setup propagates helper process exit codes", () => {
   assert.match(invokeHelper, /if \(\$ExitCode -ne 0\) \{\s*exit \$ExitCode\s*\}/);
 });
 
+test("Windows setup exposes password-mode installation and redacted readiness diagnostics", () => {
+  const source = fs.readFileSync(path.join(repoRoot, "scripts/windows/wmux-windows-setup.ps1"), "utf8");
+
+  assert.match(source, /install-agent \[--logon-type Interactive\|S4U\|Password\]/);
+  assert.match(source, /'refresh-agent-credentials' \{/);
+  assert.match(source, /Invoke-WmuxHelper 'wmux-windows-agent-service' \(@\('install'\) \+ \$ActionArgs\)/);
+  assert.match(source, /agentTaskLogonType = \$AgentLogonType/);
+  assert.match(source, /agentStartsWithoutLogin = \$AgentLogonType -in @\('Password', 'S4U'\)/);
+  assert.match(source, /agentNetworkCredentialsAvailable = \$AgentLogonType -eq 'Password'/);
+  assert.match(source, /agentGenerationSlotsReady/);
+  assert.doesNotMatch(source, /WMUX_WINDOWS_AGENT_PASSWORD/);
+});
+
 test(
   "Windows setup returns the agent helper's native exit code",
   { skip: process.platform !== "win32" },

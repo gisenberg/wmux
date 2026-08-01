@@ -313,6 +313,25 @@ wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>
 wmux-windows-setup agent-status
 ```
 
+For unattended startup before a console or RDP login, with the user's
+authenticated network credentials available to pane processes, install the
+agent in explicit password mode from an interactive private shell:
+
+```powershell
+wmux-windows-setup install-agent --logon-type Password
+```
+
+The prompt never accepts a password from an argument or environment variable.
+The password crosses the Windows Task Scheduler registration API in memory and
+is retained only by Task Scheduler. wmux pre-registers the base task, the eight
+adjacent rollout task slots, and the update watcher during that prompt; later
+headless rollouts only activate those fixed slots. If the Windows account
+password changes, close active agent panes and refresh all task credentials:
+
+```powershell
+wmux-windows-setup refresh-agent-credentials
+```
+
 Notes:
 
 - `validate` prints a JSON report for helper state, wmux API reachability, FFmpeg/Python/pywinpty/winget availability, hook config files, and native-agent capture supervision state.
@@ -320,10 +339,17 @@ Notes:
 - `install-deps` uses `winget` to install `Gyan.FFmpeg` and `Python.Python.3.12` when missing, then installs `pywinpty` with pip. It executes Python during detection so the Microsoft Store app-execution alias is not mistaken for an installed runtime.
 - `install-agent` installs and starts the per-user `wmux-windows-agent` Scheduled Task for restart-durable sessions, in-process dynamic registration, and view-only capture supervision.
   It removes legacy standalone `wmux-heartbeat` and `wmux-stream-agent` tasks during migration.
+- `install-agent --logon-type Password` prompts locally and installs a fixed
+  password-backed task pool. It refuses to replace the pool while a reachable
+  generation owns panes; `--force` is reserved for cases where terminating
+  unverifiable or active panes is explicitly acceptable.
+- `refresh-agent-credentials` re-prompts after an account-password change. It
+  never reads the old Task Scheduler credential and does not persist the new
+  password in wmux-owned files.
 - `install-stream` remains a compatibility alias for `install-agent`, and `stream-status` reports the native agent.
 - `configure-agent-firewall` must run from an elevated PowerShell session. It allows the configured base `agentPort` and eight adjacent rollout ports only from the exact Tailscale/RFC1918/IPv6 ULA wmux server addresses passed on the command line. For the default base port, the bounded range is `3481-3489`. `install-agent` warns when this managed rule is absent or stale.
 - `agent-firewall-status` prints the expected range and current managed-rule state as JSON. If you manage Windows Firewall separately, create an equivalent exact-source rule for the same nine-port range; opening only the base port prevents safe side-by-side updates.
-- The Windows agent task starts at user logon, starts when available, restarts after failure, has no fixed execution-time cutoff, and launches through a hidden PowerShell wrapper instead of a visible `cmd.exe` window.
+- The Windows agent task has user-logon and once-per-minute triggers, starts when available, restarts after failure, has no fixed execution-time cutoff, and launches through a hidden PowerShell wrapper instead of a visible `cmd.exe` window. `S4U` and `Password` modes can therefore start without a UI login.
 
 If you are running setup from plain SSH before the helper directory is on PATH, invoke the staged script by path:
 
@@ -435,7 +461,7 @@ To make wmux use the agent for new panes, opt in explicitly:
 
 Keep the legacy `powershell-ssh` path available as a fallback while the ConPTY agent is still being validated.
 
-The agent task uses `Interactive` logon when a desktop user is logged in and falls back to `S4U` on a headless host. S4U avoids a stored password and does not require a live desktop session, but Windows does not make delegated network credentials available to S4U processes. Override automatic selection before installation with `WMUX_WINDOWS_AGENT_LOGON_TYPE=Interactive` or `WMUX_WINDOWS_AGENT_LOGON_TYPE=S4U`. Logon and once-per-minute triggers supervise the task; `MultipleInstances: IgnoreNew` prevents duplicate agents, while `wmux-windows-agent-service stop` disables the task so an intentional stop remains stopped.
+The agent task uses `Interactive` logon when a desktop user is logged in and falls back to `S4U` on a headless host. S4U avoids a stored password and does not require a live desktop session, but Windows does not make delegated network credentials available to S4U processes. Override automatic selection before installation with `--logon-type Interactive`, `--logon-type S4U`, or the corresponding `WMUX_WINDOWS_AGENT_LOGON_TYPE` value. Explicit `Password` mode also starts without a desktop login and supplies network credentials, but account-password rotation requires `refresh-agent-credentials`. Password mode is accepted only through the private local prompt; `--password` and `WMUX_WINDOWS_AGENT_PASSWORD` are rejected. Logon and once-per-minute triggers supervise the task; `MultipleInstances: IgnoreNew` prevents duplicate agents, while `wmux-windows-agent-service stop` disables the task so an intentional stop remains stopped.
 
 ## Definition Of Done
 
@@ -455,6 +481,7 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - A direct `/sessions/:id` create/input/output/delete smoke test returns command output.
 - Creating a new pane against an outdated agent stages the current release and starts a side-by-side Scheduled Task generation on an unused adjacent port. The new pane moves to that generation, existing panes remain pinned to their owning generation, and wmux persists the selected port for restart-safe routing.
 - `wmux-windows-setup agent-firewall-status` reports the configured base-through-eight agent port range as allowed from the wmux server.
+- In Password mode, `wmux-windows-setup validate` reports `agentStartsWithoutLogin: true`, `agentNetworkCredentialsAvailable: true`, and `agentGenerationSlotsReady: true`; after a reboot with no UI login, `/health`, pane creation, and an authenticated network-resource smoke test succeed.
 - `wmux-windows-agent-service activate-update` remains the manual in-place restart-when-idle flow; `cancel-update` cancels it. `rollout-update --port PORT` is the lower-level generation launcher used by wmux.
 - `wmux-windows-setup install-hooks` reports Claude and Codex hooks installed; `/hooks` in a new Codex session shows the direct PowerShell command ready for review/trust.
 - Changing directories in PowerShell updates the pane cwd, and a same-host split starts in that directory.

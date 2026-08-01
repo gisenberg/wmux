@@ -273,6 +273,27 @@ test("Windows agent service drains staged updates and refuses unsafe restarts", 
   assert.ok(!content.includes("Start-Process -FilePath $PowerShell"));
 });
 
+test("Windows agent password logon pre-registers credentialed rollout tasks without persisting the password", () => {
+  const bundle = buildWindowsHelperBundle(machine);
+  const helper = bundle.files.find((file) => file.name === "wmux-windows-agent-service.ps1");
+  assert.ok(helper, "bundle includes wmux-windows-agent-service.ps1");
+  const content = Buffer.from(helper.dataBase64, "base64").toString("utf8");
+
+  assert.match(content, /--logon-type Interactive\|S4U\|Password/);
+  assert.match(content, /Read-Host "Enter the Windows password for \$Identity" -AsSecureString/);
+  assert.match(content, /WMUX_WINDOWS_AGENT_PASSWORD is not accepted/);
+  assert.match(content, /--password is not supported/);
+  assert.match(content, /Register-ScheduledTask -TaskName \$Name -InputObject \$Definition -User \$Identity -Password \$Password/);
+  assert.match(content, /function Install-PasswordTaskPool/);
+  assert.match(content, /for \(\$Offset = 1; \$Offset -le 8; \$Offset \+= 1\)/);
+  assert.match(content, /wmux-windows-agent-supervisor\.ps1/);
+  assert.match(content, /Password-backed rollout slot \$GenerationTaskName is missing/);
+  assert.match(content, /refresh-credentials/);
+  assert.match(content, /Password retained only by Windows Task Scheduler/);
+  assert.doesNotMatch(content, /WMUX_WINDOWS_AGENT_PASSWORD\s*=/);
+  assert.doesNotMatch(content, /WriteAllText\([^\n]*\$Password/);
+});
+
 test("Windows setup manages the bounded agent firewall range", () => {
   const bundle = buildWindowsHelperBundle(machine);
   const helper = bundle.files.find((file) => file.name === "wmux-windows-setup.ps1");

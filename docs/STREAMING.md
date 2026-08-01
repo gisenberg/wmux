@@ -82,7 +82,10 @@ wmux-windows-setup agent-status
 The installer removes the legacy `wmux-stream-agent` Scheduled Task.
 The base `wmux-windows-agent` task owns capture supervision, while adjacent rollout generations have `streamOwner: false` so only one process polls leases or publishes pixels.
 Use the `Interactive` task logon type for capture.
-S4U, locked, and logged-out desktop capture remains platform-dependent and is not claimed as supported.
+S4U and Password task modes run without an interactive desktop. Password mode
+adds the user's network credentials, not a desktop session; S4U, Password,
+locked, and logged-out desktop capture remains platform-dependent and is not
+claimed as supported.
 
 `wmux-windows-setup install-stream` remains a compatibility alias for `install-agent`.
 

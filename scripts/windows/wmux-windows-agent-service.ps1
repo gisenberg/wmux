@@ -9,14 +9,21 @@ $HelperDir = if ($env:WMUX_HELPER_DIR) { $env:WMUX_HELPER_DIR } else { Join-Path
 $Agent = Join-Path $HelperDir 'wmux-windows-agent.py'
 $Wrapper = Join-Path $HelperDir 'wmux-windows-agent-task.ps1'
 $RestartTaskName = "$TaskName-update"
+$SupervisorWrapper = Join-Path $HelperDir 'wmux-windows-agent-supervisor.ps1'
 $OutLog = Join-Path $LogDir 'windows-agent.out.log'
 $ErrLog = Join-Path $LogDir 'windows-agent.err.log'
 $LegacyHeartbeatTaskName = if ($env:WMUX_HEARTBEAT_TASK) { $env:WMUX_HEARTBEAT_TASK } else { 'wmux-heartbeat' }
 $LegacyStreamTaskName = if ($env:WMUX_STREAM_AGENT_TASK) { $env:WMUX_STREAM_AGENT_TASK } else { 'wmux-stream-agent' }
 $Force = @($args) -contains '--force'
 $GenerationPort = 0
+$RequestedLogonType = ''
+if (@($args | Where-Object { [string]$_ -like '--password*' }).Count -gt 0) {
+  Write-Error 'Passwords must be entered at the private interactive prompt; --password is not supported.'
+  exit 2
+}
 for ($Index = 0; $Index -lt $args.Count - 1; $Index += 1) {
   if ([string]$args[$Index] -eq '--port') { $GenerationPort = [int]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--logon-type') { $RequestedLogonType = [string]$args[$Index + 1] }
 }
 
 function ConvertTo-PowerShellLiteral {
@@ -50,7 +57,8 @@ function Get-PythonLaunch {
 function Write-Wrapper {
   param(
     [string]$TargetConfig = $Config,
-    [string]$TargetWrapper = $Wrapper
+    [string]$TargetWrapper = $Wrapper,
+    [switch]$RequireConfig
   )
   New-Item -ItemType Directory -Force -Path $StateDir, $LogDir, $HelperDir | Out-Null
   $Python = Get-PythonLaunch
@@ -78,8 +86,14 @@ function Write-Wrapper {
   )
   $Command = $CommandParts -join ' '
   $CommandLiteral = ConvertTo-PowerShellLiteral $Command
+  $ConfigGuard = if ($RequireConfig) {
+    "if (-not (Test-Path -LiteralPath $(ConvertTo-PowerShellLiteral $TargetConfig) -PathType Leaf)) { exit 0 }"
+  } else {
+    ''
+  }
   $Content = @"
 `$ErrorActionPreference = 'Continue'
+$ConfigGuard
 `$env:PATH = $HelperDirLiteral + ';' + `$env:PATH
 `$env:WMUX_AGENT_RUN = "`$(Get-Random)-`$(Get-Random)"
 `$env:WMUX_AGENT_OUT = Join-Path $LogDirLiteral "windows-agent-`$(`$env:WMUX_AGENT_RUN).out.log"
@@ -227,21 +241,187 @@ function Get-AgentGenerationTasks {
     Where-Object { $_.TaskName -match $GenerationPattern })
 }
 
+function Get-AgentBasePort {
+  $Document = if (Test-Path -LiteralPath $Config -PathType Leaf) {
+    Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+  } else {
+    [pscustomobject]@{}
+  }
+  if ($Document.port) { return [int]$Document.port }
+  return 3481
+}
+
+function Get-TaskLogonType {
+  param([string]$Name = $TaskName)
+  $Task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+  if (-not $Task) { return '' }
+  return [string]$Task.Principal.LogonType
+}
+
+function Test-PasswordTaskPool {
+  return ((Get-TaskLogonType) -eq 'Password')
+}
+
 function Get-AgentLogonType {
-  if ($env:WMUX_WINDOWS_AGENT_LOGON_TYPE) {
-    if ($env:WMUX_WINDOWS_AGENT_LOGON_TYPE -notin @('Interactive', 'S4U')) {
-      Write-Error 'WMUX_WINDOWS_AGENT_LOGON_TYPE must be Interactive or S4U.'
-      exit 2
+  $Value = if ($RequestedLogonType) {
+    $RequestedLogonType
+  } elseif ($env:WMUX_WINDOWS_AGENT_LOGON_TYPE) {
+    [string]$env:WMUX_WINDOWS_AGENT_LOGON_TYPE
+  } else {
+    ''
+  }
+  if ($Value) {
+    switch ($Value.ToLowerInvariant()) {
+      'interactive' { return 'Interactive' }
+      's4u' { return 'S4U' }
+      'password' { return 'Password' }
+      default {
+        Write-Error 'The Windows agent logon type must be Interactive, S4U, or Password.'
+        exit 2
+      }
     }
-    return $env:WMUX_WINDOWS_AGENT_LOGON_TYPE
   }
   $InteractiveUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
   if ($InteractiveUser) { return 'Interactive' }
   return 'S4U'
 }
 
+function Read-AgentTaskPassword {
+  param([string]$Identity)
+  if ($env:WMUX_WINDOWS_AGENT_PASSWORD) {
+    throw 'WMUX_WINDOWS_AGENT_PASSWORD is not accepted; enter the password at the private interactive prompt.'
+  }
+  try {
+    $SecurePassword = Read-Host "Enter the Windows password for $Identity" -AsSecureString
+  } catch {
+    throw 'Password logon mode requires an interactive private prompt. No password was read or stored.'
+  }
+  if (-not $SecurePassword -or $SecurePassword.Length -eq 0) {
+    throw 'A non-empty Windows password is required for Password logon mode.'
+  }
+  $Credential = [System.Management.Automation.PSCredential]::new($Identity, $SecurePassword)
+  return $Credential.GetNetworkCredential().Password
+}
+
+function Register-AgentTaskDefinition {
+  param(
+    [string]$Name,
+    $Definition,
+    [string]$Identity,
+    [string]$LogonType,
+    [AllowEmptyString()][string]$Password
+  )
+  if ($LogonType -eq 'Password') {
+    Register-ScheduledTask -TaskName $Name -InputObject $Definition -User $Identity -Password $Password -Force | Out-Null
+  } else {
+    Register-ScheduledTask -TaskName $Name -InputObject $Definition -Force | Out-Null
+  }
+}
+
+function Test-AgentTaskCredential {
+  param([string]$Identity, [string]$Password)
+  $CanaryName = "$TaskName-credential-check"
+  $PowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument '-NoLogo -NoProfile -NonInteractive -Command "exit 0"'
+  $Principal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType Password
+  $Definition = New-ScheduledTask -Action $Action -Principal $Principal -Settings (New-WmuxTaskSettings)
+  try {
+    Register-AgentTaskDefinition -Name $CanaryName -Definition $Definition -Identity $Identity -LogonType Password -Password $Password
+  } finally {
+    Unregister-ScheduledTask -TaskName $CanaryName -Confirm:$false -ErrorAction SilentlyContinue
+  }
+}
+
+function Get-AgentConfigSessionCount {
+  param([string]$ConfigPath, [int]$Port)
+  if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return 0 }
+  try {
+    $Document = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    $HostValue = if ($Document.host) { [string]$Document.host } else { '127.0.0.1' }
+    if ($HostValue -in @('0.0.0.0', '::')) { $HostValue = '127.0.0.1' }
+    $Headers = @{}
+    if ($Document.token) { $Headers.Authorization = "Bearer $($Document.token)" }
+    $Health = Invoke-RestMethod -Method GET -Uri "http://${HostValue}:$Port/health" -Headers $Headers -TimeoutSec 2
+    return (Get-ActiveSessionCount $Health)
+  } catch {
+    return $null
+  }
+}
+
+function Assert-AgentTaskPoolCanChange {
+  $BasePort = Get-AgentBasePort
+  $Candidates = @(
+    [pscustomobject]@{ task = $TaskName; config = $Config; port = $BasePort }
+  )
+  for ($Offset = 1; $Offset -le 8; $Offset += 1) {
+    $Port = $BasePort + $Offset
+    $Candidates += [pscustomobject]@{
+      task = "$TaskName-$Port"
+      config = Join-Path $StateDir "windows-agent-$Port.json"
+      port = $Port
+    }
+  }
+  foreach ($Candidate in $Candidates) {
+    $Task = Get-ScheduledTask -TaskName $Candidate.task -ErrorAction SilentlyContinue
+    if (-not $Task) { continue }
+    $Count = Get-AgentConfigSessionCount -ConfigPath $Candidate.config -Port $Candidate.port
+    if ($null -eq $Count -and [string]$Task.State -eq 'Running' -and -not $Force) {
+      throw "Cannot verify whether $($Candidate.task) owns live panes. Restore agent health or rerun with --force only if terminating its panes is acceptable."
+    }
+    if ($null -ne $Count -and $Count -gt 0 -and -not $Force) {
+      throw "Refusing to replace the agent task pool while $($Candidate.task) owns $Count active pane session(s). Close them first or rerun with --force."
+    }
+  }
+}
+
+function Install-PasswordTaskPool {
+  param([string]$Identity, [string]$Password)
+  Test-AgentTaskCredential -Identity $Identity -Password $Password
+  Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
+  $Principal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType Password
+  $Settings = New-WmuxTaskSettings
+  $Triggers = New-WmuxTaskTriggers
+  $BasePort = Get-AgentBasePort
+
+  for ($Offset = 1; $Offset -le 8; $Offset += 1) {
+    $Port = $BasePort + $Offset
+    $GenerationTaskName = "$TaskName-$Port"
+    $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
+    $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+    Write-Wrapper -TargetConfig $GenerationConfig -TargetWrapper $GenerationWrapper -RequireConfig
+    $Definition = New-ScheduledTask `
+      -Action (New-HiddenPowerShellAction -ScriptPath $GenerationWrapper) `
+      -Trigger $Triggers `
+      -Principal $Principal `
+      -Settings $Settings
+    Register-AgentTaskDefinition -Name $GenerationTaskName -Definition $Definition -Identity $Identity -LogonType Password -Password $Password
+    if (Test-Path -LiteralPath $GenerationConfig -PathType Leaf) {
+      Enable-ScheduledTask -TaskName $GenerationTaskName | Out-Null
+    } else {
+      Disable-ScheduledTask -TaskName $GenerationTaskName | Out-Null
+    }
+  }
+
+  if (-not (Test-Path -LiteralPath $SupervisorWrapper -PathType Leaf)) {
+    [System.IO.File]::WriteAllText($SupervisorWrapper, "exit 0`r`n", [System.Text.UTF8Encoding]::new($false))
+  }
+  $SupervisorDefinition = New-ScheduledTask `
+    -Action (New-HiddenPowerShellAction -ScriptPath $SupervisorWrapper) `
+    -Principal $Principal `
+    -Settings $Settings
+  Register-AgentTaskDefinition -Name $RestartTaskName -Definition $SupervisorDefinition -Identity $Identity -LogonType Password -Password $Password
+  Disable-ScheduledTask -TaskName $RestartTaskName | Out-Null
+
+  $BaseDefinition = New-ScheduledTask `
+    -Action (New-HiddenPowerShellAction) `
+    -Trigger $Triggers `
+    -Principal $Principal `
+    -Settings $Settings
+  Register-AgentTaskDefinition -Name $TaskName -Definition $BaseDefinition -Identity $Identity -LogonType Password -Password $Password
+}
+
 function Show-Usage {
-  Write-Error 'usage: wmux-windows-agent-service [install|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
+  Write-Error 'usage: wmux-windows-agent-service [install [--logon-type Interactive|S4U|Password]|refresh-credentials|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
 }
 
 function Start-AgentGeneration {
@@ -250,6 +430,11 @@ function Start-AgentGeneration {
   $GenerationTaskName = "$TaskName-$Port"
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+  $PasswordPool = Test-PasswordTaskPool
+  $ExistingTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
+  if ($PasswordPool -and -not $ExistingTask) {
+    throw "Password-backed rollout slot $GenerationTaskName is missing. Run wmux-windows-setup refresh-agent-credentials from an interactive shell."
+  }
   $Document = if (Test-Path -LiteralPath $Config -PathType Leaf) {
     Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
   } else {
@@ -267,23 +452,28 @@ function Start-AgentGeneration {
     ($Document | ConvertTo-Json -Depth 20),
     [System.Text.UTF8Encoding]::new($false)
   )
-  Write-Wrapper -TargetConfig $GenerationConfig -TargetWrapper $GenerationWrapper
+  Write-Wrapper -TargetConfig $GenerationConfig -TargetWrapper $GenerationWrapper -RequireConfig
 
-  $ExistingTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   if ($ExistingTask) {
     Stop-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $GenerationTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (-not $PasswordPool) {
+      Unregister-ScheduledTask -TaskName $GenerationTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
     Get-CimInstance Win32_Process |
       Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -like "*$GenerationConfig*" } |
       ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   }
 
-  $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-  $GenerationAction = New-HiddenPowerShellAction -ScriptPath $GenerationWrapper
-  $GenerationTrigger = New-WmuxTaskTriggers
-  $GenerationSettings = New-WmuxTaskSettings
-  $GenerationTask = New-ScheduledTask -Action $GenerationAction -Trigger $GenerationTrigger -Principal $MainTask.Principal -Settings $GenerationSettings
-  Register-ScheduledTask -TaskName $GenerationTaskName -InputObject $GenerationTask -Force | Out-Null
+  if ($PasswordPool) {
+    Enable-ScheduledTask -TaskName $GenerationTaskName | Out-Null
+  } else {
+    $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $GenerationAction = New-HiddenPowerShellAction -ScriptPath $GenerationWrapper
+    $GenerationTrigger = New-WmuxTaskTriggers
+    $GenerationSettings = New-WmuxTaskSettings
+    $GenerationTask = New-ScheduledTask -Action $GenerationAction -Trigger $GenerationTrigger -Principal $MainTask.Principal -Settings $GenerationSettings
+    Register-ScheduledTask -TaskName $GenerationTaskName -InputObject $GenerationTask -Force | Out-Null
+  }
   Start-ScheduledTask -TaskName $GenerationTaskName
 
   $HostValue = if ($Document.host) { [string]$Document.host } else { '127.0.0.1' }
@@ -321,8 +511,9 @@ function Remove-AgentGeneration {
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
   $GenerationTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
+  $PasswordPool = Test-PasswordTaskPool
   if (-not (Test-Path -LiteralPath $GenerationConfig -PathType Leaf)) {
-    if ($GenerationTask) { throw "refusing to retire generation $Port without its health configuration" }
+    if ($GenerationTask -and -not $PasswordPool) { throw "refusing to retire generation $Port without its health configuration" }
     [pscustomobject]@{ port = $Port; retired = $true; alreadyAbsent = $true } | ConvertTo-Json -Compress
     return
   }
@@ -357,14 +548,18 @@ function Remove-AgentGeneration {
   if ($GenerationTask) {
     Disable-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue | Out-Null
     Stop-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $GenerationTaskName -Confirm:$false -ErrorAction Stop
+    if (-not $PasswordPool) {
+      Unregister-ScheduledTask -TaskName $GenerationTaskName -Confirm:$false -ErrorAction Stop
+    }
   }
   $AgentPid = if ($Health.pid) { [int]$Health.pid } else { 0 }
   if ($AgentPid -gt 0 -and $AgentPid -ne $PID) {
     Stop-Process -Id $AgentPid -Force -ErrorAction SilentlyContinue
   }
   Remove-Item -LiteralPath $GenerationConfig -Force
-  Remove-Item -LiteralPath $GenerationWrapper -Force -ErrorAction SilentlyContinue
+  if (-not $PasswordPool) {
+    Remove-Item -LiteralPath $GenerationWrapper -Force -ErrorAction SilentlyContinue
+  }
   [pscustomobject]@{ port = $Port; retired = $true; activeSessions = 0 } | ConvertTo-Json -Compress
 }
 
@@ -373,12 +568,19 @@ function Start-UpdateRestartWatcher {
   # atomic update-pending state; legacy agents are polled until idle before the
   # watcher requests their hard drain. In both cases, the watcher restarts the
   # main task only after the old process exits.
+  $PasswordPool = Test-PasswordTaskPool
   $ExistingWatcher = Get-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
   if ($ExistingWatcher) {
     Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (-not $PasswordPool) {
+      Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
   }
-  $RestartScript = Join-Path $HelperDir 'wmux-windows-agent-update.ps1'
+  $RestartScript = if ($PasswordPool) {
+    $SupervisorWrapper
+  } else {
+    Join-Path $HelperDir 'wmux-windows-agent-update.ps1'
+  }
   $Sequence = @'
 $ErrorActionPreference = 'Continue'
 $ConfigPath = __WMUX_CONFIG_PATH__
@@ -442,15 +644,22 @@ while ($true) {
   $Sequence = $Sequence.Replace('__WMUX_CONFIG_PATH__', (ConvertTo-PowerShellLiteral $Config))
   $Sequence = $Sequence.Replace('__WMUX_TASK_NAME__', (ConvertTo-PowerShellLiteral $TaskName))
   [System.IO.File]::WriteAllText($RestartScript, $Sequence, [System.Text.UTF8Encoding]::new($false))
-  $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-  $RestartAction = New-HiddenPowerShellAction -ScriptPath $RestartScript
-  $RestartSettings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -MultipleInstances IgnoreNew
-  $RestartTask = New-ScheduledTask -Action $RestartAction -Principal $MainTask.Principal -Settings $RestartSettings
-  Register-ScheduledTask -TaskName $RestartTaskName -InputObject $RestartTask -Force | Out-Null
+  if ($PasswordPool) {
+    if (-not $ExistingWatcher) {
+      throw "Password-backed update task $RestartTaskName is missing. Run wmux-windows-setup refresh-agent-credentials from an interactive shell."
+    }
+    Enable-ScheduledTask -TaskName $RestartTaskName | Out-Null
+  } else {
+    $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $RestartAction = New-HiddenPowerShellAction -ScriptPath $RestartScript
+    $RestartSettings = New-ScheduledTaskSettingsSet `
+      -AllowStartIfOnBatteries `
+      -DontStopIfGoingOnBatteries `
+      -ExecutionTimeLimit ([TimeSpan]::Zero) `
+      -MultipleInstances IgnoreNew
+    $RestartTask = New-ScheduledTask -Action $RestartAction -Principal $MainTask.Principal -Settings $RestartSettings
+    Register-ScheduledTask -TaskName $RestartTaskName -InputObject $RestartTask -Force | Out-Null
+  }
   Start-ScheduledTask -TaskName $RestartTaskName
 }
 
@@ -462,19 +671,86 @@ switch ($ActionName) {
     }
     Remove-LegacyStreamTask
     Write-Wrapper
-    $TaskAction = New-HiddenPowerShellAction
-    $TaskTrigger = New-WmuxTaskTriggers
     $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $LogonType = Get-AgentLogonType
-    $TaskPrincipal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType $LogonType
-    $TaskSettings = New-WmuxTaskSettings
-    $Task = New-ScheduledTask -Action $TaskAction -Trigger $TaskTrigger -Principal $TaskPrincipal -Settings $TaskSettings
-    Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+    $ExistingLogonType = Get-TaskLogonType
+    if ($LogonType -eq 'Password') {
+      Assert-AgentTaskPoolCanChange
+      $Password = Read-AgentTaskPassword -Identity $Identity
+      try {
+        Stop-AgentProcesses
+        Install-PasswordTaskPool -Identity $Identity -Password $Password
+      } finally {
+        $Password = $null
+      }
+    } else {
+      if ($ExistingLogonType -eq 'Password') {
+        Assert-AgentTaskPoolCanChange
+        Stop-AgentProcesses
+        Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        foreach ($GenerationTask in Get-AgentGenerationTasks) {
+          Stop-ScheduledTask -TaskName $GenerationTask.TaskName -ErrorAction SilentlyContinue
+          Unregister-ScheduledTask -TaskName $GenerationTask.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
+      }
+      $TaskAction = New-HiddenPowerShellAction
+      $TaskTrigger = New-WmuxTaskTriggers
+      $TaskPrincipal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType $LogonType
+      $TaskSettings = New-WmuxTaskSettings
+      $Task = New-ScheduledTask -Action $TaskAction -Trigger $TaskTrigger -Principal $TaskPrincipal -Settings $TaskSettings
+      Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+    }
+    Enable-ScheduledTask -TaskName $TaskName | Out-Null
     Start-ScheduledTask -TaskName $TaskName
+    if ($LogonType -eq 'Password') {
+      foreach ($GenerationTask in Get-AgentGenerationTasks) {
+        $PortText = $GenerationTask.TaskName.Substring($TaskName.Length + 1)
+        $GenerationConfig = Join-Path $StateDir "windows-agent-$PortText.json"
+        if (Test-Path -LiteralPath $GenerationConfig -PathType Leaf) {
+          Enable-ScheduledTask -TaskName $GenerationTask.TaskName | Out-Null
+          Start-ScheduledTask -TaskName $GenerationTask.TaskName
+        }
+      }
+    }
     Write-Output "Installed $TaskName"
     Write-Output "Logon type: $LogonType"
+    if ($LogonType -eq 'Password') {
+      Write-Output 'Password retained only by Windows Task Scheduler; use refresh-agent-credentials after the account password changes.'
+    }
     Write-Output "Logs: $LogDir"
     Write-HeartbeatConfigurationStatus
+  }
+  'refresh-credentials' {
+    if ((Get-TaskLogonType) -ne 'Password') {
+      Write-Error 'refresh-credentials requires an existing Password-mode agent. Use install --logon-type Password to opt in.'
+      exit 2
+    }
+    if (-not (Test-Path -LiteralPath $Agent -PathType Leaf)) {
+      Write-Error "wmux-windows-agent was not found at $Agent"
+      exit 127
+    }
+    Assert-AgentTaskPoolCanChange
+    Write-Wrapper
+    $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $Password = Read-AgentTaskPassword -Identity $Identity
+    try {
+      Stop-AgentProcesses
+      Install-PasswordTaskPool -Identity $Identity -Password $Password
+    } finally {
+      $Password = $null
+    }
+    Enable-ScheduledTask -TaskName $TaskName | Out-Null
+    Start-ScheduledTask -TaskName $TaskName
+    foreach ($GenerationTask in Get-AgentGenerationTasks) {
+      $PortText = $GenerationTask.TaskName.Substring($TaskName.Length + 1)
+      $GenerationConfig = Join-Path $StateDir "windows-agent-$PortText.json"
+      if (Test-Path -LiteralPath $GenerationConfig -PathType Leaf) {
+        Enable-ScheduledTask -TaskName $GenerationTask.TaskName | Out-Null
+        Start-ScheduledTask -TaskName $GenerationTask.TaskName
+      }
+    }
+    Write-Output "Refreshed Task Scheduler credentials for $TaskName and its rollout slots."
   }
   'restart' {
     Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
@@ -498,7 +774,12 @@ switch ($ActionName) {
     # Task Scheduler owns this launcher outside the agent's process tree. A
     # plain Start-Process child is still terminated with an agent-owned pane or
     # an OpenSSH session, which can leave the main task stopped and port dark.
-    $RestartScript = Join-Path $HelperDir 'wmux-windows-agent-restart.ps1'
+    $PasswordPool = Test-PasswordTaskPool
+    $RestartScript = if ($PasswordPool) {
+      $SupervisorWrapper
+    } else {
+      Join-Path $HelperDir 'wmux-windows-agent-restart.ps1'
+    }
     $Sequence = @"
 Stop-ScheduledTask -TaskName '$($TaskName -replace "'", "''")' -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process |
@@ -508,15 +789,22 @@ Start-Sleep -Seconds 1
 Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
 "@
     [System.IO.File]::WriteAllText($RestartScript, $Sequence, [System.Text.UTF8Encoding]::new($false))
-    $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-    $RestartAction = New-HiddenPowerShellAction -ScriptPath $RestartScript
-    $RestartSettings = New-ScheduledTaskSettingsSet `
-      -AllowStartIfOnBatteries `
-      -DontStopIfGoingOnBatteries `
-      -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
-      -MultipleInstances IgnoreNew
-    $RestartTask = New-ScheduledTask -Action $RestartAction -Principal $MainTask.Principal -Settings $RestartSettings
-    Register-ScheduledTask -TaskName $RestartTaskName -InputObject $RestartTask -Force | Out-Null
+    if ($PasswordPool) {
+      if (-not (Get-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue)) {
+        throw "Password-backed restart task $RestartTaskName is missing. Run wmux-windows-setup refresh-agent-credentials from an interactive shell."
+      }
+      Enable-ScheduledTask -TaskName $RestartTaskName | Out-Null
+    } else {
+      $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+      $RestartAction = New-HiddenPowerShellAction -ScriptPath $RestartScript
+      $RestartSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+        -MultipleInstances IgnoreNew
+      $RestartTask = New-ScheduledTask -Action $RestartAction -Principal $MainTask.Principal -Settings $RestartSettings
+      Register-ScheduledTask -TaskName $RestartTaskName -InputObject $RestartTask -Force | Out-Null
+    }
     Start-ScheduledTask -TaskName $RestartTaskName
     Write-Output "Restarting $TaskName through the independent $RestartTaskName task"
   }
@@ -539,7 +827,11 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
       }
     } catch {
       Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
-      Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+      if (Test-PasswordTaskPool) {
+        Disable-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue | Out-Null
+      } else {
+        Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+      }
       Write-Error "The running agent does not support safe drain activation. Stage the current helper, then restart --force only when losing active panes is acceptable. $($_.Exception.Message)"
       exit 4
     }
@@ -560,13 +852,21 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
   'cancel-update' {
     $Drain = Invoke-AgentRequest -Method DELETE -Path '/drain'
     Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (Test-PasswordTaskPool) {
+      Disable-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue | Out-Null
+    } else {
+      Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
     Write-Output "Drain cancelled; active pane sessions: $(Get-ActiveSessionCount $Drain)"
   }
   'stop' {
     Remove-LegacyHeartbeatTask
     Stop-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (Test-PasswordTaskPool) {
+      Disable-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue | Out-Null
+    } else {
+      Unregister-ScheduledTask -TaskName $RestartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
     Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
     foreach ($GenerationTask in Get-AgentGenerationTasks) {
       Disable-ScheduledTask -TaskName $GenerationTask.TaskName -ErrorAction SilentlyContinue | Out-Null
@@ -588,7 +888,31 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
     Write-Output "Uninstalled $TaskName"
   }
   'status' {
-    Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Format-List *
+    $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $LogonType = [string]$MainTask.Principal.LogonType
+    $BasePort = Get-AgentBasePort
+    $ReadySlots = 0
+    for ($Offset = 1; $Offset -le 8; $Offset += 1) {
+      $SlotTask = Get-ScheduledTask -TaskName "$TaskName-$($BasePort + $Offset)" -ErrorAction SilentlyContinue
+      if ($SlotTask -and [string]$SlotTask.Principal.LogonType -eq 'Password') {
+        $ReadySlots += 1
+      }
+    }
+    $UpdateTask = Get-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
+    [pscustomobject]@{
+      taskName = $TaskName
+      state = [string]$MainTask.State
+      userId = [string]$MainTask.Principal.UserId
+      logonType = $LogonType
+      startsWithoutLogin = $LogonType -in @('Password', 'S4U')
+      networkCredentialsAvailable = $LogonType -eq 'Password'
+      generationSlotsReady = if ($LogonType -eq 'Password') {
+        $ReadySlots -eq 8 -and $UpdateTask -and [string]$UpdateTask.Principal.LogonType -eq 'Password'
+      } else {
+        $null
+      }
+    } | Format-List
+    $MainTask | Format-List *
     Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List *
     try {
       Invoke-AgentRequest -Method GET -Path '/health' | Select-Object version, releaseVersion, protocolVersion, backend, processTree, activeSessions, draining, restartWhenIdle, heartbeat, stream | Format-List
@@ -610,6 +934,7 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
     Write-Output "task=$TaskName"
     Write-Output "agent=$Agent"
     Write-Output "wrapper=$Wrapper"
+    Write-Output "supervisorWrapper=$SupervisorWrapper"
     Write-Output "config=$Config"
     Write-Output "logs=$LogDir"
     Write-Output '--- commands ---'
