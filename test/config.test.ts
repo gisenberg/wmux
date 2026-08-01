@@ -52,7 +52,7 @@ test("Windows agents with DNS SSH hosts require an explicit private agent endpoi
   const missingEndpoint = configSchema.safeParse(dnsAgent);
   assert.equal(missingEndpoint.success, false);
   if (!missingEndpoint.success) {
-    assert.match(missingEndpoint.error.issues[0]?.message ?? "", /agentUrl with an explicit private\/internal IP/);
+    assert.match(missingEndpoint.error.issues[0]?.message ?? "", /agentUrl with an explicit private\/internal IPv4 address/);
   }
   assert.ok(configSchema.safeParse(machine({
     kind: "powershell-ssh",
@@ -74,6 +74,36 @@ test("Windows agents with DNS SSH hosts require an explicit private agent endpoi
     sessionBackend: "agent",
     agentUrl: "http://203.0.113.7:3481",
   })).success, false);
+  for (const agentUrl of [
+    "not-a-url",
+    "http://100.64.0.7",
+    "https://100.64.0.7:3481",
+    "http://user:secret@100.64.0.7:3481",
+    "http://100.64.0.7:3481/agent",
+    "http://100.64.0.7:3481/?query=1",
+    "http://[fd7a:115c:a1e0::7]:3481",
+  ]) {
+    assert.doesNotThrow(() => configSchema.safeParse({
+      machines: [{
+        id: "windows-agent",
+        name: "Windows agent",
+        kind: "powershell-ssh",
+        host: "box.ts.net",
+        sessionBackend: "agent",
+        agentUrl,
+      }],
+    }));
+    assert.equal(configSchema.safeParse({
+      machines: [{
+        id: "windows-agent",
+        name: "Windows agent",
+        kind: "powershell-ssh",
+        host: "box.ts.net",
+        sessionBackend: "agent",
+        agentUrl,
+      }],
+    }).success, false, agentUrl);
+  }
 });
 
 test("native session agents are limited to supported machine transports", () => {

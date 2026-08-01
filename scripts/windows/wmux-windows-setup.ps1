@@ -325,7 +325,9 @@ function Get-WindowsWmuxReport {
     $AgentConfig = Get-Content -LiteralPath $AgentConfigPath -Raw | ConvertFrom-Json
     $AgentHost = if ($AgentConfig.host -and $AgentConfig.host -notin @('0.0.0.0', '::')) { [string]$AgentConfig.host } else { '127.0.0.1' }
     $AgentPort = if ($AgentConfig.port) { [int]$AgentConfig.port } else { 3481 }
-    $AgentHealth = Invoke-RestMethod -Method Get -Uri "http://${AgentHost}:${AgentPort}/health" -TimeoutSec 3
+    $AgentHeaders = @{}
+    if ($AgentConfig.token) { $AgentHeaders.Authorization = "Bearer $($AgentConfig.token)" }
+    $AgentHealth = Invoke-RestMethod -Method Get -Uri "http://${AgentHost}:${AgentPort}/health" -Headers $AgentHeaders -TimeoutSec 3
   } catch {}
   $AgentLogonType = if ($AgentTask) { [string]$AgentTask.Principal.LogonType } else { $null }
   $AgentBasePort = if ($AgentConfig -and $AgentConfig.port) { [int]$AgentConfig.port } else { 3481 }

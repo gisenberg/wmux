@@ -68,6 +68,8 @@ test("Windows setup exposes password-mode installation and redacted readiness di
   assert.match(source, /agentStartsWithoutLogin = \$AgentLogonType -in @\('Password', 'S4U'\)/);
   assert.match(source, /agentNetworkCredentialsAvailable = \$AgentLogonType -eq 'Password'/);
   assert.match(source, /agentGenerationSlotsReady/);
+  assert.match(source, /\$AgentHeaders\.Authorization = "Bearer \$\(\$AgentConfig\.token\)"/);
+  assert.match(source, /\/health" -Headers \$AgentHeaders -TimeoutSec 3/);
   assert.doesNotMatch(source, /WMUX_WINDOWS_AGENT_PASSWORD/);
 });
 

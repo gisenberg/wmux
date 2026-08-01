@@ -91,17 +91,40 @@ export const machineSchema = z.object({
     });
   }
   if (machine.kind === "powershell-ssh" && machine.sessionBackend === "agent") {
-    const parsedAgentUrl = machine.agentUrl ? new URL(machine.agentUrl) : undefined;
+    let parsedAgentUrl: URL | undefined;
+    if (machine.agentUrl) {
+      try {
+        parsedAgentUrl = new URL(machine.agentUrl);
+      } catch {
+        // The field-level URL validator owns the malformed URL diagnostic.
+        return;
+      }
+      if (
+        parsedAgentUrl.protocol !== "http:"
+        || !parsedAgentUrl.port
+        || parsedAgentUrl.username
+        || parsedAgentUrl.password
+        || parsedAgentUrl.pathname !== "/"
+        || parsedAgentUrl.search
+        || parsedAgentUrl.hash
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agentUrl"],
+          message: "agentUrl must be an HTTP origin with an explicit port and no credentials, path, query, or fragment",
+        });
+      }
+    }
     const agentHost = parsedAgentUrl
       ? parsedAgentUrl.hostname.replace(/^\[|\]$/g, "")
       : machine.host;
-    if (!agentHost || !isAllowedBindHost(agentHost)) {
+    if (!agentHost || net.isIP(agentHost) !== 4 || !isAllowedBindHost(agentHost)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: [machine.agentUrl ? "agentUrl" : "host"],
         message: machine.host && !machine.agentUrl && net.isIP(machine.host) === 0
-          ? "Windows agent hosts addressed by DNS require agentUrl with an explicit private/internal IP"
-          : "Windows agent endpoint must use an explicit private/internal IP",
+          ? "Windows agent hosts addressed by DNS require agentUrl with an explicit private/internal IPv4 address"
+          : "Windows agent endpoint must use an explicit private/internal IPv4 address",
       });
     }
     if (
