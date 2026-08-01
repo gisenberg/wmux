@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { AgentSessionService } from "../src/server/agent-sessions.js";
 import { StateIdConflictError, StateStore, WorkspaceDepthError } from "../src/server/state.js";
 import { CURRENT_STATE_SCHEMA_VERSION, parsePersistedState } from "../src/server/state-schema.js";
-import type { MachineConfig } from "../src/server/types.js";
+import type { MachineConfig, PersistedState } from "../src/server/types.js";
 
 const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
 const agentServices = new WeakMap<StateStore, AgentSessionService>();
@@ -447,6 +447,44 @@ test("server-only PowerShell profile preferences are not persisted in state", ()
     ], filePath).snapshot();
     assert.equal(snapshot.machines[0].loadPowerShellProfile, undefined);
     assert.doesNotMatch(fs.readFileSync(filePath, "utf8"), /loadPowerShellProfile/);
+  });
+});
+
+test("stale persisted machine endpoints cannot quarantine valid workspace state", () => {
+  withTempState((filePath, dir) => {
+    const initial = new StateStore(machines, filePath).snapshot();
+    initial.workspaces[0].name = "Keep this workspace";
+    initial.machines = [{
+      id: "epoch",
+      name: "Epoch",
+      kind: "powershell-ssh",
+      host: "epoch.lan",
+      sessionBackend: "agent",
+      agentPort: 3481,
+    }];
+    const stale = JSON.stringify(initial);
+    fs.writeFileSync(filePath, stale);
+    fs.writeFileSync(`${filePath}.bak`, stale);
+
+    const currentMachines: MachineConfig[] = [{
+      id: "epoch",
+      name: "Epoch",
+      kind: "powershell-ssh",
+      host: "epoch.lan",
+      sessionBackend: "agent",
+      agentUrl: "http://10.0.0.25:3481",
+      agentPort: 3481,
+    }];
+    const recovered = new StateStore(currentMachines, filePath).snapshot();
+
+    assert.equal(recovered.workspaces[0].name, "Keep this workspace");
+    assert.equal(recovered.machines[0].agentUrl, "http://10.0.0.25:3481");
+    assert.equal(fs.readdirSync(dir).some((name) => name.includes(".corrupt-")), false);
+    for (const persistedPath of [filePath, `${filePath}.bak`]) {
+      const persisted = JSON.parse(fs.readFileSync(persistedPath, "utf8")) as PersistedState;
+      assert.equal(persisted.workspaces[0].name, "Keep this workspace");
+      assert.equal(persisted.machines[0].agentUrl, "http://10.0.0.25:3481");
+    }
   });
 });
 

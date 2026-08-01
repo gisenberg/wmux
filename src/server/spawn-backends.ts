@@ -687,6 +687,7 @@ const durableShellScript = ({
   const tmuxCommand = [
     `tmux has-session -t ${tmuxTarget} 2>/dev/null || ${tmuxCreateCommand}`,
     `tmux set-option -t ${tmuxTarget} history-limit 100000 >/dev/null 2>&1 || true`,
+    `tmux set-option -t ${tmuxTarget} destroy-unattached off >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} status off >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} mouse on >/dev/null 2>&1 || true`,
     `tmux set-option -t ${tmuxTarget} allow-passthrough on >/dev/null 2>&1 || true`,
@@ -704,17 +705,18 @@ const durableShellScript = ({
     "termcapinfo screen* ti@:te@",
   ].join("\\n");
   const screenConfigScript = `${runtimeStageDirScript} wmux_screenrc="$wmux_run_base/wmux-screen-${sessionName}.rc"; printf '%s\\n' ${shellQuote(screenRc)} > "$wmux_screenrc";`;
-  const screenAttach = `${screenConfigScript} screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -x`;
-  const screenCreate = `screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -U -h 100000 /bin/sh -lc ${shellQuote(paneCommand)}`;
+  const screenAttach = `screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -x`;
+  const screenCreate = `screen -c "$wmux_screenrc" -dmS ${shellQuote(sessionName)} -U -h 100000 /bin/sh -lc ${shellQuote(paneCommand)}`;
+  const screenCommand = `${screenConfigScript} ${screenAttach} || { ${screenCreate} && exec ${screenAttach}; }`;
   const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
 
   if (backend === "tmux") {
     return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
   if (backend === "screen") {
-    return `${persistCredentials} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
-  return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
+  return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; ${fallbackShell}`;
 };
 
 const stageLocalRuntime = (sessionName: string, innerScript: string): string => {

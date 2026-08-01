@@ -100,6 +100,47 @@ test("every machine kind produces a runnable file + cwd", () => {
   }
 });
 
+test("screen sessions start detached before wmux attaches a client", { skip: process.platform === "win32" }, () => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-screen-spawn-"));
+  const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = runtimeDir;
+  try {
+    const spec = buildSpawnSpec(
+      { id: "local", name: "Local", kind: "local", sessionBackend: "screen" },
+      120,
+      40,
+      { WMUX_PANE_ID: "pane_screen_detach" },
+    );
+    const runtime = fs.readFileSync(spec.args[0], "utf8");
+    assert.match(runtime, /screen -c "\$wmux_screenrc" -dmS 'wmux_pane_screen_detach'/);
+    assert.match(runtime, /&& exec screen -c "\$wmux_screenrc" -S 'wmux_pane_screen_detach' -x/);
+  } finally {
+    if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
+  }
+});
+
+test("tmux sessions override user destroy-unattached preferences", { skip: process.platform === "win32" }, () => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-tmux-spawn-"));
+  const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = runtimeDir;
+  try {
+    const spec = buildSpawnSpec(
+      { id: "local", name: "Local", kind: "local", sessionBackend: "tmux" },
+      120,
+      40,
+      { WMUX_PANE_ID: "pane_tmux_detach" },
+    );
+    const runtime = fs.readFileSync(spec.args[0], "utf8");
+    assert.match(runtime, /tmux set-option -t 'wmux_pane_tmux_detach' destroy-unattached off/);
+  } finally {
+    if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
+  }
+});
+
 test("pane spawn environments do not inherit server-scoped credentials", () => {
   const keys = [
     "WMUX_AUTOMATION_TOKEN",
