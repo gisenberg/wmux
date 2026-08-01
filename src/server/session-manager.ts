@@ -295,15 +295,24 @@ export class SessionManager {
       const message = this.parse(raw.toString());
       if (!message) return;
       if (message.type === "input") {
+        const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
+        if (terminalResponse) {
+          // Every attached browser renders pane output and can therefore answer
+          // terminal queries. Only the authoritative viewer may forward that
+          // answer or a multi-viewer pane will inject duplicate replies into
+          // the application that issued the query.
+          if (this.resizeOwners.get(paneId) !== socket) return;
+          this.backends.get(paneId)?.write(session, message.data, true);
+          return;
+        }
         const socketState = this.socketState.get(socket);
         if (socketState && message.sequence !== undefined) socketState.inputSequence = message.sequence;
         this.promoteResizeOwner(paneId, socket, session);
         if (isAgentInterruptInput(message.data)) {
           this.agentSessions.interruptAgentForPane(paneId);
         }
-        const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
-        if (!terminalResponse) this.advancePaneInputEpoch(paneId);
-        this.backends.get(paneId)?.write(session, message.data, terminalResponse);
+        this.advancePaneInputEpoch(paneId);
+        this.backends.get(paneId)?.write(session, message.data, false);
       }
       if (message.type === "resize") {
         const size = normalizeSize(message.cols, message.rows);

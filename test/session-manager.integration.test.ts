@@ -511,6 +511,54 @@ test("server recognizes terminal replies from stale browser clients", () => {
   assert.equal(isTerminalProtocolResponseInput("\x1b[A"), false);
 });
 
+test("only the authoritative viewer forwards terminal query responses", { skip: process.platform === "win32" }, async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    const first = socket();
+    const second = socket();
+    manager.attach(pane.id, first, 80, 24);
+    await waitForMessage(first, (message) => message.type === "ready");
+    manager.attach(pane.id, second, 100, 30);
+    await waitForMessage(second, (message) => message.type === "ready");
+
+    const internals = manager as unknown as {
+      backends: Map<string, {
+        write: (session: unknown, data: string, terminalResponse?: boolean) => void;
+      }>;
+      resizeOwners: Map<string, WebSocket>;
+    };
+    const backend = internals.backends.get(pane.id);
+    assert.ok(backend);
+    const writes: Array<{ data: string; terminalResponse: boolean }> = [];
+    backend.write = (_session, data, terminalResponse = false) => {
+      writes.push({ data, terminalResponse });
+    };
+    const response = "\x1b[>1;0;0c\x1bP>|libghostty\x1b\\";
+
+    fake(second).message({ type: "input", data: response, terminalResponse: true });
+    assert.deepEqual(writes, []);
+    assert.equal(internals.resizeOwners.get(pane.id), first);
+
+    fake(first).message({ type: "input", data: response });
+    assert.deepEqual(writes, [{ data: response, terminalResponse: true }]);
+
+    fake(second).message({ type: "input", data: "x", sequence: 1 });
+    assert.deepEqual(writes.at(-1), { data: "x", terminalResponse: false });
+    assert.equal(internals.resizeOwners.get(pane.id), second);
+
+    fake(first).message({ type: "input", data: response, terminalResponse: true });
+    assert.deepEqual(writes, [
+      { data: response, terminalResponse: true },
+      { data: "x", terminalResponse: false },
+    ]);
+    fake(second).message({ type: "input", data: response, terminalResponse: true });
+    assert.deepEqual(writes.at(-1), { data: response, terminalResponse: true });
+    manager.disposeAll();
+  });
+});
+
 test("new sessions receive the current terminal theme environment", { skip: process.platform === "win32" }, async () => {
   const machine: MachineConfig = {
     id: "local",
