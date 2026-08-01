@@ -450,6 +450,39 @@ test("server-only PowerShell profile preferences are not persisted in state", ()
   });
 });
 
+test("stale persisted machine endpoints cannot quarantine valid workspace state", () => {
+  withTempState((filePath, dir) => {
+    const initial = new StateStore(machines, filePath).snapshot();
+    initial.workspaces[0].name = "Keep this workspace";
+    initial.machines = [{
+      id: "epoch",
+      name: "Epoch",
+      kind: "powershell-ssh",
+      host: "epoch.lan",
+      sessionBackend: "agent",
+      agentPort: 3481,
+    }];
+    const stale = JSON.stringify(initial);
+    fs.writeFileSync(filePath, stale);
+    fs.writeFileSync(`${filePath}.bak`, stale);
+
+    const currentMachines: MachineConfig[] = [{
+      id: "epoch",
+      name: "Epoch",
+      kind: "powershell-ssh",
+      host: "epoch.lan",
+      sessionBackend: "agent",
+      agentUrl: "http://10.0.0.25:3481",
+      agentPort: 3481,
+    }];
+    const recovered = new StateStore(currentMachines, filePath).snapshot();
+
+    assert.equal(recovered.workspaces[0].name, "Keep this workspace");
+    assert.equal(recovered.machines[0].agentUrl, "http://10.0.0.25:3481");
+    assert.equal(fs.readdirSync(dir).some((name) => name.includes(".corrupt-")), false);
+  });
+});
+
 test("fresh store does not pin a retained registered machine", () => {
   withTempState((filePath) => {
     const registeredMachines: MachineConfig[] = [

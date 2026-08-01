@@ -783,7 +783,7 @@ export class StateStore extends EventEmitter {
   private load(machines: MachineConfig[]): PersistedState {
     const safeMachines = stateMachines(machines);
     if (fs.existsSync(this.filePath)) {
-      const restored = this.tryLoadPersisted();
+      const restored = this.tryLoadPersisted(this.filePath, safeMachines);
       if (restored) {
         const beforeNormalization = JSON.stringify(restored.state);
         const normalized = { ...this.normalizeRestoredState(restored.state), machines: safeMachines };
@@ -796,7 +796,7 @@ export class StateStore extends EventEmitter {
       this.quarantineStateFile();
     }
     if (fs.existsSync(this.backupPath())) {
-      const backup = this.tryLoadPersisted(this.backupPath());
+      const backup = this.tryLoadPersisted(this.backupPath(), safeMachines);
       if (backup) {
         console.error(`wmux: recovered state from ${this.backupPath()}`);
         this.dirty = true;
@@ -824,9 +824,16 @@ export class StateStore extends EventEmitter {
     return { ...state, activeWorkspaceId: workspace.id };
   }
 
-  private tryLoadPersisted(filePath = this.filePath): ParsedPersistedState | null {
+  private tryLoadPersisted(
+    filePath = this.filePath,
+    machines?: MachineConfig[],
+  ): ParsedPersistedState | null {
     try {
-      return parsePersistedState(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
+      const input = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+      const candidate = machines && input && typeof input === "object" && !Array.isArray(input)
+        ? { ...input, machines }
+        : input;
+      return parsePersistedState(candidate);
     } catch (error) {
       if (error instanceof UnsupportedStateVersionError) throw error;
       return null;
