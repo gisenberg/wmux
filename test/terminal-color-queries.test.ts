@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { colorSchemeById } from "../src/client/src/color-schemes.js";
-import { OscColorQueryParser } from "../src/client/src/terminal-color-queries.js";
+import { OscColorQueryParser } from "../src/shared/terminal-color-queries.js";
+import { terminalThemeById } from "../src/shared/terminal-themes.js";
 
-const tokyoNight = colorSchemeById("tokyo-night").terminal;
-const dracula = colorSchemeById("dracula").terminal;
+const tokyoNight = terminalThemeById("tokyo-night");
+const dracula = terminalThemeById("dracula");
 const responses = (parser: OscColorQueryParser, input: string, theme = tokyoNight): string[] =>
   parser.push(input, theme).responses;
 
@@ -39,6 +39,27 @@ test("OSC color queries survive chunk boundaries and use the current live theme"
   assert.deepEqual(responses(parser, "\x1b"), []);
   parser.reset();
   assert.deepEqual(responses(parser, "]11;?\x07"), []);
+});
+
+test("OSC color query themes resolve lazily from live server settings", () => {
+  const parser = new OscColorQueryParser();
+  let theme = tokyoNight;
+  let resolutions = 0;
+  const currentTheme = () => {
+    resolutions += 1;
+    return theme;
+  };
+
+  assert.deepEqual(parser.push("ordinary output", currentTheme).responses, []);
+  assert.equal(resolutions, 0);
+  assert.deepEqual(parser.push("\x1b]10;?\x07", currentTheme).responses, [
+    "\x1b]10;rgb:c0c0/caca/f5f5\x1b\\",
+  ]);
+  theme = dracula;
+  assert.deepEqual(parser.push("\x1b]10;?\x07", currentTheme).responses, [
+    "\x1b]10;rgb:f8f8/f8f8/f2f2\x1b\\",
+  ]);
+  assert.equal(resolutions, 2);
 });
 
 test("OSC color queries distinguish BEL terminators from audible bells", () => {

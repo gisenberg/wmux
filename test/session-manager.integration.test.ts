@@ -511,7 +511,7 @@ test("server recognizes terminal replies from stale browser clients", () => {
   assert.equal(isTerminalProtocolResponseInput("\x1b[A"), false);
 });
 
-test("only the authoritative viewer forwards terminal query responses", { skip: process.platform === "win32" }, async () => {
+test("only the authoritative viewer forwards non-color terminal query responses", { skip: process.platform === "win32" }, async () => {
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -536,6 +536,10 @@ test("only the authoritative viewer forwards terminal query responses", { skip: 
       writes.push({ data, terminalResponse });
     };
     const response = "\x1b[>1;0;0c\x1bP>|libghostty\x1b\\";
+    const staleColorResponse = "\x1b]10;rgb:c0c0/caca/f5f5\x1b\\";
+
+    fake(first).message({ type: "input", data: staleColorResponse, terminalResponse: true });
+    assert.deepEqual(writes, []);
 
     fake(second).message({ type: "input", data: response, terminalResponse: true });
     assert.deepEqual(writes, []);
@@ -582,6 +586,71 @@ test("new sessions receive the current terminal theme environment", { skip: proc
       manager.attach(pane.id, client, 80, 24);
       const output = await waitForMessage(client, (message) => message.type === "output" && message.data.includes("tokyo-night|dark"));
       assert.match(output.data, /tokyo-night\|dark/);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+});
+
+test("server answers startup color queries without a browser viewer", { skip: process.platform === "win32" }, async () => {
+  const expected = [
+    "\x1b]10;rgb:c0c0/caca/f5f5\x1b\\",
+    "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\",
+    "\x1b]4;1;rgb:f7f7/7676/8e8e\x1b\\",
+  ].join("");
+  const queryPrefix = "\x1b]10";
+  const querySuffix = ";?\x07\x1b]11;?\x1b\\\x1b]4;1;?\x07";
+  const program = `
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    let received = "";
+    const expected = ${JSON.stringify(expected)};
+    const timeout = setTimeout(() => {
+      process.stdout.write("WMUX_COLOR_RESPONSE_TIMEOUT");
+      process.exit(2);
+    }, 2000);
+    process.stdin.on("data", (chunk) => {
+      received += chunk.toString("utf8");
+      if (!received.includes(expected)) return;
+      clearTimeout(timeout);
+      process.stdout.write("WMUX_COLOR_RESPONSE_OK");
+      process.exit(0);
+    });
+    process.stdout.write(${JSON.stringify(queryPrefix)});
+    setTimeout(() => process.stdout.write(${JSON.stringify(querySuffix)}), 10);
+  `;
+  const machine: MachineConfig = {
+    id: "local",
+    name: "Local",
+    kind: "local",
+    command: [process.execPath, "-e", program],
+  };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(
+      state,
+      [machine],
+      "",
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        WMUX_COLOR_SCHEME: "tokyo-night",
+        WMUX_COLOR_MODE: "dark",
+      }),
+    );
+    const watcher = socket();
+    try {
+      manager.watchOutput(pane.id, watcher, 80, 24);
+      const output = await waitForMessage(
+        watcher,
+        (message) => message.type === "output" && message.data.includes("WMUX_COLOR_RESPONSE_OK"),
+      );
+      assert.match(output.data, /WMUX_COLOR_RESPONSE_OK/);
+      assert.equal(
+        fake(watcher).sent.some((message: any) => message.type === "output" && message.data.includes("WMUX_COLOR_RESPONSE_TIMEOUT")),
+        false,
+      );
     } finally {
       manager.disposeAll();
     }

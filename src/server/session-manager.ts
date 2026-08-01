@@ -1,6 +1,10 @@
 import path from "node:path";
 import type { WebSocket } from "ws";
-import { isTerminalProtocolResponse } from "../shared/terminal-protocol.js";
+import { OscColorQueryParser } from "../shared/terminal-color-queries.js";
+import {
+  isTerminalColorResponse,
+  isTerminalProtocolResponse,
+} from "../shared/terminal-protocol.js";
 import type { BrowserAuthMode } from "./auth.js";
 import { AgentSessionService } from "./agent-sessions.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
@@ -28,6 +32,7 @@ import {
   readKittyGraphicsSource,
   type KittyGraphicsSourceRequest,
 } from "./kitty-graphics-source.js";
+import { terminalThemeFromEnvironment } from "./terminal-theme.js";
 
 export type ClientMessage = PaneClientMessage;
 
@@ -297,6 +302,9 @@ export class SessionManager {
       if (message.type === "input") {
         const terminalResponse = message.terminalResponse || isTerminalProtocolResponseInput(message.data);
         if (terminalResponse) {
+          // The server owns palette query replies. Ignore color replies from
+          // older browser clients so they cannot inject a duplicate answer.
+          if (isTerminalColorResponse(message.data)) return;
           // Every attached browser renders pane output and can therefore answer
           // terminal queries. Only the authoritative viewer may forward that
           // answer or a multi-viewer pane will inject duplicate replies into
@@ -583,8 +591,13 @@ export class SessionManager {
     this.state.updatePane(pane.id, { status: "running", exitCode: undefined, title: pane.title });
     this.cancelPaneCwdRefresh(pane.id);
     this.schedulePaneCwdRefresh(pane, machine, session);
+    const colorQueryParser = new OscColorQueryParser();
+    const currentTerminalTheme = () => terminalThemeFromEnvironment(this.terminalEnvironment());
 
     session.on("output", (data) => {
+      for (const response of colorQueryParser.push(data, currentTerminalTheme).responses) {
+        backend.write(session, response, true);
+      }
       this.broadcastOutput(pane.id, data);
       this.applyBackpressure(pane.id, session);
       this.scheduleTerminalCheckpoint(pane.id, session);

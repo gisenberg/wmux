@@ -25,7 +25,7 @@ import { writeBrowserClipboard } from "./clipboard";
 import { api } from "./api";
 import { canApplyStagedPasteImage, imagesFromClipboard, quoteStagedImagePath } from "./clipboard-images";
 import { Osc52ClipboardController } from "./terminal-osc52";
-import { OscColorQueryParser } from "./terminal-color-queries";
+import { OscColorQueryParser } from "../../shared/terminal-color-queries";
 import { RectangularSelection } from "./terminal-rectangular-selection";
 import {
   createTerminalPredictionEchoProbe,
@@ -798,10 +798,9 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
     };
 
     const handleOutput = (term: Terminal, data: string) => {
+      // The server owns color replies. The browser still identifies query BEL
+      // terminators so they do not become audible notification bells.
       const colorQueries = colorQueryParser.push(data, colorSchemeRef.current.terminal);
-      if (!replayingTerminalOutput) {
-        for (const response of colorQueries.responses) sendInput(socketRef.current, response, true);
-      }
       const osc52 = osc52Controller.push(data, !replayingTerminalOutput);
       const bellCount = osc52.text.split("\x07").length - 1;
       if (bellCount > colorQueries.bellTerminators) onBell();

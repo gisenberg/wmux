@@ -1,30 +1,20 @@
-import type { ITheme } from "ghostty-web";
+import {
+  TERMINAL_ANSI_COLOR_KEYS,
+  type TerminalTheme,
+} from "./terminal-themes.js";
 
 const MAX_OSC_COLOR_QUERY_CHARS = 4096;
 const MAX_OSC_PALETTE_QUERIES = 256;
 const OSC_START = "\x1b]";
 const OSC_END = "\x1b\\";
 
-const ansiColorKeys = [
-  "black",
-  "red",
-  "green",
-  "yellow",
-  "blue",
-  "magenta",
-  "cyan",
-  "white",
-  "brightBlack",
-  "brightRed",
-  "brightGreen",
-  "brightYellow",
-  "brightBlue",
-  "brightMagenta",
-  "brightCyan",
-  "brightWhite",
-] as const satisfies readonly (keyof ITheme)[];
-
-type CompleteTerminalTheme = Required<Pick<ITheme, "foreground" | "background" | (typeof ansiColorKeys)[number]>>;
+type TerminalColorQueryTheme = Pick<
+  TerminalTheme,
+  "foreground" | "background" | (typeof TERMINAL_ANSI_COLOR_KEYS)[number]
+>;
+type TerminalColorQueryThemeSource =
+  | TerminalColorQueryTheme
+  | (() => TerminalColorQueryTheme | undefined);
 
 export interface OscColorQueryResult {
   responses: string[];
@@ -38,7 +28,7 @@ export class OscColorQueryParser {
     this.carry = "";
   }
 
-  push(data: string, theme: CompleteTerminalTheme): OscColorQueryResult {
+  push(data: string, theme: TerminalColorQueryThemeSource): OscColorQueryResult {
     const input = this.carry + data;
     this.carry = "";
     const responses: string[] = [];
@@ -80,9 +70,15 @@ const findOscTerminator = (input: string, from: number): { index: number; length
   return undefined;
 };
 
-const colorQueryResponses = (payload: string, theme: CompleteTerminalTheme): string[] => {
-  if (payload === "10;?") return [oscColorResponse("10", theme.foreground)];
-  if (payload === "11;?") return [oscColorResponse("11", theme.background)];
+const colorQueryResponses = (payload: string, themeSource: TerminalColorQueryThemeSource): string[] => {
+  if (payload === "10;?") {
+    const theme = resolveTheme(themeSource);
+    return theme ? [oscColorResponse("10", theme.foreground)] : [];
+  }
+  if (payload === "11;?") {
+    const theme = resolveTheme(themeSource);
+    return theme ? [oscColorResponse("11", theme.background)] : [];
+  }
 
   const parts = payload.split(";");
   if (parts[0] !== "4" || parts.length < 3 || parts.length % 2 === 0) return [];
@@ -94,13 +90,21 @@ const colorQueryResponses = (payload: string, theme: CompleteTerminalTheme): str
     if (!/^(?:0|[1-9][0-9]{0,2})$/.test(parts[index]) || parts[index + 1] !== "?") return [];
     const paletteIndex = Number(parts[index]);
     if (paletteIndex > 255) return [];
+  }
+  const theme = resolveTheme(themeSource);
+  if (!theme) return [];
+  for (let index = 1; index < parts.length; index += 2) {
+    const paletteIndex = Number(parts[index]);
     responses.push(oscColorResponse(`4;${paletteIndex}`, terminalPaletteColor(theme, paletteIndex)));
   }
   return responses;
 };
 
-const terminalPaletteColor = (theme: CompleteTerminalTheme, index: number): string => {
-  if (index < ansiColorKeys.length) return theme[ansiColorKeys[index]];
+const resolveTheme = (source: TerminalColorQueryThemeSource): TerminalColorQueryTheme | undefined =>
+  typeof source === "function" ? source() : source;
+
+const terminalPaletteColor = (theme: TerminalColorQueryTheme, index: number): string => {
+  if (index < TERMINAL_ANSI_COLOR_KEYS.length) return theme[TERMINAL_ANSI_COLOR_KEYS[index]];
   if (index < 232) {
     const cubeIndex = index - 16;
     const levels = [0, 95, 135, 175, 215, 255];
