@@ -769,6 +769,10 @@ owns them, and generation ports are persisted so wmux restarts reconnect each
 pane correctly. Password-backed rollout retirement leaves its dormant,
 credentialed task slot registered while removing the generation config; full
 uninstall removes every task and its Task Scheduler credential. The Windows
+agent cannot preserve pane processes across a Windows reboot. When the agent
+returns without a previously live session, wmux recreates that pane ID once as
+a fresh shell at its last known cwd and dimensions, clears the stale terminal
+screen, and resumes polling instead of repeating `unknown_session` forever. The
 firewall must allow the configured `agentPort` and
 the next eight ports from the wmux server (for the default, `3481-3489`);
 `configure-agent-firewall` installs that exact-source, bounded rule and requires

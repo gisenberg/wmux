@@ -298,6 +298,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private cwdCaptureBuffer = "";
   private observedCwdFromOutput = false;
   private ready = false;
+  private desiredCols: number;
+  private desiredRows: number;
   private pendingResize: { cols: number; rows: number } | undefined;
   private pendingInput: Array<{ data: string; terminalResponse: boolean }> = [];
   private inputQueue: Promise<void> = Promise.resolve();
@@ -328,6 +330,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     });
     this.cwd = pane.cwd ?? "";
     this.agentUrl = windowsAgentUrl(machine);
+    this.desiredCols = cols;
+    this.desiredRows = rows;
     queueMicrotask(() => void this.start());
   }
 
@@ -388,6 +392,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   resize(cols: number, rows: number): void {
     if (this.exited || this.stopped || cols < 2 || rows < 1) return;
+    this.desiredCols = cols;
+    this.desiredRows = rows;
     if (!this.ready) {
       this.pendingResize = { cols, rows };
       return;
@@ -473,50 +479,12 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       );
       const response = await this.post<AgentSessionResponse>(
         WINDOWS_AGENT_PATHS.session(this.pane.id),
-        {
-          cols: this.cols,
-          rows: this.rows,
-          cwd: this.cwd || this.machine.cwd || "",
-          shell: this.machine.shell || "",
-          loadPowerShellProfile: this.machine.loadPowerShellProfile === true,
-          agentProfileOptionalAuth: this.machine.source === "registered",
-          helperBundle: {
-            bundleVersion: helperBundle?.bundleVersion ?? "",
-            files: helperBundle?.files ?? [],
-          },
-          env: {
-            WMUX_MACHINE_ID: this.machine.id,
-            WMUX_MACHINE_NAME: this.machine.name,
-            ...this.extraEnv,
-          },
-        },
+        this.sessionCreatePayload(this.cols, this.rows, helperBundle),
         SESSION_CREATE_TIMEOUT_MS,
       );
-      this.pidValue = response.pid ?? 0;
-      this.cursor = typeof response.base === "number" ? response.base : 0;
-      if (response.cwd) {
-        this.cwd = response.cwd;
-        this.emit("cwd", response.cwd);
-      }
-      const historyBytes = Math.max(0, (response.cursor ?? this.cursor) - this.cursor);
-      const replayCols = response.cols ?? (historyBytes > 0 ? 80 : this.cols);
-      const replayRows = response.rows ?? (historyBytes > 0 ? 24 : this.rows);
-      this.checkpoint.reframe(replayCols, replayRows);
-      if (historyBytes > 0) this.reportPhase("replaying", "Restoring terminal state…");
-      await this.hydrateReplay(response.cursor ?? this.cursor);
-      if (historyBytes > 0 && response.cols && response.rows) {
-        this.liveOutputObserved = true;
-      }
+      await this.acceptSession(response, this.cols, this.rows, false);
       this.ready = true;
-      const pendingResize = this.pendingResize;
-      this.pendingResize = undefined;
-      if (pendingResize && !sameSize(this.checkpoint.dimensions, pendingResize.cols, pendingResize.rows)) {
-        this.checkpoint.reframe(pendingResize.cols, pendingResize.rows);
-        await this.post(WINDOWS_AGENT_PATHS.resize(this.pane.id), pendingResize);
-      }
-      const pendingInput = this.pendingInput;
-      this.pendingInput = [];
-      for (const input of pendingInput) this.postInput(input.data, input.terminalResponse);
+      await this.flushPendingOperations();
       this.resolveAttachReady();
       this.emit("title", this.machine.name);
       void this.poll();
@@ -537,6 +505,99 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.resolveAttachReady();
       this.emit("exit", 1);
     }
+  }
+
+  private sessionCreatePayload(
+    cols: number,
+    rows: number,
+    helperBundle?: WindowsHelperBundle,
+  ): Record<string, unknown> {
+    return {
+      cols,
+      rows,
+      cwd: this.cwd || this.machine.cwd || "",
+      shell: this.machine.shell || "",
+      loadPowerShellProfile: this.machine.loadPowerShellProfile === true,
+      agentProfileOptionalAuth: this.machine.source === "registered",
+      helperBundle: {
+        bundleVersion: helperBundle?.bundleVersion ?? "",
+        files: helperBundle?.files ?? [],
+      },
+      env: {
+        WMUX_MACHINE_ID: this.machine.id,
+        WMUX_MACHINE_NAME: this.machine.name,
+        ...this.extraEnv,
+      },
+    };
+  }
+
+  private async acceptSession(
+    response: AgentSessionResponse,
+    fallbackCols: number,
+    fallbackRows: number,
+    recreated: boolean,
+  ): Promise<void> {
+    if (recreated) {
+      this.checkpoint.dispose();
+      this.checkpoint = new TerminalCheckpoint(fallbackCols, fallbackRows, this.extraEnv);
+      this.replay = [];
+      this.replayBytes = 0;
+      this.replayTruncated = false;
+      this.cwdCaptureBuffer = "";
+      this.observedCwdFromOutput = false;
+      // A new remote process invalidates both the restored checkpoint and the
+      // old live screen. Clear it before replaying the replacement shell.
+      this.liveOutputObserved = true;
+      this.liveResetEmitted = true;
+      this.appendAndEmit(
+        `\x1bc\r\n[wmux] Session agent restarted; opened a new shell for this pane.\r\n`,
+      );
+    }
+    this.pidValue = response.pid ?? 0;
+    this.cursor = typeof response.base === "number" ? response.base : 0;
+    if (response.cwd) {
+      this.cwd = response.cwd;
+      this.emit("cwd", response.cwd);
+    }
+    const historyBytes = Math.max(0, (response.cursor ?? this.cursor) - this.cursor);
+    const replayCols = response.cols ?? (historyBytes > 0 ? 80 : fallbackCols);
+    const replayRows = response.rows ?? (historyBytes > 0 ? 24 : fallbackRows);
+    this.checkpoint.reframe(replayCols, replayRows);
+    if (historyBytes > 0) this.reportPhase("replaying", "Restoring terminal state…");
+    await this.hydrateReplay(response.cursor ?? this.cursor);
+    if (historyBytes > 0 && response.cols && response.rows) {
+      this.liveOutputObserved = true;
+    }
+  }
+
+  private async flushPendingOperations(): Promise<void> {
+    const pendingResize = this.pendingResize;
+    this.pendingResize = undefined;
+    if (pendingResize && !sameSize(this.checkpoint.dimensions, pendingResize.cols, pendingResize.rows)) {
+      this.checkpoint.reframe(pendingResize.cols, pendingResize.rows);
+      await this.post(WINDOWS_AGENT_PATHS.resize(this.pane.id), pendingResize);
+    }
+    const pendingInput = this.pendingInput;
+    this.pendingInput = [];
+    for (const input of pendingInput) this.postInput(input.data, input.terminalResponse);
+  }
+
+  private async recreateMissingSession(): Promise<void> {
+    this.ready = false;
+    const dimensions = { cols: this.desiredCols, rows: this.desiredRows };
+    const helperBundle = shouldUseWindowsAgent(this.machine)
+      ? buildWindowsHelperBundle(this.machine)
+      : undefined;
+    const response = await this.post<AgentSessionResponse>(
+      WINDOWS_AGENT_PATHS.session(this.pane.id),
+      this.sessionCreatePayload(dimensions.cols, dimensions.rows, helperBundle),
+      SESSION_CREATE_TIMEOUT_MS,
+    );
+    if (this.stopped || this.exited) return;
+    await this.acceptSession(response, dimensions.cols, dimensions.rows, true);
+    this.ready = true;
+    await this.flushPendingOperations();
+    this.emit("title", this.machine.name);
   }
 
   private async ensureCurrentAgent(helperBundle: WindowsHelperBundle): Promise<boolean> {
@@ -834,6 +895,17 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         }
       } catch (error) {
         if (this.stopped) return;
+        if (isUnknownAgentSessionError(error)) {
+          try {
+            await this.recreateMissingSession();
+            continue;
+          } catch (recoveryError) {
+            if (this.stopped) return;
+            this.reportTransportFailure("session recovery", recoveryError);
+            await delay(1000);
+            continue;
+          }
+        }
         this.appendAndEmit(`\r\n[wmux] Windows agent polling failed: ${formatError(error)}\r\n`);
         await delay(1000);
       }
@@ -1054,6 +1126,26 @@ export const activateWindowsAgentUpdate: WindowsAgentUpdateActivator = async (ma
   });
 };
 
+class AgentHttpError extends Error {
+  readonly agentCode?: string;
+
+  constructor(readonly statusCode: number, rawBody: string) {
+    super(`HTTP ${statusCode}${rawBody ? `: ${rawBody.slice(0, 200)}` : ""}`);
+    this.name = "AgentHttpError";
+    try {
+      const payload = JSON.parse(rawBody) as { error?: unknown };
+      if (typeof payload.error === "string") this.agentCode = payload.error;
+    } catch {
+      // Preserve the HTTP failure even when the agent returned non-JSON text.
+    }
+  }
+}
+
+const isUnknownAgentSessionError = (error: unknown): boolean =>
+  error instanceof AgentHttpError
+  && error.statusCode === 404
+  && error.agentCode === "unknown_session";
+
 const requestJson = <T>(
   method: string,
   rawUrl: string,
@@ -1086,7 +1178,7 @@ const requestJson = <T>(
         response.on("end", () => {
           const raw = Buffer.concat(chunks).toString("utf8");
           if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(`HTTP ${response.statusCode ?? 0}${raw ? `: ${raw.slice(0, 200)}` : ""}`));
+            reject(new AgentHttpError(response.statusCode ?? 0, raw));
             return;
           }
           try {

@@ -805,6 +805,116 @@ test("Windows agent queues initial resize and input until session creation compl
   await once(server, "close");
 });
 
+test("Windows agent recreates a live pane when the remote agent loses its session", async () => {
+  let createCount = 0;
+  let reportMissingSession = false;
+  let remoteCols = 80;
+  let remoteRows = 24;
+  const createBodies: Array<Record<string, unknown>> = [];
+  const server = http.createServer(async (request, response) => {
+    const path = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && path === "/sessions/pane_reboot") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      createBodies.push(body);
+      remoteCols = Number(body.cols);
+      remoteRows = Number(body.rows);
+      createCount += 1;
+      response.end(JSON.stringify({
+        id: "pane_reboot",
+        pid: 100 + createCount,
+        base: 0,
+        cursor: 0,
+        cwd: "C:\\work",
+        cols: remoteCols,
+        rows: remoteRows,
+      }));
+      return;
+    }
+    if (request.method === "POST" && path === "/sessions/pane_reboot/resize") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { cols: number; rows: number };
+      remoteCols = body.cols;
+      remoteRows = body.rows;
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (request.method === "GET" && path.startsWith("/sessions/pane_reboot/output")) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (reportMissingSession) {
+        reportMissingSession = false;
+        response.writeHead(404);
+        response.end(JSON.stringify({ error: "unknown_session" }));
+        return;
+      }
+      const cursor = Number(new URL(path, "http://agent.invalid").searchParams.get("cursor") ?? 0);
+      const output = Buffer.from(createCount === 1 ? "first-shell\r\n" : "second-shell\r\n");
+      const data = output.subarray(Math.min(cursor, output.length));
+      response.end(JSON.stringify({
+        base: 0,
+        startCursor: cursor,
+        cursor: output.length,
+        dataBase64: data.toString("base64"),
+        exited: false,
+        cols: remoteCols,
+        rows: remoteRows,
+      }));
+      return;
+    }
+    response.writeHead(404);
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_reboot",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      cwd: "C:\\work",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+    },
+    80,
+    24,
+  );
+  const output: string[] = [];
+  session.on("output", (data) => output.push(data));
+  await session.attachReady;
+  await waitUntil(() => output.join("").includes("first-shell"));
+  assert.equal(session.pid, 101);
+  session.resize(120, 35);
+  await waitUntil(() => remoteCols === 120 && remoteRows === 35);
+
+  reportMissingSession = true;
+  await waitUntil(() => createCount === 2);
+  await waitUntil(() => output.join("").includes("second-shell"));
+  assert.equal(session.pid, 102);
+  assert.equal(createBodies.length, 2);
+  assert.equal(createBodies[1]?.cwd, "C:\\work");
+  assert.equal(createBodies[1]?.cols, 120);
+  assert.equal(createBodies[1]?.rows, 35);
+  assert.match(output.join(""), /Session agent restarted; opened a new shell for this pane/);
+  assert.doesNotMatch(output.join(""), /unknown_session/);
+
+  session.detach();
+  server.close();
+  await once(server, "close");
+});
+
 test("Windows agent preserves input request order", async () => {
   const inputBodies: Array<{ dataBase64?: string }> = [];
   const server = http.createServer((request, response) => {

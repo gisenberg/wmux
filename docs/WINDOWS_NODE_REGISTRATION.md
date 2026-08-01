@@ -495,3 +495,8 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - Windows screen streaming is validated on a dogfood Windows host through FFmpeg/gdigrab and native-agent supervision.
   Locked and logged-out behavior is still not implemented.
 - The managed Windows session agent uses `backend: "auto"`, preferring pywinpty-backed ConPTY and falling back to terminal-normalized stdio when pywinpty is unavailable. It is restart-durable across `wmux.service` restarts while the owning Windows agent generation keeps running. Agent releases use the same platform-suffixed wmux version shown by the UI (for example, `v0.1.2-win`); the HTTP protocol version is reported separately. Automatic rollout is side-by-side; protocol v2 separates update-pending from hard-drain state, protocol v3 refreshes durable callback state on attach, and protocol v5 carries the per-session PowerShell profile preference. It supports terminal-safe stdio newlines, byte-exact resize boundaries, and applying an available `wmux-agent-profile` before a new PowerShell session. Legacy agents use a compatibility watcher plus a best-effort 80x24 replay fallback. A forced Windows-agent restart still kills owned pane processes, so process preservation across an unexpected agent crash and broad full-screen app validation remain pending.
+- A Windows host reboot necessarily terminates its ConPTY processes. When the
+  restarted agent reports `unknown_session` for a pane that wmux still owns,
+  wmux clears the stale screen and recreates the same pane ID as a fresh shell
+  at its last known cwd and dimensions. Pane navigation therefore recovers,
+  but the pre-reboot process and its in-memory state do not.
