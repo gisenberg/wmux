@@ -320,12 +320,25 @@ function Get-WindowsWmuxReport {
   $AgentTask = Get-ScheduledTask -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue
   $AgentTaskInfo = if ($AgentTask) { Get-ScheduledTaskInfo -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue } else { $null }
   $AgentHealth = $null
+  $AgentConfig = $null
   try {
     $AgentConfig = Get-Content -LiteralPath $AgentConfigPath -Raw | ConvertFrom-Json
     $AgentHost = if ($AgentConfig.host -and $AgentConfig.host -notin @('0.0.0.0', '::')) { [string]$AgentConfig.host } else { '127.0.0.1' }
     $AgentPort = if ($AgentConfig.port) { [int]$AgentConfig.port } else { 3481 }
-    $AgentHealth = Invoke-RestMethod -Method Get -Uri "http://${AgentHost}:${AgentPort}/health" -TimeoutSec 3
+    $AgentHeaders = @{}
+    if ($AgentConfig.token) { $AgentHeaders.Authorization = "Bearer $($AgentConfig.token)" }
+    $AgentHealth = Invoke-RestMethod -Method Get -Uri "http://${AgentHost}:${AgentPort}/health" -Headers $AgentHeaders -TimeoutSec 3
   } catch {}
+  $AgentLogonType = if ($AgentTask) { [string]$AgentTask.Principal.LogonType } else { $null }
+  $AgentBasePort = if ($AgentConfig -and $AgentConfig.port) { [int]$AgentConfig.port } else { 3481 }
+  $AgentGenerationSlotCount = 0
+  for ($Offset = 1; $Offset -le $AgentRolloutPortCount; $Offset += 1) {
+    $AgentGenerationTask = Get-ScheduledTask -TaskName "wmux-windows-agent-$($AgentBasePort + $Offset)" -ErrorAction SilentlyContinue
+    if ($AgentGenerationTask -and [string]$AgentGenerationTask.Principal.LogonType -eq 'Password') {
+      $AgentGenerationSlotCount += 1
+    }
+  }
+  $AgentUpdateTask = Get-ScheduledTask -TaskName 'wmux-windows-agent-update' -ErrorAction SilentlyContinue
   $AgentFirewall = Get-WindowsAgentFirewallReport
   $SunshineCommand = Get-SunshineCommand
   $SunshineUrl = if ($env:WMUX_SUNSHINE_URL) { $env:WMUX_SUNSHINE_URL } else { 'https://127.0.0.1:47990' }
@@ -354,6 +367,14 @@ function Get-WindowsWmuxReport {
     agentConfigPath = $AgentConfigPath
     agentConfigExists = Test-Path -LiteralPath $AgentConfigPath -PathType Leaf
     agentTaskState = if ($AgentTask) { [string]$AgentTask.State } else { 'missing' }
+    agentTaskLogonType = $AgentLogonType
+    agentStartsWithoutLogin = $AgentLogonType -in @('Password', 'S4U')
+    agentNetworkCredentialsAvailable = $AgentLogonType -eq 'Password'
+    agentGenerationSlotsReady = if ($AgentLogonType -eq 'Password') {
+      $AgentGenerationSlotCount -eq $AgentRolloutPortCount -and $AgentUpdateTask -and [string]$AgentUpdateTask.Principal.LogonType -eq 'Password'
+    } else {
+      $null
+    }
     agentTaskLastRunTime = if ($AgentTaskInfo) { $AgentTaskInfo.LastRunTime.ToString('o') } else { $null }
     agentTaskLastTaskResult = if ($AgentTaskInfo) { $AgentTaskInfo.LastTaskResult } else { $null }
     agentFirewall = $AgentFirewall
@@ -478,7 +499,7 @@ function Start-Sunshine {
 
 function Show-Usage {
   Write-Error @'
-usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-stream|stream-status|install-agent|configure-agent-firewall|agent-firewall-status|agent-status|agent-logs|install-hooks|status]
+usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-stream|stream-status|install-agent [--logon-type Interactive|S4U|Password]|refresh-agent-credentials|configure-agent-firewall|agent-firewall-status|agent-status|agent-logs|install-hooks|status]
 
 validate       Print a JSON report for Windows wmux prerequisites and helper state.
 persist-path   Add %LOCALAPPDATA%\wmux\bin to the persistent user PATH.
@@ -489,7 +510,8 @@ start-sunshine Start sunshine.exe for the current logged-in user session.
 sunshine-status Print the Sunshine section of the validation report.
 install-stream Compatibility alias for install-agent; capture is supervised by the native agent.
 stream-status  Show native-agent capture supervision status.
-install-agent  Install/start the per-user Windows session agent with integrated registration heartbeat.
+install-agent  Install/start the per-user Windows session agent; Password mode prompts privately and starts before login with network credentials.
+refresh-agent-credentials Refresh every Password-mode agent task after the Windows account password changes.
 configure-agent-firewall IP... Allow the base and eight rollout ports from exact internal wmux server IPs (requires elevation).
 agent-firewall-status Show the managed Windows agent firewall rule as JSON.
 agent-status   Show the wmux Windows session agent Scheduled Task status.
@@ -529,17 +551,20 @@ switch ($Action) {
   }
   'install-stream' {
     Write-Warning 'install-stream is now an alias for install-agent; the native agent owns capture supervision.'
-    Invoke-WmuxHelper 'wmux-windows-agent-service' @('install')
+    Invoke-WmuxHelper 'wmux-windows-agent-service' (@('install') + $ActionArgs)
   }
   'stream-status' {
     Invoke-WmuxHelper 'wmux-windows-agent-service' @('status')
   }
   'install-agent' {
-    Invoke-WmuxHelper 'wmux-windows-agent-service' @('install')
+    Invoke-WmuxHelper 'wmux-windows-agent-service' (@('install') + $ActionArgs)
     $Firewall = Get-WindowsAgentFirewallReport
     if (-not $Firewall.configured) {
       Write-Warning "Windows agent rollouts require inbound TCP $($Firewall.expectedLocalPort). From an elevated shell, run: wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>"
     }
+  }
+  'refresh-agent-credentials' {
+    Invoke-WmuxHelper 'wmux-windows-agent-service' (@('refresh-credentials') + $ActionArgs)
   }
   'configure-agent-firewall' {
     Set-WindowsAgentFirewall $ActionArgs

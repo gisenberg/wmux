@@ -177,9 +177,30 @@ Update `wmux.config.json` or `~/.wmux/config.json`:
   "host": "100.64.0.30",
   "user": "operator",
   "port": 22,
+  "agentPort": 3481,
+  "agentToken": "replace-with-a-long-random-token",
   "loadPowerShellProfile": true
 }
 ```
+
+Generate the agent token on the wmux server with `openssl rand -hex 32`.
+Add the port and token before opening the first Windows pane so bootstrap stages a protected agent config, but leave `sessionBackend` unset until the agent and firewall have been validated.
+Never commit this runtime-local token.
+
+The Windows agent currently binds an IPv4 literal by design.
+If SSH uses a DNS name, keep that name in `host` and add an explicit private IPv4 endpoint for the agent:
+
+```json
+{
+  "host": "windows-box.lan",
+  "agentUrl": "http://100.64.0.30:3481",
+  "agentPort": 3481
+}
+```
+
+`agentUrl` must be an `http://` origin with an explicit port and no credentials, path, query, or fragment.
+`agentPort` and the port in `agentUrl` must match.
+wmux rejects public, hostname-based, IPv6, and structurally ambiguous agent URLs before startup instead of staging an agent task that cannot pass its private-bind check.
 
 Profile loading is disabled when the field is omitted and applies to both
 plain SSH and `sessionBackend: "agent"` panes. wmux preserves a profile-defined
@@ -302,6 +323,24 @@ Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helpe
 %LOCALAPPDATA%\wmux\bin
 ```
 
+Bootstrap also creates `~\.wmux\windows-agent.json`.
+It fills a missing agent token from the server-only machine configuration and repairs an older hostname-based bind value when the newly staged `agentUrl` supplies an explicit IP.
+It does not overwrite an existing token, private bind IP, or backend choice.
+Inspect the non-secret fields before installation:
+
+```powershell
+$AgentConfig = Get-Content "$HOME\.wmux\windows-agent.json" -Raw | ConvertFrom-Json
+[pscustomobject]@{
+  machine = $AgentConfig.machine
+  host = $AgentConfig.host
+  port = $AgentConfig.port
+  backend = $AgentConfig.backend
+  tokenPresent = [bool]$AgentConfig.token
+}
+```
+
+`host` must be the Windows node's own private/internal IP, not its DNS name, and `tokenPresent` must be `True`.
+
 Then run:
 
 ```powershell
@@ -313,6 +352,23 @@ wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>
 wmux-windows-setup agent-status
 ```
 
+For unattended startup before a console or RDP login, with the user's authenticated network credentials available to pane processes, install the agent in explicit password mode from an interactive private shell:
+
+```powershell
+wmux-windows-setup install-agent --logon-type Password
+```
+
+The prompt never accepts a password from an argument or environment variable.
+Enter the account password, not a Windows Hello PIN; an interactive SSH PowerShell prompt is sufficient and no desktop login is required.
+The task uses the hidden PowerShell launcher, so it does not create a visible terminal window.
+The password crosses the Windows Task Scheduler registration API in memory and is retained only by Task Scheduler.
+wmux pre-registers the base task, the eight adjacent rollout task slots, and the update watcher during that prompt; later headless rollouts only activate those fixed slots.
+If the Windows account password changes, close active agent panes and refresh all task credentials:
+
+```powershell
+wmux-windows-setup refresh-agent-credentials
+```
+
 Notes:
 
 - `validate` prints a JSON report for helper state, wmux API reachability, FFmpeg/Python/pywinpty/winget availability, hook config files, and native-agent capture supervision state.
@@ -320,10 +376,17 @@ Notes:
 - `install-deps` uses `winget` to install `Gyan.FFmpeg` and `Python.Python.3.12` when missing, then installs `pywinpty` with pip. It executes Python during detection so the Microsoft Store app-execution alias is not mistaken for an installed runtime.
 - `install-agent` installs and starts the per-user `wmux-windows-agent` Scheduled Task for restart-durable sessions, in-process dynamic registration, and view-only capture supervision.
   It removes legacy standalone `wmux-heartbeat` and `wmux-stream-agent` tasks during migration.
+- `install-agent --logon-type Password` prompts locally and installs a fixed password-backed task pool.
+  It refuses to replace the pool while a reachable generation owns panes; `--force` is reserved for cases where terminating unverifiable or active panes is explicitly acceptable.
+- `refresh-agent-credentials` re-prompts after an account-password change.
+  It never reads the old Task Scheduler credential and does not persist the new password in wmux-owned files.
 - `install-stream` remains a compatibility alias for `install-agent`, and `stream-status` reports the native agent.
 - `configure-agent-firewall` must run from an elevated PowerShell session. It allows the configured base `agentPort` and eight adjacent rollout ports only from the exact Tailscale/RFC1918/IPv6 ULA wmux server addresses passed on the command line. For the default base port, the bounded range is `3481-3489`. `install-agent` warns when this managed rule is absent or stale.
+- While an SSH pane is connected, `Get-NetTCPConnection -LocalPort 22 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique` shows candidate source addresses for the exact wmux-server firewall argument.
+  Confirm the address on the server before installing the rule.
 - `agent-firewall-status` prints the expected range and current managed-rule state as JSON. If you manage Windows Firewall separately, create an equivalent exact-source rule for the same nine-port range; opening only the base port prevents safe side-by-side updates.
-- The Windows agent task starts at user logon, starts when available, restarts after failure, has no fixed execution-time cutoff, and launches through a hidden PowerShell wrapper instead of a visible `cmd.exe` window.
+- The Windows agent task has user-logon and once-per-minute triggers, starts when available, restarts after failure, has no fixed execution-time cutoff, and launches through a hidden PowerShell wrapper instead of a visible `cmd.exe` window.
+  `S4U` and `Password` modes can therefore start without a UI login.
 
 If you are running setup from plain SSH before the helper directory is on PATH, invoke the staged script by path:
 
@@ -402,20 +465,25 @@ New managed configs use `backend: "auto"`. Bootstrap merges preserve an existing
 Run a direct lifecycle smoke test:
 
 ```bash
+agent_token='replace-with-the-existing-agent-token'
 session="windows-agent-smoke"
 curl -fsS -X POST "http://100.64.0.30:3481/sessions/$session" \
+  -H "authorization: Bearer $agent_token" \
   -H 'content-type: application/json' \
   -d '{"cols":120,"rows":30,"cwd":"C:\\Users\\operator"}'
 da=$(printf '\033[?64;1;2;6;9;15;18;21;22c' | base64 -w0)
 curl -fsS -X POST "http://100.64.0.30:3481/sessions/$session/input" \
+  -H "authorization: Bearer $agent_token" \
   -H 'content-type: application/json' \
   -d "{\"dataBase64\":\"$da\"}"
 curl -fsS -X POST "http://100.64.0.30:3481/sessions/$session/input" \
+  -H "authorization: Bearer $agent_token" \
   -H 'content-type: application/json' \
   -d '{"dataBase64":"V3JpdGUtT3V0cHV0ICJoZWxsby1mcm9tLWFnZW50Ig0="}'
-curl -fsS "http://100.64.0.30:3481/sessions/$session/output?cursor=0&timeoutMs=1000" |
+curl -fsS -H "authorization: Bearer $agent_token" "http://100.64.0.30:3481/sessions/$session/output?cursor=0&timeoutMs=1000" |
   jq -r '.dataBase64' | base64 -d
-curl -fsS -X DELETE "http://100.64.0.30:3481/sessions/$session"
+curl -fsS -X DELETE -H "authorization: Bearer $agent_token" "http://100.64.0.30:3481/sessions/$session"
+unset agent_token
 ```
 
 To make wmux use the agent for new panes, opt in explicitly:
@@ -429,13 +497,22 @@ To make wmux use the agent for new panes, opt in explicitly:
   "user": "operator",
   "port": 22,
   "sessionBackend": "agent",
-  "agentPort": 3481
+  "agentPort": 3481,
+  "agentToken": "replace-with-the-existing-agent-token"
 }
 ```
 
+If `host` is a DNS name, retain the matching private-IP `agentUrl` added in step 4.
+Restart `wmux.service` after setting `sessionBackend`; existing panes keep their original backend, while newly created panes use the agent.
+
 Keep the legacy `powershell-ssh` path available as a fallback while the ConPTY agent is still being validated.
 
-The agent task uses `Interactive` logon when a desktop user is logged in and falls back to `S4U` on a headless host. S4U avoids a stored password and does not require a live desktop session, but Windows does not make delegated network credentials available to S4U processes. Override automatic selection before installation with `WMUX_WINDOWS_AGENT_LOGON_TYPE=Interactive` or `WMUX_WINDOWS_AGENT_LOGON_TYPE=S4U`. Logon and once-per-minute triggers supervise the task; `MultipleInstances: IgnoreNew` prevents duplicate agents, while `wmux-windows-agent-service stop` disables the task so an intentional stop remains stopped.
+The agent task uses `Interactive` logon when a desktop user is logged in and falls back to `S4U` on a headless host.
+S4U avoids a stored password and does not require a live desktop session, but Windows does not make delegated network credentials available to S4U processes.
+Override automatic selection before installation with `--logon-type Interactive`, `--logon-type S4U`, or the corresponding `WMUX_WINDOWS_AGENT_LOGON_TYPE` value.
+Explicit `Password` mode also starts without a desktop login and supplies network credentials, but account-password rotation requires `refresh-agent-credentials`.
+Password mode is accepted only through the private local prompt; `--password` and `WMUX_WINDOWS_AGENT_PASSWORD` are rejected.
+Logon and once-per-minute triggers supervise the task; `MultipleInstances: IgnoreNew` prevents duplicate agents, while `wmux-windows-agent-service stop` disables the task so an intentional stop remains stopped.
 
 ## Definition Of Done
 
@@ -451,10 +528,11 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - `wmux-windows-setup validate` reports `wmuxApi.reachable: true`, helper scripts present, FFmpeg/Python/pywinpty available, and native-agent capture supervision running.
 - A short `/api/streams/windows-box/request` lease causes the Windows stream agent to publish `wmux-windows-box`, then return idle after release.
 - `wmux-windows-setup validate` reports the `wmux-windows-agent` helper and agent config present.
-- `curl http://100.64.0.30:3481/health` reports the Windows session agent as healthy.
+- `wmux-windows-setup agent-status` reports the authenticated Windows session agent as healthy.
 - A direct `/sessions/:id` create/input/output/delete smoke test returns command output.
 - Creating a new pane against an outdated agent stages the current release and starts a side-by-side Scheduled Task generation on an unused adjacent port. The new pane moves to that generation, existing panes remain pinned to their owning generation, and wmux persists the selected port for restart-safe routing.
 - `wmux-windows-setup agent-firewall-status` reports the configured base-through-eight agent port range as allowed from the wmux server.
+- In Password mode, `wmux-windows-setup validate` reports `agentStartsWithoutLogin: true`, `agentNetworkCredentialsAvailable: true`, and `agentGenerationSlotsReady: true`; after a reboot with no UI login, `/health`, pane creation, and an authenticated network-resource smoke test succeed.
 - `wmux-windows-agent-service activate-update` remains the manual in-place restart-when-idle flow; `cancel-update` cancels it. `rollout-update --port PORT` is the lower-level generation launcher used by wmux.
 - `wmux-windows-setup install-hooks` reports Claude and Codex hooks installed; `/hooks` in a new Codex session shows the direct PowerShell command ready for review/trust.
 - Changing directories in PowerShell updates the pane cwd, and a same-host split starts in that directory.
@@ -468,3 +546,6 @@ The agent task uses `Interactive` logon when a desktop user is logged in and fal
 - Windows screen streaming is validated on a dogfood Windows host through FFmpeg/gdigrab and native-agent supervision.
   Locked and logged-out behavior is still not implemented.
 - The managed Windows session agent uses `backend: "auto"`, preferring pywinpty-backed ConPTY and falling back to terminal-normalized stdio when pywinpty is unavailable. It is restart-durable across `wmux.service` restarts while the owning Windows agent generation keeps running. Agent releases use the same platform-suffixed wmux version shown by the UI (for example, `v0.1.2-win`); the HTTP protocol version is reported separately. Automatic rollout is side-by-side; protocol v2 separates update-pending from hard-drain state, protocol v3 refreshes durable callback state on attach, and protocol v5 carries the per-session PowerShell profile preference. It supports terminal-safe stdio newlines, byte-exact resize boundaries, and applying an available `wmux-agent-profile` before a new PowerShell session. Legacy agents use a compatibility watcher plus a best-effort 80x24 replay fallback. A forced Windows-agent restart still kills owned pane processes, so process preservation across an unexpected agent crash and broad full-screen app validation remain pending.
+- A Windows host reboot necessarily terminates its ConPTY processes.
+  When the restarted agent reports `unknown_session` for a pane that wmux still owns, wmux clears the stale screen and recreates the same pane ID as a fresh shell at its last known cwd and dimensions.
+  Pane navigation therefore recovers, but the pre-reboot process and its in-memory state do not.
