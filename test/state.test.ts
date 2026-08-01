@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { AgentSessionService } from "../src/server/agent-sessions.js";
 import { StateIdConflictError, StateStore, WorkspaceDepthError } from "../src/server/state.js";
 import { CURRENT_STATE_SCHEMA_VERSION, parsePersistedState } from "../src/server/state-schema.js";
-import type { MachineConfig } from "../src/server/types.js";
+import type { MachineConfig, PersistedState } from "../src/server/types.js";
 
 const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
 const agentServices = new WeakMap<StateStore, AgentSessionService>();
@@ -480,6 +480,11 @@ test("stale persisted machine endpoints cannot quarantine valid workspace state"
     assert.equal(recovered.workspaces[0].name, "Keep this workspace");
     assert.equal(recovered.machines[0].agentUrl, "http://10.0.0.25:3481");
     assert.equal(fs.readdirSync(dir).some((name) => name.includes(".corrupt-")), false);
+    for (const persistedPath of [filePath, `${filePath}.bak`]) {
+      const persisted = JSON.parse(fs.readFileSync(persistedPath, "utf8")) as PersistedState;
+      assert.equal(persisted.workspaces[0].name, "Keep this workspace");
+      assert.equal(persisted.machines[0].agentUrl, "http://10.0.0.25:3481");
+    }
   });
 });
 

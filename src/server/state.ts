@@ -833,7 +833,13 @@ export class StateStore extends EventEmitter {
       const candidate = machines && input && typeof input === "object" && !Array.isArray(input)
         ? { ...input, machines }
         : input;
-      return parsePersistedState(candidate);
+      const parsed = parsePersistedState(candidate);
+      const persistedMachines = input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>).machines
+        : undefined;
+      return machines && JSON.stringify(persistedMachines) !== JSON.stringify(machines)
+        ? { ...parsed, normalized: true }
+        : parsed;
     } catch (error) {
       if (error instanceof UnsupportedStateVersionError) throw error;
       return null;
