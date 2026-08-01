@@ -34,11 +34,46 @@ test("PowerShell profile loading is opt-in and limited to powershell-ssh machine
 test("Windows agent ports reserve the bounded rollout range", () => {
   const windowsAgent = (agentPort: number) => machine({
     kind: "powershell-ssh",
+    host: "100.64.0.7",
     sessionBackend: "agent",
     agentPort,
   });
   assert.ok(configSchema.safeParse(windowsAgent(65527)).success);
   assert.equal(configSchema.safeParse(windowsAgent(65528)).success, false);
+});
+
+test("Windows agents with DNS SSH hosts require an explicit private agent endpoint", () => {
+  const dnsAgent = machine({
+    kind: "powershell-ssh",
+    host: "box.ts.net",
+    sessionBackend: "agent",
+    agentPort: 3481,
+  });
+  const missingEndpoint = configSchema.safeParse(dnsAgent);
+  assert.equal(missingEndpoint.success, false);
+  if (!missingEndpoint.success) {
+    assert.match(missingEndpoint.error.issues[0]?.message ?? "", /agentUrl with an explicit private\/internal IP/);
+  }
+  assert.ok(configSchema.safeParse(machine({
+    kind: "powershell-ssh",
+    host: "box.ts.net",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.7:3481",
+    agentToken: "secret",
+  })).success);
+  assert.equal(configSchema.safeParse(machine({
+    kind: "powershell-ssh",
+    host: "box.ts.net",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.7:3482",
+    agentPort: 3481,
+  })).success, false);
+  assert.equal(configSchema.safeParse(machine({
+    kind: "powershell-ssh",
+    host: "box.ts.net",
+    sessionBackend: "agent",
+    agentUrl: "http://203.0.113.7:3481",
+  })).success, false);
 });
 
 test("native session agents are limited to supported machine transports", () => {

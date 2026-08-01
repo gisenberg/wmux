@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -22,6 +23,7 @@ import {
   type DelegationConfig,
   type DelegationMode,
 } from "../shared/protocol.js";
+import { isAllowedBindHost } from "./bind.js";
 import { localMachine } from "./machines.js";
 import type { MachineConfig } from "./types.js";
 
@@ -87,6 +89,32 @@ export const machineSchema = z.object({
       path: ["sessionBackend"],
       message: "agent is only valid for local, ssh, and powershell-ssh machines",
     });
+  }
+  if (machine.kind === "powershell-ssh" && machine.sessionBackend === "agent") {
+    const parsedAgentUrl = machine.agentUrl ? new URL(machine.agentUrl) : undefined;
+    const agentHost = parsedAgentUrl
+      ? parsedAgentUrl.hostname.replace(/^\[|\]$/g, "")
+      : machine.host;
+    if (!agentHost || !isAllowedBindHost(agentHost)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [machine.agentUrl ? "agentUrl" : "host"],
+        message: machine.host && !machine.agentUrl && net.isIP(machine.host) === 0
+          ? "Windows agent hosts addressed by DNS require agentUrl with an explicit private/internal IP"
+          : "Windows agent endpoint must use an explicit private/internal IP",
+      });
+    }
+    if (
+      parsedAgentUrl?.port
+      && machine.agentPort !== undefined
+      && Number(parsedAgentUrl.port) !== machine.agentPort
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agentPort"],
+        message: "agentPort must match the explicit port in agentUrl",
+      });
+    }
   }
 });
 

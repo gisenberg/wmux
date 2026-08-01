@@ -759,6 +759,13 @@ Opt in from the machine's untracked config:
 }
 ```
 
+Generate `agentToken` with `openssl rand -hex 32` and add it before the first
+SSH bootstrap pane so the staged listener is protected from its first start.
+When the SSH `host` is a DNS name, also set `agentUrl` to the target's explicit
+private/internal IP, for example `"agentUrl": "http://100.64.0.30:3481"`.
+The agent intentionally refuses hostname and public-address binds;
+`agentPort` must match the port in `agentUrl`.
+
 Managed configs use `backend: "auto"`: ConPTY is preferred and terminal-safe
 stdio is the fallback when `pywinpty` is unavailable. Existing explicit
 `"conpty"` or `"stdio"` values remain pinned. When the base agent is outdated

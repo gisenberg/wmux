@@ -83,6 +83,26 @@ test("Windows agent config prefers ConPTY with stdio fallback", () => {
   assert.equal(buildWindowsHelperBundle(machine).agentConfig.streamEnabled, true);
 });
 
+test("Windows agent config uses an explicit private agent URL for hostname-based SSH targets", () => {
+  const bundle = buildWindowsHelperBundle({
+    ...machine,
+    agentUrl: "http://100.64.0.30:4581",
+    agentToken: "agent-secret",
+  });
+  assert.equal(bundle.agentConfig.host, "100.64.0.30");
+  assert.equal(bundle.agentConfig.port, 4581);
+  assert.equal(bundle.agentConfig.token, "agent-secret");
+
+  const bootstrap = buildWindowsPowerShellBootstrap({
+    ...machine,
+    agentUrl: "http://100.64.0.30:4581",
+    agentToken: "agent-secret",
+  }, undefined, {});
+  assert.match(bootstrap, /'streamEnabled', 'token'/);
+  assert.match(bootstrap, /Repair old hostname-based configs/);
+  assert.match(bootstrap, /-not \$ExistingAgentHostIsLiteral -and \$DefaultAgentHostIsLiteral/);
+});
+
 test("clipboard helper sends bearer auth and reads staged fallback files", () => {
   const bundle = buildWindowsHelperBundle(machine);
   const helper = bundle.files.find((file) => file.name === "wmux-copy.ps1");

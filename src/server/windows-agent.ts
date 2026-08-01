@@ -767,10 +767,11 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   }
 
   private baseAgentPort(): number {
-    if (this.machine.agentPort) return this.machine.agentPort;
-    if (!this.agentUrl) return 3481;
-    const parsed = new URL(this.agentUrl);
-    return parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+    if (this.agentUrl) {
+      const parsed = new URL(this.agentUrl);
+      return parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+    }
+    return this.machine.agentPort ?? 3481;
   }
 
   private urlForAgentPort(port: number): string {

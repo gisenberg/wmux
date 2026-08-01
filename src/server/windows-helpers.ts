@@ -242,11 +242,30 @@ if ((Test-Path -LiteralPath $AgentDefaultsPath) -and -not (Test-Path -LiteralPat
   }
   $DefaultAgentConfig = Get-Content -LiteralPath $AgentDefaultsPath -Raw | ConvertFrom-Json -AsHashtable
   $ChangedAgentConfig = $false
-  foreach ($Key in @('machine', 'host', 'port', 'shell', 'cwd', 'helperDir', 'maxReplayBytes', 'backend', 'heartbeatOwner', 'heartbeatEnabled', 'heartbeatIntervalSeconds', 'streamOwner', 'streamEnabled')) {
-    if (-not $ExistingAgentConfig.ContainsKey($Key)) {
+  foreach ($Key in @('machine', 'host', 'port', 'shell', 'cwd', 'helperDir', 'maxReplayBytes', 'backend', 'heartbeatOwner', 'heartbeatEnabled', 'heartbeatIntervalSeconds', 'streamOwner', 'streamEnabled', 'token')) {
+    if (-not $ExistingAgentConfig.ContainsKey($Key) -and $DefaultAgentConfig.ContainsKey($Key)) {
       $ExistingAgentConfig[$Key] = $DefaultAgentConfig[$Key]
       $ChangedAgentConfig = $true
     }
+  }
+  if (
+    $DefaultAgentConfig.ContainsKey('token') -and
+    [string]::IsNullOrWhiteSpace([string]$ExistingAgentConfig['token'])
+  ) {
+    $ExistingAgentConfig['token'] = $DefaultAgentConfig['token']
+    $ChangedAgentConfig = $true
+  }
+  $ExistingAgentHost = [string]$ExistingAgentConfig['host']
+  $DefaultAgentHost = [string]$DefaultAgentConfig['host']
+  $ExistingAgentHostIsLiteral = $ExistingAgentHost -in @('localhost', '::1')
+  $DefaultAgentHostIsLiteral = $DefaultAgentHost -in @('localhost', '::1')
+  try { [void][System.Net.IPAddress]::Parse($ExistingAgentHost); $ExistingAgentHostIsLiteral = $true } catch {}
+  try { [void][System.Net.IPAddress]::Parse($DefaultAgentHost); $DefaultAgentHostIsLiteral = $true } catch {}
+  if (-not $ExistingAgentHostIsLiteral -and $DefaultAgentHostIsLiteral) {
+    # Repair old hostname-based configs only when the newly staged defaults
+    # provide the explicit IP required by the agent's private bind guard.
+    $ExistingAgentConfig['host'] = $DefaultAgentHost
+    $ChangedAgentConfig = $true
   }
   if ($ChangedAgentConfig) {
     [System.IO.File]::WriteAllText($AgentConfigPath, (($ExistingAgentConfig | ConvertTo-Json -Depth 8) + [Environment]::NewLine), $Utf8NoBom)
@@ -477,24 +496,29 @@ const windowsStreamConfig = (machine: MachineConfig, bindHost: string): Record<s
   };
 };
 
-const windowsAgentConfig = (machine: MachineConfig): Record<string, unknown> => ({
-  machine: machine.id,
-  host: machine.host ?? "127.0.0.1",
-  port: machine.agentPort ?? 3481,
-  shell: machine.shell ?? "pwsh",
-  cwd: machine.cwd ?? "",
-  helperDir: "%LOCALAPPDATA%\\wmux\\bin",
-  maxReplayBytes: 2 * 1024 * 1024,
-  backend: "auto",
-  heartbeatOwner: true,
-  heartbeatEnabled: true,
-  heartbeatIntervalSeconds: 30,
-  streamOwner: true,
-  streamEnabled: true,
-  // When set, the agent requires this bearer token on every request, closing
-  // the unauthenticated-RCE exposure to other hosts on the tailnet.
-  ...(machine.agentToken ? { token: machine.agentToken } : {}),
-});
+const windowsAgentConfig = (machine: MachineConfig): Record<string, unknown> => {
+  const explicitAgentUrl = machine.agentUrl ? new URL(machine.agentUrl) : undefined;
+  const explicitAgentHost = explicitAgentUrl?.hostname.replace(/^\[|\]$/g, "");
+  const explicitAgentPort = explicitAgentUrl?.port ? Number(explicitAgentUrl.port) : undefined;
+  return {
+    machine: machine.id,
+    host: explicitAgentHost || machine.host || "127.0.0.1",
+    port: explicitAgentPort ?? machine.agentPort ?? 3481,
+    shell: machine.shell ?? "pwsh",
+    cwd: machine.cwd ?? "",
+    helperDir: "%LOCALAPPDATA%\\wmux\\bin",
+    maxReplayBytes: 2 * 1024 * 1024,
+    backend: "auto",
+    heartbeatOwner: true,
+    heartbeatEnabled: true,
+    heartbeatIntervalSeconds: 30,
+    streamOwner: true,
+    streamEnabled: true,
+    // When set, the agent requires this bearer token on every request, closing
+    // the unauthenticated-RCE exposure to other hosts on the tailnet.
+    ...(machine.agentToken ? { token: machine.agentToken } : {}),
+  };
+};
 
 // Canonical OSC 7 cwd-reporting prompt snippet. scripts/wmux-windows-agent
 // embeds a byte-identical copy (it must run standalone on the Windows host);

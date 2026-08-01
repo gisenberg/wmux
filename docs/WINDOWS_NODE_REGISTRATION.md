@@ -177,9 +177,31 @@ Update `wmux.config.json` or `~/.wmux/config.json`:
   "host": "100.64.0.30",
   "user": "operator",
   "port": 22,
+  "agentPort": 3481,
+  "agentToken": "replace-with-a-long-random-token",
   "loadPowerShellProfile": true
 }
 ```
+
+Generate the agent token on the wmux server with `openssl rand -hex 32`. Add
+the port and token before opening the first Windows pane so bootstrap stages a
+protected agent config, but leave `sessionBackend` unset until the agent and
+firewall have been validated. Never commit this runtime-local token.
+
+The Windows agent binds an IP literal by design. If SSH uses a DNS name, keep
+that name in `host` and add an explicit private endpoint for the agent:
+
+```json
+{
+  "host": "windows-box.lan",
+  "agentUrl": "http://100.64.0.30:3481",
+  "agentPort": 3481
+}
+```
+
+`agentPort` and the port in `agentUrl` must match. wmux rejects a public or
+hostname-based `agentUrl` before startup instead of staging an agent task that
+cannot pass its private-bind check.
 
 Profile loading is disabled when the field is omitted and applies to both
 plain SSH and `sessionBackend: "agent"` panes. wmux preserves a profile-defined
@@ -302,6 +324,26 @@ Open a fresh wmux pane on the Windows node. The pane bootstrap fetches the helpe
 %LOCALAPPDATA%\wmux\bin
 ```
 
+Bootstrap also creates `~\.wmux\windows-agent.json`. It fills a missing agent
+token from the server-only machine configuration and repairs an older
+hostname-based bind value when the newly staged `agentUrl` supplies an explicit
+IP. It does not overwrite an existing token, private bind IP, or backend choice.
+Inspect the non-secret fields before installation:
+
+```powershell
+$AgentConfig = Get-Content "$HOME\.wmux\windows-agent.json" -Raw | ConvertFrom-Json
+[pscustomobject]@{
+  machine = $AgentConfig.machine
+  host = $AgentConfig.host
+  port = $AgentConfig.port
+  backend = $AgentConfig.backend
+  tokenPresent = [bool]$AgentConfig.token
+}
+```
+
+`host` must be the Windows node's own private/internal IP, not its DNS name, and
+`tokenPresent` must be `True`.
+
 Then run:
 
 ```powershell
@@ -322,6 +364,9 @@ wmux-windows-setup install-agent --logon-type Password
 ```
 
 The prompt never accepts a password from an argument or environment variable.
+Enter the account password, not a Windows Hello PIN; an interactive SSH
+PowerShell prompt is sufficient and no desktop login is required. The task uses
+the hidden PowerShell launcher, so it does not create a visible terminal window.
 The password crosses the Windows Task Scheduler registration API in memory and
 is retained only by Task Scheduler. wmux pre-registers the base task, the eight
 adjacent rollout task slots, and the update watcher during that prompt; later
@@ -348,6 +393,7 @@ Notes:
   password in wmux-owned files.
 - `install-stream` remains a compatibility alias for `install-agent`, and `stream-status` reports the native agent.
 - `configure-agent-firewall` must run from an elevated PowerShell session. It allows the configured base `agentPort` and eight adjacent rollout ports only from the exact Tailscale/RFC1918/IPv6 ULA wmux server addresses passed on the command line. For the default base port, the bounded range is `3481-3489`. `install-agent` warns when this managed rule is absent or stale.
+- While an SSH pane is connected, `Get-NetTCPConnection -LocalPort 22 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique` shows candidate source addresses for the exact wmux-server firewall argument. Confirm the address on the server before installing the rule.
 - `agent-firewall-status` prints the expected range and current managed-rule state as JSON. If you manage Windows Firewall separately, create an equivalent exact-source rule for the same nine-port range; opening only the base port prevents safe side-by-side updates.
 - The Windows agent task has user-logon and once-per-minute triggers, starts when available, restarts after failure, has no fixed execution-time cutoff, and launches through a hidden PowerShell wrapper instead of a visible `cmd.exe` window. `S4U` and `Password` modes can therefore start without a UI login.
 
@@ -455,9 +501,14 @@ To make wmux use the agent for new panes, opt in explicitly:
   "user": "operator",
   "port": 22,
   "sessionBackend": "agent",
-  "agentPort": 3481
+  "agentPort": 3481,
+  "agentToken": "replace-with-the-existing-agent-token"
 }
 ```
+
+If `host` is a DNS name, retain the matching private-IP `agentUrl` added in
+step 4. Restart `wmux.service` after setting `sessionBackend`; existing panes
+keep their original backend, while newly created panes use the agent.
 
 Keep the legacy `powershell-ssh` path available as a fallback while the ConPTY agent is still being validated.
 
