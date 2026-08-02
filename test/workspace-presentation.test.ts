@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { workspacePresentationDescriptor, workspacePresentationMachineId } from "../src/client/src/workspace-presentation.ts";
+import {
+  workspacePresentationDescriptor,
+  workspacePresentationMachineId,
+  workspacePresentationTarget,
+} from "../src/client/src/workspace-presentation.ts";
 import type { Workspace } from "../src/client/src/types.ts";
 
 const workspace = (overrides: Partial<Workspace> = {}): Workspace => ({
@@ -36,6 +40,53 @@ test("workspace presentation falls back through missing active IDs to affinity",
   assert.equal(workspacePresentationMachineId(workspace({ tabs: [{
     ...workspace().tabs[0], activePaneId: "missing", panes: [], layout: { type: "pane", paneId: "missing" },
   }] })), "origin-host");
+});
+
+test("agent presentation keeps an inactive agent pane on its own host", () => {
+  const agentTab = {
+    ...workspace().tabs[0],
+    id: "tab_agent",
+    activePaneId: "pane_agent",
+    layout: { type: "pane" as const, paneId: "pane_agent" },
+    panes: [{
+      ...workspace().tabs[0].panes[0],
+      id: "pane_agent",
+      machineId: "agent-host",
+    }],
+  };
+  const supportTab = {
+    ...workspace().tabs[0],
+    id: "tab_support",
+    activePaneId: "pane_support",
+    layout: { type: "pane" as const, paneId: "pane_support" },
+    panes: [{
+      ...workspace().tabs[0].panes[0],
+      id: "pane_support",
+      machineId: "support-host",
+    }],
+  };
+  const mixedHost = workspace({
+    activeTabId: supportTab.id,
+    tabs: [agentTab, supportTab],
+  });
+
+  const target = workspacePresentationTarget(mixedHost, {
+    tabId: agentTab.id,
+    paneId: agentTab.activePaneId,
+  });
+  assert.equal(target.machineId, "agent-host");
+  assert.equal(target.tab?.id, agentTab.id);
+  assert.equal(target.pane?.id, agentTab.activePaneId);
+});
+
+test("agent presentation ignores stale pane references", () => {
+  const target = workspacePresentationTarget(workspace(), {
+    tabId: "missing",
+    paneId: "missing",
+  });
+  assert.equal(target.machineId, "active-host");
+  assert.equal(target.tab?.id, "tab_1");
+  assert.equal(target.pane?.id, "pane_1");
 });
 
 test("workspace presentation replaces only default or legacy affinity descriptors", () => {
