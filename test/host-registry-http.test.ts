@@ -418,7 +418,7 @@ test("periodic health and stream lease mutations force cached status refreshes",
   }
 });
 
-test("a cached bootstrap waits for an in-flight forced health refresh", async () => {
+test("a cached bootstrap does not wait for an in-flight forced health refresh", async () => {
   let streamCalls = 0;
   let markSecondStarted!: () => void;
   let releaseSecond!: () => void;
@@ -444,17 +444,11 @@ test("a cached bootstrap waits for an in-flight forced health refresh", async ()
 
     const forced = fetch(`${app.baseUrl}/api/streams`, { headers: bearer("wmux-token") });
     await secondStarted;
-    let concurrentSettled = false;
-    const concurrent = fetch(`${app.baseUrl}/api/bootstrap`, { headers: bearer("wmux-token") }).then((response) => {
-      concurrentSettled = true;
-      return response;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(concurrentSettled, false);
+    const concurrent = fetch(`${app.baseUrl}/api/bootstrap`, { headers: bearer("wmux-token") });
+    assert.equal((await withTimeout(concurrent, "cached bootstrap", 1000)).status, 200);
 
     releaseSecond();
     assert.equal((await forced).status, 200);
-    assert.equal((await concurrent).status, 200);
   } finally {
     releaseSecond?.();
     await app.close();
