@@ -152,6 +152,123 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
   }
 });
 
+test("Agents rail keeps an inactive agent tab on its reporting host", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "one desktop host-grouping run covers shared presentation logic");
+  let workspaceId: string | undefined;
+
+  try {
+    const workspaceResponse = await request.post("/api/workspaces", {
+      data: { machineId: "local" },
+    });
+    expect(workspaceResponse.ok()).toBeTruthy();
+    const workspace = (await workspaceResponse.json() as {
+      workspace: E2eWorkspace & {
+        tabs: Array<{ id: string; activePaneId: string; panes: Array<{ id: string }> }>;
+      };
+    }).workspace;
+    workspaceId = workspace.id;
+    const agentTab = workspace.tabs[0]!;
+
+    const agentEvent = await request.post("/api/agent-events", {
+      data: {
+        workspaceId: workspace.id,
+        tabId: agentTab.id,
+        paneId: agentTab.activePaneId,
+        agent: "codex",
+        status: "completed",
+        title: "Agent remains discoverable",
+        summary: "Waiting for another turn",
+      },
+    });
+    expect(agentEvent.ok()).toBeTruthy();
+
+    const supportMachineId = "agent-support-fixture";
+    const supportTabId = "tab_agent_support_fixture";
+    const supportPaneId = "pane_agent_support_fixture";
+    await page.routeWebSocket("**/ws/events", (webSocket) => webSocket.close());
+    await page.route("**/api/bootstrap", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json() as {
+        machines: Array<Record<string, unknown> & { id: string; name: string }>;
+        workspaces: Array<E2eWorkspace & {
+          machineId: string;
+          tabs: Array<{
+            id: string;
+            title: string;
+            activePaneId: string;
+            layout: { type: "pane"; paneId: string };
+            panes: Array<Record<string, unknown> & { id: string; machineId: string }>;
+            createdAt: string;
+          }>;
+        }>;
+      };
+      const fixtureWorkspace = payload.workspaces.find(
+        (candidate) => candidate.id === workspace.id,
+      );
+      const fixtureAgentTab = fixtureWorkspace?.tabs.find(
+        (candidate) => candidate.id === agentTab.id,
+      );
+      const fixtureAgentPane = fixtureAgentTab?.panes.find(
+        (candidate) => candidate.id === agentTab.activePaneId,
+      );
+      const localMachine = payload.machines.find(
+        (candidate) => candidate.id === "local",
+      );
+      if (!fixtureWorkspace || !fixtureAgentTab || !fixtureAgentPane || !localMachine) {
+        await route.fulfill({ response });
+        return;
+      }
+      const supportTab = {
+        ...fixtureAgentTab,
+        id: supportTabId,
+        title: "Support",
+        activePaneId: supportPaneId,
+        layout: { type: "pane" as const, paneId: supportPaneId },
+        panes: [{
+          ...fixtureAgentPane,
+          id: supportPaneId,
+          machineId: supportMachineId,
+          title: "Support",
+        }],
+      };
+      await route.fulfill({
+        response,
+        json: {
+          ...payload,
+          machines: [
+            ...payload.machines,
+            { ...localMachine, id: supportMachineId, name: "Agent Support" },
+          ],
+          workspaces: payload.workspaces.map((candidate) =>
+            candidate.id === workspace.id
+              ? {
+                  ...candidate,
+                  activeTabId: supportTabId,
+                  tabs: [...candidate.tabs, supportTab],
+                }
+              : candidate),
+        },
+      });
+    });
+
+    await page.goto(`/workspaces/${workspace.id}/tabs/${supportTabId}`);
+    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    const agentItem = page.locator(`a[role="treeitem"][href^="/workspaces/${workspace.id}/"]`);
+    await expect(agentItem).toHaveAttribute(
+      "href",
+      `/workspaces/${workspace.id}/tabs/${agentTab.id}`,
+    );
+    await expect(agentItem).toHaveAttribute("data-agent-machine", "local");
+
+    await agentItem.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/workspaces/${workspace.id}/tabs/${agentTab.id}$`));
+  } finally {
+    if (workspaceId) {
+      await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);
+    }
+  }
+});
+
 test("workspace close grace hides immediately, restores on undo, and closes after its deadline", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "one desktop deadline run covers the server-owned timer");
   test.setTimeout(45_000);

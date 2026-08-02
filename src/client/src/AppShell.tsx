@@ -53,7 +53,11 @@ import { writeBrowserClipboard } from "./clipboard";
 import { summarizeWorkspaceVersion } from "./workspace-version";
 import { useMobileViewportState } from "./mobile-viewport";
 import { loadMachineTargetId, persistMachineTargetId, resolveMachineTargetId } from "./machine-target";
-import { workspacePresentationDescriptor, workspacePresentationMachineId } from "./workspace-presentation";
+import {
+  workspacePresentationDescriptor,
+  workspacePresentationMachineId,
+  workspacePresentationTarget,
+} from "./workspace-presentation";
 import {
   contextMobileSurfaceMode,
   legacyMobileSurfaceModeStorageKey,
@@ -455,17 +459,18 @@ export function AppShell() {
     () =>
       openTuiWorkspaceTree.rows.flatMap((treeRow) => {
         const workspace = treeRow.workspace;
-        const presentationMachineId = workspacePresentationMachineId(workspace);
+        const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
+        const presentation = workspacePresentationTarget(workspace, latestAgent);
+        const presentationMachineId = presentation.machineId;
         const machine = machineFor(displayMachines, presentationMachineId);
         const sourceMachine = machineFor(machines, presentationMachineId);
         const affinityMachine = machineFor(machines, workspace.machineId);
         const latestUnread = latestUnreadByWorkspaceId.get(workspace.id);
-        const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
         const latestAgentName = latestAgent ? workspaceAgentName(latestAgent) : undefined;
         const latestAgentStatusLabel = latestAgent ? workspaceAgentStatusLabel(latestAgent) : undefined;
-        const tab = workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace.tabs[0];
+        const tab = presentation.tab;
         if (!tab) return [];
-        const pane = tab.panes.find((candidate) => candidate.id === tab.activePaneId) ?? tab.panes[0];
+        const pane = presentation.pane;
         const cwd = normalizeUserPath(pane?.cwd);
         const descriptor = dedupeAgentDescriptor(
           latestUnread?.body ||
@@ -531,7 +536,10 @@ export function AppShell() {
     () =>
       displayMachines.map((machine) => {
         const machineWorkspaces = (state?.workspaces ?? []).filter(
-          (workspace) => workspacePresentationMachineId(workspace) === machine.id,
+          (workspace) => workspacePresentationTarget(
+            workspace,
+            latestAgentByWorkspaceId.get(workspace.id),
+          ).machineId === machine.id,
         );
         const activeAgentCount = machineWorkspaces.filter((workspace) => {
           const agent = latestAgentByWorkspaceId.get(workspace.id);
@@ -1106,7 +1114,10 @@ export function AppShell() {
     "Closing agent group...",
     async (machineId: string) => {
       const workspaceIds = (store.get()?.workspaces ?? [])
-        .filter((workspace) => workspacePresentationMachineId(workspace) === machineId)
+        .filter((workspace) => workspacePresentationTarget(
+          workspace,
+          latestAgentByWorkspaceId.get(workspace.id),
+        ).machineId === machineId)
         .map((workspace) => workspace.id);
       let latestState: BootstrapPayload | undefined;
       try {
