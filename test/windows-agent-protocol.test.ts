@@ -252,7 +252,7 @@ print(json.dumps({
   assert.equal(payload.rollout.running, false);
 });
 
-test("Windows agent answers terminal queries locally and suppresses delayed browser duplicates", () => {
+test("Windows agent filters delayed browser duplicates from bundled terminal replies", () => {
   const source = String.raw`
 import json
 import runpy
@@ -291,6 +291,13 @@ backend.write_terminal_response(b"\x1b[?62;22c")
 backend.write_terminal_response(b"\x1b[?62;22c")
 backend.write_terminal_response(b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\")
 backend.write_terminal_response(b"\x1b]11;rgb:0000/0000/0000\x1b\\")
+backend.write_terminal_response(
+    b"\x1b[?62;22c\x1b[>1;0;0c\x1bP>|libghostty 0.1.0-dev\x1b\\"
+)
+backend.write_terminal_response(
+    b"\x1b]10;rgb:c0c0/caca/f5f5\x1b\\\x1b[24;80R"
+)
+backend.write_terminal_response(b"\x1b[?62;22cuser-input")
 __import__("time").sleep(0.01)
 backend.write_terminal_response(b"\x1b[?62;22c")
 backend.write_terminal_response(b"user-input")
@@ -306,7 +313,15 @@ print(json.dumps({
   const background = "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\";
   assert.deepEqual(JSON.parse(result.stdout), {
     replies: ["\x1b[?62;22c", "\x1b[0n", "\x1b[?62;22c", foreground, background],
-    writes: ["\x1b[?62;22c", foreground, background, "user-input"],
+    writes: [
+      "\x1b[?62;22c",
+      foreground,
+      background,
+      "\x1b[>1;0;0c\x1bP>|libghostty 0.1.0-dev\x1b\\",
+      "\x1b[24;80R",
+      "\x1b[?62;22cuser-input",
+      "user-input",
+    ],
   });
 });
 
