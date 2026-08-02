@@ -26,6 +26,7 @@ export function CommandPalette({
   autoFocus?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const liveQueryRef = useRef(query);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -94,10 +95,8 @@ export function CommandPalette({
           }
           if (event.key === "Enter") {
             event.preventDefault();
-            const inputQuery = inputRef.current?.value ?? query;
-            const submittedCommands = inputQuery === query
-              ? filteredCommands
-              : filterCommands(commands, inputQuery).slice(0, 40);
+            const inputQuery = liveQueryRef.current || inputRef.current?.value || "";
+            const submittedCommands = filterCommands(commands, inputQuery).slice(0, 40);
             const submittedIndex = inputQuery === query ? selectedIndex : 0;
             const selectedCommand = submittedCommands[submittedIndex];
             void runCommand(
@@ -120,7 +119,13 @@ export function CommandPalette({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            onChange={(event) => onQueryChange(event.target.value)}
+            onInputCapture={(event) => {
+              liveQueryRef.current = event.currentTarget.value;
+            }}
+            onChange={(event) => {
+              liveQueryRef.current = event.target.value;
+              onQueryChange(event.target.value);
+            }}
           />
           <button
             type="button"

@@ -44,6 +44,7 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
   const theme = useOpenTuiTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const liveQueryRef = useRef(query);
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -119,10 +120,8 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const inputQuery = inputRef.current?.value ?? query;
-      const submittedCommands = inputQuery === query
-        ? filteredCommands
-        : filterCommands(commands, inputQuery).slice(0, 40);
+      const inputQuery = liveQueryRef.current || inputRef.current?.value || "";
+      const submittedCommands = filterCommands(commands, inputQuery).slice(0, 40);
       const submittedIndex = inputQuery === query ? selectedIndex : 0;
       const selectedCommand = submittedCommands[submittedIndex];
       void runCommand(
@@ -175,7 +174,13 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
             ref={inputRef}
             value={query}
             placeholder="Search commands, workspaces, tabs, hosts"
-            onChange={(event) => onQueryChange(event.target.value)}
+            onInputCapture={(event) => {
+              liveQueryRef.current = event.currentTarget.value;
+            }}
+            onChange={(event) => {
+              liveQueryRef.current = event.target.value;
+              onQueryChange(event.target.value);
+            }}
           />
         </div>
         <canvas ref={canvasRef} className="open-tui-command-canvas" onClick={onCanvasClick} onPointerMove={onPointerMove} />

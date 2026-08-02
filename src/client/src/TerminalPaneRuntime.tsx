@@ -132,6 +132,9 @@ export interface TerminalPaneProps {
   onDismissMedia: (mediaId: string) => void;
 }
 
+const modalOwnsFocus = (): boolean =>
+  document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+
 // Memoized: with structural sharing in refresh (reconcile.ts) and the stable
 // callbacks from LayoutPane, unrelated state events skip this subtree.
 export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
@@ -1171,7 +1174,9 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         focusSignalRef.current > appliedFocusSignalRef.current
       ) {
         appliedFocusSignalRef.current = focusSignalRef.current;
-        requestAnimationFrame(() => term.focus());
+        requestAnimationFrame(() => {
+          if (!modalOwnsFocus()) term.focus();
+        });
       }
       await waitForVisibleBox(containerRef.current);
       fitAddon = createTerminalFitter(term, containerRef.current, (dimensions) => {
@@ -1672,7 +1677,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       fitAddonRef.current?.setForeground(foreground);
       if (active && focusSignal > appliedFocusSignalRef.current) {
         appliedFocusSignalRef.current = focusSignal;
-        term.focus();
+        if (!modalOwnsFocus()) term.focus();
       }
       if (active) fitAddonRef.current?.fit();
       const dimensions = fitAddonRef.current?.proposedDimensions() ?? { cols: term.cols, rows: term.rows };
