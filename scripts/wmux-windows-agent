@@ -1121,6 +1121,11 @@ def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile
     escaped_cwd = cwd.replace("'", "''")
     preserve_prompt_literal = "$true" if preserve_prompt else "$false"
     optional_auth_argument = " --optional-auth" if optional_agent_profile_auth else ""
+    cwd_bootstrap = (
+        f"\nSet-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue"
+        if cwd
+        else ""
+    )
     return (
         "\n$WmuxOriginalErrorActionPreference = $ErrorActionPreference\n$ErrorActionPreference = 'Continue'\n"
         + WINDOWS_CONSOLE_THEME_PS1
@@ -1129,10 +1134,7 @@ def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile
 $AgentProfileHelper = if ($env:WMUX_HELPER_DIR) {{ Join-Path $env:WMUX_HELPER_DIR 'wmux-agent-profile.cmd' }} else {{ $null }}
 if ($AgentProfileHelper -and (Test-Path -LiteralPath $AgentProfileHelper -PathType Leaf)) {{
   & $AgentProfileHelper apply --quiet{optional_auth_argument}
-}}
-if ('{escaped_cwd}') {{
-  Set-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue
-}}
+}}{cwd_bootstrap}
 __wmuxInstallPrompt {preserve_prompt_literal}
 __wmuxEmitCwd
 $ErrorActionPreference = $WmuxOriginalErrorActionPreference
@@ -1184,9 +1186,10 @@ def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -
     shell = str(payload.get("shell") or config_string(config, "shell", default_shell))
     lower_shell = os.path.basename(shell).lower()
     if lower_shell in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+        requested_cwd = str(payload.get("cwd") or config_string(config, "cwd") or "")
         return powershell_command(
             shell,
-            cwd,
+            requested_cwd,
             payload.get("loadPowerShellProfile") is True,
             payload.get("agentProfileOptionalAuth") is True,
         )
