@@ -42,6 +42,8 @@ export interface TerminalFitter {
   dispose: () => void;
 }
 
+export const TERMINAL_RESIZE_SETTLE_MS = 140;
+
 export const safeCols = (cols: number): number => (Number.isFinite(cols) && cols >= 2 ? Math.floor(cols) : 80);
 export const safeRows = (rows: number): number => (Number.isFinite(rows) && rows >= 1 ? Math.floor(rows) : 24);
 
@@ -64,6 +66,7 @@ export const createTerminalFitter = (
   onProposedDimensions?: (dimensions: { cols: number; rows: number }) => void,
 ): TerminalFitter => {
   let frame: number | undefined;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
   let proposed: { cols: number; rows: number } | undefined;
   let authoritative: { cols: number; rows: number } | undefined;
   let resizeOwner = true;
@@ -96,10 +99,14 @@ export const createTerminalFitter = (
   };
   const scheduleFit = () => {
     if (frame !== undefined) cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => {
-      frame = undefined;
-      fit();
-    });
+    if (settleTimer !== undefined) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = undefined;
+      frame = requestAnimationFrame(() => {
+        frame = undefined;
+        fit();
+      });
+    }, TERMINAL_RESIZE_SETTLE_MS);
   };
   const observer = new ResizeObserver(scheduleFit);
   observer.observe(element);
@@ -118,6 +125,7 @@ export const createTerminalFitter = (
     },
     dispose: () => {
       observer.disconnect();
+      if (settleTimer !== undefined) clearTimeout(settleTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
     },
   };

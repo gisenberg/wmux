@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Terminal } from "ghostty-web";
-import { createTerminalFitter } from "../src/client/src/terminal-pane-runtime.js";
+import {
+  createTerminalFitter,
+  TERMINAL_RESIZE_SETTLE_MS,
+} from "../src/client/src/terminal-pane-runtime.js";
 
 test("passive terminal fit proposals do not replace the authoritative grid", () => {
   const globals = globalThis as typeof globalThis & {
@@ -69,5 +72,77 @@ test("passive terminal fit proposals do not replace the authoritative grid", () 
     else globals.window = previousWindow;
     if (previousResizeObserver === undefined) delete globals.ResizeObserver;
     else globals.ResizeObserver = previousResizeObserver;
+  }
+});
+
+test("terminal resize observations apply only the settled geometry", async () => {
+  const globals = globalThis as typeof globalThis & {
+    ResizeObserver?: typeof ResizeObserver;
+    window?: Window & typeof globalThis;
+  };
+  const previousWindow = globals.window;
+  const previousResizeObserver = globals.ResizeObserver;
+  const previousRequestAnimationFrame = globals.requestAnimationFrame;
+  const previousCancelAnimationFrame = globals.cancelAnimationFrame;
+  const element = { clientWidth: 800, clientHeight: 480 } as HTMLElement;
+  const resizes: Array<[number, number]> = [];
+  const proposals: Array<{ cols: number; rows: number }> = [];
+  const terminal = {
+    cols: 80,
+    rows: 24,
+    renderer: { getMetrics: () => ({ width: 10, height: 20 }) },
+    resize: (cols: number, rows: number) => {
+      terminal.cols = cols;
+      terminal.rows = rows;
+      resizes.push([cols, rows]);
+    },
+  } as unknown as Terminal;
+  let observeResize: (() => void) | undefined;
+
+  class StubResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      observeResize = () => callback([], this as unknown as ResizeObserver);
+    }
+    observe(): void {}
+    disconnect(): void {}
+    unobserve(): void {}
+  }
+
+  globals.window = {
+    getComputedStyle: () => ({
+      paddingLeft: "0",
+      paddingRight: "0",
+      paddingTop: "0",
+      paddingBottom: "0",
+    }),
+  } as unknown as Window & typeof globalThis;
+  globals.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
+  globals.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  }) as typeof requestAnimationFrame;
+  globals.cancelAnimationFrame = (() => undefined) as typeof cancelAnimationFrame;
+
+  const fitter = createTerminalFitter(terminal, element, (dimensions) => proposals.push(dimensions));
+  try {
+    fitter.fit();
+    Object.defineProperty(element, "clientWidth", { configurable: true, value: 900 });
+    observeResize?.();
+    Object.defineProperty(element, "clientWidth", { configurable: true, value: 1_000 });
+    observeResize?.();
+
+    assert.deepEqual(resizes, []);
+    assert.deepEqual(proposals, [{ cols: 80, rows: 24 }]);
+    await new Promise((resolve) => setTimeout(resolve, TERMINAL_RESIZE_SETTLE_MS + 25));
+    assert.deepEqual(resizes, [[100, 24]]);
+    assert.deepEqual(proposals.at(-1), { cols: 100, rows: 24 });
+  } finally {
+    fitter.dispose();
+    if (previousWindow === undefined) delete globals.window;
+    else globals.window = previousWindow;
+    if (previousResizeObserver === undefined) delete globals.ResizeObserver;
+    else globals.ResizeObserver = previousResizeObserver;
+    globals.requestAnimationFrame = previousRequestAnimationFrame;
+    globals.cancelAnimationFrame = previousCancelAnimationFrame;
   }
 });

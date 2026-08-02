@@ -754,7 +754,11 @@ test("active resize ownership keeps every viewer on one authoritative grid", { s
       { cols: 80, rows: 24, resizeOwner: false },
     );
     fake(second).message({ type: "activate", cols: 100, rows: 30, foreground: true });
-    assert.deepEqual(resizes, []);
+    assert.deepEqual(resizes, [[100, 30]]);
+    assert.deepEqual(
+      await waitForMessage(second, (message) => message.type === "size" && message.cols === 100),
+      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: true },
+    );
 
     fake(second).message({ type: "input", data: "" });
     assert.deepEqual(resizes, [[100, 30]]);
@@ -767,7 +771,7 @@ test("active resize ownership keeps every viewer on one authoritative grid", { s
       { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: true },
     );
     fake(first).message({ type: "activate", cols: 80, rows: 24, foreground: true });
-    assert.deepEqual(resizes, [[100, 30]]);
+    assert.deepEqual(resizes, [[100, 30], [80, 24]]);
 
     fake(first).message({ type: "input", data: "" });
     assert.deepEqual(resizes, [[100, 30], [80, 24]]);
@@ -775,7 +779,38 @@ test("active resize ownership keeps every viewer on one authoritative grid", { s
   });
 });
 
-test("an inactive owner keeps the canonical size until another foreground viewer activates", { skip: process.platform === "win32" }, async () => {
+test("an unfocused sole resize owner still applies browser-window geometry", { skip: process.platform === "win32" }, async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    const viewer = socket();
+    manager.attach(pane.id, viewer, 80, 24);
+    await waitForMessage(viewer, (message) => message.type === "ready");
+
+    const internals = manager as unknown as {
+      sessions: Map<string, { resize: (cols: number, rows: number) => void }>;
+    };
+    const session = internals.sessions.get(pane.id);
+    assert.ok(session);
+    const originalResize = session.resize.bind(session);
+    const resizes: Array<[number, number]> = [];
+    session.resize = (cols, rows) => {
+      resizes.push([cols, rows]);
+      originalResize(cols, rows);
+    };
+
+    fake(viewer).message({ type: "resize", cols: 120, rows: 36, foreground: false });
+    assert.deepEqual(resizes, [[120, 36]]);
+    assert.deepEqual(
+      await waitForMessage(viewer, (message) => message.type === "size" && message.cols === 120),
+      { type: "size", paneId: pane.id, cols: 120, rows: 36, resizeOwner: true },
+    );
+    manager.disposeAll();
+  });
+});
+
+test("foreground activation transfers resize ownership before terminal input", { skip: process.platform === "win32" }, async () => {
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -801,24 +836,16 @@ test("an inactive owner keeps the canonical size until another foreground viewer
     manager.attach(pane.id, second, 100, 30);
     await waitForMessage(second, (message) => message.type === "ready");
     fake(second).message({ type: "activate", cols: 100, rows: 30, foreground: true });
-    assert.deepEqual(resizes, []);
+    assert.deepEqual(resizes, [[100, 30]]);
 
     fake(first).message({ type: "resize", cols: 90, rows: 27, foreground: false });
     assert.deepEqual(resizes, [[100, 30]]);
-    assert.deepEqual(
-      await waitForMessage(first, (message) => message.type === "size" && message.cols === 100),
-      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: false },
-    );
 
     fake(first).message({ type: "resize", cols: 110, rows: 34, foreground: false });
     assert.deepEqual(resizes, [[100, 30]]);
     fake(second).message({ type: "resize", cols: 100, rows: 30, foreground: false });
     fake(second).close();
     assert.deepEqual(resizes, [[100, 30]]);
-    assert.deepEqual(
-      await waitForMessage(first, (message) => message.type === "size" && message.resizeOwner),
-      { type: "size", paneId: pane.id, cols: 100, rows: 30, resizeOwner: true },
-    );
 
     fake(first).message({ type: "activate", cols: 110, rows: 34, foreground: true });
     assert.deepEqual(resizes, [[100, 30], [110, 34]]);
