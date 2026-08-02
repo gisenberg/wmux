@@ -278,6 +278,10 @@ test("desktop agent group menu closes every workspace on its host", async ({ pag
 
     await page.reload();
     await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    // The shell now mounts as soon as bootstrap completes, so wait for the
+    // asynchronously initialized terminal before asserting keyboard focus on
+    // surrounding chrome.
+    await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     const group = page.getByRole("navigation", { name: "Spaces" })
       .getByRole("button", { name: new RegExp(`^${machineName},`) });
     await group.focus();
