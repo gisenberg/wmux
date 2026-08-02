@@ -140,7 +140,6 @@ export class SessionManager {
   private paneInputEpochs = new Map<string, number>();
   private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
   private durableRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
-  private durableResizeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private durableCwdRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private durableCwdRefreshInFlight = new Set<string>();
   private durableCwdLastReadAt = new Map<string, number>();
@@ -331,9 +330,10 @@ export class SessionManager {
           ...size,
           foreground,
         });
-        if (!foreground) {
-          this.yieldResizeOwnerIfInactive(paneId, socket, session);
-        } else if (this.resizeOwners.get(paneId) === socket) {
+        // A resize report must not transfer ownership merely because browser
+        // chrome temporarily moved focus. Explicit pane activation, input,
+        // and owner disconnect remain the ownership handoff paths.
+        if (this.resizeOwners.get(paneId) === socket) {
           this.applyResizeOwnerSize(paneId, socket, session);
         }
       }
@@ -647,7 +647,6 @@ export class SessionManager {
       this.sessions.delete(pane.id);
       this.resizeOwners.delete(pane.id);
       this.paneSizes.delete(pane.id);
-      this.cancelDurableResizeRefresh(pane.id);
       const context = this.state.findPaneContext(pane.id);
       if (!context) return;
 
@@ -818,8 +817,6 @@ export class SessionManager {
     }
     for (const timer of this.durableRefreshTimers) clearTimeout(timer);
     this.durableRefreshTimers.clear();
-    for (const timer of this.durableResizeRefreshTimers.values()) clearTimeout(timer);
-    this.durableResizeRefreshTimers.clear();
     this.durableCwdRefreshTimers.clear();
     this.durableCwdRefreshInFlight.clear();
     this.durableCwdLastReadAt.clear();
@@ -872,27 +869,6 @@ export class SessionManager {
     }
   }
 
-  private scheduleDurableResizeRefresh(pane: PaneState): void {
-    if (!this.shouldUseDurableClientRefresh(pane)) return;
-    const previous = this.durableResizeRefreshTimers.get(pane.id);
-    if (previous) clearTimeout(previous);
-    const timer = setTimeout(() => {
-      this.durableResizeRefreshTimers.delete(pane.id);
-      const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
-      if (machine && !(machine.source === "registered" && machine.online === false)) {
-        void this.backends.get(pane.id)?.refreshClient(pane.id);
-      }
-    }, 120);
-    timer.unref?.();
-    this.durableResizeRefreshTimers.set(pane.id, timer);
-  }
-
-  private cancelDurableResizeRefresh(paneId: string): void {
-    const timer = this.durableResizeRefreshTimers.get(paneId);
-    if (timer) clearTimeout(timer);
-    this.durableResizeRefreshTimers.delete(paneId);
-  }
-
   private shouldUseDurableClientRefresh(pane: PaneState): boolean {
     const machine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
     if (!machine || (machine.source === "registered" && machine.online === false)) return false;
@@ -909,7 +885,6 @@ export class SessionManager {
     this.sessions.delete(pane.id);
     this.resizeOwners.delete(pane.id);
     this.paneSizes.delete(pane.id);
-    this.cancelDurableResizeRefresh(pane.id);
     const backend = this.backends.get(pane.id);
     if (backend) {
       backend.detach(existing);
@@ -950,28 +925,11 @@ export class SessionManager {
   private activateResizeOwner(paneId: string, socket: WebSocket, session: BackendSession): void {
     const state = this.socketState.get(socket);
     if (!state) return;
-    const owner = this.resizeOwners.get(paneId);
-    const paneSockets = this.sockets.get(paneId);
-    const ownerState = owner ? this.socketState.get(owner) : undefined;
-    if (
-      owner
-      && owner !== socket
-      && paneSockets?.has(owner)
-      && owner.readyState === owner.OPEN
-      && ownerState?.foreground
-    ) return;
+    // `activate` is sent only for the visible pane in the focused browser.
+    // Transfer ownership here so its settled geometry reaches the PTY before
+    // the user's first input. A connected background viewer must not pin the
+    // pane to its stale grid until input promotion happens.
     this.applyResizeOwnerSize(paneId, socket, session);
-  }
-
-  private yieldResizeOwnerIfInactive(paneId: string, socket: WebSocket, session: BackendSession): void {
-    if (this.resizeOwners.get(paneId) !== socket) return;
-    const foregroundSocket = [...(this.sockets.get(paneId) ?? [])].find(
-      (candidate) =>
-        candidate !== socket
-        && candidate.readyState === candidate.OPEN
-        && this.socketState.get(candidate)?.foreground,
-    );
-    if (foregroundSocket) this.applyResizeOwnerSize(paneId, foregroundSocket, session);
   }
 
   private reassignResizeOwner(paneId: string, closedSocket: WebSocket, session: BackendSession): void {
@@ -1009,8 +967,6 @@ export class SessionManager {
     this.paneSizes.set(paneId, { cols: state.cols, rows: state.rows });
     if (sizeChanged && !session.isExited) {
       this.backends.get(paneId)?.resize(session, state.cols, state.rows);
-      const pane = this.state.findPane(paneId);
-      if (pane) this.scheduleDurableResizeRefresh(pane);
     }
     if (previousOwner !== socket || sizeChanged) this.broadcastPaneSize(paneId);
   }
@@ -1046,7 +1002,6 @@ export class SessionManager {
     this.paneInputEpochs.delete(paneId);
     this.resizeOwners.delete(paneId);
     this.paneSizes.delete(paneId);
-    this.cancelDurableResizeRefresh(paneId);
     this.terminalCheckpoints.delete(paneId);
     const fallbackMachineId = machineId ?? session?.pane.machineId ?? this.state.findPane(paneId)?.machineId;
     const machine = resolveDisposalMachine(sessionMachine, this.currentMachines(), fallbackMachineId);

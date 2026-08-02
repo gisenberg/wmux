@@ -981,6 +981,112 @@ test("Windows agent preserves input request order", async () => {
   await once(server, "close");
 });
 
+test("Windows agent coalesces resize bursts and repaints a settled alternate screen once", async () => {
+  const resizes: Array<{ cols: number; rows: number }> = [];
+  const historical = "\x1b[?1049h\x1b[2J\x1b[HREADY";
+  const historyBytes = Buffer.byteLength(historical);
+  let activeResizes = 0;
+  let maxActiveResizes = 0;
+  let remoteCols = 80;
+  let remoteRows = 24;
+  const server = http.createServer(async (request, response) => {
+    const path = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && path === "/sessions/pane_resize_burst") {
+      response.end(JSON.stringify({
+        id: "pane_resize_burst",
+        pid: 123,
+        base: 0,
+        cursor: historyBytes,
+        cols: remoteCols,
+        rows: remoteRows,
+      }));
+      return;
+    }
+    if (request.method === "POST" && path.endsWith("/resize")) {
+      activeResizes += 1;
+      maxActiveResizes = Math.max(maxActiveResizes, activeResizes);
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { cols: number; rows: number };
+      resizes.push(body);
+      if (resizes.length === 1) await new Promise((resolve) => setTimeout(resolve, 80));
+      remoteCols = body.cols;
+      remoteRows = body.rows;
+      activeResizes -= 1;
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (request.method === "GET" && path.includes("/output")) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const cursor = Number(new URL(path, "http://agent.invalid").searchParams.get("cursor") ?? 0);
+      response.end(JSON.stringify({
+        base: 0,
+        startCursor: cursor,
+        cursor: historyBytes,
+        cols: remoteCols,
+        rows: remoteRows,
+        resizes: [],
+        dataBase64: cursor === 0 ? Buffer.from(historical).toString("base64") : "",
+        exited: false,
+      }));
+      return;
+    }
+    response.writeHead(404);
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_resize_burst",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${address.port}`,
+    },
+    80,
+    24,
+  );
+  const output: string[] = [];
+  session.on("output", (data) => output.push(data));
+  try {
+    await session.attachReady;
+    session.resize(85, 25);
+    session.resize(87, 26);
+    session.resize(90, 28);
+    await waitUntil(() => resizes.length === 1);
+    session.resize(100, 31);
+    session.resize(110, 35);
+
+    await waitUntil(() => remoteCols === 110 && remoteRows === 35);
+    await waitUntil(() => output.length === 1, 2000);
+    assert.deepEqual(resizes, [
+      { cols: 90, rows: 28 },
+      { cols: 110, rows: 35 },
+    ]);
+    assert.equal(maxActiveResizes, 1);
+    assert.equal(output.length, 1);
+    assert.match(output[0] ?? "", /^\x1bc\x1b\[\?1049h/);
+    const checkpoint = (session as unknown as { checkpoint: TerminalCheckpoint }).checkpoint;
+    assert.deepEqual(checkpoint.dimensions, { cols: 110, rows: 35 });
+  } finally {
+    session.detach();
+    server.close();
+    await once(server, "close");
+  }
+});
+
 test("Windows agent hydrates a 24-row replay before attaching it to a taller split", async () => {
   const historical = "\x1b[2J\x1b[Hhistory\x1b[24;1HPS> ";
   const historyBytes = Buffer.byteLength(historical);
