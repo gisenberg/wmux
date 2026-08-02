@@ -1079,6 +1079,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       if (cancelled || !containerRef.current) return;
       const term = new Terminal({
         cursorBlink: true,
+        focusOnOpen: false,
         fontSize: terminalFontSize,
         fontFamily: terminalFontFamilyStack(terminalFontFamily),
         scrollback: terminalScrollbackRows,
