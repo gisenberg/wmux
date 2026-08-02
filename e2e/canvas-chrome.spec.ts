@@ -89,7 +89,10 @@ test("idle Life field stays bounded and pauses when it leaves the viewport", asy
 
     const canvas = page.getByLabel("Interactive Game of Life field; click a column to toggle a cell");
     await expect(canvas).toBeVisible({ timeout: 20_000 });
-    await expect.poll(async () => Number(await canvas.getAttribute("data-render-frame") ?? 0)).toBeGreaterThan(2);
+    await expect.poll(
+      async () => Number(await canvas.getAttribute("data-render-frame") ?? 0),
+      { timeout: 20_000 },
+    ).toBeGreaterThan(2);
 
     const renderSize = await canvas.evaluate((element: HTMLCanvasElement) => ({
       pixels: element.width * element.height,

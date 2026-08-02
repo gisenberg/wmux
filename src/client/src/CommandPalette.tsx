@@ -26,11 +26,11 @@ export function CommandPalette({
   autoFocus?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const liveQueryRef = useRef(query);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
-  const selectableCommands = filteredCommands.filter((command) => !command.disabled);
 
   useEffect(() => {
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -95,7 +95,15 @@ export function CommandPalette({
           }
           if (event.key === "Enter") {
             event.preventDefault();
-            void runCommand(filteredCommands[selectedIndex] ?? selectableCommands[0]);
+            const inputQuery = liveQueryRef.current || inputRef.current?.value || "";
+            const submittedCommands = filterCommands(commands, inputQuery).slice(0, 40);
+            const submittedIndex = inputQuery === query ? selectedIndex : 0;
+            const selectedCommand = submittedCommands[submittedIndex];
+            void runCommand(
+              selectedCommand && !selectedCommand.disabled
+                ? selectedCommand
+                : submittedCommands.find((command) => !command.disabled),
+            );
           }
         }}
       >
@@ -111,7 +119,13 @@ export function CommandPalette({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            onChange={(event) => onQueryChange(event.target.value)}
+            onInputCapture={(event) => {
+              liveQueryRef.current = event.currentTarget.value;
+            }}
+            onChange={(event) => {
+              liveQueryRef.current = event.target.value;
+              onQueryChange(event.target.value);
+            }}
           />
           <button
             type="button"

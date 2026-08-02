@@ -209,9 +209,16 @@ export class EventBroadcastRuntime {
   };
 
   readonly bootstrapFresh = async () => {
+    // Bootstrap needs one complete health snapshot, but once that snapshot is
+    // available it must not join an unrelated periodic forced refresh. Those
+    // probes can take several seconds for offline agent generations, while the
+    // existing snapshot remains valid and the completed refresh will publish a
+    // health delta to connected browsers.
+    const machineStatusesCurrent = this.machineStatusKey === this.machineInputKey();
+    const streamStatusesCurrent = this.streamStatusKey === this.streamInputKey();
     await Promise.all([
-      this.refreshMachineStatuses(false),
-      this.refreshStreamStatuses(false),
+      machineStatusesCurrent ? Promise.resolve() : this.refreshMachineStatuses(false),
+      streamStatusesCurrent ? Promise.resolve() : this.refreshStreamStatuses(false),
     ]);
     const payload = this.currentPayload();
     this.lastPayload = payload;
