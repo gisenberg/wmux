@@ -252,6 +252,25 @@ export const sortFavoriteWorkspaceRows = <
   return sorted;
 };
 
+// Canonical sidebar display order: rows grouped by machine (known machines
+// first, in machine-list order), favorites bubbled up within each group.
+// Digit and previous/next shortcuts must walk this same order so Cmd+N always
+// targets the Nth visible row.
+export const orderWorkspaceRowsForDisplay = <
+  T extends { id: string; machineId: string; parentId?: string; favorite: boolean },
+>(rows: readonly T[], machineIds: readonly string[]): T[] => {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const group = grouped.get(row.machineId) ?? [];
+    group.push(row);
+    grouped.set(row.machineId, group);
+  }
+  const orderedMachineIds = [...machineIds, ...grouped.keys()].filter(
+    (machineId, index, ids) => grouped.has(machineId) && ids.indexOf(machineId) === index,
+  );
+  return orderedMachineIds.flatMap((machineId) => sortFavoriteWorkspaceRows(grouped.get(machineId) ?? []));
+};
+
 export const workspaceMoveIntents = (
   workspaces: readonly Workspace[],
   workspaceId: string,

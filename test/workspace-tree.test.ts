@@ -4,6 +4,7 @@ import type { Workspace } from "../src/shared/protocol.ts";
 import {
   deriveWorkspaceTree,
   expandWorkspaceAncestors,
+  orderWorkspaceRowsForDisplay,
   pruneCollapsedWorkspaceIds,
   pruneFavoriteWorkspaceIds,
   rebaseCollapsedWorkspaceIds,
@@ -104,6 +105,21 @@ test("favorite rows sort sibling subtrees without separating children from paren
     sortFavoriteWorkspaceRows(rows).map((row) => row.id),
     ["root-b", "root-a", "child-b", "grandchild", "child-a"],
   );
+});
+
+test("display order groups by machine in machine-list order with favorites first", () => {
+  const rows = [
+    { id: "b-plain", machineId: "b", favorite: false },
+    { id: "a-plain", machineId: "a", favorite: false },
+    { id: "orphan", machineId: "gone", favorite: false },
+    { id: "a-favorite", machineId: "a", favorite: true },
+    { id: "b-child", machineId: "b", parentId: "b-plain", favorite: false },
+  ];
+  assert.deepEqual(
+    orderWorkspaceRowsForDisplay(rows, ["a", "b", "empty"]).map((row) => row.id),
+    ["a-favorite", "a-plain", "b-plain", "b-child", "orphan"],
+  );
+  assert.deepEqual(orderWorkspaceRowsForDisplay([], ["a"]), []);
 });
 
 test("favorite workspace ids prune and rebase independently from collapse state", () => {
