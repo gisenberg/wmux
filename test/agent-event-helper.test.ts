@@ -11,12 +11,21 @@ import { test } from "node:test";
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const agentEventScript = path.join(repoRoot, "scripts", "wmux-agent-event");
-const agentEventEnv = (home: string, values: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
-  ...process.env,
-  HOME: home,
-  USERPROFILE: home,
-  ...values,
-});
+const agentEventEnv = (home: string, values: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+  };
+  for (const key of [
+    "WMUX_AUTOMATION_TOKEN",
+    "WMUX_AUTOMATION_TOKEN_PATH",
+    "WMUX_E2E_TOKEN",
+    "WMUX_HELPER_TOKEN",
+    "WMUX_HELPER_TOKEN_PATH",
+  ]) delete environment[key];
+  return Object.assign(environment, values);
+};
 const runAgentEvent = (args: string[], env: NodeJS.ProcessEnv) =>
   execFileAsync("python3", [agentEventScript, ...args], { env });
 
