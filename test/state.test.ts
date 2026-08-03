@@ -1126,3 +1126,70 @@ test("a new running event reconciles a prior turn without a stop hook", () => {
     assert.equal(previous.summary, "codex interrupted");
   });
 });
+
+test("coalesced active hook observations do not interrupt or duplicate the current event", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    const first = agentsFor(store).recordAgentEvent({
+      paneId,
+      agent: "codex",
+      status: "running",
+      summary: "codex running",
+      coalesce: true,
+    });
+    const duplicate = agentsFor(store).recordAgentEvent({
+      paneId,
+      agent: "codex",
+      status: "running",
+      summary: "codex running",
+      coalesce: true,
+    });
+
+    assert.equal(duplicate.agentEvent.id, first.agentEvent.id);
+    assert.equal(store.snapshot().agentEvents.length, 1);
+    assert.equal(store.snapshot().agentEvents[0].status, "running");
+
+    agentsFor(store).recordAgentEvent({
+      paneId,
+      agent: "codex",
+      status: "completed",
+      summary: "Step complete",
+    });
+    const continuation = agentsFor(store).recordAgentEvent({
+      paneId,
+      agent: "codex",
+      status: "running",
+      summary: "codex running",
+      coalesce: true,
+    });
+    assert.notEqual(continuation.agentEvent.id, first.agentEvent.id);
+    assert.equal(store.snapshot().agentEvents[0].status, "running");
+    assert.equal(store.snapshot().agentEvents[1].status, "completed");
+  });
+});
+
+test("coalesced runless hooks inherit and preserve the current delegation", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const paneId = store.snapshot().workspaces[0].tabs[0].panes[0].id;
+    const first = agentsFor(store).recordAgentEvent({
+      paneId,
+      runId: "run-coalesced",
+      agent: "codex",
+      status: "running",
+      summary: "Starting",
+    });
+    const duplicate = agentsFor(store).recordAgentEvent({
+      paneId,
+      agent: "codex",
+      status: "running",
+      summary: "codex running",
+      coalesce: true,
+    });
+
+    assert.equal(duplicate.agentEvent.id, first.agentEvent.id);
+    assert.equal(store.snapshot().agentEvents.length, 1);
+    assert.equal(agentsFor(store).delegationForRun("run-coalesced")?.state, "running");
+  });
+});

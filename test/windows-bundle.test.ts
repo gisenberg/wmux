@@ -131,6 +131,11 @@ test("agent-event helper sends bearer auth and maps Claude start hooks to runnin
   assert.ok(stateIndex >= 0 && stateIndex < helperIndex && helperIndex < publicIndex && publicIndex < legacyIndex, "agent-event URL precedence must favor refreshed state, helper, public, then legacy");
   assert.ok(content.includes("$HookEvent -eq 'UserPromptSubmit'"), "Claude start hooks must be recognized");
   assert.ok(content.includes("$Summary = 'claude running'"), "Claude start hooks must emit a fresh running summary");
+  assert.ok(content.includes("'PreToolUse'"), "Codex tool hooks must restore running state for automatic continuations");
+  assert.ok(content.includes("Start-CodexReconciler"), "Codex stop hooks must defer lifecycle reconciliation");
+  assert.ok(content.includes("transcriptOffset"), "Codex reconciliation must keep a stable bounded transcript window");
+  assert.ok(content.includes("task_started"), "Codex reconciliation must detect a newer turn");
+  assert.ok(content.includes("$Payload.coalesce = $true"), "repeated Codex tool hooks must be coalesced");
   assert.ok(content.includes("$Message = ''"), "start hooks must discard the previous assistant response");
   assert.ok(content.includes("-TimeoutSec 10"), "agent events must not hang indefinitely during delivery");
   const contextGuardIndex = content.indexOf("if (-not $Force -and -not $PaneId -and -not $WorkspaceId)");
@@ -147,6 +152,7 @@ test("Windows Codex hooks bypass the cmd shim and migrate wmux-owned entries", (
   assert.ok(content.includes("commandWindows"), "Codex hook must provide a Windows command override");
   assert.ok(content.includes("wmux-agent-event.ps1"), "Codex hook must invoke PowerShell directly");
   assert.ok(content.includes("$OwnedCommand"), "installer must migrate existing wmux hook entries");
+  assert.ok(content.includes("'PreToolUse'"), "Codex installer must register the tool lifecycle fallback");
 });
 
 test("bootstrap stages, verifies, then swaps and records the bundle version", () => {

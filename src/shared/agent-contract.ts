@@ -103,6 +103,8 @@ export interface AgentEventPostBody {
   prompt?: string;
   attentionReason?: "approval" | "login" | "blocked" | "input";
   body?: string;
+  /** Coalesce a repeated active observation with the current lifecycle event. */
+  coalesce?: boolean;
 }
 
 export type RunEventStatus = "started" | "completed" | "failed";

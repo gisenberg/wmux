@@ -113,6 +113,9 @@ const installCodex = () => {
     addHook(settings, "UserPromptSubmit", codexHookCommand, {
       statusMessage: "Updating wmux workspace",
     }),
+    addHook(settings, "PreToolUse", codexHookCommand, {
+      statusMessage: "Updating wmux workspace",
+    }),
     addHook(settings, "Stop", codexHookCommand, {
       statusMessage: "Summarizing wmux workspace",
     }),
@@ -1053,7 +1056,7 @@ const status = () => {
   const claudeSkillInstalled = fs.existsSync(claudeSkillFile) && fs.readFileSync(claudeSkillFile, "utf8") === claudeSkill();
   const codexPath = path.join(os.homedir(), ".codex", "hooks.json");
   const codexSettings = readJson(codexPath);
-  const codexInstalled = ["UserPromptSubmit", "Stop"].every((eventName) =>
+  const codexInstalled = ["UserPromptSubmit", "PreToolUse", "Stop"].every((eventName) =>
     hasCommand(codexSettings.hooks?.[eventName] ?? [], codexHookCommand),
   );
   const openCodePath = opencodePluginPath();

@@ -126,6 +126,7 @@ interface PendingAction {
 interface PendingWorkspaceClose {
   request: ReturnType<typeof api.scheduleWorkspaceClose>;
   toastId: number;
+  restoreTabId?: string;
 }
 
 export function AppShell() {
@@ -1031,7 +1032,9 @@ export function AppShell() {
     try {
       const response = await api.cancelWorkspaceClose(workspaceId);
       await refresh(response.state);
-      if (!response.cancelled) {
+      if (response.cancelled && pending.restoreTabId) {
+        activateWorkspaceTab(workspaceId, pending.restoreTabId, { replaceHistory: true });
+      } else if (!response.cancelled) {
         pushToast("The workspace close deadline had already passed.", "info", {
           status: "closed",
         });
@@ -1040,7 +1043,7 @@ export function AppShell() {
       pushToast(`Undo close failed: ${describeActionError(error)}`);
       void loadBootstrapRef.current();
     }
-  }, [dismissToast, pushToast, refresh, revealPendingWorkspace]);
+  }, [activateWorkspaceTab, dismissToast, pushToast, refresh, revealPendingWorkspace]);
 
   const scheduleWorkspaceClose = useCallback((workspaceId: string): void => {
     if (pendingWorkspaceCloses.current.has(workspaceId)) return;
@@ -1065,7 +1068,13 @@ export function AppShell() {
         status: "pending",
       },
     );
-    pendingWorkspaceCloses.current.set(workspaceId, { request, toastId });
+    pendingWorkspaceCloses.current.set(workspaceId, {
+      request,
+      toastId,
+      ...(store.get()?.activeWorkspaceId === workspaceId
+        ? { restoreTabId: workspace.activeTabId }
+        : {}),
+    });
 
     void request.catch((error) => {
       const pending = pendingWorkspaceCloses.current.get(workspaceId);

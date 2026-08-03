@@ -19,6 +19,13 @@ const agentEventEnv = (home: string, values: NodeJS.ProcessEnv = {}): NodeJS.Pro
 });
 const runAgentEvent = (args: string[], env: NodeJS.ProcessEnv) =>
   execFileAsync("python3", [agentEventScript, ...args], { env });
+const waitFor = async (predicate: () => boolean, timeoutMs = 3000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for agent event");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
 
 const resolveHelperUrl = (env: Record<string, string>, persistedUrl?: string): string => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-event-url-"));
@@ -214,6 +221,167 @@ test("agent start hooks never replay the previous assistant response", async () 
     assert.equal(captured?.title, "new mobile prompt");
     assert.equal(captured?.summary, "codex running");
     assert.equal("message" in (captured ?? {}), false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Codex tool hooks restore running state without replaying prior output", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-tool-"));
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201).end();
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await runAgentEvent(
+      ["--url", `http://127.0.0.1:${address.port}`, "--agent", "codex", "--codex-hook", "--pane", "pane-1", "--force"],
+      agentEventEnv(dir, {
+        WMUX_TOKEN: "",
+        WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
+        HOOK_INPUT: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          turn_id: "turn-continued",
+          last_assistant_message: "response from the prior turn",
+        }),
+      }),
+    );
+    assert.equal(captured.length, 1);
+    assert.deepEqual({
+      agent: captured[0]?.agent,
+      status: captured[0]?.status,
+      title: captured[0]?.title,
+      summary: captured[0]?.summary,
+      body: captured[0]?.body,
+      coalesce: captured[0]?.coalesce,
+      paneId: captured[0]?.paneId,
+    }, {
+      agent: "codex",
+      status: "running",
+      title: "",
+      summary: "codex running",
+      body: "",
+      coalesce: true,
+      paneId: "pane-1",
+    });
+    assert.equal("message" in captured[0], false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Codex stop reconciliation observes an automatic continuation before completing", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-reconcile-"));
+  const transcriptPath = path.join(dir, "transcript.jsonl");
+  fs.writeFileSync(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "turn-first" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Continue the goal" }] } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Finished one step." }] } }),
+    ].join("\n") + "\n",
+  );
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201).end();
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await runAgentEvent(
+      ["--url", `http://127.0.0.1:${address.port}`, "--agent", "codex", "--codex-hook", "--pane", "pane-1", "--force"],
+      agentEventEnv(dir, {
+        WMUX_TOKEN: "",
+        WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
+        WMUX_CODEX_RECONCILE_TIMEOUT_MS: "1000",
+        WMUX_CODEX_RECONCILE_GRACE_MS: "50",
+        HOOK_INPUT: JSON.stringify({
+          hook_event_name: "Stop",
+          turn_id: "turn-first",
+          transcript_path: transcriptPath,
+          last_assistant_message: "Finished one step.",
+        }),
+      }),
+    );
+    fs.appendFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "turn-first" } }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "turn-second" } }),
+      ].join("\n") + "\n",
+    );
+    await waitFor(() => captured.length === 1);
+    assert.equal(captured[0]?.status, "running");
+    assert.equal(captured[0]?.summary, "codex running");
+    assert.equal(captured[0]?.coalesce, true);
+    assert.equal("message" in captured[0], false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Codex stop reconciliation emits one completion when no continuation starts", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-complete-"));
+  const transcriptPath = path.join(dir, "transcript.jsonl");
+  fs.writeFileSync(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "turn-final" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Finish the goal" }] } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "The goal is complete." }] } }),
+    ].join("\n") + "\n",
+  );
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201).end();
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await runAgentEvent(
+      ["--url", `http://127.0.0.1:${address.port}`, "--agent", "codex", "--codex-hook", "--pane", "pane-1", "--force"],
+      agentEventEnv(dir, {
+        WMUX_TOKEN: "",
+        WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
+        WMUX_CODEX_RECONCILE_TIMEOUT_MS: "1000",
+        WMUX_CODEX_RECONCILE_GRACE_MS: "50",
+        HOOK_INPUT: JSON.stringify({
+          hook_event_name: "Stop",
+          turn_id: "turn-final",
+          transcript_path: transcriptPath,
+        }),
+      }),
+    );
+    fs.appendFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "turn-final" } }) + "\n",
+    );
+    await waitFor(() => captured.length === 1);
+    assert.equal(captured[0]?.status, "completed");
+    assert.equal(captured[0]?.summary, "The goal is complete.");
+    assert.equal(captured[0]?.message, "The goal is complete.");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(dir, { recursive: true, force: true });

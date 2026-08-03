@@ -132,6 +132,146 @@ function Read-TranscriptSummary([string]$PathValue) {
   return $Result
 }
 
+function Read-CodexLifecycle([string]$PathValue, [long]$Start = -1) {
+  $Events = @()
+  if (-not $PathValue -or -not (Test-Path -LiteralPath $PathValue -PathType Leaf)) { return $Events }
+  try {
+    $Sharing = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    $Stream = [IO.FileStream]::new($PathValue, [IO.FileMode]::Open, [IO.FileAccess]::Read, $Sharing)
+    try {
+      if ($Start -lt 0) { $Start = [Math]::Max(0, $Stream.Length - 1048576) }
+      [void]$Stream.Seek([Math]::Min($Start, $Stream.Length), [IO.SeekOrigin]::Begin)
+      $Reader = [IO.StreamReader]::new($Stream, [Text.Encoding]::UTF8, $true, 4096, $true)
+      try {
+        if ($Start -gt 0) { [void]$Reader.ReadLine() }
+        while ($null -ne ($Line = $Reader.ReadLine())) {
+          try {
+            $Entry = $Line | ConvertFrom-Json
+          } catch {
+            continue
+          }
+          if ($Entry.type -ne 'event_msg' -or $Entry.payload.type -notin @('task_started', 'task_complete')) { continue }
+          $TurnId = [string]$Entry.payload.turn_id
+          if ($TurnId) {
+            $Events += [pscustomobject]@{ type = [string]$Entry.payload.type; turnId = $TurnId }
+          }
+        }
+      } finally {
+        $Reader.Dispose()
+      }
+    } finally {
+      $Stream.Dispose()
+    }
+  } catch {}
+  return $Events
+}
+
+function Get-CodexTransition($Events, [string]$TurnId) {
+  $Completed = $false
+  foreach ($Event in @($Events)) {
+    if ($Event.type -eq 'task_complete' -and $Event.turnId -eq $TurnId) {
+      $Completed = $true
+      continue
+    }
+    if ($Completed -and $Event.type -eq 'task_started' -and $Event.turnId -ne $TurnId) {
+      return 'running'
+    }
+  }
+  return $(if ($Completed) { 'completed' } else { 'unknown' })
+}
+
+function Get-DurationMilliseconds([string]$Name, [int]$DefaultValue) {
+  $RawValue = [Environment]::GetEnvironmentVariable($Name, 'Process')
+  $Value = 0
+  if (-not [int]::TryParse($RawValue, [ref]$Value)) { return $DefaultValue }
+  return [Math]::Max(10, [Math]::Min($Value, 30000))
+}
+
+function Send-AgentEventPayload([string]$Url, $Payload) {
+  $Json = $Payload | ConvertTo-Json -Depth 8 -Compress
+  $Headers = @{}
+  $WmuxToken = Get-WmuxToken
+  if ($WmuxToken) { $Headers['Authorization'] = "Bearer $WmuxToken" }
+  Invoke-RestMethod -Method Post -Uri ($Url.TrimEnd('/') + '/api/agent-events') -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec 10 | Out-Null
+}
+
+function Invoke-CodexReconcile($Data) {
+  $Stopwatch = [Diagnostics.Stopwatch]::StartNew()
+  $Timeout = Get-DurationMilliseconds 'WMUX_CODEX_RECONCILE_TIMEOUT_MS' 3000
+  $Grace = Get-DurationMilliseconds 'WMUX_CODEX_RECONCILE_GRACE_MS' 1500
+  $CompletedAt = $null
+  $Status = 'completed'
+  while ($Data.transcript -and $Data.turnId -and $Stopwatch.ElapsedMilliseconds -lt $Timeout) {
+    $Transition = Get-CodexTransition (Read-CodexLifecycle ([string]$Data.transcript) ([long]$Data.transcriptOffset)) ([string]$Data.turnId)
+    if ($Transition -eq 'running') {
+      $Status = 'running'
+      break
+    }
+    if ($Transition -eq 'completed') {
+      if ($null -eq $CompletedAt) { $CompletedAt = $Stopwatch.ElapsedMilliseconds }
+      if ($Stopwatch.ElapsedMilliseconds - $CompletedAt -ge $Grace) { break }
+    }
+    Start-Sleep -Milliseconds 50
+  }
+
+  $TranscriptResult = Read-TranscriptSummary ([string]$Data.transcript)
+  $Payload = [ordered]@{
+    agent = Clean-Text ([string]$Data.agent) 50
+    status = $Status
+    title = if ($Status -eq 'running') { '' } else { Clean-Text ([string]$TranscriptResult.title) 80 }
+    summary = if ($Status -eq 'running') { 'codex running' } elseif ($TranscriptResult.summary) { Clean-Text ([string]$TranscriptResult.summary) 500 } else { 'codex completed' }
+    body = ''
+  }
+  if ($Status -eq 'running') { $Payload.coalesce = $true }
+  if ($Status -eq 'completed' -and $TranscriptResult.message) { $Payload.message = Clean-Message ([string]$TranscriptResult.message) }
+  if ($Data.paneId) { $Payload.paneId = [string]$Data.paneId }
+  if ($Data.workspaceId) { $Payload.workspaceId = [string]$Data.workspaceId }
+  if ($Data.tabId) { $Payload.tabId = [string]$Data.tabId }
+  try {
+    Send-AgentEventPayload ([string]$Data.url) $Payload
+  } catch {
+    # Reconciliation is telemetry and must never keep a Codex turn alive.
+  }
+}
+
+function Start-CodexReconciler(
+  [string]$Url,
+  [string]$Transcript,
+  [string]$TurnId,
+  [string]$AgentName,
+  [string]$Pane,
+  [string]$Workspace,
+  [string]$Tab
+) {
+  if (-not $Transcript -or -not $TurnId -or -not $PSCommandPath) { return $false }
+  try {
+    $TranscriptOffset = [Math]::Max(0, (Get-Item -LiteralPath $Transcript -ErrorAction Stop).Length - 1048576)
+    $Data = [ordered]@{
+      url = $Url
+      transcript = $Transcript
+      transcriptOffset = $TranscriptOffset
+      turnId = $TurnId
+      agent = $AgentName
+      paneId = $Pane
+      workspaceId = $Workspace
+      tabId = $Tab
+    }
+    $DataJson = $Data | ConvertTo-Json -Depth 4 -Compress
+    $DataBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DataJson))
+    $ScriptPath = $PSCommandPath.Replace("'", "''")
+    $Command = "& '$ScriptPath' --codex-reconcile '$DataBase64'"
+    $EncodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Command))
+    $Executable = Join-Path $PSHOME 'pwsh.exe'
+    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+      $Executable = (Get-Process -Id $PID).Path
+    }
+    Start-Process -FilePath $Executable -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $EncodedCommand) -WindowStyle Hidden | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
 $WmuxUrl = Get-WmuxUrl
 $Agent = $env:WMUX_AGENT_NAME
 if (-not $Agent) { $Agent = 'agent' }
@@ -146,6 +286,7 @@ $TabId = $env:WMUX_TAB_ID
 $Transcript = ''
 $ClaudeHook = $false
 $CodexHook = $false
+$CodexReconcileData = ''
 $Force = $false
 
 for ($Index = 0; $Index -lt $args.Count; $Index++) {
@@ -164,9 +305,18 @@ for ($Index = 0; $Index -lt $args.Count; $Index++) {
     '--transcript' { $Index++; $Transcript = [string]$args[$Index]; continue }
     '--claude-hook' { $ClaudeHook = $true; continue }
     '--codex-hook' { $CodexHook = $true; continue }
+    '--codex-reconcile' { $Index++; $CodexReconcileData = [string]$args[$Index]; continue }
     '--force' { $Force = $true; continue }
     default { throw "unknown argument: $Arg" }
   }
+}
+
+if ($CodexReconcileData) {
+  try {
+    $Decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CodexReconcileData))
+    Invoke-CodexReconcile ($Decoded | ConvertFrom-Json)
+  } catch {}
+  exit 0
 }
 
 if (-not $Force -and -not $PaneId -and -not $WorkspaceId) {
@@ -182,13 +332,15 @@ if ($HookInput) {
   if (-not $Summary -and $HookInput.last_assistant_message) { $Summary = Get-SummaryFromOutput ([string]$HookInput.last_assistant_message) }
   if (-not $Message -and $HookInput.last_assistant_message) { $Message = Clean-Message ([string]$HookInput.last_assistant_message) }
 }
-$TranscriptResult = Read-TranscriptSummary $Transcript
+$HookEvent = if ($HookInput) { [string]$HookInput.hook_event_name } else { '' }
+$TurnId = if ($HookInput) { [string]$HookInput.turn_id } else { '' }
+$DeferCodexStop = $CodexHook -and $HookEvent -eq 'Stop' -and $Transcript -and $TurnId
+$TranscriptResult = if ($DeferCodexStop) { @{ title = ''; summary = ''; message = '' } } else { Read-TranscriptSummary $Transcript }
 if (-not $Title) { $Title = $TranscriptResult.title }
 if (-not $Summary) { $Summary = if ($Body) { $Body } else { $TranscriptResult.summary } }
 if (-not $Message) { $Message = $TranscriptResult.message }
 
 if ($ClaudeHook -and $HookInput) {
-  $HookEvent = [string]$HookInput.hook_event_name
   if ($HookEvent -eq 'UserPromptSubmit') {
     $Status = 'running'
     $Summary = 'claude running'
@@ -205,8 +357,7 @@ if ($ClaudeHook -and $HookInput) {
   $Status = 'completed'
 }
 if ($CodexHook -and $HookInput) {
-  $HookEvent = [string]$HookInput.hook_event_name
-  if ($HookEvent -eq 'UserPromptSubmit') {
+  if ($HookEvent -in @('UserPromptSubmit', 'PreToolUse')) {
     $Status = 'running'
     $Summary = 'codex running'
     $Message = ''
@@ -224,16 +375,21 @@ $Payload = [ordered]@{
   body = Clean-Text $Body 500
 }
 if ($Message) { $Payload.message = Clean-Message $Message }
+if ($CodexHook -and $HookEvent -eq 'PreToolUse') { $Payload.coalesce = $true }
 if ($PaneId) { $Payload.paneId = $PaneId }
 if ($WorkspaceId) { $Payload.workspaceId = $WorkspaceId }
 if ($TabId) { $Payload.tabId = $TabId }
 
-$Json = $Payload | ConvertTo-Json -Depth 8 -Compress
-$Headers = @{}
-$WmuxToken = Get-WmuxToken
-if ($WmuxToken) { $Headers['Authorization'] = "Bearer $WmuxToken" }
+if (
+  $CodexHook -and
+  $HookEvent -eq 'Stop' -and
+  (Start-CodexReconciler $WmuxUrl $Transcript $TurnId $Agent $PaneId $WorkspaceId $TabId)
+) {
+  exit 0
+}
+
 try {
-  Invoke-RestMethod -Method Post -Uri ($WmuxUrl.TrimEnd('/') + '/api/agent-events') -Headers $Headers -ContentType 'application/json' -Body $Json -TimeoutSec 10 | Out-Null
+  Send-AgentEventPayload $WmuxUrl $Payload
 } catch {
   [Console]::Error.WriteLine("wmux-agent-event: delivery failed: $($_.Exception.Message)")
   exit 1
