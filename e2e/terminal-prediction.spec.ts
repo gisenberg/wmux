@@ -47,7 +47,10 @@ const routeTerminalFontFamily = async (page: Page, terminalFontFamily: string): 
   });
 };
 
-const delayTerminalOutput = async (page: Page, delayMs = 500): Promise<void> => {
+const terminalOutputDelayMs = 750;
+
+// Keep the synthetic echo comfortably behind browser input dispatch under concurrent runner load.
+const delayTerminalOutput = async (page: Page, delayMs = terminalOutputDelayMs): Promise<void> => {
   await page.routeWebSocket(/\/ws\/panes\//, (browserSocket) => {
     const serverSocket = browserSocket.connectToServer();
     browserSocket.onMessage((message) => serverSocket.send(message));
@@ -226,15 +229,17 @@ const readTerminalColors = async (pane: Locator): Promise<{ foreground: string; 
 
 const armTerminalPrediction = async (page: Page, prediction: Locator): Promise<void> => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await page.keyboard.type("a");
-    await page.waitForTimeout(750);
-    await page.keyboard.type("q");
     try {
+      if (!await prediction.getAttribute("data-armed-screen")) {
+        await page.keyboard.type("a");
+        await expect(prediction).toHaveAttribute("data-armed-screen", /^(normal|alternate)$/, { timeout: 2_000 });
+      }
+      await page.keyboard.type("q");
       await expect(prediction).toHaveAttribute("data-active", "true", { timeout: 400 });
       await expect(prediction).not.toHaveAttribute("data-active", "true", { timeout: 2_000 });
       return;
     } catch {
-      await page.waitForTimeout(750);
+      await page.waitForTimeout(250);
     }
   }
   throw new Error("Terminal prediction did not arm after three authoritative echoes");
@@ -248,7 +253,9 @@ const verifyDelayedGlyph = async (
   background?: string,
 ): Promise<void> => {
   await armTerminalPrediction(page, prediction);
-  await page.keyboard.type("xy");
+  await page.keyboard.type("x");
+  await expect(prediction).toHaveAttribute("data-active", "true");
+  await page.keyboard.type("y");
   await expect(prediction).toHaveAttribute("data-active", "true");
   const cells = await predictionCells(prediction);
   expect(cells).toHaveLength(2);
