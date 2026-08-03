@@ -381,6 +381,104 @@ test("a new Windows pane stages and safely activates an outdated agent", async (
   await once(server, "close");
 });
 
+test("an idle pinned Windows generation refreshes itself instead of the base agent", async () => {
+  const expectedRelease = expectedWindowsAgentReleaseVersion();
+  const expectedProtocol = expectedWindowsAgentProtocolVersion();
+  let helperBundleVersion = "stale";
+  let refreshedPort: number | undefined;
+  let created = false;
+  const server = http.createServer(async (request, response) => {
+    const path = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && path === "/health") {
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedRelease,
+        protocolVersion: expectedProtocol,
+        helperBundleVersion,
+        activeSessions: 0,
+        draining: false,
+      }));
+      return;
+    }
+    if (request.method === "GET" && path === "/sessions") {
+      response.end(JSON.stringify({ sessions: [] }));
+      return;
+    }
+    if (request.method === "POST" && path.startsWith("/sessions/__wmux_update_")) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        helperBundle?: { bundleVersion?: string };
+      };
+      helperBundleVersion = body.helperBundle?.bundleVersion ?? helperBundleVersion;
+      response.end(JSON.stringify({ id: path.split("/")[2], status: "running" }));
+      return;
+    }
+    if (request.method === "DELETE" && path.startsWith("/sessions/__wmux_update_")) {
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    if (request.method === "POST" && path === "/sessions/pane_pinned_generation") {
+      created = true;
+      response.end(JSON.stringify({
+        id: "pane_pinned_generation",
+        pid: 321,
+        base: 0,
+        cursor: 0,
+      }));
+      return;
+    }
+    if (request.method === "GET" && path.startsWith("/sessions/pane_pinned_generation/output")) {
+      response.end(JSON.stringify({ base: 0, cursor: 0, dataBase64: "", exited: false }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const generationPort = address.port;
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_pinned_generation",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${generationPort}`,
+    },
+    80,
+    24,
+    {},
+    async (_machine, rolloutPort) => {
+      refreshedPort = rolloutPort;
+      return rolloutPort;
+    },
+    1_000,
+    undefined,
+    generationPort - 1,
+  );
+  try {
+    await session.attachReady;
+    assert.equal(refreshedPort, generationPort);
+    assert.equal(created, true);
+    assert.equal(session.isExited, false);
+  } finally {
+    session.detach();
+    server.close();
+    await once(server, "close");
+  }
+});
+
 test("an acknowledged Windows agent update cannot leave pane startup waiting forever", async () => {
   let helperBundleVersion = "stale";
   const server = http.createServer((request, response) => {

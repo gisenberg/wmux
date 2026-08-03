@@ -32,6 +32,7 @@ export class WindowsAgentBackend implements SessionBackend {
   constructor(
     readonly machine: MachineConfig,
     private readonly pasteImages: PasteImageStager,
+    private readonly baseAgentPort?: number,
   ) {}
 
   spawn(spec: BackendSpawnSpec): BackendSession {
@@ -44,6 +45,7 @@ export class WindowsAgentBackend implements SessionBackend {
       undefined,
       undefined,
       spec.restoredCheckpoint,
+      this.baseAgentPort,
     );
   }
 

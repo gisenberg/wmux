@@ -33,6 +33,7 @@ import {
   type KittyGraphicsSourceRequest,
 } from "./kitty-graphics-source.js";
 import { terminalThemeFromEnvironment } from "./terminal-theme.js";
+import { windowsAgentPort } from "./windows-agent.js";
 
 export type ClientMessage = PaneClientMessage;
 
@@ -532,10 +533,13 @@ export class SessionManager {
     const machine = pane.agentPort && configuredMachine.kind === "powershell-ssh"
       ? { ...configuredMachine, agentPort: pane.agentPort, agentUrl: undefined }
       : configuredMachine;
+    const windowsAgentBasePort = pane.agentPort && configuredMachine.kind === "powershell-ssh"
+      ? windowsAgentPort(configuredMachine)
+      : undefined;
     if (machine.source === "registered" && machine.online === false) {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
-    const backend = createSessionBackend(machine, this.pasteImages);
+    const backend = createSessionBackend(machine, this.pasteImages, { windowsAgentBasePort });
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
       const previousBackend = this.backends.get(pane.id)
         ?? createSessionBackend(previousSessionMachine, this.pasteImages);
