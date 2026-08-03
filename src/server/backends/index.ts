@@ -22,9 +22,12 @@ export const isDurableMultiplexerMachine = (machine: MachineConfig): boolean => 
 export const createSessionBackend = (
   machine: MachineConfig,
   pasteImages: PasteImageStager,
+  options: { windowsAgentBasePort?: number } = {},
 ): SessionBackend => {
   const snapshot = structuredClone(machine);
-  if (shouldUseSessionAgent(snapshot)) return new WindowsAgentBackend(snapshot, pasteImages);
+  if (shouldUseSessionAgent(snapshot)) {
+    return new WindowsAgentBackend(snapshot, pasteImages, options.windowsAgentBasePort);
+  }
   if (isDurableMultiplexerMachine(snapshot)) return new DurableMultiplexerBackend(snapshot, pasteImages);
   return new RawPtyBackend(snapshot, pasteImages);
 };

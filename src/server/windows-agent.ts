@@ -57,6 +57,17 @@ export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
   return `http://${host}:${machine.agentPort ?? 3481}`;
 };
 
+const agentPortFromUrl = (url: string): number => {
+  const parsed = new URL(url);
+  if (parsed.port) return Number(parsed.port);
+  return parsed.protocol === "https:" ? 443 : 80;
+};
+
+export const windowsAgentPort = (machine: MachineConfig): number => {
+  const url = windowsAgentUrl(machine);
+  return url ? agentPortFromUrl(url) : machine.agentPort ?? 3481;
+};
+
 export const shouldUseWindowsAgent = (machine: MachineConfig): boolean =>
   machine.kind === "powershell-ssh" && machine.sessionBackend === "agent";
 
@@ -330,6 +341,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     private readonly activateUpdate: WindowsAgentUpdateActivator = activateWindowsAgentUpdate,
     private readonly updateRestartTimeoutMs = UPDATE_RESTART_TIMEOUT_MS,
     private readonly restoredCheckpoint?: AttachReplay,
+    private readonly configuredBaseAgentPort?: number,
   ) {
     super();
     this.checkpoint = new TerminalCheckpoint(cols, rows, extraEnv);
@@ -774,11 +786,15 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     }
 
     if (activeSessions === 0) {
-      // Nothing is owned by the outdated base process, so replace it in place.
-      // Existing side-by-side generations have independent tasks and remain
-      // available to panes already pinned to them.
+      // Nothing is owned by the outdated process, so replace it in place.
+      // A pane restored on a side-by-side generation must refresh that exact
+      // generation instead of arming an unrelated base-agent restart.
       this.reportPhase("starting-generation", "Updating the Windows agent…");
-      await this.activateUpdate(this.machine);
+      const currentPort = this.currentAgentPort();
+      await this.activateUpdate(
+        this.machine,
+        currentPort === this.baseAgentPort() ? undefined : currentPort,
+      );
     } else {
       const currentGeneration = await this.findCurrentGeneration(helperBundle);
       if (currentGeneration !== undefined) {
@@ -860,11 +876,11 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   }
 
   private baseAgentPort(): number {
-    if (this.agentUrl) {
-      const parsed = new URL(this.agentUrl);
-      return parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-    }
-    return this.machine.agentPort ?? 3481;
+    return this.configuredBaseAgentPort ?? windowsAgentPort(this.machine);
+  }
+
+  private currentAgentPort(): number {
+    return this.agentUrl ? agentPortFromUrl(this.agentUrl) : windowsAgentPort(this.machine);
   }
 
   private urlForAgentPort(port: number): string {
