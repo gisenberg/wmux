@@ -20,8 +20,8 @@ import type { MachineVersionStatus, Workspace, WorkspaceReorderPosition } from "
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 import { WorkspaceMoveDialog } from "./WorkspaceMoveDialog";
 import {
+  orderWorkspaceRowsForDisplay,
   remainingWorkspaceRowCount,
-  sortFavoriteWorkspaceRows,
   workspacePointerMovePosition,
   type WorkspaceAgentStatus,
   type WorkspaceMoveIntent,
@@ -942,19 +942,10 @@ const drawSidebarGrid = (
     write(row, 3, "NO AGENT SESSIONS", rgba.faint, 700);
     row += 2;
   } else {
-    const allGroupedWorkspaces = new Map<string, OpenTuiSidebarWorkspace[]>();
-    for (const workspace of model.workspaces) {
-      const group = allGroupedWorkspaces.get(workspace.machineId) ?? [];
-      group.push(workspace);
-      allGroupedWorkspaces.set(workspace.machineId, group);
-    }
-    const allOrderedMachineIds = [
-      ...model.machines.map((machine) => machine.id),
-      ...allGroupedWorkspaces.keys(),
-    ].filter((machineId, index, machineIds) =>
-      allGroupedWorkspaces.has(machineId) && machineIds.indexOf(machineId) === index);
-    const orderedWorkspaces = allOrderedMachineIds.flatMap((machineId) =>
-      sortFavoriteWorkspaceRows(allGroupedWorkspaces.get(machineId) ?? []));
+    const orderedWorkspaces = orderWorkspaceRowsForDisplay(
+      model.workspaces,
+      model.machines.map((machine) => machine.id),
+    );
     const remainingWorkspaces = orderedWorkspaces.slice(model.workspaceScrollOffset);
     const groupedWorkspaces = new Map<string, OpenTuiSidebarWorkspace[]>();
     for (const workspace of remainingWorkspaces) {
@@ -962,7 +953,7 @@ const drawSidebarGrid = (
       group.push(workspace);
       groupedWorkspaces.set(workspace.machineId, group);
     }
-    const orderedMachineIds = allOrderedMachineIds.filter((machineId) => groupedWorkspaces.has(machineId));
+    const orderedMachineIds = [...groupedWorkspaces.keys()];
 
     groupLoop:
     for (const machineId of orderedMachineIds) {

@@ -71,6 +71,7 @@ import {
 import {
   deriveWorkspaceTree,
   expandWorkspaceAncestors,
+  orderWorkspaceRowsForDisplay,
   pruneCollapsedWorkspaceIds,
   pruneFavoriteWorkspaceIds,
   rebaseCollapsedWorkspaceIds,
@@ -559,6 +560,12 @@ export function AppShell() {
         };
       }),
     [displayMachines, latestAgentByWorkspaceId, state?.workspaces],
+  );
+  // The same visible order the sidebar renders; digit and previous/next
+  // workspace shortcuts index into this list.
+  const displayOrderedWorkspaces = useMemo(
+    () => orderWorkspaceRowsForDisplay(openTuiWorkspaces, openTuiMachines.map((machine) => machine.id)),
+    [openTuiMachines, openTuiWorkspaces],
   );
   const openTuiActivityRows = useMemo<OpenTuiActivityRow[]>(
     () => {
@@ -1183,16 +1190,17 @@ export function AppShell() {
 
   const activateWorkspaceAt = (index: number) => {
     if (!state) return;
-    const workspace = state.workspaces[index];
+    const row = displayOrderedWorkspaces[index];
+    const workspace = row ? state.workspaces.find((candidate) => candidate.id === row.id) : undefined;
     const tab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace?.tabs[0];
     if (workspace && tab) activateWorkspaceTab(workspace.id, tab.id);
   };
 
   const activateWorkspaceRelative = (delta: number) => {
-    if (!state || !activeWorkspace) return;
-    const current = state.workspaces.findIndex((workspace) => workspace.id === activeWorkspace.id);
+    if (!activeWorkspace || displayOrderedWorkspaces.length === 0) return;
+    const current = displayOrderedWorkspaces.findIndex((row) => row.id === activeWorkspace.id);
     if (current === -1) return;
-    const next = modulo(current + delta, state.workspaces.length);
+    const next = modulo(current + delta, displayOrderedWorkspaces.length);
     activateWorkspaceAt(next);
   };
 
@@ -1249,8 +1257,8 @@ export function AppShell() {
     focusPaneRelative,
     activateWorkspaceRelative,
     activateTabRelative,
-    activateWorkspaceAtDigit: state
-      ? (digit) => activateWorkspaceAt(digit === 9 ? state.workspaces.length - 1 : digit - 1)
+    activateWorkspaceAtDigit: state && displayOrderedWorkspaces.length > 0
+      ? (digit) => activateWorkspaceAt(digit === 9 ? displayOrderedWorkspaces.length - 1 : digit - 1)
       : null,
     activateTabAtDigit: activeWorkspace
       ? (digit) => activateTabAt(digit === 9 ? activeWorkspace.tabs.length - 1 : digit - 1)
