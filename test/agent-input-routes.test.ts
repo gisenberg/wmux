@@ -139,13 +139,27 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     assert.equal(invalidAttestation.status, 409, "the server independently rejects a non-exact runtime attestation");
     assert.equal(credentials.authenticate(capability.capability)?.kind, "agent-input-registration",
       "invalid attestation does not consume the one-shot capability");
+    const relaySecretSeed = "Q".repeat(43);
+    const registrationRequest = { ...registrationBody("N".repeat(43), serverChallenge), relaySecretSeed };
     const register = await fetch(`${base}/api/agent-input/sources/register`, {
-      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43), serverChallenge)),
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationRequest),
     });
     assert.equal(register.status, 201);
     assert.equal(register.headers.get("cache-control"), "no-store");
     const source = await register.json() as { sourceId: string; relaySecret: string };
     assert.ok(source.sourceId && source.relaySecret);
+    assert.equal(source.relaySecret.endsWith(`.${relaySecretSeed}`), true);
+    const lostRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationRequest),
+    });
+    assert.equal(lostRegistrationReplay.status, 200, "an exact response-loss retry converges without replaying plaintext");
+    const replayResult = await lostRegistrationReplay.json() as Record<string, unknown>;
+    assert.equal(replayResult.outcome, "already_exchanged");
+    assert.equal(replayResult.sourceId, source.sourceId);
+    assert.equal(typeof replayResult.expiresAt, "number");
+    assert.equal(replayResult.supported, true);
+    assert.equal(replayResult.credentialGeneration, 1);
+    assert.equal("relaySecret" in replayResult, false);
     const sourceChallengeResponse = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/challenge`, {
       method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify({ kind: "opencode" }),
     });
@@ -167,13 +181,11 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
       method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify({ pendingRequestIds: [] }),
     });
     assert.equal(incompleteNativeSnapshot.status, 400, "absence reconciliation requires an explicit complete snapshot");
-    const lostRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
-      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43), serverChallenge)),
+    const rotatedRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationRequest),
     });
-    assert.equal(lostRegistrationReplay.status, 200, "an exact retry converges without reconstructing plaintext");
-    const replayResult = await lostRegistrationReplay.json() as Record<string, unknown>;
-    assert.deepEqual(replayResult, { outcome: "already_exchanged", sourceId: source.sourceId });
-    assert.equal("relaySecret" in replayResult, false);
+    assert.equal(rotatedRegistrationReplay.status, 401,
+      "a capability cannot reconstruct a source credential after relay rotation");
     const conflictingRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
       method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("D".repeat(43), serverChallenge)),
     });

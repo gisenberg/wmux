@@ -37,7 +37,9 @@ const registerSchema = z.object({
   instanceNonce: text(),
   kind: z.literal("opencode"),
   runtimeAttestation: openCodeRuntimeAttestationSchema,
+  relaySecretSeed: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
 }).strict();
+const refreshSchema = registerSchema.omit({ relaySecretSeed: true });
 const challengeSchema = z.object({ kind: z.literal("opencode") }).strict();
 const captureSchema = z.object({
   occurrenceId: text(),
@@ -201,7 +203,7 @@ export const agentInputRoutes: readonly ApiRoute[] = [
     handler: async (ctx) => {
       if (!ctx.deps.agentInputEnabled) throw new HttpError(503, "agent_input_disabled");
       const principal = sourcePrincipal(ctx, ctx.match![1]);
-      const body = parse(registerSchema, await ctx.readJsonBody(MAX_SOURCE_BODY));
+      const body = parse(refreshSchema, await ctx.readJsonBody(MAX_SOURCE_BODY));
       const source = ctx.deps.agentInputCredentials.sourceForPrincipal(principal);
       if (!source || !liveContext(ctx, source.context)) throw new HttpError(409, "pane_unavailable");
       ctx.sendJson(200, ctx.deps.agentInputCredentials.refresh(principal, body), NO_STORE);

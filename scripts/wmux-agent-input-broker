@@ -314,6 +314,31 @@ function readCapability() {
   try { assertPrivateFile(capabilityPath); return fs.readFileSync(capabilityPath, "utf8").trim(); } catch { return ""; }
 }
 
+function consumeExactCapability(expected) {
+  if (!capabilityPath || !expected) return;
+  const claimedPath = `${capabilityPath}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.consumed`;
+  let claimed = false;
+  let restore = false;
+  try {
+    assertPrivateFile(capabilityPath);
+    fs.renameSync(capabilityPath, claimedPath);
+    claimed = true;
+    assertPrivateFile(claimedPath);
+    restore = fs.readFileSync(claimedPath, "utf8").trim() !== expected;
+    if (restore) {
+      try { fs.linkSync(claimedPath, capabilityPath); } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+      }
+    }
+  } catch {
+    if (claimed && restore) {
+      try { fs.linkSync(claimedPath, capabilityPath); } catch {}
+    }
+  } finally {
+    if (claimed) try { fs.rmSync(claimedPath, { force: true }); } catch {}
+  }
+}
+
 async function obtainServerChallenge() {
   const useSource = credential && !credential.requiresFreshRegistration;
   const token = useSource ? credential.relaySecret : readCapability();
@@ -381,10 +406,12 @@ async function register(attestation) {
   if (!capabilityPath || attestationDiagnostic(attestation) !== "ok") return false;
   let capability = readCapability();
   if (!capability) return false;
+  const relaySecretSeed = crypto.randomBytes(32).toString("base64url");
   const body = JSON.stringify({
     instanceNonce: attestation.nonce,
     kind: "opencode",
     runtimeAttestation: attestation,
+    relaySecretSeed,
   });
   let response = { status: 0, body: {} };
   try {
@@ -394,14 +421,19 @@ async function register(attestation) {
       if (response.status !== 0 && response.status !== 408 && response.status !== 429 && response.status < 500) break;
       if (attempt === 0) await sleep(100);
     }
-    if (response.status === 200 && response.body?.outcome === "already_exchanged") {
-      lastDiagnostic = "registration_response_lost";
-      return false;
+    const recovered = response.status === 200 && response.body?.outcome === "already_exchanged";
+    const issued = response.status === 201;
+    if ((!issued && !recovered) || typeof response.body.sourceId !== "string"
+      || typeof response.body.expiresAt !== "number" || !Number.isInteger(response.body.credentialGeneration)) return false;
+    let relaySecret = response.body.relaySecret;
+    if (recovered) {
+      const source = /^source_([0-9a-f-]{36})$/.exec(response.body.sourceId);
+      if (!source || response.body.supported !== true) return false;
+      relaySecret = `ais_${source[1]}.${relaySecretSeed}`;
     }
-    if (response.status !== 201 || typeof response.body.sourceId !== "string"
-      || typeof response.body.relaySecret !== "string" || typeof response.body.expiresAt !== "number") return false;
+    if (typeof relaySecret !== "string") return false;
     credential = {
-      schemaVersion: SCHEMA_VERSION, sourceId: response.body.sourceId, relaySecret: response.body.relaySecret,
+      schemaVersion: SCHEMA_VERSION, sourceId: response.body.sourceId, relaySecret,
       expiresAt: response.body.expiresAt, supported: response.body.supported === true,
       credentialGeneration: response.body.credentialGeneration, cursor: 0,
        occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
@@ -410,10 +442,10 @@ async function register(attestation) {
     persistCredential();
     return true;
   } finally {
-    capability = "";
     const terminal = response.status === 200 || response.status === 201
       || [400, 401, 403, 404, 409, 410, 422].includes(response.status);
-    if (terminal) try { fs.rmSync(capabilityPath, { force: true }); } catch {}
+    if (terminal) consumeExactCapability(capability);
+    capability = "";
   }
 }
 

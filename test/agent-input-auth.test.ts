@@ -62,12 +62,14 @@ const registration = (
   principal: Parameters<AgentInputCredentialStore["issueRuntimeChallenge"]>[0],
   nonce: string,
   nowMs: number,
+  relaySecretSeed?: string,
 ) => {
   const challenge = store.issueRuntimeChallenge(principal, nowMs - 1);
   return {
     instanceNonce: nonce,
     kind: "opencode" as const,
     runtimeAttestation: createOpenCodeRuntimeAttestation(nonce, challenge, nowMs),
+    ...(relaySecretSeed ? { relaySecretSeed } : {}),
   };
 };
 
@@ -80,11 +82,13 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     const registrationPrincipal = store.authenticate(issued.capability, 1_001);
     assert.equal(registrationPrincipal?.kind, "agent-input-registration");
     if (registrationPrincipal?.kind !== "agent-input-registration") return;
-    const registrationBody = registration(store, registrationPrincipal, "N".repeat(43), 1_002);
+    const relaySecretSeed = "Q".repeat(43);
+    const registrationBody = registration(store, registrationPrincipal, "N".repeat(43), 1_002, relaySecretSeed);
     const exchange = store.exchange(registrationPrincipal, registrationBody, 1_002);
     assert.equal(exchange.outcome, "issued");
     if (exchange.outcome !== "issued") return;
     assert.notEqual(exchange.relaySecret, issued.capability);
+    assert.equal(exchange.relaySecret.endsWith(`.${relaySecretSeed}`), true);
     const persisted = fs.readFileSync(filePath, "utf8");
     assert.doesNotMatch(persisted, new RegExp(issued.capability.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(persisted, new RegExp(exchange.relaySecret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -93,9 +97,13 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     assert.throws(() => registration(store, registrationPrincipal, "N".repeat(43), 1_003), /unauthorized/);
     assert.deepEqual(store.exchange(registrationPrincipal, registrationBody, 1_003), {
       outcome: "already_exchanged", sourceId: exchange.sourceId,
+      expiresAt: exchange.expiresAt, supported: true, credentialGeneration: 1,
     });
     assert.throws(() => store.exchange(registrationPrincipal, {
       ...registrationBody, instanceNonce: "D".repeat(43),
+    }, 1_003), /invalid_capability/);
+    assert.throws(() => store.exchange(registrationPrincipal, {
+      ...registrationBody, relaySecretSeed: "Z".repeat(43),
     }, 1_003), /invalid_capability/);
 
     const sourcePrincipal = store.authenticate(exchange.relaySecret, 1_010);

@@ -396,9 +396,10 @@ export interface RegisterAgentInputSource {
   instanceNonce: string;
   kind: "opencode";
   runtimeAttestation: OpenCodeRuntimeAttestation;
+  relaySecretSeed?: string;
 }
 
-export type RefreshAgentInputSource = RegisterAgentInputSource;
+export type RefreshAgentInputSource = Omit<RegisterAgentInputSource, "relaySecretSeed">;
 
 export type AgentInputSourceExchange =
   | {
@@ -409,7 +410,13 @@ export type AgentInputSourceExchange =
       supported: boolean;
       credentialGeneration: number;
     }
-  | { outcome: "already_exchanged"; sourceId: string };
+  | {
+      outcome: "already_exchanged";
+      sourceId: string;
+      expiresAt: number;
+      supported: boolean;
+      credentialGeneration: number;
+    };
 
 export interface AgentInputCredentialStoreOptions {
   hashKey: string;
@@ -577,6 +584,7 @@ export class AgentInputCredentialStore extends EventEmitter {
       instanceNonce: value(),
       kind: z.literal("opencode"),
       runtimeAttestation: openCodeRuntimeAttestationSchema,
+      relaySecretSeed: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
     }).strict().parse(input);
     let plaintext = "";
     const result = this.commit((draft) => {
@@ -588,7 +596,18 @@ export class AgentInputCredentialStore extends EventEmitter {
         if (capability.exchangeNonce !== parsed.instanceNonce || !capability.sourceId) {
           throw new AgentInputCredentialError("invalid_capability");
         }
-        return { outcome: "already_exchanged" as const, sourceId: capability.sourceId ?? "unavailable" };
+        const source = draft.sources.find((candidate) => candidate.id === capability.sourceId);
+        if (!source || (parsed.relaySecretSeed
+          && !this.verify("source", source.id, parsed.relaySecretSeed, source.secretVerifier))) {
+          throw new AgentInputCredentialError("invalid_capability");
+        }
+        return {
+          outcome: "already_exchanged" as const,
+          sourceId: source.id,
+          expiresAt: source.expiresAt,
+          supported: source.supported,
+          credentialGeneration: source.credentialGeneration,
+        };
       }
       this.consumeRuntimeChallenge(draft, principal, capability.context, parsed, nowMs);
       if (draft.sources.some((source) => source.revokedAt === undefined && source.expiresAt > nowMs
@@ -598,7 +617,7 @@ export class AgentInputCredentialStore extends EventEmitter {
       if (draft.sources.length >= 2_000) throw new AgentInputCredentialError("source_limit");
       const sourceUuid = crypto.randomUUID();
       const sourceId = `source_${sourceUuid}`;
-      plaintext = crypto.randomBytes(32).toString("base64url");
+      plaintext = parsed.relaySecretSeed ?? crypto.randomBytes(32).toString("base64url");
       const credentialId = crypto.randomUUID();
       const source: AgentInputSourceRecord = {
         id: sourceId,

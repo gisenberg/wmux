@@ -516,8 +516,13 @@ test("running broker backs off until durable reattachment stages replacement aut
   const capabilityPath = `${credentialPath}.cap`;
   const calls: string[] = [];
   let sourceChallengeCalls = 0;
+  let registrationAttempts = 0;
+  const registrationSeeds: string[] = [];
+  const recoveredSourceId = `source_${crypto.randomUUID()}`;
+  let recoveredAuthorization = "";
   const server = http.createServer(async (request, response) => {
-    for await (const _chunk of request) { /* drain */ }
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const requestPath = request.url ?? "";
     calls.push(requestPath);
     const send = (status: number, value: unknown) => {
@@ -537,11 +542,24 @@ test("running broker backs off until durable reattachment stages replacement aut
       return send(401, { error: "unauthorized" });
     }
     if (requestPath === "/api/agent-input/sources/challenge") return send(201, serverChallenge());
-    if (requestPath === "/api/agent-input/sources/register") return send(201, {
-      sourceId: "source-restarted", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000,
-      supported: true, credentialGeneration: 1,
-    });
-    if (requestPath.startsWith("/api/agent-input/sources/source-restarted/deliveries?")) {
+    if (requestPath === "/api/agent-input/sources/register") {
+      registrationAttempts += 1;
+      registrationSeeds.push(body.relaySecretSeed);
+      if (registrationAttempts === 1) {
+        fs.writeFileSync(capabilityPath, `${"D".repeat(43)}\n`, { mode: 0o600 });
+        return send(401, { error: "superseded" });
+      }
+      if (registrationAttempts === 2) {
+        request.socket.destroy();
+        return;
+      }
+      return send(200, {
+        outcome: "already_exchanged", sourceId: recoveredSourceId, expiresAt: Date.now() + 600_000,
+        supported: true, credentialGeneration: 1,
+      });
+    }
+    if (requestPath.startsWith(`/api/agent-input/sources/${recoveredSourceId}/deliveries?`)) {
+      recoveredAuthorization = request.headers.authorization ?? "";
       return send(200, { epoch: "relay-restarted", cursor: 0, deliveries: [] });
     }
     return send(404, { error: "not_found" });
@@ -560,8 +578,14 @@ test("running broker backs off until durable reattachment stages replacement aut
 
     fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
     await waitFor(() => broker.messages.filter((message) => message.type === "runtime_ready" && message.supported === true).length === 2);
-    await waitFor(() => calls.some((requestPath) => requestPath.startsWith("/api/agent-input/sources/source-restarted/deliveries?")));
-    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, "source-restarted");
+    await waitFor(() => calls.some((requestPath) => requestPath.startsWith(`/api/agent-input/sources/${recoveredSourceId}/deliveries?`)));
+    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, recoveredSourceId);
+    assert.equal(registrationAttempts, 3);
+    assert.notEqual(registrationSeeds[0], registrationSeeds[1],
+      "replacement authority starts an independent registration attempt");
+    assert.equal(registrationSeeds[1], registrationSeeds[2], "response-loss retry preserves the client-held relay seed");
+    assert.equal(recoveredAuthorization,
+      `Bearer ais_${recoveredSourceId.slice("source_".length)}.${registrationSeeds[1]}`);
     assert.ok(calls.includes("/api/agent-input/sources/challenge"));
     assert.ok(calls.includes("/api/agent-input/sources/register"));
     assert.equal(fs.existsSync(capabilityPath), false);
