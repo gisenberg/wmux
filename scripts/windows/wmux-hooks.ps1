@@ -98,6 +98,7 @@ if ($Command -eq 'install' -and $Target -eq 'codex') {
   $Settings = Read-JsonFile $SettingsPath
   $Changed = @(
     Set-HookCommand $Settings 'UserPromptSubmit' $CodexHookCommand @{ commandWindows = $CodexHookCommand; statusMessage = 'Updating wmux workspace' } 'codex'
+    Set-HookCommand $Settings 'PreToolUse' $CodexHookCommand @{ commandWindows = $CodexHookCommand; statusMessage = 'Updating wmux workspace' } 'codex'
     Set-HookCommand $Settings 'Stop' $CodexHookCommand @{ commandWindows = $CodexHookCommand; statusMessage = 'Summarizing wmux workspace' } 'codex'
   ) -contains $true
   if ($Changed) { Write-JsonFile $SettingsPath $Settings }
@@ -113,7 +114,7 @@ if ($Command -eq 'status') {
   $CodexPath = Join-Path $HOME '.codex\hooks.json'
   $CodexSettings = Read-JsonFile $CodexPath
   $ClaudeInstalled = (Test-HookCommand $ClaudeSettings.hooks.UserPromptSubmit $ClaudeHookCommand) -and (Test-HookCommand $ClaudeSettings.hooks.Stop $ClaudeHookCommand) -and (Test-HookCommand $ClaudeSettings.hooks.Notification $ClaudeHookCommand)
-  $CodexInstalled = (Test-HookCommand $CodexSettings.hooks.UserPromptSubmit $CodexHookCommand $CodexHookCommand) -and (Test-HookCommand $CodexSettings.hooks.Stop $CodexHookCommand $CodexHookCommand)
+  $CodexInstalled = (Test-HookCommand $CodexSettings.hooks.UserPromptSubmit $CodexHookCommand $CodexHookCommand) -and (Test-HookCommand $CodexSettings.hooks.PreToolUse $CodexHookCommand $CodexHookCommand) -and (Test-HookCommand $CodexSettings.hooks.Stop $CodexHookCommand $CodexHookCommand)
   [ordered]@{
     claude = if ($ClaudeInstalled) { 'installed' } else { 'not_installed' }
     codex = if ($CodexInstalled) { 'installed' } else { 'not_installed' }

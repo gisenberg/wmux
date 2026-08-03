@@ -118,6 +118,8 @@ export class AgentSessionService {
   }
 
   recordAgentEvent(input: AgentEventPostBody): AgentEventResult {
+    const coalesced = this.coalescedActiveEvent(input);
+    if (coalesced) return coalesced;
     this.recordInitialPrompt(input);
     const timelineInputs: AgentTimelineLifecycleInput[] = [];
     const result = this.state.commitMutation((persisted) => {
@@ -316,6 +318,39 @@ export class AgentSessionService {
       this.timelines.recordLifecycle(timelineInput);
     }
     return result;
+  }
+
+  private coalescedActiveEvent(
+    input: AgentEventPostBody,
+  ): AgentEventResult | undefined {
+    if (!input.coalesce) return undefined;
+    const snapshot = this.state.snapshot();
+    const target = resolveTarget(snapshot, input);
+    const agent = cleanTitle(input.agent ?? "agent", "agent");
+    const status = cleanTitle(input.status ?? "updated", "updated").toLowerCase();
+    if (!ACTIVE_AGENT_STATUSES.has(status)) return undefined;
+    const latest = snapshot.agentEvents.find(
+      (candidate) =>
+        candidate.paneId === target.paneId
+        && candidate.agent === agent,
+    );
+    const suppliedRunId = cleanDelegationRunId(input.runId);
+    const runId = suppliedRunId || (
+      latest && ACTIVE_AGENT_STATUSES.has(latest.status)
+        ? cleanDelegationRunId(latest.runId)
+        : ""
+    );
+    if (
+      !latest
+      || latest.status !== status
+      || cleanDelegationRunId(latest.runId) !== runId
+    ) {
+      return undefined;
+    }
+    return {
+      workspace: structuredClone(target.workspace),
+      agentEvent: structuredClone(latest),
+    };
   }
 
   delegationForRun(runId: string): DelegationRecord | undefined {

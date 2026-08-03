@@ -70,6 +70,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
         message: body.message,
         prompt: body.prompt,
         body: body.body,
+        coalesce: body.coalesce,
       });
       if (result.agentEvent.status === "completed") {
         deps.state.scheduleWorkspaceCleanupAfterSuccess(

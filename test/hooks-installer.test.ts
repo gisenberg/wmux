@@ -100,6 +100,32 @@ test("Claude installer adds a managed delegation skill without overwriting an un
   }
 });
 
+test("Codex installer covers prompt, tool, and stop lifecycle hooks idempotently", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-hooks-"));
+  const hooks = path.join(repoRoot, "scripts", "wmux-hooks");
+  const env = { ...process.env, HOME: home };
+  const settingsPath = path.join(home, ".codex", "hooks.json");
+  try {
+    await execFileAsync(hooks, ["install", "codex"], { env });
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    for (const eventName of ["UserPromptSubmit", "PreToolUse", "Stop"]) {
+      assert.equal(settings.hooks[eventName]?.length, 1);
+      assert.match(settings.hooks[eventName][0].hooks[0].command, /wmux-agent-event.*--codex-hook/);
+    }
+
+    const before = fs.statSync(settingsPath).mtimeMs;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await execFileAsync(hooks, ["install", "codex"], { env });
+    assert.equal(fs.statSync(settingsPath).mtimeMs, before);
+    const status = JSON.parse((await execFileAsync(hooks, ["status"], { env })).stdout) as Record<string, unknown>;
+    assert.equal(status.codex, "installed");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip: process.platform === "win32" }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-plugin-"));
   const configHome = path.join(home, "config");
