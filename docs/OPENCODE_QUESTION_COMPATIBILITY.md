@@ -294,7 +294,10 @@ public `failed` state for deterministic non-retryable SDK errors while retaining
   a durable pane reattaches, its new random session-incarnation epoch revokes the
   predecessor even if the pane ID and endpoint are unchanged. Durable terminal
   processes may survive, but structured answering requires a freshly staged
-  capability and restarted OpenCode process (normally a new pane). Server
+  capability and restarted OpenCode process. Reattaching a durable pane stages
+  a replacement capability; a restarted broker may discard only its stale
+  source authority and exchange that exact capability. A pane that predates
+  agent-input staging still requires a new pane. Server
   restart retains only sanitized request/credential history and never a raw
   answer. A never-exposed interrupted submission can be retried only when a new
   authoritative source owns the still-applicable request; SDK-started or

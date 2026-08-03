@@ -325,7 +325,20 @@ async function obtainServerChallenge() {
     const response = await request(pathname, token, { method: "POST", body: JSON.stringify({ kind: "opencode" }) });
     if (response.status === 201 && validServerChallenge(response.body)) return response.body;
     if (response.status !== 0 && response.status !== 408 && response.status !== 429 && response.status < 500) {
-      if (useSource && (response.status === 401 || response.status === 403)) disable("stale-credential");
+      if (useSource && (response.status === 401 || response.status === 403)) {
+        if (!readCapability()) {
+          disable("stale-credential");
+          return undefined;
+        }
+        // A wmux restart deliberately invalidates the old session incarnation.
+        // Only a newly staged, pane-bound capability may establish replacement
+        // authority; broad helper/browser credentials remain unavailable here.
+        credential.supported = false;
+        credential.requiresFreshRegistration = true;
+        credential.disabledReason = "stale-credential";
+        persistCredential();
+        return obtainServerChallenge();
+      }
       return undefined;
     }
     await sleep(Math.min(500, 100 * (2 ** attempt)));

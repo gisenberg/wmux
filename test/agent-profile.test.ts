@@ -302,6 +302,8 @@ print(json.dumps(authorizations))
     "WMUX_E2E_TOKEN",
     "WMUX_HELPER_TOKEN",
     "WMUX_HELPER_TOKEN_PATH",
+    "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_TOKEN_PATH",
   ]) delete env[key];
   const result = spawnSync("python3", ["-c", source, helper], {
     encoding: "utf8",

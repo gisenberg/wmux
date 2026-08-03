@@ -417,14 +417,27 @@ test("broker migrations discard unbound metadata, require fresh registration, an
   }
 });
 
-test("broker stale credentials and receipt capacity fail closed without metadata mutation calls", { skip: process.platform === "win32" }, async () => {
+test("broker stale credentials require fresh pane capability authority and receipt capacity fails closed", { skip: process.platform === "win32" }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-fail-closed-"));
   const credentialPath = path.join(directory, "pane.json");
+  const capabilityPath = `${credentialPath}.cap`;
   const calls: Array<{ path: string; body: any }> = [];
   const server = http.createServer(async (request, response) => {
-    for await (const _chunk of request) { /* consume */ }
-    calls.push({ path: request.url ?? "", body: {} });
-    response.writeHead(401, { "content-type": "application/json" }); response.end('{"error":"stale"}');
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const requestPath = request.url ?? "";
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+    calls.push({ path: requestPath, body });
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
+    };
+    if (requestPath === "/api/agent-input/sources/source-one/challenge") return send(401, { error: "stale" });
+    if (requestPath === "/api/agent-input/sources/challenge") return send(201, serverChallenge());
+    if (requestPath === "/api/agent-input/sources/register") return send(201, {
+      sourceId: "source-restarted", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000,
+      supported: true, credentialGeneration: 1,
+    });
+    if (requestPath.includes("/deliveries?")) return send(200, { epoch: "relay-restarted", cursor: 0, deliveries: [] });
+    return send(404, { error: "not_found" });
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
@@ -436,6 +449,21 @@ test("broker stale credentials and receipt capacity fail closed without metadata
     await broker.stop();
     assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).disabledReason, "stale-credential");
     assert.equal(calls.filter((call) => call.path.endsWith("/requests")).length, 0);
+
+    calls.length = 0;
+    writeCredential(credentialPath);
+    fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+    broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath, capabilityPath);
+    broker.send(runtime);
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
+    await broker.stop();
+    assert.deepEqual(calls.slice(0, 3).map((call) => call.path), [
+      "/api/agent-input/sources/source-one/challenge",
+      "/api/agent-input/sources/challenge",
+      "/api/agent-input/sources/register",
+    ]);
+    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, "source-restarted");
+    assert.equal(fs.existsSync(capabilityPath), false, "successful replacement consumes the new pane capability");
 
     const key = "a".repeat(64);
     const digest = "b".repeat(64);

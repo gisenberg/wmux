@@ -23,6 +23,9 @@ const agentEventEnv = (home: string, values: NodeJS.ProcessEnv = {}): NodeJS.Pro
     "WMUX_E2E_TOKEN",
     "WMUX_HELPER_TOKEN",
     "WMUX_HELPER_TOKEN_PATH",
+    "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_TOKEN",
+    "WMUX_TOKEN_PATH",
   ]) delete environment[key];
   return Object.assign(environment, values);
 };

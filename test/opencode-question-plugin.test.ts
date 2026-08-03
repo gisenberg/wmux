@@ -495,15 +495,19 @@ process.stdin.on("data", (chunk) => {
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
     installFixturePackages(configHome);
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
-    fs.writeFileSync(pluginPath, fs.readFileSync(pluginPath, "utf8").replace(
-      JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")), JSON.stringify(brokerPath),
-    ), { mode: 0o600 });
+    fs.writeFileSync(pluginPath, fs.readFileSync(pluginPath, "utf8")
+      .replace(
+        JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")), JSON.stringify(brokerPath),
+      )
+      .replace("const QUESTION_EVENT_TIMEOUT_MS = 10_000", "const QUESTION_EVENT_TIMEOUT_MS = 500")
+      .replace("const MAX_QUESTION_EVENT_TASKS = 256", "const MAX_QUESTION_EVENT_TASKS = 4"), { mode: 0o600 });
     const module = await import(`${pathToFileURL(pluginPath).href}?sequence=${Date.now()}`);
     let releaseAsk!: () => void;
     const askGate = new Promise<void>((resolve) => { releaseAsk = resolve; });
     let askLookupStarted!: () => void;
     const askLookup = new Promise<void>((resolve) => { askLookupStarted = resolve; });
     let sessionCalls = 0;
+    let hangLookups = false;
     const client = {
       global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, response: { status: 200 } }) },
       question: {
@@ -511,8 +515,13 @@ process.stdin.on("data", (chunk) => {
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
       },
       session: {
-        get: async () => {
+        get: async (_input?: unknown, options?: { signal?: AbortSignal }) => {
           sessionCalls += 1;
+          if (hangLookups) {
+            await new Promise<void>((_resolve, reject) => {
+              options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+            });
+          }
           if (sessionCalls === 1) {
             askLookupStarted();
             await askGate;
@@ -544,6 +553,30 @@ process.stdin.on("data", (chunk) => {
     assert.deepEqual(structured.map((message) => [message.type, message.eventSequence]), [["asked", 1], ["resolved", 2]]);
     assert.equal(structured.filter((message) => message.type === "asked").length, 1);
     assert.doesNotMatch(fs.readFileSync(messagesPath, "utf8"), /agent-events|notification|card/);
+
+    hangLookups = true;
+    const stalled = plugin.event({ event: { id: "event-stalled", type: "question.asked", properties: {
+      id: "stalled", sessionID: "stalled-session", questions: [
+        { header: "H", question: "Q", options: [], multiple: false, custom: true },
+      ],
+    } } });
+    await waitFor(() => sessionCalls === 3);
+    const queued = Array.from({ length: 4 }, (_, index) => plugin.event({ event: {
+      id: `event-overflow-${index}`,
+      type: "question.asked",
+      properties: {
+        id: `overflow-${index}`,
+        sessionID: `overflow-session-${index}`,
+        questions: [{ header: "H", question: "Q", options: [], multiple: false, custom: true }],
+      },
+    } }));
+    await Promise.race([
+      Promise.all([stalled, ...queued]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("structured event queue did not settle")), 2_000)),
+    ]);
+    await waitFor(() => fs.readFileSync(messagesPath, "utf8").includes('"type":"unsupported"'));
+    assert.equal(sessionCalls, 3,
+      "a timed-out lookup disables structured handling and queued events settle without more SDK calls");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(() => {

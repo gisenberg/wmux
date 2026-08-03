@@ -197,6 +197,8 @@ const MAX_OUTPUT = 128 * 1024
 const MAX_CHANNEL = 512 * 1024
 const INPUT_DELAY_MS = 100
 const REQUEST_TIMEOUT_MS = 10_000
+const QUESTION_EVENT_TIMEOUT_MS = 10_000
+const MAX_QUESTION_EVENT_TASKS = 256
 const MIN_WAIT_TIMEOUT_SECONDS = 0.1
 const MAX_WAIT_TIMEOUT_SECONDS = 14_400
 const DEFAULT_WAIT_TIMEOUT_SECONDS = { review: 1_800, change: 7_200, deploy: 7_200 } as const
@@ -1754,19 +1756,30 @@ export default (async ({ client, directory }) => {
       const current = active.get(sessionID)
       if (structuredShapeValid && questionBroker?.isReady()
         && (event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected")) {
-        if (questionEventSequence >= Number.MAX_SAFE_INTEGER) {
+        if (questionEventSequence >= Number.MAX_SAFE_INTEGER || questionEventTasks.size >= MAX_QUESTION_EVENT_TASKS) {
           questionBroker?.disable()
         } else {
           const eventSequence = ++questionEventSequence
           const structuredTask = questionEventTail.then(async () => {
+            if (!questionBroker.isReady()) return
             const structuredClient = questionBroker.structuredClient()
             if (!structuredClient) {
               questionBroker.disable()
               return
             }
-            const topLevel = current || await structuredClient.session.get({ sessionID, directory })
-              .then((session) => session?.data && !session.data.parentID)
-              .catch(() => false)
+            let topLevel = Boolean(current)
+            if (!topLevel) {
+              try {
+                const session = await snapshotSdkCall(
+                  (signal) => structuredClient.session.get({ sessionID, directory }, { signal }),
+                  Date.now() + QUESTION_EVENT_TIMEOUT_MS,
+                )
+                topLevel = Boolean(session?.data && !session.data.parentID)
+              } catch {
+                questionBroker.disable()
+                return
+              }
+            }
             if (topLevel && event.type === "question.asked") {
               if (typeof event.id !== "string" || !forwardQuestion(event.properties, false, event.id, eventSequence)) {
                 questionBroker?.disable()
