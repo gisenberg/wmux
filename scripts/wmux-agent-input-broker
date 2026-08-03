@@ -325,18 +325,16 @@ async function obtainServerChallenge() {
     const response = await request(pathname, token, { method: "POST", body: JSON.stringify({ kind: "opencode" }) });
     if (response.status === 201 && validServerChallenge(response.body)) return response.body;
     if (response.status !== 0 && response.status !== 408 && response.status !== 429 && response.status < 500) {
-      if (useSource && (response.status === 401 || response.status === 403)) {
-        if (!readCapability()) {
-          disable("stale-credential");
-          return undefined;
-        }
+      if (useSource && (response.status === 401 || response.status === 403 || response.status === 409)) {
         // A wmux restart deliberately invalidates the old session incarnation.
-        // Only a newly staged, pane-bound capability may establish replacement
-        // authority; broad helper/browser credentials remain unavailable here.
+        // Keep the broker alive while reattachment stages replacement authority.
+        // Only that pane-bound capability can register; broad credentials remain
+        // unavailable, and polling backs off until the file and binding are live.
         credential.supported = false;
         credential.requiresFreshRegistration = true;
         credential.disabledReason = "stale-credential";
         persistCredential();
+        persistStatus("pending", "fresh-registration-required");
         return obtainServerChallenge();
       }
       return undefined;
@@ -422,13 +420,21 @@ async function register(attestation) {
 async function refresh(attestation) {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
-    if (!credential || credential.requiresFreshRegistration) return false;
+    if (!credential) return false;
     pollAbort.abort();
     if (!attestation) {
       const serverChallenge = await obtainServerChallenge();
       if (!serverChallenge) return false;
       attestation = await requestRuntimeAttestation(serverChallenge);
       if (!attestation || attestationDiagnostic(attestation) !== "ok") return false;
+    }
+    if (credential.requiresFreshRegistration) {
+      const registered = await register(attestation);
+      if (registered) {
+        persistStatus("ready", "runtime_ready");
+        emit({ type: "runtime_ready", supported: true, eventSequence: credential.lastEventSequence });
+      }
+      return registered;
     }
     const response = await request(`/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/refresh`,
       credential.relaySecret, { method: "POST", body: JSON.stringify({
@@ -457,8 +463,9 @@ async function refresh(attestation) {
 }
 
 async function ensureFreshCredential() {
-  return Boolean(credential && !credential.requiresFreshRegistration
-    && (credential.expiresAt - Date.now() > REFRESH_LEAD_MS || await refresh()));
+  if (!credential) return false;
+  if (credential.requiresFreshRegistration) return refresh();
+  return credential.expiresAt - Date.now() > REFRESH_LEAD_MS || await refresh();
 }
 
 function identityKey(sessionID, requestID) {
@@ -964,15 +971,28 @@ function clearRawDelivery(delivery) {
 }
 
 async function poll() {
+  let recoveryFailures = 0;
+  const recoveryDelay = async () => {
+    recoveryFailures = Math.min(MAX_BACKOFF_ATTEMPTS, recoveryFailures + 1);
+    await sleep(Math.min(5_000, 100 * (2 ** (recoveryFailures - 1))));
+  };
   while (!stopping) {
-    if (!runtimeReady || !credential?.supported || !(await ensureFreshCredential())) { await sleep(500); continue; }
+    if (!runtimeReady || !credential || !(await ensureFreshCredential()) || !credential.supported) {
+      await recoveryDelay();
+      continue;
+    }
     pollAbort = new AbortController();
     const requestedEpoch = credential.relayEpoch ?? "unbound";
     const response = await request(`/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/deliveries?epoch=${encodeURIComponent(requestedEpoch)}&after=${credential.cursor}&limit=4&waitMs=25000`,
       credential.relaySecret, { method: "GET" }, pollAbort.signal, 30_000);
     if (stopping) return;
-    if (response.status === 401 || response.status === 403) { await refresh(); continue; }
+    if (response.status === 401 || response.status === 403) {
+      if (await refresh()) recoveryFailures = 0;
+      else await recoveryDelay();
+      continue;
+    }
     if (response.status !== 200 || !Array.isArray(response.body.deliveries)) { await sleep(500); continue; }
+    recoveryFailures = 0;
     if (typeof response.body.epoch !== "string" || response.body.epoch.length < 1 || response.body.epoch.length > 128
       || !/^[A-Za-z0-9._-]+$/.test(response.body.epoch) || !Number.isSafeInteger(response.body.cursor)
       || response.body.cursor < 0) return disable("relay-epoch-unsupported");

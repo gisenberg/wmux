@@ -1774,7 +1774,11 @@ export default (async ({ client, directory }) => {
                   (signal) => structuredClient.session.get({ sessionID, directory }, { signal }),
                   Date.now() + QUESTION_EVENT_TIMEOUT_MS,
                 )
-                topLevel = Boolean(session?.data && !session.data.parentID)
+                if (session?.response?.status !== 200 || !session.data || session.error !== undefined) {
+                  questionBroker.disable()
+                  return
+                }
+                topLevel = !session.data.parentID
               } catch {
                 questionBroker.disable()
                 return

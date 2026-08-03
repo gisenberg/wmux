@@ -510,6 +510,67 @@ test("broker stale credentials require fresh pane capability authority and recei
   }
 });
 
+test("running broker backs off until durable reattachment stages replacement authority", { skip: process.platform === "win32" }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-live-recovery-"));
+  const credentialPath = path.join(directory, "pane.json");
+  const capabilityPath = `${credentialPath}.cap`;
+  const calls: string[] = [];
+  let sourceChallengeCalls = 0;
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain */ }
+    const requestPath = request.url ?? "";
+    calls.push(requestPath);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
+    };
+    if (requestPath === "/api/agent-input/sources/source-one/challenge") {
+      sourceChallengeCalls += 1;
+      return sourceChallengeCalls === 1
+        ? send(201, serverChallenge())
+        : send(409, { error: "pane_unavailable" });
+    }
+    if (requestPath === "/api/agent-input/sources/source-one/refresh") return send(200, {
+      sourceId: "source-one", relaySecret: "T".repeat(43), expiresAt: Date.now() + 600_000,
+      credentialGeneration: 2,
+    });
+    if (requestPath.startsWith("/api/agent-input/sources/source-one/deliveries?")) {
+      return send(401, { error: "unauthorized" });
+    }
+    if (requestPath === "/api/agent-input/sources/challenge") return send(201, serverChallenge());
+    if (requestPath === "/api/agent-input/sources/register") return send(201, {
+      sourceId: "source-restarted", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000,
+      supported: true, credentialGeneration: 1,
+    });
+    if (requestPath.startsWith("/api/agent-input/sources/source-restarted/deliveries?")) {
+      return send(200, { epoch: "relay-restarted", cursor: 0, deliveries: [] });
+    }
+    return send(404, { error: "not_found" });
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+  writeCredential(credentialPath);
+  const broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath, capabilityPath);
+  try {
+    broker.send(runtime);
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
+    await waitFor(() => JSON.parse(fs.readFileSync(credentialPath, "utf8")).requiresFreshRegistration === true);
+    const callsBeforeWait = calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(calls.length, callsBeforeWait, "missing replacement capability causes no HTTP retry storm");
+
+    fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+    await waitFor(() => broker.messages.filter((message) => message.type === "runtime_ready" && message.supported === true).length === 2);
+    await waitFor(() => calls.some((requestPath) => requestPath.startsWith("/api/agent-input/sources/source-restarted/deliveries?")));
+    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, "source-restarted");
+    assert.ok(calls.includes("/api/agent-input/sources/challenge"));
+    assert.ok(calls.includes("/api/agent-input/sources/register"));
+    assert.equal(fs.existsSync(capabilityPath), false);
+  } finally {
+    await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("complete absence advances broker ordinals and queued orphan reconciliation reruns without accepting a stale member", { skip: process.platform === "win32" }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-absence-"));
   const credentialPath = path.join(directory, "pane.json");

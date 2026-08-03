@@ -589,6 +589,80 @@ process.stdin.on("data", (chunk) => {
   }
 });
 
+test("generated plugin fails closed on an in-band session lookup error", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-lookup-error-"));
+  const configHome = path.join(home, "config");
+  const capabilityPath = path.join(home, "pane.cap");
+  const credentialPath = path.join(home, "pane.json");
+  const messagesPath = path.join(home, "broker-messages.jsonl");
+  const brokerPath = path.join(home, "broker-wrapper.mjs");
+  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(brokerPath, `#!/usr/bin/env node
+import fs from "node:fs";
+process.stdout.write(JSON.stringify({ type: "runtime_ready", supported: true, eventSequence: 0 }) + "\\n");
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (;;) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+    if (line) {
+      fs.appendFileSync(${JSON.stringify(messagesPath)}, line + "\\n");
+      if (JSON.parse(line).type === "unsupported") process.exit(0);
+    }
+  }
+});
+`, { mode: 0o700 });
+  const env = {
+    ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, WMUX_URL: "http://127.0.0.1:9",
+    WMUX_PANE_ID: "pane-lookup-error", WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath,
+  };
+  const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  let plugin: any;
+  try {
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
+    installFixturePackages(configHome);
+    const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+    fs.writeFileSync(pluginPath, fs.readFileSync(pluginPath, "utf8").replace(
+      JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")), JSON.stringify(brokerPath),
+    ), { mode: 0o600 });
+    const module = await import(`${pathToFileURL(pluginPath).href}?lookup-error=${Date.now()}`);
+    const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, response: { status: 200 } }) },
+      question: {
+        list: async () => ({ data: [], response: { status: 200 } }),
+        reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
+      },
+      session: {
+        get: async () => ({ data: undefined, error: { name: "NotFound" }, response: { status: 404 } }),
+        messages: async () => ({ data: [] }),
+      },
+    };
+    setFixtureStructuredClient(() => client);
+    plugin = await module.default({ client: withInjectedTransport(client), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
+    await waitFor(() => fs.existsSync(messagesPath));
+    await plugin.event({ event: { id: "event-error", type: "question.asked", properties: {
+      id: "lookup-error", sessionID: "missing-session", questions: [
+        { header: "H", question: "Q", options: [], multiple: false, custom: true },
+      ],
+    } } });
+    await waitFor(() => fs.readFileSync(messagesPath, "utf8").includes('"type":"unsupported"'));
+    assert.doesNotMatch(fs.readFileSync(messagesPath, "utf8"), /"type":"asked"/);
+  } finally {
+    if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(() => {
+      for (const childId of brokerChildIds()) process.kill(childId, "SIGTERM");
+    });
+    clearFixtureStructuredClient();
+    for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("generated plugin bounds snapshot count, aggregate bytes, concurrency, and wall time", { skip: process.platform === "win32" }, async (t) => {
   const minimalQuestion = { header: "H", question: "Q", options: [], multiple: false, custom: true };
   const variants = [
