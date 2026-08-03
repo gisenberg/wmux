@@ -428,8 +428,14 @@ test("prediction layout crosses a wrapped row and confirms without residue", asy
     await page.keyboard.press("Enter");
     await page.waitForTimeout(1_100);
     await page.keyboard.type("a");
-    await page.waitForTimeout(650);
-    await page.keyboard.type("xy");
+    await expect.poll(async () => {
+      const rawCursor = await prediction.getAttribute("data-armed-cursor");
+      if (!rawCursor) return undefined;
+      return (JSON.parse(rawCursor) as { x: number }).x;
+    }, { timeout: 2_000 }).toBe(cols - 1);
+    await page.keyboard.type("x");
+    await expect(prediction).toHaveAttribute("data-active", "true");
+    await page.keyboard.type("y");
     await expect(prediction).toHaveAttribute("data-active", "true");
     const cells = await predictionCells(prediction);
     expect(cells[0]!.col).toBe(cols - 1);
