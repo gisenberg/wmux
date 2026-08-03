@@ -44,4 +44,9 @@ test("the Playwright runtime protects server-only endpoint credentials", () => {
   assert.match(source, /fs\.chmodSync\(directory, 0o700\)/);
   assert.match(source, /fs\.chmodSync\(home, 0o700\)/);
   assert.match(source, /HOME: home/);
+  assert.match(source, /WMUX_DISABLE_AUTH: authToken \? "0" : "1"/);
+  const remoteServer = fs.readFileSync(path.join(repoRoot, "e2e", "remote-server.ts"), "utf8");
+  assert.match(remoteServer, /resolveExternalE2eToken\(baseURL\)/);
+  assert.match(remoteServer, /delete serverEnvironment\.WMUX_E2E_TOKEN/);
+  assert.doesNotMatch(remoteServer, /WMUX_DISABLE_AUTH/);
 });

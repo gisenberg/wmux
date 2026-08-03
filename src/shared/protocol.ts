@@ -307,6 +307,7 @@ export type AgentInputRequestState =
   | "pending"
   | "answered"
   | "rejected"
+  | "failed"
   | "cancelled"
   | "closed";
 

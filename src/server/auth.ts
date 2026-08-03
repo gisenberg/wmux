@@ -15,7 +15,7 @@ import type {
   AgentInputSourcePrincipal,
 } from "./agent-input-credential-store.js";
 
-const wmuxHome = (): string => path.join(os.homedir(), ".wmux");
+const wmuxHome = (): string => path.join(process.env.HOME || os.homedir(), ".wmux");
 const defaultTokenPath = (): string => path.join(wmuxHome(), "token");
 const defaultAuthPath = (): string => path.join(wmuxHome(), "auth.json");
 const defaultSessionSecretPath = (): string => path.join(wmuxHome(), "session-secret");

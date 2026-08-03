@@ -61,8 +61,9 @@ test("restart clears a pre-exposure delivery binding and permits the same submis
     principal = credentials.authenticate(exchange.relaySecret);
     if (principal?.kind !== "agent-input-source") throw new Error("credential did not survive restart");
     const secondRelay = new AgentInputRelay(requests, credentials, { deliveryTimeoutMs: 1_000, isPaneLive: () => true });
+    const secondPollPromise = secondRelay.poll(principal, 0, 1, 1_000);
     const retried = secondRelay.submit(captured.request.id, 1, "stable-submission", [[sentinel]]);
-    const secondPoll = await secondRelay.poll(principal, 0, 1, 0);
+    const secondPoll = await secondPollPromise;
     const delivery = secondPoll.deliveries[0];
     assert.ok(delivery);
     secondRelay.acknowledge(principal, delivery.deliveryId, {
@@ -79,8 +80,9 @@ test("restart clears a pre-exposure delivery binding and permits the same submis
     }));
     if (afterRestart.outcome !== "created") throw new Error("post-restart request unavailable");
     const restartedRelay = new AgentInputRelay(requests, credentials, { deliveryTimeoutMs: 1_000, isPaneLive: () => true });
+    const resetPollPromise = restartedRelay.poll(principal, 10_000, 1, 1_000, undefined, secondPoll.epoch);
     const restartedAnswer = restartedRelay.submit(afterRestart.request.id, 1, "after-restart", [["safe"]]);
-    const resetPoll = await restartedRelay.poll(principal, 10_000, 1, 0, undefined, secondPoll.epoch);
+    const resetPoll = await resetPollPromise;
     assert.notEqual(resetPoll.epoch, secondPoll.epoch);
     assert.equal(resetPoll.deliveries.length, 1,
       "a stale high cursor from the prior relay epoch cannot suppress the first post-restart delivery");
@@ -122,8 +124,9 @@ test("restart after exposure remains quarantined while list-present and never re
     const captured = requests.capture(captureInput);
     if (captured.outcome !== "created") throw new Error("request unavailable");
     const firstRelay = new AgentInputRelay(requests, credentials, { deliveryTimeoutMs: 5_000, isPaneLive: () => true });
+    const exposedPoll = firstRelay.poll(principal, 0, 1, 1_000);
     const interrupted = firstRelay.submit(captured.request.id, 1, "stable", [["Safe"]]);
-    const exposed = (await firstRelay.poll(principal, 0, 1, 0)).deliveries[0];
+    const exposed = (await exposedPoll).deliveries[0];
     assert.ok(exposed);
     firstRelay.startDelivery(principal, exposed.deliveryId, exposed.requestId, exposed.expectedGeneration);
     firstRelay.dispose();
@@ -170,8 +173,9 @@ test("durable delivery identity accepts SDK-success ack after relay restart with
     if (captured.outcome !== "created") throw new Error("request unavailable");
     const sentinel = ["NEVER", "PERSIST", "RAW"].join("_");
     const firstRelay = new AgentInputRelay(requests, credentials, { deliveryTimeoutMs: 5_000, isPaneLive: () => true });
+    const deliveryPoll = firstRelay.poll(principal, 0, 1, 1_000);
     const interrupted = firstRelay.submit(captured.request.id, 1, "stable", [[sentinel]]);
-    const delivery = (await firstRelay.poll(principal, 0, 1, 0)).deliveries[0];
+    const delivery = (await deliveryPoll).deliveries[0];
     firstRelay.startDelivery(principal, delivery.deliveryId, captured.request.id, 1);
     firstRelay.dispose();
     assert.deepEqual(await interrupted, { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false });

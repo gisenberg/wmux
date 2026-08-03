@@ -51,6 +51,16 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.match(plugin, /\^New session - \\d\{4\}/);
     assert.match(plugin, /cacheTitle\(input\.sessionID, session\.data\?\.title\)/);
     assert.match(plugin, /const title = titles\.get\(sessionID\) \|\| sessionTitle\(session\?\.data\?\.title\) \|\| current\.title/);
+    assert.match(plugin, /if \(!await beginDelivery\(delivery\)\) \{[\s\S]*deliveryStates\.delete\(invocationKey\)/,
+      "an unstarted delivery remains eligible after broker refresh or start-response loss");
+    assert.match(plugin, /result\.data\.length > 256/,
+      "the v9 compatibility contract bounds snapshot validation before per-session SDK calls");
+    assert.match(plugin, /Buffer\.byteLength\(JSON\.stringify\(message\)\) > 128 \* 1024/,
+      "complete snapshots cannot be silently dropped at the broker-control line bound");
+    assert.match(plugin, /Math\.min\(8, validated\.length\)/,
+      "snapshot session validation uses bounded concurrency under one deadline");
+    assert.match(plugin, /Symbol\.for\("wmux\.opencode\.question-broker-owner"\)/,
+      "plugin replacement owns and retires one broker process");
     await execFileAsync(process.execPath, ["--experimental-strip-types", "--check", pluginPath]);
     const before = fs.statSync(pluginPath).mtimeMs;
     fs.chmodSync(pluginPath, 0o644);
@@ -209,8 +219,12 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
     WMUX_TOKEN_PATH: process.env.WMUX_TOKEN_PATH,
     WMUX_PANE_ID: process.env.WMUX_PANE_ID,
     WMUX_WORKSPACE_ID: process.env.WMUX_WORKSPACE_ID,
+    WMUX_AGENT_INPUT_CAPABILITY_PATH: process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH,
   };
   try {
+    delete process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH;
+    delete process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH;
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     assert.ok(address && typeof address === "object");

@@ -4,6 +4,7 @@ import type {
   AgentInputSourcePrincipal,
 } from "../agent-input-credential-store.js";
 import { AgentInputCredentialError } from "../agent-input-credential-store.js";
+import { contextSessionBinding } from "../agent-input-credential-store.js";
 import { AgentInputRequestStoreError } from "../agent-input-request-store.js";
 import {
   OPENCODE_QUESTION_CONTRACT_DIGEST,
@@ -15,8 +16,15 @@ import { HttpError, routePolicy } from "./route.js";
 
 const NO_STORE = { "cache-control": "no-store" };
 const MAX_SOURCE_BODY = 128 * 1024;
+// A broker-control snapshot is capped at 128 KiB. Adding 256 occurrence IDs,
+// hashes, ordinals, and the duplicate cut-scope key list expands it by less
+// than another 128 KiB, so the exact native-list envelope remains bounded here.
+const MAX_NATIVE_LIST_BODY = 256 * 1024;
 const MAX_CHALLENGE_BODY = 1_024;
 const MAX_ANSWER_BODY = 256 * 1024;
+const MAX_ANSWER_VALUES = 129;
+const MAX_ANSWER_VALUE_BYTES = 4_096;
+const MAX_ANSWER_BYTES = 16_384;
 const text = (max = 256) => z.string().min(1).max(max);
 const questionSchema = z.object({
   header: text(120),
@@ -40,11 +48,19 @@ const captureSchema = z.object({
   id: text(),
   questions: z.array(questionSchema).min(1).max(32),
 }).strict();
+const answerValueSchema = z.string().min(1).max(MAX_ANSWER_VALUE_BYTES).refine(
+  (value) => Buffer.byteLength(value, "utf8") <= MAX_ANSWER_VALUE_BYTES,
+);
 const answerSchema = z.object({
   expectedGeneration: z.number().int().positive(),
   idempotencyKey: text(),
-  answers: z.array(z.array(z.string().min(1).max(4_096)).min(1).max(128)).min(1).max(32),
-}).strict();
+  // A 128-option multiple-choice question may also permit one custom value.
+  answers: z.array(z.array(answerValueSchema).min(1).max(MAX_ANSWER_VALUES)).min(1).max(32),
+}).strict().refine(
+  ({ answers }) => answers.flat().reduce(
+    (total, value) => total + Buffer.byteLength(value, "utf8"), 0,
+  ) <= MAX_ANSWER_BYTES,
+);
 const ackSchema = z.object({
   id: text(),
   generation: z.number().int().positive(),
@@ -94,12 +110,17 @@ const liveContext = (ctx: RouteContext, context: {
   tabId: string;
   paneId: string;
   machineId?: string;
+  backendId?: "raw-pty" | "durable-multiplexer" | "windows-agent";
+  sessionIncarnation?: string;
+  endpointFingerprint?: string;
 }): boolean => {
   const found = ctx.deps.state.findPaneContext(context.paneId);
-  return Boolean(found
+  const binding = contextSessionBinding({ ...context, sourceKind: "opencode" });
+  return Boolean(binding && found && found.pane.status === "running"
     && found.workspace.id === context.workspaceId
     && found.tab.id === context.tabId
-    && found.pane.machineId === context.machineId);
+    && found.pane.machineId === context.machineId
+    && ctx.deps.sessions.hasLivePaneSession?.(context.paneId, binding));
 };
 
 export const agentInputRoutes: readonly ApiRoute[] = [
@@ -156,12 +177,14 @@ export const agentInputRoutes: readonly ApiRoute[] = [
       const context = ctx.deps.agentInputCredentials.registrationContext(ctx.principal.capabilityId);
       if (!context || !liveContext(ctx, context)) throw new HttpError(409, "pane_unavailable");
       const body = parse(registerSchema, await ctx.readJsonBody(MAX_SOURCE_BODY));
+      const currentContext = ctx.deps.agentInputCredentials.registrationContext(ctx.principal.capabilityId);
+      if (!currentContext || !liveContext(ctx, currentContext)) throw new HttpError(409, "pane_unavailable");
       const result = ctx.deps.agentInputCredentials.exchange(
         ctx.principal as AgentInputRegistrationPrincipal,
         body,
       );
       if (result.outcome === "already_exchanged") {
-        ctx.sendJson(409, result, NO_STORE);
+        ctx.sendJson(200, result, NO_STORE);
         return;
       }
       ctx.sendJson(201, {
@@ -236,7 +259,7 @@ export const agentInputRoutes: readonly ApiRoute[] = [
     policy: routePolicy("agent-input-native-list-reconcile", "POST", /^\/api\/agent-input\/sources\/([^/]+)\/native-list$/, "agent-input-source"),
     handler: async (ctx) => {
       const principal = sourcePrincipal(ctx, ctx.match![1]);
-      const body = parse(nativeListSchema, await ctx.readJsonBody(MAX_SOURCE_BODY));
+      const body = parse(nativeListSchema, await ctx.readJsonBody(MAX_NATIVE_LIST_BODY));
       ctx.sendJson(200, ctx.deps.agentInputRelay.reconcileNativeList(principal, body.members, body.occurrenceKeys), NO_STORE);
     },
   },

@@ -16,8 +16,11 @@ export const MAX_AGENT_INPUT_TRANSIENT_BYTES_PER_SOURCE = 128 * 1024;
 export const MAX_AGENT_INPUT_POLL_LIMIT = 16;
 export const MAX_AGENT_INPUT_POLL_WAIT_MS = 30_000;
 export const MAX_AGENT_INPUT_POLLS = 64;
+export const MAX_AGENT_INPUT_WAITERS_PER_DELIVERY = 32;
+export const MAX_AGENT_INPUT_WAITERS = 256;
 export const DEFAULT_AGENT_INPUT_DELIVERY_TIMEOUT_MS = 15_000;
 export const MIN_AGENT_INPUT_REDELIVERY_MS = 1_000;
+export const DEFAULT_AGENT_INPUT_POLL_GRACE_MS = 5_000;
 
 export interface AgentInputDelivery {
   deliveryId: string;
@@ -36,6 +39,7 @@ interface InternalDelivery extends AgentInputDelivery {
   waiters: Map<symbol, (outcome: AgentInputAnswerOutcome) => void>;
   timer: ReturnType<typeof setTimeout>;
   observed: boolean;
+  observedAt?: number;
   sdkStarted: boolean;
 }
 
@@ -56,20 +60,24 @@ export type AgentInputSubmitResult =
 export interface AgentInputRelayOptions {
   enabled?: boolean;
   deliveryTimeoutMs?: number;
+  pollGraceMs?: number;
   isPaneLive: (source: AgentInputSourceRecord) => boolean;
 }
 
 export class AgentInputRelay {
   private enabled: boolean;
   private readonly deliveryTimeoutMs: number;
+  private readonly pollGraceMs: number;
   private readonly deliveries = new Map<string, InternalDelivery>();
   private readonly acknowledgements = new Map<string, AckRecord>();
   private readonly polls = new Map<string, { leaseId: symbol; cancel: () => void }>();
+  private readonly recentPolls = new Map<string, { credentialGeneration: number; authenticatedAt: number }>();
   private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly events = new EventEmitter();
   private readonly epoch: string = crypto.randomUUID();
   private cursor = 0;
   private transientBytes = 0;
+  private waiterCount = 0;
   private disposed = false;
 
   constructor(
@@ -79,6 +87,7 @@ export class AgentInputRelay {
   ) {
     this.enabled = options.enabled ?? true;
     this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? DEFAULT_AGENT_INPUT_DELIVERY_TIMEOUT_MS;
+    this.pollGraceMs = options.pollGraceMs ?? DEFAULT_AGENT_INPUT_POLL_GRACE_MS;
     credentials.on("revoked", this.onSourceRevoked);
     credentials.on("rotated", this.onSourceRotated);
     credentials.on("attestation-required", this.onSourceAttestationRequired);
@@ -124,8 +133,14 @@ export class AgentInputRelay {
         return this.requests.release(requestId, expectedGeneration, idempotencyKey, "source_unavailable");
       }
     }
+    // A newly reserved delivery must have room for its first waiter before it
+    // becomes observable to the broker. Otherwise the caller could receive a
+    // failure while its answer remains eligible for execution.
+    if (this.waiterCount >= MAX_AGENT_INPUT_WAITERS) {
+      return this.requests.release(requestId, expectedGeneration, idempotencyKey, "source_unavailable");
+    }
     const source = this.credentials.source(request.sourceId);
-    if (!source || !this.sourceAvailable(source)) {
+    if (!source || !this.sourceAvailable(source) || !this.hasAcceptingPoll(source)) {
       return this.requests.release(requestId, expectedGeneration, idempotencyKey, "source_unavailable");
     }
     const bytes = Buffer.byteLength(JSON.stringify(answers), "utf8");
@@ -190,64 +205,94 @@ export class AgentInputRelay {
         cancelWait?.();
       },
     });
-    const effectiveAfter = clientEpoch === this.epoch ? after : 0;
-    const select = (): AgentInputDelivery[] => {
-      const now = Date.now();
-      const internal = [...this.deliveries.values()]
-      .filter((delivery) => delivery.sourceId === principal.sourceId
-        && delivery.credentialGeneration === principal.credentialGeneration
-        && !delivery.observed
-        && delivery.cursor > effectiveAfter)
-      .sort((left, right) => left.cursor - right.cursor)
-      .slice(0, limit);
-      for (const delivery of internal) {
-        if (!delivery.observed) {
-          // This persistence boundary is deliberately before any raw answer is
-          // copied into a response. A restart can therefore distinguish a
-          // never-exposed reservation from a delivery requiring native proof.
-          this.requests.observe(
-            delivery.requestId,
-            delivery.expectedGeneration,
-            delivery.idempotencyKey,
-            now,
-          );
-          delivery.observed = true;
+    let completed = false;
+    try {
+      const effectiveAfter = clientEpoch === this.epoch ? after : 0;
+      const select = (): AgentInputDelivery[] => {
+        const now = Date.now();
+        const internal = [...this.deliveries.values()]
+          .filter((delivery) => delivery.sourceId === principal.sourceId
+            && delivery.credentialGeneration === principal.credentialGeneration
+            && ((!delivery.observed && delivery.cursor > effectiveAfter)
+              || (delivery.observed && !delivery.sdkStarted
+                && (delivery.observedAt ?? 0) + MIN_AGENT_INPUT_REDELIVERY_MS <= now)))
+          .sort((left, right) => left.cursor - right.cursor)
+          .slice(0, limit);
+        for (const delivery of internal) {
+          if (!delivery.observed) {
+            // This persistence boundary is deliberately before any raw answer is
+            // copied into a response. A restart can therefore distinguish a
+            // never-exposed reservation from a delivery requiring native proof.
+            this.requests.observe(
+              delivery.requestId,
+              delivery.expectedGeneration,
+              delivery.idempotencyKey,
+              now,
+            );
+            delivery.observed = true;
+          }
+          delivery.observedAt = now;
+        }
+        return internal.map(publicDelivery);
+      };
+      let selected = select();
+      if (selected.length === 0 && waitMs > 0 && !cancelled) {
+        const now = Date.now();
+        const nextRedeliveryAt = [...this.deliveries.values()]
+        .filter((delivery) => delivery.sourceId === principal.sourceId
+          && delivery.credentialGeneration === principal.credentialGeneration
+          && delivery.observed && !delivery.sdkStarted)
+        .reduce((earliest, delivery) => Math.min(
+          earliest,
+          (delivery.observedAt ?? now) + MIN_AGENT_INPUT_REDELIVERY_MS,
+        ), Number.POSITIVE_INFINITY);
+        const wakeMs = Math.min(waitMs, Number.isFinite(nextRedeliveryAt)
+          ? Math.max(0, nextRedeliveryAt - now)
+          : waitMs);
+        await new Promise<void>((resolve) => {
+          const event = () => done();
+          let timer: ReturnType<typeof setTimeout>;
+          const done = () => {
+            clearTimeout(timer);
+            this.events.off(principal.sourceId, event);
+            signal?.removeEventListener("abort", abort);
+            resolve();
+          };
+          const abort = () => {
+            cancelled = true;
+            done();
+          };
+          timer = setTimeout(done, wakeMs);
+          cancelWait = done;
+          this.events.once(principal.sourceId, event);
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        });
+        if (!cancelled) selected = select();
+      }
+      completed = true;
+      return {
+        epoch: this.epoch,
+        cursor: selected.length
+          ? Math.max(effectiveAfter, ...selected.map((delivery) => delivery.cursor))
+          : effectiveAfter,
+        deliveries: selected,
+      };
+    } finally {
+      const active = this.polls.get(principal.sourceId);
+      if (active?.leaseId === leaseId) {
+        this.polls.delete(principal.sourceId);
+        if (completed && !cancelled && !signal?.aborted) {
+          this.assertSourcePrincipal(principal);
+          this.recentPolls.set(principal.sourceId, {
+            credentialGeneration: principal.credentialGeneration,
+            authenticatedAt: Date.now(),
+          });
+        } else {
+          this.recentPolls.delete(principal.sourceId);
         }
       }
-      return internal.map(publicDelivery);
-    };
-    let selected = select();
-    if (selected.length === 0 && waitMs > 0 && !cancelled) {
-      await new Promise<void>((resolve) => {
-        const event = () => done();
-        let timer: ReturnType<typeof setTimeout>;
-        const done = () => {
-          clearTimeout(timer);
-          this.events.off(principal.sourceId, event);
-          signal?.removeEventListener("abort", abort);
-          resolve();
-        };
-        const abort = () => {
-          cancelled = true;
-          done();
-        };
-        timer = setTimeout(done, waitMs);
-        cancelWait = done;
-        this.events.once(principal.sourceId, event);
-        if (signal?.aborted) abort();
-        else signal?.addEventListener("abort", abort, { once: true });
-      });
-      if (!cancelled) selected = select();
     }
-    const active = this.polls.get(principal.sourceId);
-    if (active?.leaseId === leaseId) this.polls.delete(principal.sourceId);
-    return {
-      epoch: this.epoch,
-      cursor: selected.length
-        ? Math.max(effectiveAfter, ...selected.map((delivery) => delivery.cursor))
-        : effectiveAfter,
-      deliveries: selected,
-    };
   }
 
   acknowledge(
@@ -341,8 +386,7 @@ export class AgentInputRelay {
     occurrenceId: string,
   ): { outcome: "quarantined" | "pending" | "already_resolved" | "retired" } {
     this.assertSourcePrincipal(principal);
-    const request = this.requests.find(requestId);
-    if (request && (request.sourceId !== principal.sourceId || request.paneId !== principal.paneId)) {
+    if (!this.requests.belongsToSource(requestId, generation, principal.sourceId)) {
       return { outcome: "retired" };
     }
     return this.requests.reconcileNativePending(requestId, generation, occurrenceId);
@@ -370,8 +414,7 @@ export class AgentInputRelay {
     result: "replied" | "rejected",
   ): { outcome: "resolved" | "already_resolved" | "retired" } {
     this.assertSourcePrincipal(principal);
-    const request = this.requests.find(requestId);
-    if (request && (request.sourceId !== principal.sourceId || request.paneId !== principal.paneId)) {
+    if (!this.requests.belongsToSource(requestId, generation, principal.sourceId)) {
       return { outcome: "retired" };
     }
     const outcome = this.requests.resolveNative(requestId, generation, occurrenceId, result);
@@ -411,6 +454,7 @@ export class AgentInputRelay {
   disconnectSource(sourceId: string): void {
     this.polls.get(sourceId)?.cancel();
     this.polls.delete(sourceId);
+    this.recentPolls.delete(sourceId);
     for (const delivery of [...this.deliveries.values()]) {
       if (delivery.sourceId !== sourceId) continue;
       this.removeDelivery(delivery);
@@ -434,6 +478,7 @@ export class AgentInputRelay {
     }
     for (const poll of this.polls.values()) poll.cancel();
     this.polls.clear();
+    this.recentPolls.clear();
     this.credentials.off("revoked", this.onSourceRevoked);
     this.credentials.off("rotated", this.onSourceRotated);
     this.credentials.off("attestation-required", this.onSourceAttestationRequired);
@@ -466,6 +511,14 @@ export class AgentInputRelay {
       && source.expiresAt > Date.now() && this.options.isPaneLive(source);
   }
 
+  private hasAcceptingPoll(source: AgentInputSourceRecord): boolean {
+    if (this.polls.has(source.id)) return true;
+    const recent = this.recentPolls.get(source.id);
+    return Boolean(recent
+      && recent.credentialGeneration === source.credentialGeneration
+      && recent.authenticatedAt + this.pollGraceMs >= Date.now());
+  }
+
   private assertSourcePrincipal(principal: AgentInputSourcePrincipal): void {
     const source = this.credentials.source(principal.sourceId);
     if (!source || !this.sourceAvailable(source)
@@ -477,14 +530,23 @@ export class AgentInputRelay {
   }
 
   private waitForExisting(delivery: InternalDelivery, signal?: AbortSignal): Promise<AgentInputAnswerOutcome> {
+    if (delivery.waiters.size >= MAX_AGENT_INPUT_WAITERS_PER_DELIVERY
+      || this.waiterCount >= MAX_AGENT_INPUT_WAITERS) {
+      return Promise.resolve({ outcome: "source_unavailable" });
+    }
     return new Promise((resolve) => {
       const waiterId = Symbol(delivery.deliveryId);
+      let active = true;
       const finish = (outcome: AgentInputAnswerOutcome) => {
+        if (!active) return;
+        active = false;
+        this.waiterCount -= 1;
         signal?.removeEventListener("abort", abort);
         resolve(outcome);
       };
       const abort = () => this.abandonWaiter(delivery, waiterId);
       delivery.waiters.set(waiterId, finish);
+      this.waiterCount += 1;
       if (signal?.aborted) abort();
       else signal?.addEventListener("abort", abort, { once: true });
     });

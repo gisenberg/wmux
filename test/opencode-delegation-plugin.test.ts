@@ -300,9 +300,11 @@ const withGeneratedTool = async (
     "WMUX_TOKEN",
     "WMUX_TOKEN_PATH",
   ];
-  const saved = new Map(["HOME", "WMUX_URL", "WMUX_PANE_ID", ...authKeys].map((key) => [key, process.env[key]]));
+  const agentInputKeys = ["WMUX_AGENT_INPUT_CAPABILITY_PATH", "WMUX_AGENT_INPUT_CREDENTIAL_PATH"];
+  const saved = new Map(["HOME", "WMUX_URL", "WMUX_PANE_ID", ...authKeys, ...agentInputKeys]
+    .map((key) => [key, process.env[key]]));
   try {
-    for (const key of authKeys) delete process.env[key];
+    for (const key of [...authKeys, ...agentInputKeys]) delete process.env[key];
     Object.assign(process.env, { HOME: home, WMUX_URL: api.url, ...authEnv });
     if (apiOptions.parentPaneId === undefined) delete process.env.WMUX_PANE_ID;
     else process.env.WMUX_PANE_ID = apiOptions.parentPaneId;

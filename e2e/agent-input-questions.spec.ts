@@ -1,4 +1,4 @@
-import { expect, test, type WebSocketRoute } from "@playwright/test";
+import { expect, test, type WebSocketRoute } from "./fixtures";
 import type { AgentInputRequest, BootstrapPayload, TerminalNotification } from "../src/shared/protocol.js";
 
 test("rendered OpenCode shelf submits exact answers, renders outcomes, routes notifications, and resyncs gaps", async ({ page, request }, testInfo) => {
@@ -78,6 +78,7 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     };
     let bootstrapCalls = 0;
     let eventSocket: WebSocketRoute | undefined;
+    let currentRevision = payload.eventRevision;
     const submissions: Array<{ id: string; body: any }> = [];
     let paneInputCalls = 0;
     await page.route("**/api/bootstrap", async (route) => {
@@ -99,6 +100,23 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
                 ? { status: 503, body: { outcome: "delivery_timeout" } }
                 : { status: 503, body: { outcome: "source_unavailable" } };
       await route.fulfill({ status: result.status, contentType: "application/json", body: JSON.stringify(result.body) });
+      const terminal = id === main.id || id === alreadyResolved.id
+        ? { request: id === main.id ? main : alreadyResolved, state: "answered" as const, resolution: "plugin" as const }
+        : id === sdkError.id
+          ? { request: sdkError, state: "failed" as const, resolution: "plugin" as const }
+          : undefined;
+      if (terminal && eventSocket) {
+        const baseEventRevision = currentRevision;
+        currentRevision += 1;
+        eventSocket.send(JSON.stringify({
+          type: "delta", baseEventRevision, eventRevision: currentRevision,
+          revision: payload.revision, healthEpoch: payload.healthEpoch,
+          agentInputRequests: { upserted: [{
+            ...terminal.request, state: terminal.state, resolution: terminal.resolution,
+            updatedAt: new Date().toISOString(), resolvedAt: new Date().toISOString(),
+          }], removedIds: [] },
+        }));
+      }
     });
     await page.route("**/api/panes/*/input", async (route) => {
       paneInputCalls += 1;
@@ -123,7 +141,6 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await page.waitForTimeout(200);
     expect(await page.evaluate(async () => (await (await fetch("/api/bootstrap")).json()).agentInputRequests.length)).toBe(6);
 
-    const firstRevision = payload.eventRevision;
     const mainCard = page.locator(`[data-request-id="${main.id}"]`);
     await expect(mainCard).toBeVisible();
     await page.evaluate((targetHref) => {
@@ -150,15 +167,15 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await mainCard.locator("fieldset").nth(1).getByRole("checkbox").nth(1).check();
     await mainCard.getByLabel("Note custom answer").fill("rendered custom answer");
     await mainCard.getByRole("button", { name: /SUBMIT/ }).click();
-    await expect(mainCard).toHaveAttribute("data-state", "delivered");
+    await expect(mainCard).toHaveAttribute("data-state", "answered");
     expect(submissions.find((item) => item.id === main.id)?.body.answers).toEqual([
       ["Safe"], ["Tests", "Types"], ["rendered custom answer"],
     ]);
     await expect(mainCard.getByLabel("Note custom answer")).toHaveValue("");
 
     for (const [requestItem, expectedState] of [
-      [sdkError, "sdk_error"],
-      [alreadyResolved, "already_resolved"],
+      [sdkError, "failed"],
+      [alreadyResolved, "answered"],
       [conflict, "conflict"],
       [timedOut, "delivery_timeout"],
       [unavailable, "source_unavailable"],
@@ -174,37 +191,45 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
 
     eventSocket!.send(JSON.stringify({
       type: "delta",
-      baseEventRevision: firstRevision,
-      eventRevision: firstRevision + 1,
+      baseEventRevision: currentRevision,
+      eventRevision: currentRevision + 1,
       revision: payload.revision,
       healthEpoch: payload.healthEpoch,
       agentInputRequests: { upserted: [contiguousRequest], removedIds: [] },
     }));
+    currentRevision += 1;
     await expect(page.locator(`[data-request-id="${contiguousRequest.id}"]`)).toBeVisible();
 
     eventSocket!.send(JSON.stringify({ type: "notification", notification }));
-    await expect.poll(() => page.evaluate(() => (window as any).__wmuxNotifications.length)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate((tag) => (
+      (window as any).__wmuxNotifications.filter((item: any) => item.options?.tag === tag).length
+    ), notification.id)).toBe(1);
     await page.evaluate((path) => {
       window.history.pushState(null, "", path);
       window.dispatchEvent(new PopStateEvent("popstate"));
     }, `/workspaces/${createdWorkspace.id}/tabs/${createdWorkspace.tabs[0]!.id}`);
     await expect(page).toHaveURL(new RegExp(createdWorkspace.id));
-    await page.evaluate(() => (window as any).__wmuxNotifications.at(-1).onclick());
-    await expect(mainCard.locator("fieldset").nth(0).getByRole("radio")).toBeFocused();
+    await page.evaluate((tag) => (
+      (window as any).__wmuxNotifications.find((item: any) => item.options?.tag === tag).onclick()
+    ), notification.id);
+    await expect(page).toHaveURL(new RegExp(target.id));
+    await expect(mainCard).toBeVisible();
+    await expect(mainCard.getByRole("button", { name: /OPEN TERMINAL/ })).toBeFocused();
     await page.waitForTimeout(700);
-    await expect(mainCard.locator("fieldset").nth(0).getByRole("radio")).toBeFocused();
+    await expect(mainCard).toHaveAttribute("data-state", "answered");
+    await expect(mainCard.getByRole("button", { name: /OPEN TERMINAL/ })).toBeFocused();
 
     const callsBeforeGap = bootstrapCalls;
     bootstrapPayload = {
       ...payload,
-      eventRevision: firstRevision + 10,
+      eventRevision: currentRevision + 10,
       agentInputRequests: [main, sdkError, alreadyResolved, conflict, timedOut, unavailable, contiguousRequest, gapRequest],
       futureServerField: { ignoredByOlderClients: true },
     };
     eventSocket!.send(JSON.stringify({
       type: "delta",
-      baseEventRevision: firstRevision + 5,
-      eventRevision: firstRevision + 6,
+      baseEventRevision: currentRevision + 5,
+      eventRevision: currentRevision + 6,
       revision: payload.revision,
       healthEpoch: payload.healthEpoch,
       agentInputRequests: { upserted: [gapRequest], removedIds: [] },

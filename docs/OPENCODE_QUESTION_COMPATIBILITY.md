@@ -35,6 +35,23 @@ The owner-only broker state allocates a monotonic occurrence ordinal for each
 source/session/native-request key and fences snapshot membership and absence at
 that cut.
 
+The compatibility fingerprint's `v9-bounded-snapshot` label is the plugin/broker
+wire contract, not the owner-only broker-file schema. A complete snapshot may
+contain at most 256 native requests. The plugin rejects an oversized list before
+performing any per-session lookups, and every accepted member must pass the
+bounded question shape plus a bounded, successful top-level `session.get` check.
+It validates at most eight sessions concurrently under one ten-second absolute
+list-and-session deadline. The serialized control message must also fit the
+128-KiB broker line bound; an otherwise valid but larger aggregate is downgraded
+to a compact incomplete snapshot instead of being silently dropped.
+The server's expanded native-list envelope is separately capped at 256 KiB,
+which includes the worst-case bounded occurrence IDs, hashes, ordinals, and
+cut-scope keys added by the broker.
+Timeout, malformed data, an oversized list, or any failed member lookup produces
+only an incomplete, non-authoritative snapshot: it cannot capture members or
+close absent requests. Broker file schema 10 is the separate persistence
+envelope that carries this contract and migrates schema 9 as described below.
+
 Before accepting structured events, the generated plugin starts the broker from
 pane-bound runtime-file paths. The broker first obtains a cryptographically
 random, one-shot server challenge using either the exact pane registration
@@ -103,10 +120,17 @@ updating the plugin. New local and SSH panes receive the broker and a short-live
 pane-bound registration capability. Existing SSH panes are not retroactively
 restaged; open a new pane when the helper or capability is absent.
 
-The standalone broker `refresh` command cannot establish runtime identity and
-therefore fails closed with `attestation_required`. Open a fresh pane after this
-upgrade, then restart OpenCode so it loads the current generated plugin and runs
-the challenge. A plugin
+In an already-running POSIX pane with the current generated plugin and staged
+broker paths, `wmux-agent-input-broker refresh` writes an owner-only, bounded
+one-shot request beside that pane's broker credential. The exact OpenCode plugin
+watching that path consumes it and restarts its broker child. The replacement performs a fresh in-process
+runtime attestation and source credential rotation; the standalone command never
+receives relay authority or fabricates attestation. If the pane predates broker
+staging, the command fails closed with
+`refresh_unavailable`; open a fresh pane and restart OpenCode. A plugin
+module replacement also terminates the predecessor broker and aborts its
+in-flight delivery controller before the replacement can own the shared
+credential file. A plugin
 restart uses `question.list({ directory })`, validates every member and session,
 filters out child sessions, and sends full member metadata. Only a completely
 validated list is an authoritative absence barrier; a partial or failed list
@@ -130,6 +154,12 @@ durable, browser-visible `retryable: false` quarantine. Credential loss cannot
 fall back to the broad wmux, helper,
 or automation credential; create a new pane to obtain a fresh registration
 capability.
+The initial capability exchange retries one transiently lost HTTP response with
+the exact same nonce and attestation. A retry that receives a fresh `201`
+recovers normally. If the first exchange committed but its one-time plaintext
+relay secret was lost, the server returns only `already_exchanged`; the broker
+records `registration_response_lost` and requires a fresh pane rather than
+reconstructing or reissuing that secret.
 The generated plugin starts the broker with an explicit environment allowlist;
 shared, helper, automation, and registration tokens are not inherited by the
 broker process.
@@ -141,7 +171,12 @@ values, or credentials.
 
 The desktop reference shelf appears only for requests associated with the
 active pane. It maps questions in source order, retains one submission ID across
-retries, displays typed terminal/source/conflict outcomes, and exposes an Open
+retries, displays typed terminal/source/conflict outcomes, and takes terminal
+editability from the server-projected request state rather than one browser's
+local response. A deterministic non-retryable SDK rejection persists the public
+request as `failed`; later native resolution may reconcile it to answered or
+rejected, and authoritative list absence closes it as already resolved when an
+identity-only resolution event was missed. The shelf exposes an Open
 Terminal action that only focuses the pane. Browser answers use
 `POST /api/agent-input/requests/:id/answer`; neither the shelf nor the plugin
 uses pane input as an answer transport.
@@ -161,7 +196,10 @@ last event sequence, bounded asked-event receipts, and exact server bindings are
 stored in its owner-only pane file under
 `~/.wmux/agent-input/`. Its bounded per-key FIFO outbox contains capture, resolution,
 and SDK-result metadata only; raw answers are not written there.
-Delivery polling carries the server process's transient relay epoch. The broker
+Delivery polling carries the server process's transient relay epoch. User answer
+submission requires an active authenticated source poll or a successful poll
+completed within the narrow five-second reconnect grace; an aborted poll clears
+that grace immediately, so no raw answer is accepted for offline delivery. The broker
 atomically binds its durable cursor to that epoch before handling a response, so
 a high cursor from a prior server process cannot hide new post-restart deliveries.
 
@@ -173,8 +211,11 @@ occurrence identities, idempotency records, delivery IDs, and relay cursors.
 
 The default server files are `~/.wmux/agent-input-requests.json`,
 `~/.wmux/agent-input-credentials.json`, and `~/.wmux/agent-input-secret`.
-`WMUX_AGENT_INPUT_REQUEST_PATH`, `WMUX_AGENT_INPUT_CREDENTIAL_PATH`, and
+`WMUX_AGENT_INPUT_REQUEST_PATH`, `WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH`, and
 `WMUX_AGENT_INPUT_SECRET_PATH` override them for isolated operation or tests.
+The old server override `WMUX_AGENT_INPUT_CREDENTIAL_PATH` remains accepted
+outside a wmux pane, but is ignored in pane context because that name belongs to
+the pane-local broker credential file.
 Stores use owner-only atomic writes, validated rolling backups, explicit schema
 versions, migrations, and downgrade refusal. Recovery from a validated
 credential backup invalidates every recovered registration capability and
@@ -182,7 +223,12 @@ revokes every recovered source before authentication resumes; a fresh pane
 registration is required. Recovery from a request-store backup closes every
 recovered pending request and settles its submission as already resolved,
 because the lost primary may have recorded answer exposure. Generation anchors
-and already-terminal outcomes remain intact. Credential schema 6 uses
+and already-terminal outcomes remain intact. Credential schema 7 binds every new
+registration capability and source to the live pane's backend ID, one
+live-attachment session incarnation, and immutable endpoint fingerprint. Abnormal exit or
+backend/endpoint replacement retires the old source and pending requests. Its
+schema-6 migration invalidates unbound capabilities and sources. Credential
+schema 7 also uses
 record-ID-scoped HMAC-SHA-256 verifiers and constant-time comparison; plaintext
 capabilities, relay secrets, and challenge nonces are never stored. Migration from schema 0 or 1
 cannot reconstruct HMAC verifiers from legacy salted hashes, so it deliberately
@@ -195,7 +241,7 @@ the old unbound attestation and marks each source `attestation_required`; the
 current broker can source-authenticate a fresh challenge and refresh without a
 new pane. Migration from credential schema 4 likewise preserves source refresh
 authority, removes old injected-client health evidence, clears pending
-challenges, and requires reattestation. Credential schema 6 migrates schema-5
+challenges, and requires reattestation. Credential schema 6 migrated schema-5
 `serverUrl` health evidence the same way and requires fresh
 `plugin.injectedTransport:/global/health` attestation. Request schema 6 preserves
 generation anchors but closes legacy pending records as `migration-unbound`;
@@ -206,44 +252,70 @@ Future schema files are refused without rewriting them.
 
 Request schema 7 adds durable retired-source evidence and bounded resource
 ownership. A source may retain at most 128 pending requests, 256 request records,
-512 generation anchors, and 1 MiB of serialized request/anchor evidence; the
-store has an 8 MiB serialized global budget. Raw in-memory answer delivery is
+512 generation anchors, and 1 MiB of admitted serialized request/anchor evidence;
+the store has an 8 MiB admission budget. A separate bounded 512-KiB per-source
+and 4-MiB global reserve is available only for already-admitted answer lifecycle,
+terminal resolution, and source-retirement mutations, so saturation cannot retain
+stale authority or prevent startup recovery. Raw in-memory answer delivery is
 separately limited to 16 deliveries and 128 KiB per source within the existing
 64-delivery/512-KiB global limits. Quota failures return immediately without a
-state mutation. Generation anchors are removed only after the source is
+state mutation. Duplicate same-key HTTP submissions share one delivery but are
+limited to 32 waiters per delivery and 256 waiters globally; excess callers
+receive a retryable source-unavailable outcome, and abort/settlement releases
+the accounting. Generation anchors are removed only after the source is
 permanently retired and both request and tombstone evidence have expired;
-non-retired replay anchors are retained.
+non-retired replay anchors are retained. Request schema 8 adds the durable
+public `failed` state for deterministic non-retryable SDK errors while retaining
+`pending` for conservative ambiguous outcomes.
 
 ## Failure and rollback behavior
 
 - A user submission is successful only after the plugin acknowledges the typed
   SDK result. Answers are bounded in memory during that handoff and are not
-  queued across a server restart. Each request generation is single-shot once
-  raw answers cross the durable exposure boundary: timeout, transport failure,
-  disconnect, cancellation, or restart after exposure becomes non-retryable
-  ambiguity and can only converge through SDK acknowledgement or native
-  `question.replied`, `question.rejected`, or `question.list` evidence.
-- Source disconnect before exposure safely releases the in-memory handoff for
-  the same browser submission ID. Disconnect after exposure is quarantined;
-  neither server nor plugin retries or redelivers it.
-- Plugin/broker restart retains the occurrence stream and replays metadata-only outbox
-  operations. Server restart retains requests and credential metadata, but
-  never a raw answer. A never-exposed interrupted submission can be resubmitted
-  with the same submission ID; startup clears a stale delivery binding created
-  before poll exposure so retry can bind a new delivery. An exposed, SDK-started,
-  or otherwise ambiguous submission remains quarantined and is never redelivered.
+  queued across a server restart. An observed delivery may be redelivered with
+  the same delivery ID until the plugin durably marks the SDK call started.
+  Timeout, transport failure, disconnect, cancellation, or restart after that
+  SDK-start boundary becomes non-retryable ambiguity and can only converge
+  through SDK acknowledgement or native `question.replied`,
+  `question.rejected`, or `question.list` evidence.
+- Source disconnect or browser cancellation before SDK start safely releases
+  the in-memory handoff for the same browser submission ID. After SDK start it
+  is quarantined; neither server nor plugin retries or redelivers it.
+- A source credential and its constructor capability are accepted only while
+  `SessionManager` still owns the exact running backend/session incarnation and
+  endpoint. Browser reconnects preserve that binding; abnormal process exit,
+  same-pane backend replacement, or host retarget retires it.
+- Plugin/broker restart while the same wmux backend attachment remains live
+  retains the occurrence stream and replays metadata-only outbox operations.
+  A wmux server shutdown is a different authority boundary: graceful shutdown
+  retires each active source before detaching, and an abnormal pane/backend exit
+  retires the exact binding that exited. After an abrupt wmux restart, old source
+  credentials cannot capture or poll while no matching attachment exists; when
+  a durable pane reattaches, its new random session-incarnation epoch revokes the
+  predecessor even if the pane ID and endpoint are unchanged. Durable terminal
+  processes may survive, but structured answering requires a freshly staged
+  capability and restarted OpenCode process (normally a new pane). Server
+  restart retains only sanitized request/credential history and never a raw
+  answer. A never-exposed interrupted submission can be retried only when a new
+  authoritative source owns the still-applicable request; SDK-started or
+  otherwise ambiguous submissions remain quarantined and are never redelivered.
 - Capture, resolution, and snapshot metadata is strict FIFO for each native key;
   SDK acknowledgements and unrelated keys continue while one key backs off.
   Transport, HTTP 408/429, 5xx, and untyped response failures keep the bounded
   durable operation and retry indefinitely with capped exponential backoff.
   Only an authenticated typed permanent conflict consumes/quarantines the
-  affected occurrence.
+  affected operation. An acknowledgement conflict is never treated as success:
+  it is quarantined with metadata only and requests native snapshot
+  reconciliation so the server can converge from OpenCode state.
 - Duplicate native asked event IDs converge on one occurrence. While that
   occurrence is pending, distinct same-payload asked events also converge on it
   and conflicting payloads fail closed; only an asked event after terminal state
   advances the ordinal. Exact retries converge on the original public request
   ID/generation or a terminal retired result; event-sequence fencing prevents an
-  old identity-only resolution from binding to a newer occurrence.
+  old identity-only resolution from binding to a newer occurrence. Generated
+  plugin delivery is serialized by assigned event sequence, while the broker
+  independently rejects stale asks and resolutions against its durable stream
+  sequence and orphan/terminal fences.
 - Closing the pane closes its pending requests. Credential rotation or source
   revocation cancels outstanding handoffs and rejects the old principal.
 
@@ -257,10 +329,10 @@ plugin, and require `wmux-hooks status` to report `opencodeParity: true` (or
 compare `wmux-hooks hash opencode` with the reported expected hash). Rollout must
 update wmux, install the generated plugin, and restart each OpenCode process so
 it loads handshake schema 4; old processes fail structured handling closed while
-generic lifecycle events continue. Credential schema 6 is downgrade-refused.
-Before starting the upgraded server, retain an owner-only schema-5 credential
+generic lifecycle events continue. Credential schema 7 is downgrade-refused.
+Before starting the upgraded server, retain an owner-only schema-6 credential
 store backup if binary rollback is required. Otherwise, rollback requires
-stopping wmux and replacing the schema-6 credential store with a fresh empty
+stopping wmux and replacing the schema-7 credential store with a fresh empty
 store, then opening fresh panes; never hand-edit or down-convert it. Old browser
 clients still ignore the additive bootstrap field. Do not delete or replace
 state files while wmux is running.

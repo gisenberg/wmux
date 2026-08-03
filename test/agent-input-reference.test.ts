@@ -4,6 +4,7 @@ import {
   buildAgentInputAnswers,
   newAgentInputSubmissionId,
   validAgentInputAnswer,
+  validAgentInputAnswers,
 } from "../src/client/src/agent-input-reference.js";
 import { api } from "../src/client/src/api.js";
 import type { AgentInputQuestion } from "../src/shared/protocol.js";
@@ -27,6 +28,28 @@ test("reference harness maps single, multi, and custom answers in exact question
   assert.deepEqual(buildAgentInputAnswers(questions, [[], [], []], ["blocked", "blocked", "allowed"]), [
     [], [], ["allowed"],
   ], "the browser maps custom text only for questions projected with custom true");
+});
+
+test("reference validation accepts option-plus-custom cardinality and enforces UTF-8 byte budgets", () => {
+  const options = Array.from({ length: 128 }, (_, index) => ({
+    label: `option-${index}`, description: "",
+  }));
+  const maximum: AgentInputQuestion = {
+    header: "Maximum", question: "Choose", options, multiple: true, custom: true,
+  };
+  const values = [...options.map((option) => option.label), "custom"];
+  assert.equal(validAgentInputAnswer(maximum, values), true);
+  assert.equal(validAgentInputAnswers([maximum], [values]), true);
+  assert.equal(validAgentInputAnswer(
+    { header: "Custom", question: "Enter", options: [], multiple: false, custom: true },
+    ["🙂".repeat(1_025)],
+  ), false, "custom input is bounded by UTF-8 bytes rather than UTF-16 length");
+  assert.equal(validAgentInputAnswers(
+    Array.from({ length: 5 }, () => ({
+      header: "Custom", question: "Enter", options: [], multiple: false, custom: true,
+    })),
+    Array.from({ length: 5 }, () => ["x".repeat(4_000)]),
+  ), false, "the aggregate answer budget matches the server validator");
 });
 
 test("reference harness creates a stable caller-owned submission id", () => {

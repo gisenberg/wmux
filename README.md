@@ -63,8 +63,6 @@ Clients fetch a full bootstrap snapshot only for initial load, reconnect recover
 
 ## Quick Start
 
-> [!IMPORTANT] Active haswell testing deployment: [docs/HASWELL_TEST_DEPLOYMENT.md](docs/HASWELL_TEST_DEPLOYMENT.md)
-
 Server requirements: Linux or macOS, Node.js 22+, npm, and `/bin/sh` with a
 supported local PTY environment. Windows is supported as a remote
 `powershell-ssh` target, but not as the wmux server host. Running the complete
@@ -594,6 +592,11 @@ source's state. It does not replace the private-network
 boundary. Setup, refresh, privacy, rollback,
 and compatibility details are in
 [OpenCode question compatibility](docs/OPENCODE_QUESTION_COMPATIBILITY.md).
+Plugin/broker refresh can retain structured-question authority while the same
+wmux backend attachment remains live. A wmux service restart deliberately
+changes that authority epoch: durable terminal sessions still reattach, but the
+old structured-question source is retired and OpenCode must restart with a
+freshly staged pane capability before structured answering resumes.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
@@ -929,7 +932,7 @@ npm run test:e2e
 - `npm run test:e2e:chromium` is the faster browser subset.
 - `npm run test:e2e:server` runs specs that require the Playwright driver and fixture service to share a checkout and filesystem.
 - `npm run test:e2e:browser` runs the complementary browser-only group, which can use a fixture service on another trusted private-network host.
-- `WMUX_E2E_SERVER_HOST=<private-ip> npm run test:e2e:serve` exposes an isolated fixture service to a trusted private-network runner, which uses `WMUX_E2E_BASE_URL=http://<private-ip>:3491`.
+- `WMUX_E2E_SERVER_HOST=<private-ip> WMUX_E2E_TOKEN=<per-run-secret> npm run test:e2e:serve` exposes an authenticated isolated fixture service to a trusted private-network runner. The runner uses the same `WMUX_E2E_TOKEN` with `WMUX_E2E_BASE_URL=http://<private-ip>:3491`; external runs fail closed unless the token is 32–512 printable ASCII characters without spaces. Browser storage authenticates the wmux page, origin-targeted API request contexts carry the bearer, and tracing is disabled to keep that ephemeral credential out of artifacts.
 - Keep the two groups on separate fixture-service instances so concurrent state mutations remain isolated.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and

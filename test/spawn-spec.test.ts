@@ -108,6 +108,7 @@ test("pane spawn environments do not inherit server-scoped credentials", () => {
     "WMUX_HELPER_TOKEN_PATH",
     "WMUX_REGISTRATION_TOKEN",
     "WMUX_REGISTRATION_TOKEN_PATH",
+    "WMUX_E2E_TOKEN",
   ];
   const saved = new Map(keys.map((key) => [key, process.env[key]]));
   try {

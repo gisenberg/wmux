@@ -26,7 +26,7 @@ const runtime = { type: "legacy_runtime_ignored" };
 const serverChallenge = () => ({
   type: "server_challenge",
   handshakeSchema: 4,
-  contractDigest: "b9f1e1abb1960a499256f33b8630c73b56088f030802865728b32e0f4022a449",
+  contractDigest: "b37166e892fe20db37c2c501ab58c093da1db95a19ef6951393e67f38766f5b8",
   id: crypto.randomUUID(),
   nonce: crypto.randomBytes(32).toString("base64url"),
   issuedAt: Date.now(),
@@ -50,9 +50,21 @@ test("isolated reference-to-occurrence-broker-to-SDK harness preserves HTTP answ
   };
   let paneInputCalls = 0;
   let paneInputBytes = 0;
-  const sessions = { writePane: (_paneId: string, data: string) => {
+  const binding = {
+    backendId: "durable-multiplexer" as const,
+    sessionIncarnation: "1".repeat(64),
+    endpointFingerprint: "2".repeat(64),
+  };
+  const sessions = {
+    hasLivePaneSession: (_paneId: string, candidate: typeof binding) =>
+      JSON.stringify(candidate) === JSON.stringify(binding),
+    agentInputSessionBinding: () => binding,
+    setAgentInputCapabilityIssuer: () => undefined,
+    setAgentInputSourceRetirer: () => undefined,
+    writePane: (_paneId: string, data: string) => {
     paneInputCalls += 1; paneInputBytes += Buffer.byteLength(data); return true;
-  } } as unknown as SessionManager;
+    },
+  } as unknown as SessionManager;
   const server = await createHttpServer("127.0.0.1", state, machines, sessions, settings, {
     auth, agentInputCredentials: credentials, agentInputRequests: requests, agentInputRelay: relay,
     healthResolvers: { machines: async () => [], streams: async () => [] },
@@ -63,8 +75,9 @@ test("isolated reference-to-occurrence-broker-to-SDK harness preserves HTTP answ
   if (!address || typeof address === "string") throw new Error("server address unavailable");
   const base = `http://127.0.0.1:${address.port}`;
   const context = state.findPaneContext(state.snapshot().workspaces[0].tabs[0].panes[0].id)!;
+  state.updatePane(context.pane.id, { status: "running" });
   const capability = credentials.issueRegistrationCapability({ workspaceId: context.workspace.id, tabId: context.tab.id,
-    paneId: context.pane.id, machineId: context.pane.machineId, sourceKind: "opencode" });
+    paneId: context.pane.id, machineId: context.pane.machineId, sourceKind: "opencode", ...binding });
   const agentInputDirectory = path.join(directory, "agent-input");
   fs.mkdirSync(agentInputDirectory, { mode: 0o700 });
   const capabilityPath = path.join(agentInputDirectory, `${context.pane.id}.cap`);
@@ -256,6 +269,28 @@ test("identity-only orphan resolution fences an equal-cut stale member until bro
   }
 });
 
+test("broker rejects an earlier ask that arrives after a higher-sequence orphan resolution", { skip: process.platform === "win32" }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-reordered-orphan-"));
+  const credentialPath = path.join(directory, "pane.json");
+  const calls: Array<{ path: string; body: any }> = [];
+  const fixture = await startSimpleFixture(calls);
+  writeCredential(credentialPath);
+  const broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
+  try {
+    broker.send(runtime);
+    broker.send({ type: "resolved", eventSequence: 2, requestID: "reordered", sessionID: "session", result: "replied" });
+    broker.send({ type: "asked", eventId: "ask-reordered", eventSequence: 1,
+      id: "reordered", sessionID: "session", questions: [question], nativePending: false });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(calls.some((call) => call.path.endsWith("/requests") && call.body.id === "reordered"), false,
+      "a stale ask cannot delete the orphan fence and allocate a resurrected occurrence");
+  } finally {
+    await broker.stop();
+    await fixture.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("broker resets a stale high delivery cursor when the transient relay epoch changes", { skip: process.platform === "win32" }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-relay-epoch-"));
   const credentialPath = path.join(directory, "pane.json");
@@ -300,6 +335,49 @@ test("broker resets a stale high delivery cursor when the transient relay epoch 
     const persisted = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
     assert.deepEqual({ epoch: persisted.relayEpoch, cursor: persisted.cursor }, { epoch: "relay-new", cursor: 1 });
     assert.doesNotMatch(fs.readFileSync(credentialPath, "utf8"), new RegExp(sentinel));
+  } finally {
+    await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("broker quarantines acknowledgement conflicts and requests native reconciliation", { skip: process.platform === "win32" }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-ack-conflict-"));
+  const credentialPath = path.join(directory, "pane.json");
+  let acknowledgementCalls = 0;
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume */ }
+    const requestPath = request.url ?? "";
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
+    };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
+    if (requestPath.endsWith("/refresh")) return send(200, {
+      sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2,
+    });
+    if (requestPath.endsWith("/ack")) {
+      acknowledgementCalls += 1;
+      return send(409, { error: "ack_conflict" });
+    }
+    if (requestPath.includes("/deliveries?")) return send(200, { epoch: "relay-ack", cursor: 0, deliveries: [] });
+    return send(404, { error: "not_found" });
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+  writeCredential(credentialPath);
+  const broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath);
+  try {
+    broker.send(runtime);
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
+    broker.send({
+      type: "ack", deliveryId: "delivery-conflict", id: "input-conflict", generation: 1,
+      outcome: "applied",
+    });
+    await waitFor(() => broker.messages.some((message) => message.type === "snapshot_request"));
+    await waitFor(() => JSON.parse(fs.readFileSync(credentialPath, "utf8")).quarantines
+      .some((item: any) => item.opId === "ack:delivery-conflict" && item.status === 409));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(acknowledgementCalls, 1, "a typed acknowledgement conflict is not silently consumed or retried");
   } finally {
     await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
     fs.rmSync(directory, { recursive: true, force: true });

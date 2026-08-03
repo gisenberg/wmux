@@ -17,6 +17,7 @@ import {
   parseClientMessage,
   resolveDisposalMachine,
   sessionAccessTokenForMachine,
+  createAgentInputSessionBinding,
   SessionManager,
 } from "../src/server/session-manager.js";
 import { StateStore } from "../src/server/state.js";
@@ -66,6 +67,25 @@ test("pane disposal prefers the live session's pre-heartbeat machine snapshot", 
   const movedMachine = { ...oldMachine, host: "100.70.0.9" };
   assert.equal(resolveDisposalMachine(oldMachine, [movedMachine], oldMachine.id)?.host, "100.70.0.8");
   assert.equal(resolveDisposalMachine(undefined, [movedMachine], oldMachine.id)?.host, "100.70.0.9");
+});
+
+test("idle durable-client replacement preserves authority while endpoint replacement rotates it", () => {
+  const machine: MachineConfig = {
+    id: "durable", name: "Durable", kind: "ssh", host: "100.70.0.8", sessionBackend: "tmux",
+  };
+  const backend = { id: "durable-multiplexer" as const };
+  const first = createAgentInputSessionBinding("pane-one", backend, machine);
+  const recycled = createAgentInputSessionBinding("pane-one", backend, machine, first);
+  assert.deepEqual(recycled, first, "recycling only the transient durable client preserves source authority");
+
+  const retargeted = createAgentInputSessionBinding(
+    "pane-one", backend, { ...machine, host: "100.70.0.9" }, first,
+  );
+  assert.notEqual(retargeted.sessionIncarnation, first.sessionIncarnation);
+  assert.notEqual(retargeted.endpointFingerprint, first.endpointFingerprint);
+  const restarted = createAgentInputSessionBinding("pane-one", backend, machine);
+  assert.notEqual(restarted.sessionIncarnation, first.sessionIncarnation,
+    "a manager restart has no retained binding and creates a fresh authority epoch");
 });
 
 test("idle durable-client recycle detaches only the transient client and keeps the old endpoint snapshot", () => {
@@ -302,6 +322,83 @@ const waitForCondition = async (predicate: () => boolean, timeoutMs = 3_000): Pr
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 };
+
+test("agent-input authority epochs are exact and graceful shutdown retires only the current binding", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-agent-input-epoch-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const manager = new SessionManager(state, [machine]);
+  const oldBinding = {
+    backendId: "raw-pty" as const,
+    sessionIncarnation: "1".repeat(64),
+    endpointFingerprint: "2".repeat(64),
+  };
+  const currentBinding = { ...oldBinding, sessionIncarnation: "3".repeat(64) };
+  const session = { pane, isExited: false };
+  const retired: Array<{ paneId: string; binding: typeof oldBinding }> = [];
+  let detached = false;
+  const internals = manager as unknown as {
+    sessions: Map<string, typeof session>;
+    backends: Map<string, { detach: (candidate: typeof session) => void }>;
+    sessionMachines: Map<string, MachineConfig>;
+    agentInputSessionBindings: Map<string, typeof oldBinding>;
+  };
+  try {
+    state.updatePane(pane.id, { status: "running" });
+    internals.sessions.set(pane.id, session);
+    internals.backends.set(pane.id, { detach: (candidate) => {
+      assert.equal(candidate, session);
+      detached = true;
+    } });
+    internals.sessionMachines.set(pane.id, machine);
+    internals.agentInputSessionBindings.set(pane.id, oldBinding);
+    manager.setAgentInputSourceRetirer((paneId, binding) => retired.push({ paneId, binding }));
+    assert.equal(manager.hasLivePaneSession(pane.id, oldBinding), true);
+
+    internals.agentInputSessionBindings.set(pane.id, currentBinding);
+    assert.equal(manager.hasLivePaneSession(pane.id, oldBinding), false,
+      "a prior source authority epoch cannot authenticate after same-pane replacement");
+    assert.equal(manager.hasLivePaneSession(pane.id, currentBinding), true);
+
+    manager.disposeAll();
+    assert.equal(detached, true);
+    assert.deepEqual(retired, [{ paneId: pane.id, binding: currentBinding }]);
+    assert.equal(manager.hasLivePaneSession(pane.id, currentBinding), false);
+  } finally {
+    manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("abnormal live backend exit retires its exact agent-input authority", { skip: process.platform === "win32" }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-agent-input-exit-"));
+  const machine: MachineConfig = {
+    id: "local",
+    name: "Local",
+    kind: "local",
+    command: ["/bin/sh", "-c", "exit 9"],
+    sessionBackend: "pty",
+  };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const manager = new SessionManager(state, [machine]);
+  const client = socket();
+  const retired: Array<{ paneId: string; binding: unknown }> = [];
+  manager.setAgentInputSourceRetirer((paneId, binding) => retired.push({ paneId, binding }));
+  try {
+    manager.attach(pane.id, client, 80, 24);
+    await waitForMessage(client, (message) => message.type === "exit");
+    assert.equal(retired.length, 1);
+    assert.equal(retired[0].paneId, pane.id);
+    assert.match(JSON.stringify(retired[0].binding), /raw-pty/);
+    assert.equal(manager.hasLivePaneSession(pane.id), false);
+    assert.equal(state.findPane(pane.id)?.status, "exited");
+  } finally {
+    manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 const waitForWebSocketMessage = async (
   ws: WebSocket,

@@ -30,7 +30,7 @@ const withInjectedTransport = <T extends object>(client: T, transport: object = 
 };
 const serverChallenge = () => ({
   type: "server_challenge", handshakeSchema: 4,
-  contractDigest: "b9f1e1abb1960a499256f33b8630c73b56088f030802865728b32e0f4022a449",
+  contractDigest: "b37166e892fe20db37c2c501ab58c093da1db95a19ef6951393e67f38766f5b8",
   id: crypto.randomUUID(), nonce: crypto.randomBytes(32).toString("base64url"),
   issuedAt: Date.now(), deadline: Date.now() + 15_000,
 });
@@ -54,10 +54,21 @@ test("generated plugin allowlists top-level questions and uses only typed questi
   fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; method?: string; body: any; authorization?: string }> = [];
   const healthHeaders: http.IncomingHttpHeaders[] = [];
+  const startRequests: string[] = [];
   let plugin: any;
   const deliveredQuestions = new Set<string>();
   const pendingDeliveries: Array<{ deliveryId: string; cursor: number; requestId: string; expectedGeneration: number; openCodeRequestId: string; answers: string[][] }> = [];
   let cursor = 0;
+  let registrationAttempts = 0;
+  let holdNextHealth = false;
+  let healthHoldStartedResolve!: () => void;
+  const healthHoldStarted = new Promise<void>((resolve) => { healthHoldStartedResolve = resolve; });
+  let releaseHeldHealth!: () => void;
+  const heldHealth = new Promise<void>((resolve) => { releaseHeldHealth = resolve; });
+  let refreshReplyStartedResolve!: () => void;
+  const refreshReplyStarted = new Promise<void>((resolve) => { refreshReplyStartedResolve = resolve; });
+  let releaseRefreshReply!: () => void;
+  const refreshReply = new Promise<void>((resolve) => { releaseRefreshReply = resolve; });
   const server = http.createServer(async (request, response) => {
     if (request.url === "/global/health") {
       healthHeaders.push(request.headers);
@@ -75,6 +86,11 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     if (request.url?.endsWith("/challenge")) {
       send(201, serverChallenge());
     } else if (request.url === "/api/agent-input/sources/register") {
+      registrationAttempts += 1;
+      if (registrationAttempts === 1) {
+        request.socket.destroy();
+        return;
+      }
       send(201, { sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
     } else if (request.url === "/api/agent-input/sources/source-one/refresh") {
       send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
@@ -99,6 +115,9 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     } else if (request.url?.startsWith("/api/agent-input/sources/source-one/deliveries?")) {
       send(200, { epoch: "relay-plugin", cursor, deliveries: [] });
     } else if (request.url?.endsWith("/start")) {
+      const deliveryId = request.url.split("/").at(-2)!;
+      startRequests.push(deliveryId);
+      if (deliveryId === "delivery-question-refresh-start") return;
       send(200, { outcome: "started" });
     } else {
       send(200, { outcome: "resolved" });
@@ -130,6 +149,16 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     installFixturePackages(configHome);
     installRealSdkPackage(configHome);
     const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+    const failBrokerPath = path.join(home, "fail-broker-start");
+    const brokerWrapperPath = path.join(home, "broker-wrapper");
+    fs.writeFileSync(brokerWrapperPath, `#!/bin/sh
+if [ -f "${failBrokerPath}" ] && [ "$1" = "serve" ]; then exit 1; fi
+exec "${path.join(repoRoot, "scripts", "wmux-agent-input-broker")}" "$@"
+`, { mode: 0o700 });
+    fs.writeFileSync(pluginPath, fs.readFileSync(pluginPath, "utf8").replace(
+      JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")),
+      JSON.stringify(brokerWrapperPath),
+    ), { mode: 0o600 });
     const module = await import(`${pathToFileURL(pluginPath).href}?question=${Date.now()}`);
     const replies: unknown[] = [];
     const structuredSessionInputs: unknown[] = [];
@@ -150,7 +179,14 @@ test("generated plugin allowlists top-level questions and uses only typed questi
       const request = input instanceof Request ? input : new Request(input);
       const url = new URL(request.url);
       opencodeRequests.push({ method: request.method, pathname: url.pathname, search: url.search });
-      if (url.pathname === "/global/health") return json({ healthy: true, version: "1.18.9" });
+      if (url.pathname === "/global/health") {
+        if (holdNextHealth) {
+          holdNextHealth = false;
+          healthHoldStartedResolve();
+          await heldHealth;
+        }
+        return json({ healthy: true, version: "1.18.9" });
+      }
       if (request.method === "GET" && url.pathname === "/question") return json(pendingQuestions);
       const session = /^\/session\/([^/]+)$/.exec(url.pathname);
       if (request.method === "GET" && session) {
@@ -169,6 +205,10 @@ test("generated plugin allowlists top-level questions and uses only typed questi
         const requestID = decodeURIComponent(reply[1]);
         const body = await request.json() as { answers: string[][] };
         replies.push({ requestID, answers: body.answers });
+        if (requestID === "question-refresh-ack") {
+          refreshReplyStartedResolve();
+          await refreshReply;
+        }
         if (requestID === "question-not-found") return json({ _tag: "QuestionNotFoundError" }, 404);
         if (requestID === "question-invalid") return json({ _tag: "InvalidRequestError" }, 400);
         if (requestID === "question-transport") throw new Error("transport details must not escape");
@@ -214,6 +254,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     await waitFor(() => fs.existsSync(`${credentialPath}.status.json`)
       && JSON.parse(fs.readFileSync(`${credentialPath}.status.json`, "utf8")).diagnostic === "runtime_ready");
     const registrationCapture = captures.find((capture) => capture.path === "/api/agent-input/sources/register")!;
+    assert.equal(registrationAttempts, 2, "a lost registration response is retried once with the exact request");
     assert.deepEqual(registrationCapture.body.runtimeAttestation.health, {
       source: "plugin.injectedTransport:/global/health", called: true, outcome: "ok", status: 200,
       healthy: true, release: "1.18.9",
@@ -314,7 +355,86 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(captures.filter((capture) => capture.method !== "GET" && capture.path.includes("/api/agent-input/")).length, beforeAgentInput);
     assert.equal("permission" in injectedClient, false);
-    await plugin.event({ event: { type: "question.future", properties: { sessionID: "session-one" } } });
+    await plugin.event({ event: { id: "event-question-refresh-start", type: "question.asked", properties: {
+      id: "question-refresh-start", sessionID: "session-one", questions: oneCustomQuestion,
+    } } });
+    await waitFor(() => startRequests.includes("delivery-question-refresh-start"));
+    const refreshesBeforeRequest = captures.filter((capture) => capture.path.endsWith("/refresh")).length;
+    const refreshResult = await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["refresh"], { env });
+    assert.deepEqual(JSON.parse(refreshResult.stdout), {
+      refreshed: true, supported: true, diagnostic: "refresh_requested",
+    });
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/refresh")).length > refreshesBeforeRequest,
+      () => JSON.stringify(captures.slice(-20)));
+    cursor += 1;
+    pendingDeliveries.push({
+      deliveryId: "delivery-question-refresh-retry",
+      cursor,
+      requestId: "input-question-refresh-start",
+      expectedGeneration: 1,
+      openCodeRequestId: "question-refresh-start",
+      answers: [["retry-safe"]],
+    });
+    await waitFor(() => replies.some((reply: any) => reply.requestID === "question-refresh-start"),
+      () => JSON.stringify({ startRequests, replies }));
+    assert.ok(startRequests.includes("delivery-question-refresh-retry"));
+
+    await plugin.event({ event: { id: "event-question-refresh-ack", type: "question.asked", properties: {
+      id: "question-refresh-ack", sessionID: "session-one", questions: oneCustomQuestion,
+    } } });
+    await refreshReplyStarted;
+    const challengesBeforeAckRefresh = captures.filter((capture) => capture.path.endsWith("/challenge")).length;
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["refresh"], { env });
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/challenge")).length > challengesBeforeAckRefresh);
+    releaseRefreshReply();
+    await waitFor(() => captures.some((capture) => capture.path.endsWith("/ack")
+      && capture.body.id === "input-question-refresh-ack" && capture.body.outcome === "applied"),
+    () => JSON.stringify(captures.slice(-30)));
+
+    holdNextHealth = true;
+    const challengesBeforeAttestationRace = captures.filter((capture) => capture.path.endsWith("/challenge")).length;
+    const refreshesBeforeAttestationRace = captures.filter((capture) => capture.path.endsWith("/refresh")).length;
+    const snapshotsBeforeAttestationRace = captures.filter((capture) => capture.path.endsWith("/native-list")).length;
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["refresh"], { env });
+    await healthHoldStarted;
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["refresh"], { env });
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/challenge")).length
+      >= challengesBeforeAttestationRace + 2);
+    releaseHeldHealth();
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/refresh")).length
+      > refreshesBeforeAttestationRace);
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/native-list")).length
+      > snapshotsBeforeAttestationRace);
+    await plugin.event({ event: { id: "event-question-after-stale-attestation", type: "question.asked", properties: {
+      id: "question-after-stale-attestation", sessionID: "session-one", questions: oneCustomQuestion,
+    } } });
+    await waitFor(() => replies.some((reply: any) => reply.requestID === "question-after-stale-attestation"),
+      () => JSON.stringify({ captures: captures.slice(-30), replies }));
+
+    fs.writeFileSync(failBrokerPath, "fail\n", { mode: 0o600 });
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["refresh"], { env });
+    await waitFor(() => brokerChildIds().length === 0);
+    await plugin.event({ event: { id: "event-question-during-failed-refresh", type: "question.asked", properties: {
+      id: "question-during-failed-refresh", sessionID: "session-one", questions: oneCustomQuestion,
+    } } });
+    fs.rmSync(failBrokerPath, { force: true });
+    const snapshotsBeforeFailedRefreshRecovery = captures.filter((capture) => capture.path.endsWith("/native-list")).length;
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-agent-input-broker"), ["refresh"], { env });
+    await waitFor(() => captures.filter((capture) => capture.path.endsWith("/native-list")).length
+      > snapshotsBeforeFailedRefreshRecovery);
+    assert.equal(captures.some((capture) => capture.path.endsWith("/requests")
+      && capture.body.id === "question-during-failed-refresh"), false,
+    "a failed replacement must clear accepting state and queued events");
+
+    await plugin.event({ event: { type: "question.rejected", properties: { sessionID: "session-one" } } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await plugin.event({ event: { id: "event-after-malformed", type: "question.asked", properties: {
+      id: "question-after-malformed", sessionID: "session-one", questions: oneCustomQuestion,
+    } } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(captures.some((capture) => capture.path.endsWith("/requests")
+      && capture.body.id === "question-after-malformed"), false,
+      "a malformed allowed event disables later structured handling");
 
     await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session-one" } } });
     assert.ok(genericCalls.get >= 2, "generic lifecycle session.get stays on the injected root client");
@@ -334,6 +454,216 @@ test("generated plugin allowlists top-level questions and uses only typed questi
     clearFixtureStructuredClient();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("generated plugin serializes structured question delivery when resolution validation would finish before an earlier ask", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-sequence-"));
+  const configHome = path.join(home, "config");
+  const capabilityPath = path.join(home, "pane.cap");
+  const credentialPath = path.join(home, "pane.json");
+  const messagesPath = path.join(home, "broker-messages.jsonl");
+  const brokerPath = path.join(home, "broker-wrapper.mjs");
+  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(brokerPath, `#!/usr/bin/env node
+import fs from "node:fs";
+process.stdout.write(JSON.stringify({ type: "runtime_ready", supported: true, eventSequence: 0 }) + "\\n");
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (;;) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+    if (line) {
+      fs.appendFileSync(${JSON.stringify(messagesPath)}, line + "\\n");
+      if (JSON.parse(line).type === "unsupported") process.exit(0);
+    }
+  }
+});
+`, { mode: 0o700 });
+  const env = {
+    ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, WMUX_URL: "http://127.0.0.1:9",
+    WMUX_PANE_ID: "pane-sequence", WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath,
+  };
+  const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  let plugin: any;
+  try {
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
+    installFixturePackages(configHome);
+    const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+    fs.writeFileSync(pluginPath, fs.readFileSync(pluginPath, "utf8").replace(
+      JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")), JSON.stringify(brokerPath),
+    ), { mode: 0o600 });
+    const module = await import(`${pathToFileURL(pluginPath).href}?sequence=${Date.now()}`);
+    let releaseAsk!: () => void;
+    const askGate = new Promise<void>((resolve) => { releaseAsk = resolve; });
+    let askLookupStarted!: () => void;
+    const askLookup = new Promise<void>((resolve) => { askLookupStarted = resolve; });
+    let sessionCalls = 0;
+    const client = {
+      global: { health: async () => ({ data: { healthy: true, version: "1.18.9" }, response: { status: 200 } }) },
+      question: {
+        list: async () => ({ data: [], response: { status: 200 } }),
+        reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
+      },
+      session: {
+        get: async () => {
+          sessionCalls += 1;
+          if (sessionCalls === 1) {
+            askLookupStarted();
+            await askGate;
+          }
+          return { data: { title: "Top" }, response: { status: 200 } };
+        },
+        messages: async () => ({ data: [] }),
+      },
+    };
+    setFixtureStructuredClient(() => client);
+    plugin = await module.default({ client: withInjectedTransport(client), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
+    await waitFor(() => fs.existsSync(messagesPath));
+    const asked = plugin.event({ event: { id: "event-ask", type: "question.asked", properties: {
+      id: "reordered", sessionID: "session", questions: [
+        { header: "H", question: "Q", options: [], multiple: false, custom: true },
+      ],
+    } } });
+    await askLookup;
+    const resolved = plugin.event({ event: { type: "question.replied", properties: {
+      requestID: "reordered", sessionID: "session", answers: [["redacted"]],
+    } } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(sessionCalls, 1, "the later resolution cannot overtake the earlier assigned sequence");
+    releaseAsk();
+    await Promise.all([asked, resolved]);
+    await waitFor(() => fs.readFileSync(messagesPath, "utf8").includes('"type":"resolved"'));
+    const structured = fs.readFileSync(messagesPath, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      .filter((message) => message.type === "asked" || message.type === "resolved");
+    assert.deepEqual(structured.map((message) => [message.type, message.eventSequence]), [["asked", 1], ["resolved", 2]]);
+    assert.equal(structured.filter((message) => message.type === "asked").length, 1);
+    assert.doesNotMatch(fs.readFileSync(messagesPath, "utf8"), /agent-events|notification|card/);
+  } finally {
+    if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(() => {
+      for (const childId of brokerChildIds()) process.kill(childId, "SIGTERM");
+    });
+    clearFixtureStructuredClient();
+    for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("generated plugin bounds snapshot count, aggregate bytes, concurrency, and wall time", { skip: process.platform === "win32" }, async (t) => {
+  const minimalQuestion = { header: "H", question: "Q", options: [], multiple: false, custom: true };
+  const variants = [
+    {
+      name: "member count",
+      requests: Array.from({ length: 257 }, (_, index) => ({
+        id: `count-${index}`, sessionID: "session", questions: [minimalQuestion],
+      })),
+      expectedSessionCalls: 0,
+      shortenDeadline: false,
+      hangSession: false,
+    },
+    {
+      name: "aggregate bytes",
+      requests: Array.from({ length: 16 }, (_, index) => ({
+        id: `bytes-${index}`, sessionID: "session",
+        questions: [{ ...minimalQuestion, question: "x".repeat(9_000) }],
+      })),
+      expectedSessionCalls: 16,
+      shortenDeadline: false,
+      hangSession: false,
+    },
+    {
+      name: "absolute deadline",
+      requests: [{ id: "deadline", sessionID: "session", questions: [minimalQuestion] }],
+      expectedSessionCalls: 1,
+      shortenDeadline: true,
+      hangSession: true,
+    },
+  ];
+  for (const variant of variants) {
+    await t.test(variant.name, async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-snapshot-bound-"));
+      const configHome = path.join(home, "config");
+      const capabilityPath = path.join(home, "pane.cap");
+      const credentialPath = path.join(home, "pane.json");
+      const messagesPath = path.join(home, "broker-messages.jsonl");
+      const brokerPath = path.join(home, "broker-wrapper.mjs");
+      fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+      fs.writeFileSync(brokerPath, `#!/usr/bin/env node
+import fs from "node:fs";
+process.stdout.write(JSON.stringify({ type: "runtime_ready", supported: true, eventSequence: 0 }) + "\\n");
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (;;) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+    if (line) {
+      fs.appendFileSync(${JSON.stringify(messagesPath)}, line + "\\n");
+      if (JSON.parse(line).type === "unsupported") process.exit(0);
+    }
+  }
+});
+`, { mode: 0o700 });
+      const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, WMUX_URL: "http://127.0.0.1:9",
+        WMUX_PANE_ID: `pane-snapshot-${variant.name}`, WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+        WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath };
+      const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+      Object.assign(process.env, env);
+      let plugin: any;
+      let sessionCalls = 0;
+      try {
+        await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
+        installFixturePackages(configHome);
+        const pluginPath = path.join(configHome, "opencode", "plugins", "wmux.ts");
+        let source = fs.readFileSync(pluginPath, "utf8").replace(
+          JSON.stringify(path.join(repoRoot, "scripts", "wmux-agent-input-broker")), JSON.stringify(brokerPath),
+        );
+        if (variant.shortenDeadline) source = source.replace("const deadline = Date.now() + 10_000", "const deadline = Date.now() + 100");
+        fs.writeFileSync(pluginPath, source, { mode: 0o600 });
+        const module = await import(`${pathToFileURL(pluginPath).href}?snapshot-bound=${encodeURIComponent(variant.name)}-${Date.now()}`);
+        const client = {
+          question: {
+            list: async () => ({ data: variant.requests, response: { status: 200 } }),
+            reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
+          },
+          session: {
+            get: async () => {
+              sessionCalls += 1;
+              if (variant.hangSession) return new Promise(() => undefined);
+              return { data: { title: "Top" }, response: { status: 200 } };
+            },
+            messages: async () => ({ data: [] }),
+          },
+        };
+        setFixtureStructuredClient(() => client);
+        plugin = await module.default({ client: withInjectedTransport(client), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
+        await waitFor(() => fs.existsSync(messagesPath)
+          && fs.readFileSync(messagesPath, "utf8").includes('"type":"snapshot"'),
+        () => fs.existsSync(messagesPath) ? fs.readFileSync(messagesPath, "utf8") : "missing", 3_000);
+        const snapshots = fs.readFileSync(messagesPath, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+          .filter((message) => message.type === "snapshot");
+        assert.ok(snapshots.length >= 1);
+        assert.deepEqual((({ complete, members }) => ({ complete, members }))(snapshots.at(-1)), {
+          complete: false, members: [],
+        });
+        assert.equal(sessionCalls, variant.expectedSessionCalls);
+      } finally {
+        if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+        clearFixtureStructuredClient();
+        for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
   }
 });
 
@@ -652,6 +982,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     setFixtureStructuredClient(() => failingListClient);
     secondPlugin = await module.default({ client: withInjectedTransport(failingListClient), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(brokerChildIds().length, 1, "plugin replacement retires the predecessor broker before taking ownership");
     assert.equal(captures.slice(listCallsBefore).some((capture) => capture.path.endsWith("/native-list")), false,
       "question.list failure cannot produce a complete barrier or close absent requests");
   } finally {
@@ -753,7 +1084,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
       { id: "fresh", sessionID: "session", questions: freshQuestions },
       { id: "reused", sessionID: "session", questions: oldQuestions },
     ], response: { status: 200 } });
-    await waitFor(() => sessionCalls >= 3);
+    await waitFor(() => sessionCalls >= 2);
     releaseSession();
     await Promise.all([newEvent, orphanDuringList]);
     await waitFor(() => calls.some((call) => call.path.endsWith("/native-list"))

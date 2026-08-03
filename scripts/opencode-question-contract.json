@@ -12,9 +12,9 @@
   "eventEnvelope": "legacy-properties",
   "structuredClientSource": "new OpencodeClient({ client: plugin.client own _client }) from @opencode-ai/sdk/v2/client",
   "transportContract": "pinned 1.18.9 generated root own _client with own get/post functions; no mutation or fallback",
-  "questionListCall": "structuredClient.question.list({ directory })",
+  "questionListCall": "structuredClient.question.list({ directory }, { signal })",
   "questionReplyCall": "structuredClient.question.reply({ requestID, answers }, { signal })",
-  "sessionGetCall": "structuredClient.session.get({ sessionID, directory })",
+  "sessionGetCall": "structuredClient.session.get({ sessionID, directory }, { signal })",
   "questionReplyResult": "RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, fields>",
   "questionIdentityOwner": "broker-occurrence-stream",
   "questionSnapshotAuthority": "complete-validated-top-level-members",
@@ -25,6 +25,6 @@
     "question.reply",
     "session.get"
   ],
-  "compatibilityFingerprint": "opencode-question-occurrence-stream-v8-injected-transport-global-health-server-challenge-1.18.9",
-  "canonicalContractDigest": "b9f1e1abb1960a499256f33b8630c73b56088f030802865728b32e0f4022a449"
+  "compatibilityFingerprint": "opencode-question-occurrence-stream-v9-bounded-snapshot-injected-transport-global-health-server-challenge-1.18.9",
+  "canonicalContractDigest": "b37166e892fe20db37c2c501ab58c093da1db95a19ef6951393e67f38766f5b8"
 }

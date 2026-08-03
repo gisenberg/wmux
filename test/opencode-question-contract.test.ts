@@ -37,9 +37,9 @@ test("supported OpenCode manifest pins the official SDK contract", () => {
     "new OpencodeClient({ client: plugin.client own _client }) from @opencode-ai/sdk/v2/client");
   assert.equal(manifest.transportContract,
     "pinned 1.18.9 generated root own _client with own get/post functions; no mutation or fallback");
-  assert.equal(manifest.questionListCall, "structuredClient.question.list({ directory })");
+  assert.equal(manifest.questionListCall, "structuredClient.question.list({ directory }, { signal })");
   assert.equal(manifest.questionReplyCall, "structuredClient.question.reply({ requestID, answers }, { signal })");
-  assert.equal(manifest.sessionGetCall, "structuredClient.session.get({ sessionID, directory })");
+  assert.equal(manifest.sessionGetCall, "structuredClient.session.get({ sessionID, directory }, { signal })");
   assert.equal(manifest.questionReplyResult, "RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, fields>");
   assert.equal(manifest.questionIdentityOwner, "broker-occurrence-stream");
   assert.equal(manifest.questionSnapshotAuthority, "complete-validated-top-level-members");

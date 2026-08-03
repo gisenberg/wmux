@@ -1020,6 +1020,26 @@ const persistBrokerStatus = (state: "failed", diagnostic: string) => {
   }
 }
 
+const consumeBrokerRefreshRequest = () => {
+  const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  if (!path.isAbsolute(credentialPath)) return false
+  const refreshPath = credentialPath + ".refresh"
+  try {
+    const stat = fs.lstatSync(refreshPath)
+    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(refreshPath) !== path.resolve(refreshPath)
+      || (typeof process.getuid === "function" && stat.uid !== process.getuid())
+      || (stat.mode & 0o777) !== 0o600 || stat.size > 1024) return false
+    const request = JSON.parse(fs.readFileSync(refreshPath, "utf8"))
+    if (request?.schemaVersion !== 1 || typeof request.nonce !== "string"
+      || !/^[A-Za-z0-9_-]{43}$/.test(request.nonce) || !Number.isSafeInteger(request.requestedAt)
+      || Math.abs(Date.now() - request.requestedAt) > 60_000) return false
+    fs.rmSync(refreshPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
 type StructuredClientState = {
   client?: OpencodeClient
   diagnostic?: "injected_transport_missing" | "injected_transport_invalid"
@@ -1150,10 +1170,16 @@ const createQuestionBroker = (injectedClient: unknown) => {
   let snapshotHandler: (() => void) | undefined
   let readyResolve: (eventSequence: number | undefined) => void
   const ready = new Promise<number | undefined>((resolve) => { readyResolve = resolve })
+  let runtimeReadyReported = false
   let structuredReady = false
+  let restartInProgress = false
   const attestedChallenges = new Set<string>()
   const deliveryStates = new Map<string, "running" | "acknowledged">()
+  const pendingTerminalAcks = new Map<string, Record<string, unknown>>()
+  const pendingRestartMessages: Record<string, unknown>[] = []
   const startWaiters = new Map<string, { resolve: (started: boolean) => void; timer: ReturnType<typeof setTimeout> }>()
+  const deliveryControllers = new Set<AbortController>()
+  let closed = false
   const writeControl = (message: Record<string, unknown>) => {
     if (!child?.stdin.writable || child.stdin.destroyed) return
     const line = JSON.stringify(message)
@@ -1161,9 +1187,21 @@ const createQuestionBroker = (injectedClient: unknown) => {
     child.stdin.write(line + "\n")
   }
   const write = (message: Record<string, unknown>) => {
+    if (closed) return
+    if (structuredReady) {
+      writeControl(message)
+    } else if (restartInProgress && pendingRestartMessages.length < 256) {
+      pendingRestartMessages.push(message)
+    }
+  }
+  const sendTerminalAck = (invocationKey: string, message: Record<string, unknown>) => {
+    if (pendingTerminalAcks.size >= 256 && !pendingTerminalAcks.has(invocationKey)) {
+      pendingTerminalAcks.delete(pendingTerminalAcks.keys().next().value!)
+    }
+    pendingTerminalAcks.set(invocationKey, message)
     if (structuredReady) writeControl(message)
   }
-  const attest = async (message: any) => {
+  const attest = async (message: any, brokerChild: NonNullable<typeof child>) => {
     const now = Date.now()
     if (!message || JSON.stringify(Object.keys(message).sort()) !== JSON.stringify([
       "type", "handshakeSchema", "nonce", "serverChallenge", "issuedAt", "deadline", "contractDigest",
@@ -1189,6 +1227,7 @@ const createQuestionBroker = (injectedClient: unknown) => {
     if (attestedChallenges.size >= 16) attestedChallenges.delete(attestedChallenges.values().next().value!)
     attestedChallenges.add(challengeKey)
     const clientState = await structuredClientState
+    if (brokerChild !== child) return
     const capabilities = {
       globalHealth: hasClientMethod(() => clientState.client?.global?.health),
       questionList: hasClientMethod(() => clientState.client?.question?.list),
@@ -1198,6 +1237,7 @@ const createQuestionBroker = (injectedClient: unknown) => {
     const health = clientState.client && capabilities.globalHealth
       ? await probeOpenCodeHealth(clientState.client, message.deadline)
       : failedHealth("unavailable", 0, false)
+    if (brokerChild !== child) return
     const healthDiagnostics: Record<string, string> = {
       timeout: "health_timeout", transport_error: "health_transport_error", status: "health_status",
       shape_invalid: "health_shape_invalid", release_mismatch: "health_release_mismatch",
@@ -1205,7 +1245,7 @@ const createQuestionBroker = (injectedClient: unknown) => {
     const diagnostic = clientState.diagnostic
       ?? (!Object.values(capabilities).every(Boolean) ? "client_method_missing"
         : health.outcome === "ok" ? "ok" : healthDiagnostics[health.outcome] ?? "health_shape_invalid")
-    writeControl({
+    const attestation = {
       type: "runtime_attestation",
       handshakeSchema: message.handshakeSchema,
       nonce: message.nonce,
@@ -1220,7 +1260,11 @@ const createQuestionBroker = (injectedClient: unknown) => {
       health,
       capabilities,
       diagnostic,
-    })
+    }
+    if (brokerChild.stdin.writable && !brokerChild.stdin.destroyed) {
+      const line = JSON.stringify(attestation)
+      if (Buffer.byteLength(line) <= 128 * 1024) brokerChild.stdin.write(line + "\n")
+    }
   }
   const beginDelivery = (delivery: any) => new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
@@ -1250,7 +1294,7 @@ const createQuestionBroker = (injectedClient: unknown) => {
     if (!await beginDelivery(delivery)) {
       for (const answer of delivery.answers) answer.fill("")
       delivery.answers.length = 0
-      deliveryStates.set(invocationKey, "acknowledged")
+      deliveryStates.delete(invocationKey)
       return
     }
     const input: Parameters<OpencodeClient["question"]["reply"]>[0] = {
@@ -1262,6 +1306,7 @@ const createQuestionBroker = (injectedClient: unknown) => {
     let retryable = false
     let compatibleResult = false
     const controller = new AbortController()
+    deliveryControllers.add(controller)
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
@@ -1301,10 +1346,11 @@ const createQuestionBroker = (injectedClient: unknown) => {
       compatibleResult = true
     } finally {
       clearTimeout(timer)
+      deliveryControllers.delete(controller)
       for (const answer of input.answers ?? []) answer.fill("")
       if (Array.isArray(delivery.answers)) delivery.answers.length = 0
     }
-    write({
+    sendTerminalAck(invocationKey, {
       type: "ack",
       deliveryId: delivery.deliveryId,
       id: delivery.requestId,
@@ -1319,68 +1365,145 @@ const createQuestionBroker = (injectedClient: unknown) => {
     if (!compatibleResult) write({ type: "unsupported" })
     deliveryStates.set(invocationKey, "acknowledged")
   }
-  child.stdout.setEncoding("utf8")
-  child.stdout.on("data", (chunk: string) => {
-    buffer += chunk
-    if (Buffer.byteLength(buffer) > 256 * 1024) {
-      buffer = ""
-      write({ type: "unsupported" })
-      return
-    }
-    for (;;) {
-      const newline = buffer.indexOf("\n")
-      if (newline < 0) break
-      const line = buffer.slice(0, newline)
-      buffer = buffer.slice(newline + 1)
-      let message: any
-      try { message = JSON.parse(line) } catch { continue }
-      if (message?.type === "runtime_challenge") {
-        void attest(message)
-        continue
-      }
-      if (message?.type === "start_result" && typeof message.deliveryId === "string") {
-        const waiter = startWaiters.get(message.deliveryId)
-        if (waiter) {
-          clearTimeout(waiter.timer)
-          startWaiters.delete(message.deliveryId)
-          waiter.resolve(message.started === true)
-        }
-        continue
-      }
-      if (message?.type === "runtime_ready") {
-        structuredReady = message.supported === true
-        readyResolve(structuredReady && Number.isSafeInteger(message.eventSequence) && message.eventSequence >= 0
-          ? message.eventSequence : undefined)
-        continue
-      }
-      if (message?.type === "snapshot_request") {
-        snapshotHandler?.()
-        continue
-      }
-      if (message?.type !== "delivery") continue
-      if (queuedDeliveries >= 64) {
+  const retiredChildren = new WeakSet<object>()
+  const attachBrokerProcess = (brokerChild: NonNullable<typeof child>) => {
+    brokerChild.stdout.setEncoding("utf8")
+    brokerChild.stdout.on("data", (chunk: string) => {
+      if (brokerChild !== child) return
+      buffer += chunk
+      if (Buffer.byteLength(buffer) > 256 * 1024) {
+        buffer = ""
         write({ type: "unsupported" })
-        continue
+        return
       }
-      queuedDeliveries += 1
-      deliveryQueue = deliveryQueue.then(() => applyDelivery(message)).catch(() => {}).finally(() => {
-        queuedDeliveries -= 1
-      })
+      for (;;) {
+        const newline = buffer.indexOf("\n")
+        if (newline < 0) break
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        let message: any
+        try { message = JSON.parse(line) } catch { continue }
+        if (message?.type === "runtime_challenge") {
+          void attest(message, brokerChild)
+          continue
+        }
+        if (message?.type === "start_result" && typeof message.deliveryId === "string") {
+          const waiter = startWaiters.get(message.deliveryId)
+          if (waiter) {
+            clearTimeout(waiter.timer)
+            startWaiters.delete(message.deliveryId)
+            waiter.resolve(message.started === true)
+          }
+          continue
+        }
+        if (message?.type === "ack_result" && message.accepted === true && typeof message.id === "string"
+          && Number.isInteger(message.generation)) {
+          pendingTerminalAcks.delete(message.id + ":" + message.generation)
+          continue
+        }
+        if (message?.type === "runtime_ready") {
+          const firstReport = !runtimeReadyReported
+          runtimeReadyReported = true
+          structuredReady = message.supported === true
+          readyResolve(structuredReady && Number.isSafeInteger(message.eventSequence) && message.eventSequence >= 0
+            ? message.eventSequence : undefined)
+          if (structuredReady) {
+            for (const ack of pendingTerminalAcks.values()) writeControl(ack)
+            for (const pending of pendingRestartMessages.splice(0)) writeControl(pending)
+            if (!firstReport) snapshotHandler?.()
+          } else {
+            pendingRestartMessages.length = 0
+          }
+          restartInProgress = false
+          continue
+        }
+        if (message?.type === "snapshot_request") {
+          snapshotHandler?.()
+          continue
+        }
+        if (message?.type !== "delivery") continue
+        if (queuedDeliveries >= 64) {
+          write({ type: "unsupported" })
+          continue
+        }
+        queuedDeliveries += 1
+        deliveryQueue = deliveryQueue.then(() => applyDelivery(message)).catch(() => {}).finally(() => {
+          queuedDeliveries -= 1
+        })
+      }
+    })
+    brokerChild.on("error", () => {
+      if (brokerChild !== child || retiredChildren.has(brokerChild)) return
+      structuredReady = false
+      restartInProgress = false
+      pendingRestartMessages.length = 0
+      persistBrokerStatus("failed", "broker_spawn_error")
+      readyResolve(undefined)
+    })
+    brokerChild.on("close", () => {
+      if (brokerChild !== child || retiredChildren.has(brokerChild)) return
+      const wasReady = structuredReady
+      structuredReady = false
+      restartInProgress = false
+      pendingRestartMessages.length = 0
+      if (wasReady) persistBrokerStatus("failed", "broker_exited")
+      readyResolve(undefined)
+    })
+  }
+  attachBrokerProcess(child)
+  const restart = () => {
+    if (closed) return
+    const previous = child
+    if (previous) {
+      retiredChildren.add(previous)
+      previous.stdin.end()
+      previous.kill()
     }
-  })
-  child.on("error", () => {
+    for (const waiter of startWaiters.values()) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(false)
+    }
+    startWaiters.clear()
     structuredReady = false
-    persistBrokerStatus("failed", "broker_spawn_error")
-    readyResolve(undefined)
-  })
-  child.on("close", () => {
-    const wasReady = structuredReady
+    restartInProgress = true
+    buffer = ""
+    try {
+      child = spawn(brokerScript, ["serve"], { stdio: ["pipe", "pipe", "ignore"], env: brokerEnvironment })
+      attachBrokerProcess(child)
+    } catch {
+      child = undefined
+      restartInProgress = false
+      pendingRestartMessages.length = 0
+      persistBrokerStatus("failed", "broker_spawn_error")
+    }
+  }
+  const close = () => {
+    if (closed) return
+    closed = true
+    const previous = child
+    child = undefined
+    if (previous) {
+      retiredChildren.add(previous)
+      previous.stdin.end()
+      previous.kill()
+    }
+    for (const controller of deliveryControllers) controller.abort()
+    deliveryControllers.clear()
+    for (const waiter of startWaiters.values()) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(false)
+    }
+    startWaiters.clear()
     structuredReady = false
-    if (wasReady) persistBrokerStatus("failed", "broker_exited")
+    restartInProgress = false
+    pendingRestartMessages.length = 0
+    snapshotHandler = undefined
     readyResolve(undefined)
-  })
-  return { send: write, ready, isReady: () => structuredReady, structuredClient: () => structuredClient,
-    onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler } }
+  }
+  return { send: write, disable: () => { structuredReady = false; restartInProgress = false
+      pendingRestartMessages.length = 0; writeControl({ type: "unsupported" }) },
+    ready, isReady: () => structuredReady || restartInProgress, structuredClient: () => structuredClient,
+    onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler }, restart, close }
 }
 
 const text = (parts: Array<{ type: string; text?: string }>) =>
@@ -1405,7 +1528,24 @@ const applyPermissionDefaults = (config: any) => {
 export default (async ({ client, directory }) => {
   const active = new Map<string, { messageID: string; prompt: string; title: string; pending: Set<string> }>()
   const titles = new Map<string, string>()
+  const brokerOwnerKey = Symbol.for("wmux.opencode.question-broker-owner")
+  const priorBrokerOwner = (globalThis as any)[brokerOwnerKey] as { close: () => void } | undefined
+  priorBrokerOwner?.close()
   const questionBroker = createQuestionBroker(client)
+  if (questionBroker) (globalThis as any)[brokerOwnerKey] = { close: questionBroker.close }
+  else delete (globalThis as any)[brokerOwnerKey]
+  const refreshWatchKey = Symbol.for("wmux.opencode.question-broker-refresh-watch")
+  const priorRefreshWatch = (globalThis as any)[refreshWatchKey] as { path: string; listener: () => void } | undefined
+  if (priorRefreshWatch) fs.unwatchFile(priorRefreshWatch.path, priorRefreshWatch.listener)
+  const brokerCredentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  if (questionBroker && path.isAbsolute(brokerCredentialPath)) {
+    const refreshPath = brokerCredentialPath + ".refresh"
+    const refreshListener = () => {
+      if (consumeBrokerRefreshRequest()) questionBroker.restart()
+    }
+    ;(globalThis as any)[refreshWatchKey] = { path: refreshPath, listener: refreshListener }
+    fs.watchFile(refreshPath, { interval: 500, persistent: false }, refreshListener)
+  }
   const normalizeQuestion = (question: any) => ({
     header: question.header,
     question: question.question,
@@ -1418,6 +1558,7 @@ export default (async ({ client, directory }) => {
     if (eventSequence !== undefined) questionEventSequence = Math.max(questionEventSequence, eventSequence)
   }) ?? Promise.resolve()
   const questionEventTasks = new Map<number, Promise<void>>()
+  let questionEventTail: Promise<void> = Promise.resolve()
   const forwardQuestion = (request: any, nativePending: boolean, eventId: string, eventSequence: number) => {
     if (!request || typeof request.id !== "string" || typeof request.sessionID !== "string"
       || typeof eventId !== "string" || eventId.length < 1 || eventId.length > 256
@@ -1437,6 +1578,50 @@ export default (async ({ client, directory }) => {
   }
   let snapshotInFlight = false
   let snapshotPending = false
+  const snapshotSdkCall = async <T>(
+    call: (signal: AbortSignal) => Promise<T>,
+    deadline: number,
+  ): Promise<T> => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error("question snapshot SDK timeout")
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error("question snapshot SDK timeout"))
+      }, remaining)
+    })
+    try { return await Promise.race([call(controller.signal), timeout]) } finally { clearTimeout(timer!) }
+  }
+  const waitForSnapshotTasks = async (cutSequence: number, deadline: number): Promise<boolean> => {
+    for (;;) {
+      const tasks = [...questionEventTasks.entries()]
+        .filter(([eventSequence]) => eventSequence <= cutSequence)
+        .map(([, task]) => task)
+      if (tasks.length === 0) return true
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return false
+      let timer: ReturnType<typeof setTimeout>
+      const settled = await Promise.race([
+        Promise.allSettled(tasks).then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), remaining) }),
+      ]).finally(() => clearTimeout(timer!))
+      if (!settled) return false
+    }
+  }
+  const sendSnapshot = (
+    cutSequence: number,
+    complete: boolean,
+    members: Array<{ id: string; sessionID: string; questions: any[] }>,
+  ) => {
+    const message = { type: "snapshot", complete, cutSequence, members }
+    if (Buffer.byteLength(JSON.stringify(message)) > 128 * 1024) {
+      questionBroker?.send({ type: "snapshot", complete: false, cutSequence, members: [] })
+      return
+    }
+    questionBroker?.send(message)
+  }
   const sendQuestionSnapshot = () => {
     if (!questionBroker?.isReady()) return
     if (snapshotInFlight) {
@@ -1446,41 +1631,58 @@ export default (async ({ client, directory }) => {
     const cutSequence = questionEventSequence
     const structuredClient = questionBroker.structuredClient()
     if (!structuredClient) {
-      questionBroker.send({ type: "unsupported" })
+      questionBroker.disable()
       return
     }
     snapshotInFlight = true
-    void structuredClient.question.list({ directory }).then(async (result) => {
-      if ((result?.response?.status !== undefined && result.response.status !== 200) || !Array.isArray(result?.data)) {
-        questionBroker.send({ type: "snapshot", complete: false, cutSequence, members: [] })
+    const deadline = Date.now() + 10_000
+    void snapshotSdkCall((signal) => structuredClient.question.list({ directory }, { signal }), deadline).then(async (result) => {
+      if ((result?.response?.status !== undefined && result.response.status !== 200)
+        || !Array.isArray(result?.data) || result.data.length > 256) {
+        sendSnapshot(cutSequence, false, [])
         return
       }
-      const members: Array<{ id: string; sessionID: string; questions: any[] }> = []
-      let complete = true
-      for (const request of result.data) {
-        if (!request || typeof request.id !== "string" || typeof request.sessionID !== "string"
-          || !Array.isArray(request.questions) || request.questions.length < 1 || request.questions.length > 32
-          || !request.questions.every(validQuestion)) {
-          complete = false
-          continue
-        }
-        const session = await structuredClient.session.get({ sessionID: request.sessionID, directory }).catch(() => undefined)
-        if (!session?.data || (session.response?.status !== undefined && session.response.status !== 200)) {
-          complete = false
-          continue
-        }
-        if (session.data.parentID) continue
-        members.push({ id: request.id, sessionID: request.sessionID, questions: request.questions.map(normalizeQuestion) })
+      if (!result.data.every((request) => request && typeof request.id === "string"
+        && typeof request.sessionID === "string" && Array.isArray(request.questions)
+        && request.questions.length >= 1 && request.questions.length <= 32
+        && request.questions.every(validQuestion))) {
+        sendSnapshot(cutSequence, false, [])
+        return
       }
-      if (complete) {
+      const validated = result.data as Array<{ id: string; sessionID: string; questions: any[] }>
+      const checked = new Array<{ id: string; sessionID: string; questions: any[] } | null | undefined>(validated.length)
+      let next = 0
+      const worker = async () => {
         for (;;) {
-          const tasks = [...questionEventTasks.values()]
-          if (tasks.length === 0) break
-          await Promise.allSettled(tasks)
+          const index = next++
+          if (index >= validated.length) return
+          const request = validated[index]
+          const session = await snapshotSdkCall((signal) => structuredClient.session.get(
+            { sessionID: request.sessionID, directory }, { signal },
+          ), deadline).catch(() => undefined)
+          if (!session?.data || (session.response?.status !== undefined && session.response.status !== 200)) {
+            checked[index] = undefined
+          } else if (session.data.parentID) {
+            checked[index] = null
+          } else {
+            checked[index] = {
+              id: request.id,
+              sessionID: request.sessionID,
+              questions: request.questions.map(normalizeQuestion),
+            }
+          }
         }
       }
-      questionBroker.send({ type: "snapshot", complete, cutSequence, members })
-    }).catch(() => questionBroker.send({ type: "snapshot", complete: false, cutSequence, members: [] }))
+      await Promise.all(Array.from({ length: Math.min(8, validated.length) }, worker))
+      let complete = checked.every((member) => member !== undefined)
+      if (complete) {
+        complete = await waitForSnapshotTasks(cutSequence, deadline)
+      }
+      const members = complete
+        ? checked.filter((member): member is { id: string; sessionID: string; questions: any[] } => member !== null && member !== undefined)
+        : []
+      sendSnapshot(cutSequence, complete, members)
+    }).catch(() => sendSnapshot(cutSequence, false, []))
       .finally(() => {
         snapshotInFlight = false
         if (snapshotPending) {
@@ -1524,23 +1726,42 @@ export default (async ({ client, directory }) => {
         cacheTitle(info.id, info.title)
         return
       }
+      const questionEvent = event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected"
       if (typeof event.type === "string" && event.type.startsWith("question.")
         && event.type !== "question.asked" && event.type !== "question.replied" && event.type !== "question.rejected") {
-        questionBroker?.send({ type: "unsupported" })
+        questionBroker?.disable()
         return
       }
-      const sessionID = event.properties.sessionID
+      if (questionEvent && (!event.properties || typeof event.properties.sessionID !== "string")) {
+        questionBroker?.disable()
+        return
+      }
+      let structuredShapeValid = true
+      if (event.type === "question.asked" && (typeof event.id !== "string"
+        || typeof event.properties.id !== "string" || !Array.isArray(event.properties.questions)
+        || event.properties.questions.length < 1 || event.properties.questions.length > 32
+        || !event.properties.questions.every(validQuestion))) {
+        questionBroker?.disable()
+        structuredShapeValid = false
+      }
+      if ((event.type === "question.replied" || event.type === "question.rejected")
+        && typeof event.properties.requestID !== "string") {
+        questionBroker?.disable()
+        return
+      }
+      const sessionID = event.properties?.sessionID
       if (!sessionID) return
       const current = active.get(sessionID)
-      if (questionBroker?.isReady() && (event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected")) {
+      if (structuredShapeValid && questionBroker?.isReady()
+        && (event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected")) {
         if (questionEventSequence >= Number.MAX_SAFE_INTEGER) {
-          questionBroker?.send({ type: "unsupported" })
+          questionBroker?.disable()
         } else {
           const eventSequence = ++questionEventSequence
-          const structuredTask = (async () => {
+          const structuredTask = questionEventTail.then(async () => {
             const structuredClient = questionBroker.structuredClient()
             if (!structuredClient) {
-              questionBroker.send({ type: "unsupported" })
+              questionBroker.disable()
               return
             }
             const topLevel = current || await structuredClient.session.get({ sessionID, directory })
@@ -1548,19 +1769,24 @@ export default (async ({ client, directory }) => {
               .catch(() => false)
             if (topLevel && event.type === "question.asked") {
               if (typeof event.id !== "string" || !forwardQuestion(event.properties, false, event.id, eventSequence)) {
-                questionBroker?.send({ type: "unsupported" })
+                questionBroker?.disable()
               }
             } else if (topLevel) {
               const requestID = event.properties.requestID
-              if (typeof requestID === "string") questionBroker?.send({
-                type: "resolved",
-                eventSequence,
-                requestID,
-                sessionID,
-                result: event.type === "question.replied" ? "replied" : "rejected",
-              })
+              if (typeof requestID !== "string") {
+                questionBroker?.disable()
+              } else {
+                questionBroker?.send({
+                  type: "resolved",
+                  eventSequence,
+                  requestID,
+                  sessionID,
+                  result: event.type === "question.replied" ? "replied" : "rejected",
+                })
+              }
             }
-          })()
+          })
+          questionEventTail = structuredTask.catch(() => undefined)
           questionEventTasks.set(eventSequence, structuredTask)
           await structuredTask.finally(() => questionEventTasks.delete(eventSequence))
         }

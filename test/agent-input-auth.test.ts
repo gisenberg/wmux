@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   AgentInputCredentialStore,
+  agentInputCredentialStorePathOverride,
   CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
   UnsupportedAgentInputCredentialVersionError,
 } from "../src/server/agent-input-credential-store.js";
@@ -26,6 +27,36 @@ const schema3Fixture = fs.readFileSync(
 const schema3RelaySecret = "ais_00000000-0000-4000-8000-000000000002.AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE";
 const schema3UnusedCapability = "aic_00000000-0000-4000-8000-000000000004.AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
 const schema3SourceId = "source_00000000-0000-4000-8000-000000000002";
+
+test("server credential-store override cannot be confused with a pane broker credential", () => {
+  const keys = [
+    "WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH",
+    "WMUX_AGENT_INPUT_CREDENTIAL_PATH",
+    "WMUX_AGENT_INPUT_CAPABILITY_PATH",
+    "WMUX_PANE_ID",
+  ] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH = "/legacy/server-store.json";
+    delete process.env.WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH;
+    delete process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH;
+    delete process.env.WMUX_PANE_ID;
+    assert.equal(agentInputCredentialStorePathOverride(), "/legacy/server-store.json");
+
+    process.env.WMUX_PANE_ID = "pane-one";
+    process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH = "/pane/capability";
+    assert.equal(agentInputCredentialStorePathOverride(), undefined);
+
+    process.env.WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH = "/server/store.json";
+    assert.equal(agentInputCredentialStorePathOverride(), "/server/store.json");
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 const registration = (
   store: AgentInputCredentialStore,
   principal: Parameters<AgentInputCredentialStore["issueRuntimeChallenge"]>[0],
@@ -49,7 +80,8 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     const registrationPrincipal = store.authenticate(issued.capability, 1_001);
     assert.equal(registrationPrincipal?.kind, "agent-input-registration");
     if (registrationPrincipal?.kind !== "agent-input-registration") return;
-    const exchange = store.exchange(registrationPrincipal, registration(store, registrationPrincipal, "N".repeat(43), 1_002), 1_002);
+    const registrationBody = registration(store, registrationPrincipal, "N".repeat(43), 1_002);
+    const exchange = store.exchange(registrationPrincipal, registrationBody, 1_002);
     assert.equal(exchange.outcome, "issued");
     if (exchange.outcome !== "issued") return;
     assert.notEqual(exchange.relaySecret, issued.capability);
@@ -57,8 +89,14 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     assert.doesNotMatch(persisted, new RegExp(issued.capability.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(persisted, new RegExp(exchange.relaySecret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
-    assert.equal(store.authenticate(issued.capability, 1_003), undefined);
+    assert.equal(store.authenticate(issued.capability, 1_003)?.kind, "agent-input-registration");
     assert.throws(() => registration(store, registrationPrincipal, "N".repeat(43), 1_003), /unauthorized/);
+    assert.deepEqual(store.exchange(registrationPrincipal, registrationBody, 1_003), {
+      outcome: "already_exchanged", sourceId: exchange.sourceId,
+    });
+    assert.throws(() => store.exchange(registrationPrincipal, {
+      ...registrationBody, instanceNonce: "D".repeat(43),
+    }, 1_003), /invalid_capability/);
 
     const sourcePrincipal = store.authenticate(exchange.relaySecret, 1_010);
     assert.equal(sourcePrincipal?.kind, "agent-input-source");
@@ -75,6 +113,44 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     const disabledCapability = store.issueRegistrationCapability(context, 2_000);
     assert.equal(store.invalidateCapabilities(2_001), 1);
     assert.equal(store.authenticate(disabledCapability.capability, 2_002), undefined);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("new capabilities supersede stale registration authority and one bound context has one active source", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-supersede-"));
+  try {
+    const store = new AgentInputCredentialStore(path.join(directory, "credentials.json"), {
+      hashKey: "server-key", capabilityTtlMs: 10_000, relayTtlMs: 20_000,
+    });
+    const boundContext = {
+      ...context,
+      backendId: "durable-multiplexer" as const,
+      sessionIncarnation: "a".repeat(64),
+      endpointFingerprint: "b".repeat(64),
+    };
+    const stale = store.issueRegistrationCapability(boundContext, 1_000);
+    const current = store.issueRegistrationCapability(boundContext, 1_001);
+    assert.equal(store.authenticate(stale.capability, 1_002), undefined);
+    const principal = store.authenticate(current.capability, 1_002);
+    assert.equal(principal?.kind, "agent-input-registration");
+    if (principal?.kind !== "agent-input-registration") return;
+    const first = store.exchange(principal, registration(store, principal, "A".repeat(43), 1_003), 1_003);
+    assert.equal(first.outcome, "issued");
+
+    const parallel = store.issueRegistrationCapability(boundContext, 1_004);
+    const parallelPrincipal = store.authenticate(parallel.capability, 1_005);
+    assert.equal(parallelPrincipal?.kind, "agent-input-registration");
+    if (parallelPrincipal?.kind !== "agent-input-registration") return;
+    assert.throws(
+      () => store.exchange(
+        parallelPrincipal,
+        registration(store, parallelPrincipal, "B".repeat(43), 1_006),
+        1_006,
+      ),
+      /source_already_registered/,
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -422,6 +498,32 @@ test("schema-5 serverUrl health evidence migrates to injected-transport reattest
     assert.equal(migrated.authenticate(refreshed.relaySecret, 1_005)?.kind, "agent-input-source");
     assert.equal(migrated.source(exchange.sourceId)?.runtimeAttestation?.health.source,
       "plugin.injectedTransport:/global/health");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("schema-6 credentials without live session bindings migrate revoked", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v6-binding-"));
+  const filePath = path.join(directory, "credentials.json");
+  try {
+    const store = new AgentInputCredentialStore(filePath, { hashKey: "server-key" });
+    const capability = store.issueRegistrationCapability(context);
+    const principal = store.authenticate(capability.capability);
+    if (principal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
+    const now = Date.now();
+    const exchange = store.exchange(principal, registration(store, principal, "S".repeat(43), now), now);
+    if (exchange.outcome !== "issued") throw new Error("source unavailable");
+    store.dispose();
+    const legacy = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    legacy.schemaVersion = 6;
+    fs.writeFileSync(filePath, `${JSON.stringify(legacy)}\n`, { mode: 0o600 });
+    const migrated = new AgentInputCredentialStore(filePath, { hashKey: "server-key" });
+    assert.equal(migrated.snapshot().schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
+    assert.equal(migrated.authenticate(capability.capability), undefined);
+    assert.equal(migrated.authenticate(exchange.relaySecret), undefined);
+    assert.ok(migrated.snapshot().sources.every((source) => source.revokedAt !== undefined));
+    assert.deepEqual(migrated.snapshot().challenges, []);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

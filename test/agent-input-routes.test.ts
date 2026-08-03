@@ -38,6 +38,18 @@ const captureBodyFor = (occurrenceId: string, sessionID: string, id: string, que
   payloadDigest: capturePayloadDigest({ openCodeSessionId: sessionID, openCodeRequestId: id, questions }),
   sessionID, id, questions,
 });
+const liveBinding = {
+  backendId: "durable-multiplexer" as const,
+  sessionIncarnation: "1".repeat(64),
+  endpointFingerprint: "2".repeat(64),
+};
+const liveSessions = (live = () => true) => ({
+  hasLivePaneSession: (_paneId: string, binding: typeof liveBinding) =>
+    live() && JSON.stringify(binding) === JSON.stringify(liveBinding),
+  agentInputSessionBinding: () => liveBinding,
+  setAgentInputCapabilityIssuer: () => undefined,
+  setAgentInputSourceRetirer: () => undefined,
+}) as unknown as SessionManager;
 
 test("real server routes enforce source/pane authority and deliver ephemeral answers with typed outcomes", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-routes-"));
@@ -50,6 +62,7 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     workspaceId: "workspace-one", tabId: "tab-one", paneId: "pane-one",
   });
   state.flush();
+  state.updatePane(created.tabs[0].panes[0].id, { status: "running" });
   const relay = new AgentInputRelay(requests, credentials, {
     deliveryTimeoutMs: 2_000,
     isPaneLive: (source) => source.context.paneId === "pane-one",
@@ -59,7 +72,8 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     sessionSecret: "session-secret", browserAuthMode: "shared-or-login",
     helperToken: "H".repeat(43), automationToken: "A".repeat(43),
   };
-  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+  const sessions = liveSessions();
+  const server = await createHttpServer("127.0.0.1", state, machines, sessions, settings, {
     auth, agentInputCredentials: credentials, agentInputRequests: requests, agentInputRelay: relay,
     healthResolvers: { machines: async () => [], streams: async () => [] },
   });
@@ -88,14 +102,14 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
       credentials,
       state,
       created.tabs[0].panes[0].id,
+      liveBinding,
     );
     assert.throws(() => issueAgentInputRegistrationCapabilityForPane(credentials, state, "other-pane"), /pane_unavailable/);
     assert.equal((await fetch(`${base}/api/agent-input/sources/challenge`, {
       method: "POST", headers: bearer(auth.token), body: JSON.stringify({ kind: "opencode" }),
     })).status, 403, "broad browser authority cannot mint a runtime challenge");
-    const boundedCapability = issueAgentInputRegistrationCapabilityForPane(credentials, state, created.tabs[0].panes[0].id);
     assert.equal((await fetch(`${base}/api/agent-input/sources/challenge`, {
-      method: "POST", headers: bearer(boundedCapability.capability), body: "x".repeat(1_025),
+      method: "POST", headers: bearer(capability.capability), body: "x".repeat(1_025),
     })).status, 413, "challenge requests have an independent small body bound");
     const lostChallengeResponse = await fetch(`${base}/api/agent-input/sources/challenge`, {
       method: "POST", headers: bearer(capability.capability), body: JSON.stringify({ kind: "opencode" }),
@@ -156,7 +170,14 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     const lostRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
       method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("N".repeat(43), serverChallenge)),
     });
-    assert.equal(lostRegistrationReplay.status, 401, "a used capability never reconstructs a lost plaintext response");
+    assert.equal(lostRegistrationReplay.status, 200, "an exact retry converges without reconstructing plaintext");
+    const replayResult = await lostRegistrationReplay.json() as Record<string, unknown>;
+    assert.deepEqual(replayResult, { outcome: "already_exchanged", sourceId: source.sourceId });
+    assert.equal("relaySecret" in replayResult, false);
+    const conflictingRegistrationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify(registrationBody("D".repeat(43), serverChallenge)),
+    });
+    assert.equal(conflictingRegistrationReplay.status, 401, "a used capability cannot bind a different source nonce");
     assert.equal((await fetch(`${base}/api/agent-input/sources/register?token=${encodeURIComponent(capability.capability)}`, {
       method: "POST", body: "{}", headers: { "content-type": "application/json" },
     })).status, 401);
@@ -199,16 +220,17 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
       }),
     })).status, 422);
 
+    const pollPromise = fetch(`${base}/api/agent-input/sources/${source.sourceId}/deliveries?epoch=unbound&after=0&limit=1&waitMs=1000`, {
+      headers: bearer(source.relaySecret),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
     const answerPromise = fetch(`${base}/api/agent-input/requests/${request.id}/answer`, {
       method: "POST", headers: bearer(auth.token), body: JSON.stringify({
         expectedGeneration: request.generation, idempotencyKey: "submission-one",
         answers: [["Safe"], ["Tests"]],
       }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const polled = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/deliveries?epoch=unbound&after=0&limit=1&waitMs=100`, {
-      headers: bearer(source.relaySecret),
-    });
+    const polled = await pollPromise;
     assert.equal(polled.status, 200);
     assert.equal(polled.headers.get("cache-control"), "no-store");
     const deliveryPayload = await polled.json() as { epoch: string; deliveries: Array<{ deliveryId: string; requestId: string; expectedGeneration: number; answers: string[][] }> };
@@ -226,6 +248,55 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     assert.equal(answer.status, 200);
     assert.equal(answer.headers.get("cache-control"), "no-store");
     assert.deepEqual(await answer.json(), { outcome: "delivered" });
+
+    const maximumOptions = Array.from({ length: 128 }, (_, index) => ({
+      label: `option-${index}`, description: "",
+    }));
+    const maximumValues = [...maximumOptions.map((option) => option.label), "custom"];
+    const maximumCapture = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/requests`, {
+      method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify(captureBodyFor(
+        "occ-request-maximum", "session-one", "request-maximum",
+        [{ header: "Maximum", question: "Choose", options: maximumOptions, multiple: true, custom: true }],
+      )),
+    });
+    assert.equal(maximumCapture.status, 201);
+    const maximumRequest = await maximumCapture.json() as { id: string; generation: number };
+    assert.equal((await fetch(`${base}/api/agent-input/requests/${maximumRequest.id}/answer`, {
+      method: "POST", headers: bearer(auth.token), body: JSON.stringify({
+        expectedGeneration: maximumRequest.generation,
+        idempotencyKey: "submission-oversized-utf8",
+        answers: [["🙂".repeat(1_025)]],
+      }),
+    })).status, 422, "route validation applies the per-value UTF-8 byte bound");
+    const maximumPollPromise = fetch(
+      `${base}/api/agent-input/sources/${source.sourceId}/deliveries?epoch=unbound&after=0&limit=1&waitMs=1000`,
+      { headers: bearer(source.relaySecret) },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const maximumAnswerPromise = fetch(`${base}/api/agent-input/requests/${maximumRequest.id}/answer`, {
+      method: "POST", headers: bearer(auth.token), body: JSON.stringify({
+        expectedGeneration: maximumRequest.generation,
+        idempotencyKey: "submission-maximum",
+        answers: [maximumValues],
+      }),
+    });
+    const maximumDeliveryResponse = await maximumPollPromise;
+    assert.equal(maximumDeliveryResponse.status, 200);
+    const maximumDelivery = await maximumDeliveryResponse.json() as {
+      deliveries: Array<{ deliveryId: string; requestId: string; expectedGeneration: number; answers: string[][] }>;
+    };
+    assert.deepEqual(maximumDelivery.deliveries[0].answers, [maximumValues]);
+    assert.equal((await fetch(
+      `${base}/api/agent-input/sources/${source.sourceId}/deliveries/${maximumDelivery.deliveries[0].deliveryId}/ack`,
+      {
+        method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify({
+          id: maximumRequest.id, generation: maximumRequest.generation, outcome: "applied",
+        }),
+      },
+    )).status, 200);
+    assert.equal((await maximumAnswerPromise).status, 200,
+      "128 selected options plus one custom answer remain a valid bounded submission");
+
     const terminalCaptureRetry = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/requests`, {
       method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify(captureBody),
     });
@@ -257,9 +328,15 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     });
     assert.equal(conflicting.status, 409);
 
+    const secondWorkspace = state.createWorkspace("local", undefined, "user", undefined, {
+      workspaceId: "workspace-two", tabId: "tab-two", paneId: "pane-two",
+    });
+    state.updatePane(secondWorkspace.tabs[0].panes[0].id, { status: "running" });
     const secondCapability = credentials.issueRegistrationCapability({
-      workspaceId: created.id, tabId: created.tabs[0].id, paneId: created.tabs[0].panes[0].id,
+      workspaceId: secondWorkspace.id, tabId: secondWorkspace.tabs[0].id,
+      paneId: secondWorkspace.tabs[0].panes[0].id,
       machineId: "local", sourceKind: "opencode",
+      ...liveBinding,
     });
     const secondPrincipal = credentials.authenticate(secondCapability.capability);
     assert.equal(secondPrincipal?.kind, "agent-input-registration");
@@ -291,6 +368,145 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
   }
 });
 
+test("source and registration authority retire on abnormal exit, backend replacement, host retarget, and incarnation change", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-live-authority-"));
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local", sessionBackend: "tmux" }];
+  const state = new StateStore(machines, path.join(directory, "state.json"));
+  const settings = new SettingsStore(path.join(directory, "settings.json"));
+  const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "server-key" });
+  const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "answer-key" });
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const context = state.findPaneContext(pane.id)!;
+  state.updatePane(pane.id, { status: "running" });
+  let currentBinding = liveBinding;
+  let live = true;
+  let retire: ((paneId: string, binding: typeof liveBinding) => void) | undefined;
+  const sessions = {
+    hasLivePaneSession: (_paneId: string, binding: typeof liveBinding) =>
+      live && JSON.stringify(binding) === JSON.stringify(currentBinding),
+    agentInputSessionBinding: () => currentBinding,
+    setAgentInputCapabilityIssuer: () => undefined,
+    setAgentInputSourceRetirer: (value: typeof retire) => { retire = value; },
+  } as unknown as SessionManager;
+  const auth: AuthConfig = {
+    enabled: true, token: "browser-user-token", loginEnabled: false,
+    sessionSecret: "session-secret", browserAuthMode: "shared-or-login",
+  };
+  const server = await createHttpServer("127.0.0.1", state, machines, sessions, settings, {
+    auth, agentInputCredentials: credentials, agentInputRequests: requests,
+    healthResolvers: { machines: async () => [], streams: async () => [] },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("server unavailable");
+  const base = `http://127.0.0.1:${address.port}`;
+  const issueSource = (binding: typeof liveBinding, nonce: string) => {
+    const capability = credentials.issueRegistrationCapability({
+      workspaceId: context.workspace.id, tabId: context.tab.id, paneId: pane.id,
+      machineId: pane.machineId, sourceKind: "opencode", ...binding,
+    });
+    const registration = credentials.authenticate(capability.capability);
+    if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
+    const challenge = credentials.issueRuntimeChallenge(registration);
+    const exchange = credentials.exchange(registration, registrationBody(nonce, challenge));
+    if (exchange.outcome !== "issued") throw new Error("source unavailable");
+    return exchange;
+  };
+  const questions = [{ header: "Mode", question: "Choose", options: [], multiple: false, custom: true }];
+  const capture = (sourceId: string, id: string) => requests.capture({
+    sourceId, workspaceId: context.workspace.id, tabId: context.tab.id, paneId: pane.id,
+    machineId: pane.machineId, openCodeSessionId: "session", openCodeRequestId: id,
+    occurrenceId: `occ-${id}`, occurrenceKey: nativeOccurrenceKey("session", id), occurrenceOrdinal: 1,
+    payloadDigest: capturePayloadDigest({ openCodeSessionId: "session", openCodeRequestId: id, questions }),
+    questions,
+  });
+  const staleCaptureStatus = async (source: { sourceId: string; relaySecret: string }, id: string) =>
+    (await fetch(`${base}/api/agent-input/sources/${source.sourceId}/requests`, {
+      method: "POST", headers: bearer(source.relaySecret),
+      body: JSON.stringify(captureBodyFor(`occ-${id}`, "session", id, questions)),
+    })).status;
+  try {
+    const delayedCapability = credentials.issueRegistrationCapability({
+      workspaceId: context.workspace.id, tabId: context.tab.id, paneId: pane.id,
+      machineId: pane.machineId, sourceKind: "opencode", ...liveBinding,
+    });
+    const delayedPrincipal = credentials.authenticate(delayedCapability.capability);
+    if (delayedPrincipal?.kind !== "agent-input-registration") throw new Error("registration unavailable");
+    const delayedChallenge = credentials.issueRuntimeChallenge(delayedPrincipal);
+    const delayedBody = JSON.stringify(registrationBody("T".repeat(43), delayedChallenge));
+    const delayedStatus = await new Promise<number>((resolve, reject) => {
+      const target = new URL("/api/agent-input/sources/register", base);
+      const request = http.request(target, {
+        method: "POST",
+        headers: {
+          ...bearer(delayedCapability.capability),
+          "content-length": Buffer.byteLength(delayedBody),
+        },
+      }, (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode ?? 0));
+      });
+      request.on("error", reject);
+      const midpoint = Math.floor(delayedBody.length / 2);
+      request.write(delayedBody.slice(0, midpoint));
+      setTimeout(() => {
+        live = false;
+        request.end(delayedBody.slice(midpoint));
+      }, 25);
+    });
+    assert.equal(delayedStatus, 409, "registration rechecks live authority after reading its body");
+    live = true;
+
+    const abnormal = issueSource(liveBinding, "A".repeat(43));
+    const abnormalRequest = capture(abnormal.sourceId, "abnormal");
+    if (abnormalRequest.outcome !== "created") throw new Error("request unavailable");
+    live = false;
+    retire?.(pane.id, liveBinding);
+    assert.equal(credentials.authenticate(abnormal.relaySecret), undefined);
+    assert.equal(requests.find(abnormalRequest.request.id)?.state, "cancelled");
+    assert.equal(requests.find(abnormalRequest.request.id)?.resolution, "source-revoked");
+    assert.equal((await fetch(`${base}/api/agent-input/sources/${abnormal.sourceId}/deliveries?epoch=x&after=0&limit=1&waitMs=0`, {
+      headers: bearer(abnormal.relaySecret),
+    })).status, 401);
+
+    live = true;
+    currentBinding = liveBinding;
+    const backendSource = issueSource(liveBinding, "B".repeat(43));
+    const staleCapability = credentials.issueRegistrationCapability({
+      workspaceId: context.workspace.id, tabId: context.tab.id, paneId: pane.id,
+      machineId: pane.machineId, sourceKind: "opencode", ...liveBinding,
+    });
+    currentBinding = { ...liveBinding, backendId: "raw-pty", sessionIncarnation: "3".repeat(64) };
+    assert.equal(await staleCaptureStatus(backendSource, "backend-replaced"), 401);
+    assert.equal((await fetch(`${base}/api/agent-input/sources/challenge`, {
+      method: "POST", headers: bearer(staleCapability.capability), body: JSON.stringify({ kind: "opencode" }),
+    })).status, 409, "a pre-replacement constructor capability cannot register against the new backend");
+    state.updatePane(pane.id, { title: "backend replacement" });
+    assert.equal(credentials.authenticate(backendSource.relaySecret), undefined);
+
+    currentBinding = liveBinding;
+    const retargeted = issueSource(liveBinding, "C".repeat(43));
+    currentBinding = { ...liveBinding, endpointFingerprint: "4".repeat(64), sessionIncarnation: "5".repeat(64) };
+    assert.equal(await staleCaptureStatus(retargeted, "host-retarget"), 401);
+    state.updatePane(pane.id, { title: "host retarget" });
+    assert.equal(credentials.authenticate(retargeted.relaySecret), undefined);
+
+    currentBinding = liveBinding;
+    const reincarnated = issueSource(liveBinding, "D".repeat(43));
+    currentBinding = { ...liveBinding, sessionIncarnation: "6".repeat(64) };
+    assert.equal(await staleCaptureStatus(reincarnated, "new-incarnation"), 401);
+    assert.equal((await fetch(`${base}/api/agent-input/sources/${reincarnated.sourceId}/deliveries?epoch=x&after=0&limit=1&waitMs=0`, {
+      headers: bearer(reincarnated.relaySecret),
+    })).status, 401, "raw-answer polling is denied across session incarnations");
+  } finally {
+    server.close();
+    await once(server, "close");
+    state.flush();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("agent-input routes enforce body, poll, concurrency, cancellation, status, and cache boundaries", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-route-limits-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
@@ -299,9 +515,11 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
   const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "server-key" });
   const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "answer-key" });
   const context = state.findPaneContext(state.snapshot().workspaces[0].tabs[0].panes[0].id)!;
+  state.updatePane(context.pane.id, { status: "running" });
   const capability = credentials.issueRegistrationCapability({
     workspaceId: context.workspace.id, tabId: context.tab.id, paneId: context.pane.id,
     machineId: context.pane.machineId, sourceKind: "opencode",
+    ...liveBinding,
   });
   const registration = credentials.authenticate(capability.capability);
   if (registration?.kind !== "agent-input-registration") throw new Error("registration unavailable");
@@ -319,6 +537,11 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
   let paneInputCalls = 0;
   let paneInputBytes = 0;
   const sessions = {
+    hasLivePaneSession: (_paneId: string, binding: typeof liveBinding) =>
+      JSON.stringify(binding) === JSON.stringify(liveBinding),
+    agentInputSessionBinding: () => liveBinding,
+    setAgentInputCapabilityIssuer: () => undefined,
+    setAgentInputSourceRetirer: () => undefined,
     writePane: (_paneId: string, data: string) => {
       paneInputCalls += 1;
       paneInputBytes += Buffer.byteLength(data);
@@ -372,9 +595,21 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
     assert.equal(oversized.status, 413);
     noStore(oversized);
 
+    const expandedSnapshotEnvelope = await fetch(`${base}${sourcePath}/native-list`, {
+      method: "POST", headers: bearer(exchange.relaySecret),
+      body: JSON.stringify({ complete: true, cutSequence: 0, members: [], padding: "x".repeat(180 * 1024) }),
+    });
+    assert.equal(expandedSnapshotEnvelope.status, 400,
+      "native-list reads the bounded broker metadata expansion above the 128-KiB control-message cap");
+    const oversizedSnapshotEnvelope = await fetch(`${base}${sourcePath}/native-list`, {
+      method: "POST", headers: bearer(exchange.relaySecret), body: "x".repeat(256 * 1024 + 1),
+    });
+    assert.equal(oversizedSnapshotEnvelope.status, 413);
+
     const unsupportedCapability = credentials.issueRegistrationCapability({
       workspaceId: context.workspace.id, tabId: context.tab.id, paneId: context.pane.id,
       machineId: context.pane.machineId, sourceKind: "opencode",
+      ...liveBinding,
     });
     const unsupportedRegistration = credentials.authenticate(unsupportedCapability.capability);
     if (unsupportedRegistration?.kind !== "agent-input-registration") throw new Error("unsupported registration unavailable");
@@ -388,11 +623,12 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
     const concurrent = capture("concurrent");
     if (concurrent.outcome !== "created") throw new Error("concurrent request unavailable");
     const concurrentBody = JSON.stringify({ expectedGeneration: 1, idempotencyKey: "same-key", answers: [["Safe"]] });
+    const concurrentPoll = relay.poll(principal, 0, 1, 1_000);
     const concurrentAnswers = [1, 2].map(() => fetch(`${base}/api/agent-input/requests/${concurrent.request.id}/answer`, {
       method: "POST", headers: bearer(auth.token), body: concurrentBody,
     }));
     await waitUntil(() => fs.readFileSync(requests.filePath, "utf8").includes("same-key"));
-    const delivery = (await relay.poll(principal, 0, 1, 0)).deliveries[0];
+    const delivery = (await concurrentPoll).deliveries[0];
     assert.ok(delivery);
     relay.startDelivery(principal, delivery.deliveryId, delivery.requestId, delivery.expectedGeneration);
     relay.acknowledge(principal, delivery.deliveryId, {
@@ -428,6 +664,41 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
     const retryResponse = await retry;
     assert.equal(retryResponse.status, 502);
     noStore(retryResponse);
+
+    const badRequest = capture("bad-request");
+    if (badRequest.outcome !== "created") throw new Error("bad request fixture unavailable");
+    const badPoll = relay.poll(principal, retriedDelivery.cursor, 1, 1_000);
+    const badBody = JSON.stringify({ expectedGeneration: 1, idempotencyKey: "bad-key", answers: [["Safe"]] });
+    const badAnswer = fetch(`${base}/api/agent-input/requests/${badRequest.request.id}/answer`, {
+      method: "POST", headers: bearer(auth.token), body: badBody,
+    });
+    const badDelivery = (await badPoll).deliveries[0];
+    relay.startDelivery(principal, badDelivery.deliveryId, badDelivery.requestId, badDelivery.expectedGeneration);
+    relay.acknowledge(principal, badDelivery.deliveryId, {
+      requestId: badDelivery.requestId, generation: badDelivery.expectedGeneration,
+      outcome: "sdk_error", code: "BadRequest", retryable: false,
+    });
+    const badResponse = await badAnswer;
+    assert.equal(badResponse.status, 502);
+    assert.deepEqual(await badResponse.json(), { outcome: "sdk_error", code: "BadRequest", retryable: false });
+    assert.equal(requests.find(badRequest.request.id)?.state, "failed");
+    const sameKey = await fetch(`${base}/api/agent-input/requests/${badRequest.request.id}/answer`, {
+      method: "POST", headers: bearer(auth.token), body: badBody,
+    });
+    assert.equal(sameKey.status, 502, "a reloaded or second client converges on the durable SDK failure");
+    const secondClient = await fetch(`${base}/api/agent-input/requests/${badRequest.request.id}/answer`, {
+      method: "POST", headers: bearer(auth.token), body: JSON.stringify({
+        expectedGeneration: 1, idempotencyKey: "different-client", answers: [["Safe"]],
+      }),
+    });
+    assert.equal(secondClient.status, 409);
+    assert.equal(relay.resolveNative(principal, badRequest.request.id, 1, "occ-bad-request", "replied").outcome, "resolved");
+    assert.equal(requests.find(badRequest.request.id)?.state, "answered");
+    const reconciled = await fetch(`${base}/api/agent-input/requests/${badRequest.request.id}/answer`, {
+      method: "POST", headers: bearer(auth.token), body: badBody,
+    });
+    assert.equal(reconciled.status, 200);
+    assert.deepEqual(await reconciled.json(), { outcome: "already_resolved" });
 
     const rotationBody = Buffer.from(JSON.stringify(captureBodyFor(
       "occ-rotated-during-body", "session", "rotated-during-body", [{
@@ -475,17 +746,30 @@ test("feature disable rejects challenge creation without leaving pending challen
   const settings = new SettingsStore(path.join(directory, "settings.json"));
   const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "server-key" });
   const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "answer-key" });
-  const relay = new AgentInputRelay(requests, credentials, { enabled: false, isPaneLive: () => true });
   const auth: AuthConfig = {
     enabled: true, token: "browser-user-token", loginEnabled: false,
     sessionSecret: "session-secret", browserAuthMode: "shared-or-login",
   };
-  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
-    auth, agentInputEnabled: false, agentInputCredentials: credentials, agentInputRequests: requests,
-    agentInputRelay: relay, healthResolvers: { machines: async () => [], streams: async () => [] },
-  });
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
   const context = state.findPaneContext(pane.id)!;
+  const questions = [{ header: "Mode", question: "Choose", options: [], multiple: false, custom: true }];
+  const orphan = requests.capture({
+    sourceId: "source-missing", workspaceId: context.workspace.id, tabId: context.tab.id,
+    paneId: pane.id, machineId: pane.machineId, openCodeSessionId: "session-disabled",
+    openCodeRequestId: "request-disabled", occurrenceId: "occ-disabled",
+    occurrenceKey: nativeOccurrenceKey("session-disabled", "request-disabled"), occurrenceOrdinal: 1,
+    payloadDigest: capturePayloadDigest({
+      openCodeSessionId: "session-disabled", openCodeRequestId: "request-disabled", questions,
+    }),
+    questions,
+  });
+  if (orphan.outcome !== "created") throw new Error("orphan request unavailable");
+  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+    auth, agentInputEnabled: false, agentInputCredentials: credentials, agentInputRequests: requests,
+    healthResolvers: { machines: async () => [], streams: async () => [] },
+  });
+  assert.equal(requests.find(orphan.request.id)?.state, "cancelled");
+  assert.equal(requests.find(orphan.request.id)?.resolution, "source-revoked");
   const capability = credentials.issueRegistrationCapability({
     workspaceId: context.workspace.id, tabId: context.tab.id, paneId: pane.id,
     machineId: pane.machineId, sourceKind: "opencode",

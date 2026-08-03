@@ -479,25 +479,43 @@ test("feature-disabled, legacy POSIX, and Windows agent sessions start without a
 });
 
 test("normal SSH and raw spawn specs preserve existing staging boundaries", () => {
-  const normalSsh = buildSpawnSpec(
-    { id: "normal-ssh", name: "Normal SSH", kind: "ssh", host: "127.0.0.1", sessionBackend: "auto" },
-    80,
-    24,
-    { WMUX_PANE_ID: "normal-pane" },
-  );
-  assert.doesNotMatch(JSON.stringify(normalSsh), /WMUX_AGENT_INPUT_(?:CAPABILITY|CREDENTIAL|REGISTRATION)/);
-  const raw = buildSpawnSpec(
-    { id: "raw", name: "Raw", kind: "local", sessionBackend: "pty" },
-    80,
-    24,
-    {
-      WMUX_PANE_ID: "raw-pane",
-      WMUX_AGENT_INPUT_CAPABILITY_PATH: "/private/raw-pane.cap",
-      WMUX_AGENT_INPUT_CREDENTIAL_PATH: "/private/raw-pane.json",
-    },
-  );
-  assert.equal(raw.env.WMUX_AGENT_INPUT_CAPABILITY_PATH, "/private/raw-pane.cap");
-  assert.equal(raw.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH, "/private/raw-pane.json");
+  const serverKeys = [
+    "WMUX_AGENT_INPUT_ENABLED",
+    "WMUX_AGENT_INPUT_REQUEST_PATH",
+    "WMUX_AGENT_INPUT_SECRET_PATH",
+    "WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH",
+    "WMUX_AGENT_INPUT_CAPABILITY_PATH",
+    "WMUX_AGENT_INPUT_CREDENTIAL_PATH",
+    "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY",
+  ] as const;
+  const previous = new Map(serverKeys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of serverKeys) process.env[key] = `server-only-${key}`;
+    const normalSsh = buildSpawnSpec(
+      { id: "normal-ssh", name: "Normal SSH", kind: "ssh", host: "127.0.0.1", sessionBackend: "auto" },
+      80,
+      24,
+      { WMUX_PANE_ID: "normal-pane" },
+    );
+    assert.doesNotMatch(JSON.stringify(normalSsh), /server-only-WMUX_AGENT_INPUT_/);
+    const raw = buildSpawnSpec(
+      { id: "raw", name: "Raw", kind: "local", sessionBackend: "pty" },
+      80,
+      24,
+      {
+        WMUX_PANE_ID: "raw-pane",
+        WMUX_AGENT_INPUT_CAPABILITY_PATH: "/private/raw-pane.cap",
+        WMUX_AGENT_INPUT_CREDENTIAL_PATH: "/private/raw-pane.json",
+      },
+    );
+    assert.equal(raw.env.WMUX_AGENT_INPUT_CAPABILITY_PATH, "/private/raw-pane.cap");
+    assert.equal(raw.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH, "/private/raw-pane.json");
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 class FakeSocket extends EventEmitter {

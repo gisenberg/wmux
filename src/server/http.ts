@@ -37,6 +37,8 @@ import { HttpError, type ServerDeps } from "./routes/route.js";
 import { clientRoot } from "./static-files.js";
 import {
   AgentInputCredentialStore,
+  agentInputCredentialStorePathOverride,
+  contextSessionBinding,
   issueAgentInputRegistrationCapabilityForPane,
   loadOrCreateAgentInputSecret,
 } from "./agent-input-credential-store.js";
@@ -140,7 +142,7 @@ export const createHttpServer = (
     );
   const agentInputCredentials = options.agentInputCredentials
     ?? new AgentInputCredentialStore(
-      process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH
+      agentInputCredentialStorePathOverride()
       ?? path.join(state.storageDirectory(), "agent-input-credentials.json"),
       { hashKey: agentInputSecret! },
     );
@@ -151,32 +153,63 @@ export const createHttpServer = (
       { answerDigestKey: agentInputSecret! },
     );
   const agentInputEnabled = options.agentInputEnabled ?? process.env.WMUX_AGENT_INPUT_ENABLED !== "0";
-  agentInputCredentials.prune();
+  const agentInputNow = Date.now();
+  const credentialSources = agentInputCredentials.snapshot().sources;
+  const credentialSourcesById = new Map(credentialSources.map((source) => [source.id, source]));
+  for (const sourceId of agentInputRequests.pendingSourceIds()) {
+    const source = credentialSourcesById.get(sourceId);
+    if (!agentInputEnabled || !source || source.revokedAt !== undefined || source.expiresAt <= agentInputNow) {
+      agentInputRequests.retireSource(sourceId, agentInputNow);
+    }
+  }
+  agentInputCredentials.prune(agentInputNow);
   agentInputRequests.prune();
+  const isAgentInputContextLive = (context: Parameters<typeof contextSessionBinding>[0]): boolean => {
+    const found = state.findPaneContext(context.paneId);
+    const binding = contextSessionBinding(context);
+    return Boolean(binding && found && found.pane.status === "running"
+      && found.workspace.id === context.workspaceId
+      && found.tab.id === context.tabId
+      && found.pane.machineId === context.machineId
+      && sessions.hasLivePaneSession?.(context.paneId, binding));
+  };
   const agentInputRelay = options.agentInputRelay
     ?? new AgentInputRelay(agentInputRequests, agentInputCredentials, {
       enabled: agentInputEnabled,
-      isPaneLive: (source) => {
-        const context = state.findPaneContext(source.context.paneId);
-        return Boolean(context
-          && context.workspace.id === source.context.workspaceId
-          && context.tab.id === source.context.tabId
-          && context.pane.machineId === source.context.machineId);
-      },
+      isPaneLive: (source) => isAgentInputContextLive(source.context),
     });
   sessions.setAgentInputCapabilityIssuer?.(agentInputEnabled
-    ? (paneId) => issueAgentInputRegistrationCapabilityForPane(agentInputCredentials, state, paneId)
+    ? (paneId, binding) => issueAgentInputRegistrationCapabilityForPane(
+        agentInputCredentials, state, paneId, binding,
+      )
+    : undefined);
+  sessions.setAgentInputSourceRetirer?.(agentInputEnabled
+    ? (paneId, binding) => {
+        for (const source of agentInputCredentials.snapshot().sources) {
+          const sourceBinding = contextSessionBinding(source.context);
+          if (source.context.paneId !== paneId || !sourceBinding
+            || JSON.stringify(sourceBinding) !== JSON.stringify(binding)) continue;
+          agentInputRequests.retireSource(source.id);
+          agentInputCredentials.revoke(source.id);
+        }
+      }
     : undefined);
   const reconcileAgentInputSources = (): void => {
     for (const source of agentInputCredentials.snapshot().sources) {
       if (source.revokedAt !== undefined) continue;
       const context = state.findPaneContext(source.context.paneId);
-      const live = Boolean(context
+      const identityMatches = Boolean(context
         && context.workspace.id === source.context.workspaceId
         && context.tab.id === source.context.tabId
         && context.pane.machineId === source.context.machineId);
-      if (!live) {
-        agentInputRequests.resolvePane(source.context.paneId);
+      const expectedBinding = contextSessionBinding(source.context);
+      const currentBinding = sessions.agentInputSessionBinding?.(source.context.paneId);
+      const replaced = Boolean(currentBinding && (!expectedBinding
+        || JSON.stringify(currentBinding) !== JSON.stringify(expectedBinding)));
+      const unattachedEphemeral = Boolean(!currentBinding && expectedBinding?.backendId === "raw-pty");
+      if (!identityMatches || context?.pane.status === "exited" || replaced || unattachedEphemeral) {
+        if (!identityMatches) agentInputRequests.resolvePane(source.context.paneId);
+        else agentInputRequests.retireSource(source.id);
         agentInputCredentials.revoke(source.id);
       }
     }
@@ -226,8 +259,15 @@ export const createHttpServer = (
     agentInputCredentials,
     agentInputRelay,
     agentInputEnabled,
-    issueAgentInputRegistrationCapability: (paneId) =>
-      issueAgentInputRegistrationCapabilityForPane(agentInputCredentials, state, paneId),
+    issueAgentInputRegistrationCapability: (paneId) => {
+      const binding = sessions.agentInputSessionBinding?.(paneId);
+      if (!binding || !sessions.hasLivePaneSession?.(paneId, binding)) {
+        throw new HttpError(409, "pane_unavailable");
+      }
+      return issueAgentInputRegistrationCapabilityForPane(
+        agentInputCredentials, state, paneId, binding,
+      );
+    },
     browserSessionCookieSecure,
     agentFollowUps,
     agentSessions,

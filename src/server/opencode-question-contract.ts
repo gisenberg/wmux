@@ -13,8 +13,8 @@ export const SUPPORTED_OPENCODE_SOURCE_COMMIT = "4da7bb44c84e013fa53e9c5d02ac753
 export const OPENCODE_RUNTIME_HANDSHAKE_SCHEMA = 4;
 export const OPENCODE_HEALTH_EVIDENCE_SOURCE = "plugin.injectedTransport:/global/health" as const;
 export const OPENCODE_QUESTION_COMPATIBILITY_FINGERPRINT =
-  "opencode-question-occurrence-stream-v8-injected-transport-global-health-server-challenge-1.18.9";
-export const OPENCODE_QUESTION_CONTRACT_DIGEST = "b9f1e1abb1960a499256f33b8630c73b56088f030802865728b32e0f4022a449";
+  "opencode-question-occurrence-stream-v9-bounded-snapshot-injected-transport-global-health-server-challenge-1.18.9";
+export const OPENCODE_QUESTION_CONTRACT_DIGEST = "b37166e892fe20db37c2c501ab58c093da1db95a19ef6951393e67f38766f5b8";
 export const OPENCODE_QUESTION_EVENT_ENVELOPE = "legacy-properties";
 
 export type OpenCodeQuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0];

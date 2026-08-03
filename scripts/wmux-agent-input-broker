@@ -106,6 +106,30 @@ function persistStatus(state, diagnostic) {
   } catch {}
 }
 
+function persistRefreshRequest() {
+  const refreshPath = `${credentialPath}.refresh`;
+  const resolved = path.resolve(refreshPath);
+  const directory = path.dirname(resolved);
+  let temporary = "";
+  try {
+    assertPrivateDirectory(directory, true);
+    if (fs.existsSync(resolved)) assertPrivateFile(resolved);
+    temporary = path.join(directory, `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`);
+    const handle = fs.openSync(temporary, "wx", 0o600);
+    try {
+      fs.writeFileSync(handle, `${JSON.stringify({ schemaVersion: 1, nonce: crypto.randomBytes(32).toString("base64url"), requestedAt: Date.now() })}\n`);
+      fs.fsyncSync(handle);
+    } finally { fs.closeSync(handle); }
+    fs.renameSync(temporary, resolved);
+    const directoryHandle = fs.openSync(directory, "r");
+    try { fs.fsyncSync(directoryHandle); } finally { fs.closeSync(directoryHandle); }
+    return true;
+  } catch {
+    if (temporary) try { fs.rmSync(temporary, { force: true }); } catch {}
+    return false;
+  }
+}
+
 function assertPrivateDirectory(directory, create = false) {
   const resolved = path.resolve(directory);
   if (create) fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
@@ -346,15 +370,23 @@ async function register(attestation) {
   if (!capabilityPath || attestationDiagnostic(attestation) !== "ok") return false;
   let capability = readCapability();
   if (!capability) return false;
-  const response = await request("/api/agent-input/sources/register", capability, {
-    method: "POST", body: JSON.stringify({
-      instanceNonce: attestation.nonce,
-      kind: "opencode",
-      runtimeAttestation: attestation,
-    }),
+  const body = JSON.stringify({
+    instanceNonce: attestation.nonce,
+    kind: "opencode",
+    runtimeAttestation: attestation,
   });
-  const terminal = [201, 400, 401, 403, 404, 409].includes(response.status);
+  let response = { status: 0, body: {} };
   try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      response = await request("/api/agent-input/sources/register", capability, { method: "POST", body });
+      if (response.status === 201 || response.status === 200) break;
+      if (response.status !== 0 && response.status !== 408 && response.status !== 429 && response.status < 500) break;
+      if (attempt === 0) await sleep(100);
+    }
+    if (response.status === 200 && response.body?.outcome === "already_exchanged") {
+      lastDiagnostic = "registration_response_lost";
+      return false;
+    }
     if (response.status !== 201 || typeof response.body.sourceId !== "string"
       || typeof response.body.relaySecret !== "string" || typeof response.body.expiresAt !== "number") return false;
     credential = {
@@ -368,6 +400,8 @@ async function register(attestation) {
     return true;
   } finally {
     capability = "";
+    const terminal = response.status === 200 || response.status === 201
+      || [400, 401, 403, 404, 409, 410, 422].includes(response.status);
     if (terminal) try { fs.rmSync(capabilityPath, { force: true }); } catch {}
   }
 }
@@ -490,17 +524,24 @@ function quarantine(operation, reason = operation.reason ?? "permanent-failure",
 }
 
 function appendOperation(operation) {
-  if (!runtimeReady || !credential?.supported || !validOperation(operation)) return;
+  if (!runtimeReady || !credential?.supported || !validOperation(operation)) return false;
   const prior = credential.outbox.find((candidate) => candidate.opId === operation.opId);
   if (prior) {
-    if (JSON.stringify(prior) !== JSON.stringify(operation)) failClosed("operation-conflict");
-    return;
+    if (JSON.stringify(prior) !== JSON.stringify(operation)) {
+      failClosed("operation-conflict");
+      return false;
+    }
+    return true;
   }
-  if (credential.outbox.length >= MAX_OUTBOX) return failClosed("outbox-capacity");
+  if (credential.outbox.length >= MAX_OUTBOX) {
+    failClosed("outbox-capacity");
+    return false;
+  }
   credential.outbox.push(operation);
   persistCredential();
   wakeDrain();
   void drainOutbox();
+  return true;
 }
 
 function appendReceipt(eventId, eventSequence, key, occurrenceId, digest) {
@@ -538,6 +579,13 @@ function allocateOccurrence(sessionID, requestID, questions, eventId, eventSeque
     if (Object.keys(credential.streams).length >= MAX_STREAMS) return failClosed("stream-capacity");
     stream = { sessionID, requestID, nextOrdinal: 0, lastEventSequence: 0 };
     credential.streams[key] = stream;
+  }
+  const fence = snapshotFences.get(key);
+  if (eventId && (eventSequence <= stream.lastEventSequence
+    || (fence && eventSequence <= fence.sequence))) {
+    credential.lastEventSequence = Math.max(credential.lastEventSequence, eventSequence);
+    persistCredential();
+    return undefined;
   }
   const current = stream.current;
   if (eventId && current?.state === "active") {
@@ -613,6 +661,7 @@ function acceptResolved(message) {
   const key = identityKey(message.sessionID, message.requestID);
   const stream = credential?.streams[key];
   const current = stream?.current;
+  if (stream && message.eventSequence <= stream.lastEventSequence) return;
   if (!current) {
     let fenced = credential.streams[key];
     if (!fenced) {
@@ -766,7 +815,19 @@ async function execute(operation) {
     credential.relaySecret, { method: "POST", body: JSON.stringify({ id: operation.id, generation: operation.generation,
       outcome: operation.outcome, ...(operation.code ? { code: operation.code } : {}),
       ...(operation.retryable !== undefined ? { retryable: operation.retryable } : {}) }) });
-  return response.status === 200 || response.status === 409 ? { kind: "done" } : classify(response);
+  if (response.status === 200) {
+    const expected = operation.outcome === "applied" ? ["delivered", "already_resolved"]
+      : operation.outcome === "already_resolved" ? ["already_resolved"]
+        : ["sdk_error", "already_resolved"];
+    if (expected.includes(response.body?.outcome)) return { kind: "done" };
+    requestSnapshot();
+    return { kind: "quarantine", status: 200 };
+  }
+  if (response.status === 409) {
+    requestSnapshot();
+    return { kind: "quarantine", status: 409 };
+  }
+  return classify(response);
 }
 
 function classify(response) {
@@ -871,9 +932,16 @@ function acceptMessage(message) {
   if (message.type === "resolved") return acceptResolved(message);
   if (message.type === "snapshot") return acceptSnapshot(message);
   if (message.type === "start") return void startDelivery(message);
-  if (message.type === "ack") appendOperation({ type: "ack", opId: `ack:${message.deliveryId}`,
-    deliveryId: message.deliveryId, id: message.id, generation: message.generation, outcome: message.outcome,
-    ...(message.code ? { code: message.code } : {}), ...(message.retryable !== undefined ? { retryable: message.retryable } : {}) });
+  if (message.type === "ack") {
+    const accepted = appendOperation({ type: "ack", opId: `ack:${message.deliveryId}`,
+      deliveryId: message.deliveryId, id: message.id, generation: message.generation, outcome: message.outcome,
+      ...(message.code ? { code: message.code } : {}), ...(message.retryable !== undefined ? { retryable: message.retryable } : {}) });
+    if (accepted) {
+      inFlightDeliveries.delete(message.deliveryId);
+      emit({ type: "ack_result", deliveryId: message.deliveryId,
+        id: message.id, generation: message.generation, accepted: true });
+    }
+  }
 }
 
 function clearRawDelivery(delivery) {
@@ -1015,9 +1083,14 @@ function stop() {
 const command = process.argv[2] || "serve";
 if (command === "serve") await serve();
 else if (command === "refresh") {
-  persistStatus("failed", "attestation_required");
-  process.stdout.write(`${JSON.stringify({ refreshed: false, supported: false, diagnostic: "attestation_required" })}\n`);
-  process.exitCode = 1;
+  if (!paneId || !capabilityPath || !credentialPath || !persistRefreshRequest()) {
+    persistStatus("failed", "refresh_unavailable");
+    process.stdout.write(`${JSON.stringify({ refreshed: false, supported: false, diagnostic: "refresh_unavailable" })}\n`);
+    process.exitCode = 1;
+  } else {
+    persistStatus("pending", "refresh_requested");
+    process.stdout.write(`${JSON.stringify({ refreshed: true, supported: true, diagnostic: "refresh_requested" })}\n`);
+  }
 } else {
   process.stderr.write("usage: wmux-agent-input-broker [serve|refresh]\n");
   process.exitCode = 2;

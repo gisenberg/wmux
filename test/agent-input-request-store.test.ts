@@ -10,6 +10,9 @@ import {
   AgentInputRequestStoreError,
   capturePayloadDigest,
   CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION,
+  enforceSerializedQuotaGrowth,
+  MAX_AGENT_INPUT_LIFECYCLE_BYTES,
+  MAX_AGENT_INPUT_LIFECYCLE_BYTES_PER_SOURCE,
   MAX_AGENT_INPUT_PENDING_PER_SOURCE,
   nativeOccurrenceKey,
   UnsupportedAgentInputRequestVersionError,
@@ -121,8 +124,51 @@ test("request store enforces ask generations, duplicate semantics, transitions, 
     assert.equal(reused.outcome === "created" && reused.request.generation, 2);
     if (reused.outcome === "created") assert.equal(store.resolveNative(reused.request.id, 1, "replied").outcome, "retired");
     const pane = capture(store, "pane-close");
+    if (pane.outcome === "created") {
+      assert.equal(store.reserve(pane.request.id, 1, "pane-submission", [["Safe"], ["Tests"]]).outcome, "reserved");
+    }
     assert.equal(store.resolvePane("pane-one"), 2);
-    if (pane.outcome === "created") assert.equal(store.find(pane.request.id)?.state, "closed");
+    if (pane.outcome === "created") {
+      assert.equal(store.find(pane.request.id)?.state, "closed");
+      assert.deepEqual(store.reserve(pane.request.id, 1, "pane-submission", [["Safe"], ["Tests"]]), {
+        outcome: "converged", result: { outcome: "already_resolved" },
+      });
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("non-retryable SDK failure is a durable public terminal state and later native resolution reconciles it", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-sdk-terminal-"));
+  const filePath = path.join(directory, "requests.json");
+  try {
+    let store = new AgentInputRequestStore(filePath, { answerDigestKey: "digest-key" });
+    const asked = capture(store, "bad-request");
+    if (asked.outcome !== "created") throw new Error("request unavailable");
+    store.reserve(asked.request.id, 1, "stable", [["Safe"], ["Tests"]]);
+    expose(store, asked.request.id, "stable");
+    assert.deepEqual(store.complete(
+      asked.request.id, 1, "stable", "sdk_error", "BadRequest", 1_010, false,
+    ), { outcome: "sdk_error", code: "BadRequest", retryable: false });
+    assert.deepEqual((({ state, resolution }) => ({ state, resolution }))(store.find(asked.request.id)!), {
+      state: "failed", resolution: "plugin",
+    });
+
+    store.dispose();
+    store = new AgentInputRequestStore(filePath, { answerDigestKey: "digest-key" });
+    assert.equal(store.find(asked.request.id)?.state, "failed", "reload exposes the same terminal state");
+    assert.deepEqual(store.reserve(asked.request.id, 1, "stable", [["Safe"], ["Tests"]]), {
+      outcome: "converged", result: { outcome: "sdk_error", code: "BadRequest", retryable: false },
+    });
+    assert.deepEqual(store.reserve(asked.request.id, 1, "second-client", [["Safe"], ["Tests"]]), {
+      outcome: "conflict", code: "idempotency_conflict",
+    });
+    assert.equal(store.resolveNative(asked.request.id, 1, "occ-bad-request", "replied").outcome, "resolved");
+    assert.equal(store.find(asked.request.id)?.state, "answered");
+    assert.deepEqual(store.reserve(asked.request.id, 1, "stable", [["Safe"], ["Tests"]]), {
+      outcome: "converged", result: { outcome: "already_resolved" },
+    });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -157,6 +203,14 @@ test("request store is owner-only, clone-safe, atomic, backup-recoverable, migra
     fs.writeFileSync(migrationPath, JSON.stringify({ schemaVersion: 0, requests: [], tombstones: [] }), { mode: 0o600 });
     new AgentInputRequestStore(migrationPath, { answerDigestKey: "key" });
     assert.equal(JSON.parse(fs.readFileSync(migrationPath, "utf8")).schemaVersion, CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION);
+
+    const v7Path = path.join(directory, "migration-v7.json");
+    const v7 = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    v7.schemaVersion = 7;
+    fs.writeFileSync(v7Path, `${JSON.stringify(v7)}\n`, { mode: 0o600 });
+    const migratedV7 = new AgentInputRequestStore(v7Path, { answerDigestKey: "digest-key" });
+    assert.equal(migratedV7.snapshot().length, v7.requests.length);
+    assert.equal(JSON.parse(fs.readFileSync(v7Path, "utf8")).schemaVersion, CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION);
 
     const v4Path = path.join(directory, "migration-v4.json");
     const v4 = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -311,8 +365,14 @@ test("single-shot persistence boundaries fail closed at reserve, buffer, exposur
     store.observe(id, 1, "stable");
     expectAtomicFailure(() => { store.complete(id, 1, "stable", "delivered"); }, "exposed");
     const restarted = new AgentInputRequestStore(filePath, { answerDigestKey: "key" });
-    assert.equal(restarted.submissionState(id)?.status, "ambiguous");
-    assert.deepEqual(restarted.reserve(id, 1, "stable", [["Safe"], ["Tests"]]), {
+    assert.equal(restarted.submissionState(id)?.status, "reserved");
+    assert.equal(restarted.reserve(id, 1, "stable", [["Safe"], ["Tests"]]).outcome, "resumed");
+    restarted.bindDelivery(id, 1, "stable", `delivery_${"c".repeat(16)}`);
+    restarted.observe(id, 1, "stable");
+    restarted.markSdkStarted(id, 1, "stable");
+    const afterSdkStart = new AgentInputRequestStore(filePath, { answerDigestKey: "key" });
+    assert.equal(afterSdkStart.submissionState(id)?.status, "ambiguous");
+    assert.deepEqual(afterSdkStart.reserve(id, 1, "stable", [["Safe"], ["Tests"]]), {
       outcome: "converged", result: { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false },
     });
   } finally {
@@ -386,7 +446,7 @@ test("complete occurrence snapshots close every absent pending state and preserv
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-occurrence-barrier-"));
   try {
     const store = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });
-    const captures = ["ordinary", "reserved", "exposed", "ambiguous", "present"].map((id) => capture(store, id));
+    const captures = ["ordinary", "reserved", "exposed", "ambiguous", "failed", "present"].map((id) => capture(store, id));
     if (captures.some((item) => item.outcome !== "created")) throw new Error("request unavailable");
     const created = captures.map((item) => item.outcome === "created" ? item.request : undefined!);
     store.reserve(created[1].id, 1, "reserved", [["Safe"], ["Tests"]]);
@@ -396,18 +456,21 @@ test("complete occurrence snapshots close every absent pending state and preserv
     expose(store, created[3].id, "ambiguous");
     store.markSdkStarted(created[3].id, 1, "ambiguous");
     store.release(created[3].id, 1, "ambiguous", "delivery_timeout", undefined, true);
+    store.reserve(created[4].id, 1, "failed", [["Safe"], ["Tests"]]);
+    expose(store, created[4].id, "failed");
+    store.complete(created[4].id, 1, "failed", "sdk_error", "BadRequest", 1_010, false);
     const presentInput = {
       occurrenceId: "occ-present", occurrenceKey: nativeOccurrenceKey("session-one", "present"), ordinal: 1,
       payloadDigest: capturePayloadDigest({ openCodeSessionId: "session-one", openCodeRequestId: "present", questions }),
       sessionID: "session-one", requestID: "present", questions,
     };
     const closed = store.resolveNativeAbsent("source-one", [presentInput]);
-    assert.deepEqual(closed.map((item) => item.id).sort(), created.slice(0, 4).map((item) => item.id).sort());
-    assert.equal(store.find(created[4].id)?.state, "pending");
-    for (const request of created.slice(0, 4)) assert.equal(store.find(request.id)?.state, "closed");
-    for (const request of created.slice(1, 4)) assert.equal(store.submissionState(request.id)?.status, "already_resolved");
+    assert.deepEqual(closed.map((item) => item.id).sort(), created.slice(0, 5).map((item) => item.id).sort());
+    assert.equal(store.find(created[5].id)?.state, "pending");
+    for (const request of created.slice(0, 5)) assert.equal(store.find(request.id)?.state, "closed");
+    for (const request of created.slice(1, 5)) assert.equal(store.submissionState(request.id)?.status, "already_resolved");
     assert.throws(() => store.resolveNativeAbsent("source-one", [{ ...presentInput, payloadDigest: "0".repeat(64) }]), /invalid_reconciliation/);
-    assert.equal(store.find(created[4].id)?.state, "pending", "an invalid/partial barrier performs no closure");
+    assert.equal(store.find(created[5].id)?.state, "pending", "an invalid/partial barrier performs no closure");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -541,7 +604,7 @@ test("per-source count and byte quotas isolate a saturating source from unrelate
   }
 });
 
-test("serialized quotas are exact, transactional, source-attributed, and enforced on every growth commit", () => {
+test("serialized admission quotas are exact while lifecycle headroom guarantees terminal mutations", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-hard-byte-quotas-"));
   try {
     const seedPath = path.join(directory, "seed.json");
@@ -581,14 +644,15 @@ test("serialized quotas are exact, transactional, source-attributed, and enforce
     assert.equal(reserveError.sourceId, "source-one");
     assert.equal(readStoredEnvelope(sourcePath).submissions.length, 0);
     assertRolledBack();
-    expectQuota(() => sourceStore.resolveNative(
+    assert.equal(sourceStore.resolveNative(
       captured.request.id, 1, "occ-boundary", "replied", 1_002,
-    ), "source_byte_limit");
-    assert.equal(sourceStore.find(captured.request.id)?.state, "pending");
-    assertRolledBack();
-    expectQuota(() => sourceStore.retireSource("source-one", 1_003), "source_byte_limit");
-    assert.deepEqual(readStoredEnvelope(sourcePath).retiredSources, []);
-    assertRolledBack();
+    ).outcome, "resolved");
+    assert.equal(sourceStore.find(captured.request.id)?.state, "answered");
+    assert.equal(sourceStore.retireSource("source-one", 1_003), 0);
+    assert.deepEqual(readStoredEnvelope(sourcePath).retiredSources, [{
+      sourceId: "source-one", retiredAt: new Date(1_003).toISOString(),
+    }]);
+    assert.equal(changes, 2, "terminal resolution and retirement both publish durable state");
 
     const globalPath = path.join(directory, "global-exact.json");
     const globalStore = new AgentInputRequestStore(globalPath, {
@@ -602,6 +666,8 @@ test("serialized quotas are exact, transactional, source-attributed, and enforce
       globalCapture.request.id, 1, "stable", [["Safe"], ["Tests"]], 1_001,
     ), "global_byte_limit");
     assert.equal(crypto.createHash("sha256").update(fs.readFileSync(globalPath)).digest("hex"), globalHash);
+    assert.equal(globalStore.retireSource("source-one", 1_002), 1,
+      "global lifecycle headroom remains available at the admission boundary");
 
     const prunePath = path.join(directory, "prune.json");
     let pruneStore = new AgentInputRequestStore(prunePath, { answerDigestKey: "key" });
@@ -636,6 +702,83 @@ test("serialized quotas are exact, transactional, source-attributed, and enforce
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("fixed lifecycle ceilings accept exact serialized boundaries and reject one additional byte", () => {
+  const empty = () => ({
+    schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION,
+    requests: [], submissions: [], tombstones: [], attention: [], generationAnchors: [], retiredSources: [],
+  });
+  const request = (index: number, sourceId: string, questionLength = 16_384) => ({
+    id: `quota-request-${index}`,
+    sourceId,
+    workspaceId: "workspace",
+    tabId: "tab",
+    paneId: "pane",
+    machineId: "local",
+    openCodeSessionId: "session",
+    openCodeRequestId: `native-${index}`,
+    generation: 1,
+    questions: [{
+      header: "H", question: "x".repeat(questionLength), options: [], multiple: false, custom: true,
+    }],
+    state: "pending",
+    createdAt: "1970-01-01T00:00:01.000Z",
+    updatedAt: "1970-01-01T00:00:01.000Z",
+  });
+  const envelopeAt = (target: number, sourceConfined: boolean) => {
+    const envelope: any = empty();
+    const measure = () => sourceConfined ? sourceBytes(envelope, "source-boundary") : compactBytes(envelope);
+    let currentBytes = measure();
+    while (true) {
+      const sourceId = sourceConfined ? "source-boundary" : `source-${envelope.requests.length}`;
+      const candidate = request(envelope.requests.length, sourceId);
+      const delta = compactBytes(candidate) + (envelope.requests.length > 0 ? 1 : 0);
+      if (target - currentBytes <= delta) break;
+      envelope.requests.push(candidate);
+      currentBytes += delta;
+    }
+    const sourceId = sourceConfined ? "source-boundary" : `source-${envelope.requests.length}`;
+    const adjustable = request(envelope.requests.length, sourceId, 1);
+    const minimumDelta = compactBytes(adjustable) + (envelope.requests.length > 0 ? 1 : 0);
+    let gap = target - currentBytes;
+    if (gap < minimumDelta) {
+      const lastFull = envelope.requests.at(-1);
+      assert.ok(lastFull);
+      const freed = minimumDelta - gap;
+      lastFull.questions[0].question = lastFull.questions[0].question.slice(freed);
+      currentBytes -= freed;
+      gap += freed;
+    }
+    const remaining = gap - minimumDelta;
+    assert.ok(remaining >= 0 && remaining < 16_384);
+    adjustable.questions[0].question += "x".repeat(remaining);
+    envelope.requests.push(adjustable);
+    assert.equal(measure(), target);
+    return envelope;
+  };
+  const limits = {
+    perSource: MAX_AGENT_INPUT_LIFECYCLE_BYTES_PER_SOURCE,
+    global: MAX_AGENT_INPUT_LIFECYCLE_BYTES,
+  };
+
+  const exactSource: any = envelopeAt(MAX_AGENT_INPUT_LIFECYCLE_BYTES_PER_SOURCE, true);
+  assert.doesNotThrow(() => enforceSerializedQuotaGrowth(empty() as any, exactSource, limits));
+  const sourceOverflow = structuredClone(exactSource);
+  sourceOverflow.requests[0].questions[0].header += "X";
+  assert.equal(expectQuota(
+    () => enforceSerializedQuotaGrowth(empty() as any, sourceOverflow, limits),
+    "source_byte_limit",
+  ).afterBytes, MAX_AGENT_INPUT_LIFECYCLE_BYTES_PER_SOURCE + 1);
+
+  const exactGlobal: any = envelopeAt(MAX_AGENT_INPUT_LIFECYCLE_BYTES, false);
+  assert.doesNotThrow(() => enforceSerializedQuotaGrowth(empty() as any, exactGlobal, limits));
+  const globalOverflow = structuredClone(exactGlobal);
+  globalOverflow.requests[0].questions[0].header += "X";
+  assert.equal(expectQuota(
+    () => enforceSerializedQuotaGrowth(empty() as any, globalOverflow, limits),
+    "global_byte_limit",
+  ).afterBytes, MAX_AGENT_INPUT_LIFECYCLE_BYTES + 1);
 });
 
 test("retired-source churn compacts generation anchors only after request and tombstone evidence expires", () => {

@@ -4,7 +4,7 @@ import type { AgentInputAnswerResult, AgentInputQuestion, AgentInputRequest } fr
 import {
   buildAgentInputAnswers,
   newAgentInputSubmissionId,
-  validAgentInputAnswer,
+  validAgentInputAnswers,
 } from "./agent-input-reference";
 
 interface AgentInputRequestShelfProps {
@@ -39,10 +39,8 @@ const AgentInputRequestCard = ({
     () => buildAgentInputAnswers(request.questions, selected, custom),
     [custom, request.questions, selected],
   );
-  const valid = request.questions.every((question, index) => validAgentInputAnswer(question, answers[index]));
-  const editable = request.state === "pending" && !submitting && result?.outcome !== "delivered"
-    && result?.outcome !== "already_resolved"
-    && !(result?.outcome === "sdk_error" && !result.retryable);
+  const valid = validAgentInputAnswers(request.questions, answers);
+  const editable = request.state === "pending" && !submitting;
   const submit = async () => {
     if (!valid || !editable) return;
     setSubmitting(true);
@@ -79,15 +77,6 @@ const AgentInputRequestCard = ({
       setCustom(request.questions.map(() => ""));
       return;
     }
-    const terminalSubmission = result?.outcome === "delivered" || result?.outcome === "already_resolved"
-      || (result?.outcome === "sdk_error" && !result.retryable);
-    if (terminalSubmission) {
-      const marker = `result:${requestIdentity}:${result?.outcome}`;
-      if (resetMarker.current === marker) return;
-      resetMarker.current = marker;
-      setSelected(request.questions.map(() => []));
-      setCustom(request.questions.map(() => ""));
-    }
   }, [request.questions, request.state, requestIdentity, result]);
   const toggle = (question: AgentInputQuestion, questionIndex: number, label: string) => {
     if (!editable) return;
@@ -98,7 +87,9 @@ const AgentInputRequestCard = ({
     }));
     if (!question.multiple) setCustom((current) => current.map((value, index) => index === questionIndex ? "" : value));
   };
-  const displayState = result?.outcome ?? (submitting ? "submitting" : request.state);
+  const displayState = request.state === "pending"
+    ? result?.outcome ?? (submitting ? "submitting" : request.state)
+    : request.state;
   return (
     <section className="agent-input-card" data-request-id={request.id} data-state={displayState} tabIndex={-1}>
       <header><strong>[INPUT] OPENCODE</strong><span>{displayState.replaceAll("_", " ")}</span></header>

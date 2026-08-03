@@ -8,7 +8,10 @@ import type { BrowserAuthMode } from "./auth.js";
 import { AgentSessionService } from "./agent-sessions.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
-import type { AgentInputRegistrationCapability } from "./agent-input-credential-store.js";
+import type {
+  AgentInputRegistrationCapability,
+  AgentInputSessionBinding,
+} from "./agent-input-credential-store.js";
 import {
   createSessionBackend,
   type BackendRuntimeFile,
@@ -131,6 +134,7 @@ export class SessionManager {
   private socketState = new Map<WebSocket, SocketState>();
   private ignoredSessionExits = new WeakSet<BackendSession>();
   private sessionMachines = new Map<string, MachineConfig>();
+  private agentInputSessionBindings = new Map<string, AgentInputSessionBinding>();
   private paneInputEpochs = new Map<string, number>();
   private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
   private durableRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -140,7 +144,11 @@ export class SessionManager {
   private readonly currentMachines: () => MachineConfig[];
   private readonly terminalCheckpoints: TerminalCheckpointStore;
   private readonly durableEndpoints: DurableEndpointStore;
-  private agentInputCapabilityIssuer?: (paneId: string) => AgentInputRegistrationCapability;
+  private agentInputCapabilityIssuer?: (
+    paneId: string,
+    binding: AgentInputSessionBinding,
+  ) => AgentInputRegistrationCapability;
+  private agentInputSourceRetirer?: (paneId: string, binding: AgentInputSessionBinding) => void;
 
   constructor(
     private readonly state: StateStore,
@@ -185,14 +193,29 @@ export class SessionManager {
   }
 
   setAgentInputCapabilityIssuer(
-    issuer: ((paneId: string) => AgentInputRegistrationCapability) | undefined,
+    issuer: ((paneId: string, binding: AgentInputSessionBinding) => AgentInputRegistrationCapability) | undefined,
   ): void {
     this.agentInputCapabilityIssuer = issuer;
   }
 
-  hasLivePaneSession(paneId: string): boolean {
+  setAgentInputSourceRetirer(
+    retirer: ((paneId: string, binding: AgentInputSessionBinding) => void) | undefined,
+  ): void {
+    this.agentInputSourceRetirer = retirer;
+  }
+
+  hasLivePaneSession(paneId: string, expectedBinding?: AgentInputSessionBinding): boolean {
+    const pane = this.state.findPane(paneId);
     const session = this.sessions.get(paneId);
-    return Boolean(this.state.findPane(paneId) && session && !session.isExited && this.sessionMachines.has(paneId));
+    const binding = this.agentInputSessionBindings.get(paneId);
+    return Boolean(pane?.status === "running" && session && !session.isExited
+      && this.sessionMachines.has(paneId) && binding
+      && (!expectedBinding || sameAgentInputSessionBinding(binding, expectedBinding)));
+  }
+
+  agentInputSessionBinding(paneId: string): AgentInputSessionBinding | undefined {
+    const binding = this.agentInputSessionBindings.get(paneId);
+    return binding ? structuredClone(binding) : undefined;
   }
 
   async readKittyGraphicsSource(paneId: string, request: KittyGraphicsSourceRequest): Promise<Buffer> {
@@ -444,6 +467,12 @@ export class SessionManager {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
     const backend = createSessionBackend(machine, this.pasteImages);
+    const agentInputBinding = createAgentInputSessionBinding(
+      pane.id,
+      backend,
+      machine,
+      this.agentInputSessionBindings.get(pane.id),
+    );
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
       const previousBackend = this.backends.get(pane.id)
         ?? createSessionBackend(previousSessionMachine, this.pasteImages);
@@ -454,7 +483,7 @@ export class SessionManager {
     let runtimeFiles: BackendRuntimeFile[] | undefined;
     if (this.agentInputCapabilityIssuer && (machine.kind === "local" || machine.kind === "ssh")) {
       try {
-        const issued = this.agentInputCapabilityIssuer(pane.id);
+        const issued = this.agentInputCapabilityIssuer(pane.id, agentInputBinding);
         if (machine.sessionBackend === "agent") {
           runtimeFiles = [{ purpose: "agent-input-capability", data: Buffer.from(`${issued.capability}\n`, "utf8") }];
         } else {
@@ -515,6 +544,7 @@ export class SessionManager {
     this.sessions.set(pane.id, session);
     this.backends.set(pane.id, backend);
     this.sessionMachines.set(pane.id, structuredClone(machine));
+    this.agentInputSessionBindings.set(pane.id, agentInputBinding);
     this.durableEndpoints.bind(pane.id, machine, backend.id);
     this.state.updatePane(pane.id, { status: "running", exitCode: undefined, title: pane.title });
     this.cancelPaneCwdRefresh(pane.id);
@@ -568,6 +598,7 @@ export class SessionManager {
         }
       }
       this.sessions.delete(pane.id);
+      const exitedAgentInputBinding = this.agentInputSessionBindings.get(pane.id);
       this.resizeOwners.delete(pane.id);
       const context = this.state.findPaneContext(pane.id);
       if (!context) return;
@@ -577,6 +608,8 @@ export class SessionManager {
         // flaky SSH host or transient error never deletes the workspace. The
         // pane is re-spawned when a client next attaches.
         this.state.updatePane(pane.id, { status: "exited", exitCode: code ?? null });
+        if (exitedAgentInputBinding) this.agentInputSourceRetirer?.(pane.id, exitedAgentInputBinding);
+        this.agentInputSessionBindings.delete(pane.id);
         return;
       }
 
@@ -588,6 +621,7 @@ export class SessionManager {
       this.terminalCheckpoints.delete(pane.id);
       this.backends.delete(pane.id);
       this.sessionMachines.delete(pane.id);
+      this.agentInputSessionBindings.delete(pane.id);
       this.durableEndpoints.deleteActiveForPane(pane.id);
       this.paneInputEpochs.delete(pane.id);
       if (exitedMachine) void this.pasteImages.cleanupPane(pane.id, exitedMachine);
@@ -741,13 +775,16 @@ export class SessionManager {
     this.durableCwdLastReadAt.clear();
     for (const timer of this.pausedSessions.values()) clearInterval(timer);
     this.pausedSessions.clear();
-    for (const session of this.sessions.values()) {
+    for (const [paneId, session] of this.sessions) {
+      const binding = this.agentInputSessionBindings.get(paneId);
+      if (binding) this.agentInputSourceRetirer?.(paneId, binding);
       this.ignoredSessionExits.add(session);
-      this.backends.get(session.pane.id)?.detach(session);
+      this.backends.get(paneId)?.detach(session);
     }
     this.sessions.clear();
     this.backends.clear();
     this.sessionMachines.clear();
+    this.agentInputSessionBindings.clear();
     this.paneInputEpochs.clear();
     this.pasteImages.dispose();
   }
@@ -887,6 +924,7 @@ export class SessionManager {
     this.sessions.delete(paneId);
     this.backends.delete(paneId);
     this.sessionMachines.delete(paneId);
+    this.agentInputSessionBindings.delete(paneId);
     this.paneInputEpochs.delete(paneId);
     this.resizeOwners.delete(paneId);
     this.terminalCheckpoints.delete(paneId);
@@ -1086,3 +1124,41 @@ const normalizeSize = (cols: number, rows: number): { cols: number; rows: number
   cols: Number.isFinite(cols) && cols >= 2 ? Math.floor(cols) : 80,
   rows: Number.isFinite(rows) && rows >= 1 ? Math.floor(rows) : 24,
 });
+
+export const createAgentInputSessionBinding = (
+  paneId: string,
+  backend: Pick<SessionBackend, "id">,
+  machine: MachineConfig,
+  existing?: AgentInputSessionBinding,
+): AgentInputSessionBinding => {
+  const endpointFingerprint = crypto.createHash("sha256").update(JSON.stringify({
+    id: machine.id,
+    kind: machine.kind,
+    host: machine.host,
+    user: machine.user,
+    port: machine.port,
+    sessionBackend: machine.sessionBackend,
+    agentUrl: machine.agentUrl,
+    agentPort: machine.agentPort,
+  })).digest("hex");
+  if (existing?.backendId === backend.id && existing.endpointFingerprint === endpointFingerprint) {
+    // Replacing only an idle durable client preserves the same server-owned
+    // backend authority. Exit and disposal paths remove this binding first;
+    // endpoint/backend replacement fails the comparison; restart has no map.
+    return structuredClone(existing);
+  }
+  // This is an authority epoch for the live wmux-to-backend attachment, not a
+  // prediction based only on pane metadata. It changes after exit, endpoint or
+  // backend replacement, and wmux restart, so pane-id reuse cannot revive an
+  // old source credential.
+  void paneId;
+  const sessionIncarnation = crypto.randomBytes(32).toString("hex");
+  return { backendId: backend.id, sessionIncarnation, endpointFingerprint };
+};
+
+const sameAgentInputSessionBinding = (
+  left: AgentInputSessionBinding,
+  right: AgentInputSessionBinding,
+): boolean => left.backendId === right.backendId
+  && left.sessionIncarnation === right.sessionIncarnation
+  && left.endpointFingerprint === right.endpointFingerprint;

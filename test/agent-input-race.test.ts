@@ -10,8 +10,15 @@ import {
   MAX_AGENT_INPUT_DELIVERIES_PER_SOURCE,
   MAX_AGENT_INPUT_POLLS,
   MAX_AGENT_INPUT_TRANSIENT_BYTES,
+  MAX_AGENT_INPUT_WAITERS,
+  MAX_AGENT_INPUT_WAITERS_PER_DELIVERY,
 } from "../src/server/agent-input-relay.js";
-import { AgentInputRequestStore, capturePayloadDigest, nativeOccurrenceKey } from "../src/server/agent-input-request-store.js";
+import {
+  AgentInputRequestStore,
+  DEFAULT_AGENT_INPUT_RESOLVED_RETENTION_MS,
+  capturePayloadDigest,
+  nativeOccurrenceKey,
+} from "../src/server/agent-input-request-store.js";
 import {
   createOpenCodeRuntimeAttestation,
 } from "../src/server/opencode-question-contract.js";
@@ -40,6 +47,7 @@ const setup = (directory: string, timeout = 500) => {
   const principal = credentials.authenticate(exchange.relaySecret);
   if (principal?.kind !== "agent-input-source") throw new Error("missing source principal");
   const relay = new AgentInputRelay(requests, credentials, { deliveryTimeoutMs: timeout, isPaneLive: () => true });
+  void relay.poll(principal, 0, 1, 0);
   const ask = (openCodeRequestId: string) => requests.capture(occurrenceInput({
     occurrenceId: `occ-${openCodeRequestId}`,
     sourceId: exchange.sourceId, workspaceId: "workspace", tabId: "tab", paneId: "pane", machineId: "local",
@@ -72,7 +80,8 @@ test("two clients race, duplicate polls/acks converge, and only one SDK delivery
     assert.equal(pollTwo.deliveries.length, 0, "cursor advancement suppresses rapid redelivery");
     await new Promise((resolve) => setTimeout(resolve, 1_050));
     const redelivery = await relay.poll(principal, pollOne.cursor, 1, 0);
-    assert.equal(redelivery.deliveries.length, 0, "an exposed delivery is never redelivered");
+    assert.equal(redelivery.deliveries.length, 1, "an unstarted delivery is redelivered after the bounded delay");
+    assert.equal(redelivery.deliveries[0].deliveryId, pollOne.deliveries[0].deliveryId);
     const delivery = pollOne.deliveries[0];
     assert.deepEqual(relay.acknowledge(principal, delivery.deliveryId, {
       requestId: captured.request.id, generation: 1, outcome: "applied",
@@ -81,6 +90,57 @@ test("two clients race, duplicate polls/acks converge, and only one SDK delivery
       requestId: captured.request.id, generation: 1, outcome: "applied",
     }), { outcome: "delivered" });
     assert.deepEqual(await first, { outcome: "delivered" });
+    relay.dispose();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a waiting poll wakes at the unstarted redelivery deadline before delivery expiry", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-redelivery-wake-"));
+  try {
+    const { relay, principal, ask } = setup(directory, 3_000);
+    const captured = ask("request-redelivery-wake");
+    if (captured.outcome !== "created") throw new Error("request unavailable");
+    const answer = relay.submit(captured.request.id, 1, "redelivery-wake", [["Safe"]]);
+    const first = await relay.poll(principal, 0, 1, 0);
+    assert.equal(first.deliveries.length, 1);
+    const startedAt = Date.now();
+    const redelivery = await relay.poll(principal, first.cursor, 1, 2_500);
+    assert.equal(redelivery.deliveries[0]?.deliveryId, first.deliveries[0].deliveryId);
+    assert.ok(Date.now() - startedAt < 2_000, "redelivery must wake the existing long poll");
+    relay.acknowledge(principal, redelivery.deliveries[0].deliveryId, {
+      requestId: captured.request.id, generation: 1, outcome: "applied",
+    });
+    assert.deepEqual(await answer, { outcome: "delivered" });
+    relay.dispose();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a poll persistence failure clears its lease and cannot authorize a later submission", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-poll-failure-"));
+  try {
+    const { requests, relay, principal, ask } = setup(directory, 3_000);
+    const captured = ask("request-poll-failure");
+    assert.equal(captured.outcome, "created");
+    if (captured.outcome !== "created") return;
+    const submission = relay.submit(captured.request.id, 1, "client-one", [["Safe"]]);
+    const observe = requests.observe.bind(requests);
+    (requests as any).observe = () => { throw new Error("injected persistence failure"); };
+    await assert.rejects(relay.poll(principal, 0, 1, 0), /injected persistence failure/);
+    (requests as any).observe = observe;
+
+    const later = ask("request-after-poll-failure");
+    assert.equal(later.outcome, "created");
+    if (later.outcome === "created") {
+      assert.deepEqual(await relay.submit(later.request.id, 1, "client-two", [["Safe"]]), {
+        outcome: "source_unavailable",
+      });
+    }
+    relay.disconnectSource(principal.sourceId);
+    await submission;
     relay.dispose();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -110,6 +170,41 @@ test("native resolution and a later equivalent SDK acknowledgement commute", asy
   }
 });
 
+test("native reconciliation remains source-confined after request retention creates a tombstone", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-tombstone-source-"));
+  try {
+    const { credentials, requests, relay, principal, ask } = setup(directory, 3_000);
+    const captured = ask("retained-source");
+    if (captured.outcome !== "created") throw new Error("request unavailable");
+    assert.deepEqual(relay.resolveNative(principal, captured.request.id, 1, "occ-retained-source", "replied"), {
+      outcome: "resolved",
+    });
+    requests.prune(Date.now() + DEFAULT_AGENT_INPUT_RESOLVED_RETENTION_MS + 1);
+    assert.equal(requests.find(captured.request.id), undefined);
+
+    const otherCapability = credentials.issueRegistrationCapability({
+      workspaceId: "other-workspace", tabId: "other-tab", paneId: "other-pane", sourceKind: "opencode",
+    });
+    const otherRegistration = credentials.authenticate(otherCapability.capability);
+    if (otherRegistration?.kind !== "agent-input-registration") throw new Error("other registration unavailable");
+    const otherExchange = credentials.exchange(otherRegistration,
+      registrationInput(credentials, otherRegistration, "O".repeat(43)));
+    if (otherExchange.outcome !== "issued") throw new Error("other source unavailable");
+    const otherPrincipal = credentials.authenticate(otherExchange.relaySecret);
+    if (otherPrincipal?.kind !== "agent-input-source") throw new Error("other principal unavailable");
+
+    assert.deepEqual(relay.reconcileNativePending(otherPrincipal, captured.request.id, 1, "occ-retained-source"), {
+      outcome: "retired",
+    });
+    assert.deepEqual(relay.resolveNative(otherPrincipal, captured.request.id, 1, "occ-retained-source", "replied"), {
+      outcome: "retired",
+    });
+    relay.dispose();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("closing one duplicate same-key waiter cannot cancel the shared submission", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-shared-waiter-"));
   try {
@@ -128,6 +223,56 @@ test("closing one duplicate same-key waiter cannot cancel the shared submission"
     });
     assert.deepEqual(await second, { outcome: "delivered" });
     relay.dispose();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("duplicate submission waiters are bounded per delivery and globally and release on settlement", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-waiter-limits-"));
+  try {
+    const { relay, principal, ask } = setup(directory, 3_000);
+    const perDelivery = ask("waiter-per-delivery");
+    if (perDelivery.outcome !== "created") throw new Error("request unavailable");
+    const waiters = Array.from({ length: MAX_AGENT_INPUT_WAITERS_PER_DELIVERY }, () =>
+      relay.submit(perDelivery.request.id, 1, "stable-per-delivery", [["Safe"]]));
+    assert.deepEqual(await relay.submit(perDelivery.request.id, 1, "stable-per-delivery", [["Safe"]]), {
+      outcome: "source_unavailable",
+    });
+    const firstPoll = await relay.poll(principal, 0, 1, 0);
+    relay.acknowledge(principal, firstPoll.deliveries[0].deliveryId, {
+      requestId: perDelivery.request.id, generation: 1, outcome: "applied",
+    });
+    assert.equal((await Promise.all(waiters)).filter((outcome) => outcome.outcome === "delivered").length,
+      MAX_AGENT_INPUT_WAITERS_PER_DELIVERY);
+
+    const globalRequests = Array.from({ length: 8 }, (_, index) => ask(`waiter-global-${index}`));
+    if (globalRequests.some((item) => item.outcome !== "created")) throw new Error("global requests unavailable");
+    const globalWaiters = globalRequests.flatMap((item, requestIndex) => {
+      if (item.outcome !== "created") return [];
+      return Array.from({ length: MAX_AGENT_INPUT_WAITERS / globalRequests.length }, () =>
+        relay.submit(item.request.id, 1, `stable-global-${requestIndex}`, [["Safe"]]));
+    });
+    const firstGlobal = globalRequests[0];
+    if (firstGlobal.outcome !== "created") throw new Error("global request unavailable");
+    assert.deepEqual(await relay.submit(firstGlobal.request.id, 1, "stable-global-0", [["Safe"]]), {
+      outcome: "source_unavailable",
+    });
+    const uniqueOverflow = ask("waiter-global-unique-overflow");
+    if (uniqueOverflow.outcome !== "created") throw new Error("unique overflow request unavailable");
+    assert.deepEqual(await relay.submit(uniqueOverflow.request.id, 1, "stable-global-overflow", [["Safe"]]), {
+      outcome: "source_unavailable",
+    });
+    const deliveryRequests = [...(relay as unknown as {
+      deliveries: Map<string, { requestId: string }>;
+    }).deliveries.values()].map((delivery) => delivery.requestId);
+    assert.equal(deliveryRequests.includes(uniqueOverflow.request.id), false,
+      "a submission rejected by the global waiter cap never becomes broker-executable");
+    relay.dispose();
+    assert.equal((await Promise.all(globalWaiters)).filter((outcome) => outcome.outcome === "source_unavailable").length,
+      MAX_AGENT_INPUT_WAITERS);
+    assert.equal((relay as unknown as { waiterCount: number }).waiterCount, 0,
+      "abort, disconnect, and settlement release global waiter accounting");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -203,7 +348,7 @@ test("terminal reply/reject races and delivery timeout return observable typed o
   }
 });
 
-test("delivery timeout quarantines every exposed handoff and never redelivers it", async () => {
+test("delivery timeout releases unstarted handoffs but quarantines SDK-started delivery", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-start-timeout-"));
   try {
     const { relay, principal, requests, ask } = setup(directory, 40);
@@ -212,8 +357,8 @@ test("delivery timeout quarantines every exposed handoff and never redelivers it
     const queuedSubmit = relay.submit(queued.request.id, 1, "queued", [["Safe"]]);
     const queuedDelivery = (await relay.poll(principal, 0, 1, 0)).deliveries[0];
     assert.ok(queuedDelivery);
-    assert.deepEqual(await queuedSubmit, { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false });
-    assert.equal(requests.submissionState(queued.request.id)?.status, "ambiguous");
+    assert.deepEqual(await queuedSubmit, { outcome: "delivery_timeout" });
+    assert.equal(requests.submissionState(queued.request.id)?.status, "reserved");
     assert.throws(() => relay.startDelivery(
       principal,
       queuedDelivery.deliveryId,
@@ -221,15 +366,18 @@ test("delivery timeout quarantines every exposed handoff and never redelivers it
       queuedDelivery.expectedGeneration,
     ), /delivery_conflict/);
 
-    assert.deepEqual(await relay.submit(queued.request.id, 1, "queued", [["Safe"]]), {
-      outcome: "sdk_error", code: "delivery_ambiguous", retryable: false,
+    const queuedRetry = relay.submit(queued.request.id, 1, "queued", [["Safe"]]);
+    const retriedDelivery = (await relay.poll(principal, queuedDelivery.cursor, 1, 0)).deliveries[0];
+    assert.ok(retriedDelivery);
+    relay.acknowledge(principal, retriedDelivery.deliveryId, {
+      requestId: queued.request.id, generation: 1, outcome: "applied",
     });
-    assert.equal((await relay.poll(principal, queuedDelivery.cursor, 1, 0)).deliveries.length, 0);
+    assert.deepEqual(await queuedRetry, { outcome: "delivered" });
 
     const started = ask("started-timeout");
     if (started.outcome !== "created") throw new Error("started request unavailable");
     const startedSubmit = relay.submit(started.request.id, 1, "started", [["Safe"]]);
-    const startedDelivery = (await relay.poll(principal, queuedDelivery.cursor, 1, 0)).deliveries[0];
+    const startedDelivery = (await relay.poll(principal, retriedDelivery.cursor, 1, 0)).deliveries[0];
     relay.startDelivery(principal, startedDelivery.deliveryId, startedDelivery.requestId, startedDelivery.expectedGeneration);
     assert.deepEqual(await startedSubmit, { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false });
     assert.equal(requests.submissionState(started.request.id)?.status, "ambiguous");
@@ -256,6 +404,25 @@ test("credential rotation cancels handoff, invalidates old principal, and confin
     if (next?.kind === "agent-input-source") {
       assert.equal((next as AgentInputSourcePrincipal).credentialGeneration, principal.credentialGeneration + 1);
     }
+    relay.dispose();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("pane closure settles a buffered submission before source revocation releases its delivery", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-pane-close-"));
+  try {
+    const { relay, credentials, requests, principal, ask } = setup(directory);
+    const captured = ask("pane-close-buffered");
+    if (captured.outcome !== "created") throw new Error("request unavailable");
+    const pending = relay.submit(captured.request.id, 1, "pane-close-client", [["Safe"]]);
+    assert.equal(requests.resolvePane("pane"), 1);
+    assert.equal(credentials.revoke(principal.sourceId), true);
+    assert.deepEqual(await pending, { outcome: "already_resolved" });
+    assert.deepEqual(await relay.submit(captured.request.id, 1, "pane-close-client", [["Safe"]]), {
+      outcome: "already_resolved",
+    });
     relay.dispose();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -357,7 +524,7 @@ test("post-exposure SDK ambiguity is quarantined while deterministic SDK failure
   }
 });
 
-test("poll cancellation is prompt and response cancellation quarantines an observed delivery", async () => {
+test("poll cancellation is prompt and response cancellation releases an unstarted delivery", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-cancel-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
@@ -370,6 +537,7 @@ test("poll cancellation is prompt and response cancellation quarantines an obser
     assert.deepEqual(empty.deliveries, []);
     assert.ok(empty.epoch);
     assert.ok(Date.now() - startedAt < 500, "aborted long poll must release its wait resource promptly");
+    await relay.poll(principal, 0, 1, 0);
 
     const captured = ask("observed-cancel");
     if (captured.outcome !== "created") throw new Error("request unavailable");
@@ -378,10 +546,52 @@ test("poll cancellation is prompt and response cancellation quarantines an obser
     const delivery = (await relay.poll(principal, 0, 1, 0)).deliveries[0];
     answerAbort.abort();
     const retry = relay.submit(captured.request.id, 1, "stable", [["Safe"]]);
-    assert.equal((await relay.poll(principal, delivery.cursor, 1, 0)).deliveries.length, 0);
+    const retriedDelivery = (await relay.poll(principal, delivery.cursor, 1, 0)).deliveries[0];
+    assert.ok(retriedDelivery);
     assert.throws(() => relay.startDelivery(principal, delivery.deliveryId, delivery.requestId, delivery.expectedGeneration), /delivery_conflict/);
-    assert.deepEqual(await retry, { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false });
+    relay.acknowledge(principal, retriedDelivery.deliveryId, {
+      requestId: retriedDelivery.requestId, generation: retriedDelivery.expectedGeneration, outcome: "applied",
+    });
+    assert.deepEqual(await retry, { outcome: "delivered" });
     assert.deepEqual(await pending, { outcome: "source_unavailable" }, "the disconnected waiter is abandoned independently");
+    relay.dispose();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("submission requires an active or narrowly recent authenticated source poll", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-poll-authority-"));
+  try {
+    const { relay, principal, ask } = setup(directory, 3_000);
+    const first = ask("no-poll");
+    if (first.outcome !== "created") throw new Error("request unavailable");
+    relay.disconnectSource(principal.sourceId);
+    assert.deepEqual(await relay.submit(first.request.id, 1, "no-poll", [["Safe"]]), {
+      outcome: "source_unavailable",
+    });
+
+    const activePollAbort = new AbortController();
+    const activePoll = relay.poll(principal, 0, 1, 30_000, activePollAbort.signal);
+    const second = ask("active-poll");
+    if (second.outcome !== "created") throw new Error("request unavailable");
+    const pending = relay.submit(second.request.id, 1, "active-poll", [["Safe"]]);
+    const deliveryPoll = await activePoll;
+    assert.equal(deliveryPoll.deliveries.length, 1);
+    relay.acknowledge(principal, deliveryPoll.deliveries[0].deliveryId, {
+      requestId: second.request.id, generation: 1, outcome: "applied",
+    });
+    assert.deepEqual(await pending, { outcome: "delivered" });
+
+    const disconnected = ask("disconnected-poll");
+    if (disconnected.outcome !== "created") throw new Error("request unavailable");
+    const disconnectedAbort = new AbortController();
+    const disconnectedPoll = relay.poll(principal, deliveryPoll.cursor, 1, 30_000, disconnectedAbort.signal);
+    disconnectedAbort.abort();
+    await disconnectedPoll;
+    assert.deepEqual(await relay.submit(disconnected.request.id, 1, "disconnected-poll", [["Safe"]]), {
+      outcome: "source_unavailable",
+    });
     relay.dispose();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -487,6 +697,8 @@ test("one source exhausting its delivery quota cannot deny an unrelated source",
     const malicious = issue("malicious");
     const healthy = issue("healthy");
     const relay = new AgentInputRelay(requests, credentials, { deliveryTimeoutMs: 30_000, isPaneLive: () => true });
+    await relay.poll(malicious.principal, 0, 1, 0);
+    await relay.poll(healthy.principal, 0, 1, 0);
     const question = [{ header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: true }];
     const captureFor = (source: typeof malicious, name: string) => requests.capture(occurrenceInput({
       occurrenceId: `occ-${name}`, sourceId: source.exchange.sourceId,

@@ -10,7 +10,7 @@ import type {
   AgentInputRequestState,
 } from "../shared/protocol.js";
 
-export const CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION = 7;
+export const CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION = 8;
 export const MAX_AGENT_INPUT_REQUESTS = 2_000;
 export const MAX_AGENT_INPUT_TOMBSTONES = MAX_AGENT_INPUT_REQUESTS * 4;
 export const MAX_AGENT_INPUT_GENERATION_ANCHORS = MAX_AGENT_INPUT_REQUESTS * 2;
@@ -19,6 +19,8 @@ export const MAX_AGENT_INPUT_REQUESTS_PER_SOURCE = 256;
 export const MAX_AGENT_INPUT_ANCHORS_PER_SOURCE = 512;
 export const MAX_AGENT_INPUT_SERIALIZED_BYTES_PER_SOURCE = 1 * 1024 * 1024;
 export const MAX_AGENT_INPUT_SERIALIZED_BYTES = 8 * 1024 * 1024;
+export const MAX_AGENT_INPUT_LIFECYCLE_BYTES_PER_SOURCE = 1536 * 1024;
+export const MAX_AGENT_INPUT_LIFECYCLE_BYTES = 12 * 1024 * 1024;
 export const MAX_AGENT_INPUT_QUESTIONS = 32;
 export const MAX_AGENT_INPUT_OPTIONS = 128;
 export const MAX_AGENT_INPUT_ANSWER_BYTES = 16_384;
@@ -53,7 +55,7 @@ const legacyRequestSchema = z.object({
   openCodeRequestId: text(256),
   generation: z.number().int().positive(),
   questions: z.array(questionSchema).min(1).max(MAX_AGENT_INPUT_QUESTIONS),
-  state: z.enum(["pending", "answered", "rejected", "cancelled", "closed"]),
+  state: z.enum(["pending", "answered", "rejected", "failed", "cancelled", "closed"]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   resolvedAt: z.string().datetime().optional(),
@@ -91,7 +93,7 @@ const legacyTombstoneSchema = z.object({
   sourceId: text(256),
   openCodeRequestId: text(256),
   generation: z.number().int().positive(),
-  state: z.enum(["answered", "rejected", "cancelled", "closed"]),
+  state: z.enum(["answered", "rejected", "failed", "cancelled", "closed"]),
   expiresAt: z.string().datetime(),
 }).strict();
 const tombstoneSchema = legacyTombstoneSchema.extend({
@@ -134,6 +136,9 @@ const envelopeSchema = z.object({
 
 const envelopeV6Schema = envelopeSchema.omit({ schemaVersion: true, retiredSources: true }).extend({
   schemaVersion: z.literal(6),
+}).strict();
+const envelopeV7Schema = envelopeSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(7),
 }).strict();
 
 const envelopeV5Schema = z.object({
@@ -313,6 +318,12 @@ export class AgentInputRequestStore extends EventEmitter {
 
   snapshot(): AgentInputRequest[] {
     return this.data.requests.map(toPublicRequest).sort(compareAgentInputRequests);
+  }
+
+  pendingSourceIds(): string[] {
+    return [...new Set(this.data.requests
+      .filter((request) => request.state === "pending")
+      .map((request) => request.sourceId))].sort();
   }
 
   attentionSnapshot(): AgentInputAttentionRecord[] {
@@ -540,7 +551,14 @@ export class AgentInputRequestStore extends EventEmitter {
       submission.updatedAt = timestamp;
       if (outcome === "sdk_error") {
         submission.code = sanitizeCode(code);
-        if (retryable) submission.code = sanitizeCode(code) === "sdk_error" ? "delivery_ambiguous" : sanitizeCode(code);
+        if (retryable) {
+          submission.code = sanitizeCode(code) === "sdk_error" ? "delivery_ambiguous" : sanitizeCode(code);
+        } else {
+          request.state = "failed";
+          request.resolution = "plugin";
+          request.resolvedAt = timestamp;
+          request.updatedAt = timestamp;
+        }
       }
       else {
         request.state = "answered";
@@ -549,7 +567,7 @@ export class AgentInputRequestStore extends EventEmitter {
         request.updatedAt = timestamp;
       }
       return { changed: true, result: submissionOutcome(submission) };
-    });
+    }, "lifecycle");
   }
 
   bindDelivery(
@@ -571,7 +589,7 @@ export class AgentInputRequestStore extends EventEmitter {
       submission.deliveryId = deliveryId;
       submission.updatedAt = new Date(nowMs).toISOString();
       return { changed: true, result: undefined };
-    });
+    }, "lifecycle");
   }
 
   completeDelivery(
@@ -605,7 +623,7 @@ export class AgentInputRequestStore extends EventEmitter {
        submission.status = "exposed";
       submission.updatedAt = new Date(nowMs).toISOString();
       return { changed: true, result: undefined };
-    });
+    }, "lifecycle");
   }
 
   markSdkStarted(
@@ -624,7 +642,14 @@ export class AgentInputRequestStore extends EventEmitter {
       submission.sdkStartedAt = new Date(nowMs).toISOString();
       submission.updatedAt = submission.sdkStartedAt;
       return { changed: true, result: undefined };
-    });
+    }, "lifecycle");
+  }
+
+  belongsToSource(id: string, generation: number, sourceId: string): boolean {
+    const request = this.data.requests.find((candidate) => candidate.id === id && candidate.generation === generation);
+    if (request) return request.sourceId === sourceId;
+    return this.data.tombstones.some((candidate) => candidate.id === id
+      && candidate.generation === generation && candidate.sourceId === sourceId);
   }
 
   reconcileNativePending(id: string, generation: number, nowMs?: number): {
@@ -653,7 +678,7 @@ export class AgentInputRequestStore extends EventEmitter {
       if (!submission || (submission.status !== "exposed" && submission.status !== "ambiguous")) {
         return { changed: false, result: { outcome: "pending" as const } };
       }
-      if (submission.status === "exposed") {
+      if (submission.status === "exposed" && submission.sdkStartedAt) {
         submission.status = "ambiguous";
         submission.outcome = "sdk_error";
         submission.code = "delivery_ambiguous";
@@ -661,7 +686,7 @@ export class AgentInputRequestStore extends EventEmitter {
         return { changed: true, result: { outcome: "quarantined" as const } };
       }
       return { changed: false, result: { outcome: "quarantined" as const } };
-    });
+    }, "lifecycle");
   }
 
   release(
@@ -680,7 +705,7 @@ export class AgentInputRequestStore extends EventEmitter {
       if (submission.status !== "reserved" && submission.status !== "exposed") {
         return { changed: false, result: submissionOutcome(submission) };
       }
-       submission.status = inDoubt || submission.sdkStartedAt !== undefined || submission.status === "exposed"
+       submission.status = inDoubt || submission.sdkStartedAt !== undefined
          ? "ambiguous" : "reserved";
       submission.outcome = submission.status === "ambiguous" ? "sdk_error" : outcome;
       submission.code = submission.status === "ambiguous" ? "delivery_ambiguous" : undefined;
@@ -690,7 +715,7 @@ export class AgentInputRequestStore extends EventEmitter {
       return { changed: true, result: submission.status === "ambiguous"
         ? { outcome: "sdk_error" as const, code: "delivery_ambiguous", retryable: false }
         : { outcome } };
-    });
+    }, "lifecycle");
   }
 
   resolveNative(
@@ -727,7 +752,9 @@ export class AgentInputRequestStore extends EventEmitter {
         if (tombstone) return { changed: false, result: { outcome: "already_resolved" as const } };
         return { changed: false, result: { outcome: "retired" as const } };
       }
-      if (request.state !== "pending") return { changed: false, result: { outcome: "already_resolved" as const, request: toPublicRequest(request) } };
+      if (request.state !== "pending" && request.state !== "failed") {
+        return { changed: false, result: { outcome: "already_resolved" as const, request: toPublicRequest(request) } };
+      }
       const timestamp = new Date(nowMs).toISOString();
       request.state = result === "replied" ? "answered" : "rejected";
       request.resolution = "terminal";
@@ -741,7 +768,7 @@ export class AgentInputRequestStore extends EventEmitter {
          submission.updatedAt = timestamp;
       }
       return { changed: true, result: { outcome: "resolved" as const, request: toPublicRequest(request) } };
-    });
+    }, "lifecycle");
   }
 
   resolveNativeAbsent(
@@ -787,7 +814,7 @@ export class AgentInputRequestStore extends EventEmitter {
       const closed: Array<{ id: string; generation: number }> = [];
       const timestamp = new Date(nowMs).toISOString();
       for (const request of draft.requests) {
-        if (request.sourceId !== sourceId || request.state !== "pending"
+        if (request.sourceId !== sourceId || (request.state !== "pending" && request.state !== "failed")
           || (request.occurrence && present.has(request.occurrence.occurrenceId))
           || (scope !== undefined && (!request.occurrence || !scope.has(request.occurrence.occurrenceKey)))) continue;
         request.state = "closed";
@@ -798,7 +825,7 @@ export class AgentInputRequestStore extends EventEmitter {
         closed.push({ id: request.id, generation: request.generation });
       }
       return { changed: closed.length > 0, result: closed };
-    });
+    }, "lifecycle");
   }
 
   submissionState(id: string): { status: Submission["status"]; deliveryId?: string; sdkStarted: boolean } | undefined {
@@ -835,7 +862,7 @@ export class AgentInputRequestStore extends EventEmitter {
       const retired = draft.retiredSources.find((source) => source.sourceId === sourceId);
       if (!retired) draft.retiredSources.push({ sourceId, retiredAt: timestamp });
       return { changed: count > 0 || !retired, result: count };
-    });
+    }, "lifecycle");
   }
 
   prune(nowMs = Date.now()): { removedIds: string[] } {
@@ -909,10 +936,11 @@ export class AgentInputRequestStore extends EventEmitter {
         request.resolution = resolution;
         request.resolvedAt = timestamp;
         request.updatedAt = timestamp;
+        settleSubmission(draft.submissions, request.id, timestamp);
         count += 1;
       }
       return { changed: count > 0, result: count };
-    });
+    }, "lifecycle");
   }
 
   private answerDigest(answers: string[][]): string {
@@ -921,15 +949,23 @@ export class AgentInputRequestStore extends EventEmitter {
       .digest("hex");
   }
 
-  private commit<T>(mutate: (draft: Envelope) => { changed: boolean; publish?: boolean; result: T }): T {
+  private commit<T>(
+    mutate: (draft: Envelope) => { changed: boolean; publish?: boolean; result: T },
+    quota: "admission" | "lifecycle" = "admission",
+  ): T {
     const draft = structuredClone(this.data);
     const { changed, publish, result } = mutate(draft);
     if (!changed) return structuredClone(result);
     envelopeSchema.parse(draft);
-    enforceSerializedQuotaGrowth(this.data, draft, {
-      perSource: this.maxSerializedBytesPerSource,
-      global: this.maxSerializedBytes,
-    });
+    enforceSerializedQuotaGrowth(this.data, draft, quota === "lifecycle"
+      ? {
+          perSource: MAX_AGENT_INPUT_LIFECYCLE_BYTES_PER_SOURCE,
+          global: MAX_AGENT_INPUT_LIFECYCLE_BYTES,
+        }
+      : {
+          perSource: this.maxSerializedBytesPerSource,
+          global: this.maxSerializedBytes,
+        });
     this.persist(draft, true);
     this.data = draft;
     if (publish !== false) this.emit("change", this.snapshot());
@@ -961,7 +997,7 @@ export class AgentInputRequestStore extends EventEmitter {
         const old = envelopeV0Schema.parse(input);
         return {
           data: {
-             schemaVersion: 7,
+             schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION,
              ...migrateLegacyRecords(old.requests, old.tombstones, []),
              submissions: [],
              attention: [], retiredSources: [],
@@ -973,7 +1009,7 @@ export class AgentInputRequestStore extends EventEmitter {
         const old = envelopeV1Schema.parse(input);
         return {
           data: {
-             schemaVersion: 7,
+             schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION,
              ...migrateLegacyRecords(old.requests, old.tombstones, migrateLegacySubmissions(old.submissions)),
              attention: [], retiredSources: [],
           },
@@ -998,7 +1034,11 @@ export class AgentInputRequestStore extends EventEmitter {
       }
       if (version === 6) {
         const old = envelopeV6Schema.parse(input);
-        return { data: { ...old, schemaVersion: 7, retiredSources: [] }, migrated: true };
+         return { data: { ...old, schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION, retiredSources: [] }, migrated: true };
+      }
+      if (version === 7) {
+        const old = envelopeV7Schema.parse(input);
+        return { data: { ...old, schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION }, migrated: true };
       }
       const parsed = envelopeSchema.safeParse(input);
       return parsed.success ? { data: parsed.data, migrated: false } : undefined;
@@ -1082,7 +1122,8 @@ export class AgentInputRequestStore extends EventEmitter {
 }
 
 const emptyEnvelope = (): Envelope => ({
-  schemaVersion: 7, requests: [], submissions: [], tombstones: [], attention: [], generationAnchors: [], retiredSources: [],
+  schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION,
+  requests: [], submissions: [], tombstones: [], attention: [], generationAnchors: [], retiredSources: [],
 });
 
 const recoverBackupEnvelope = (input: Envelope): { data: Envelope; changed: boolean } => {
@@ -1112,7 +1153,15 @@ const recoverInterruptedSubmissions = (input: Envelope): { data: Envelope; chang
       changed = true;
       continue;
     }
-    if (submission.status === "exposed" || (submission.status === "reserved" && submission.sdkStartedAt)) {
+    if (submission.status === "exposed" && !submission.sdkStartedAt) {
+      submission.status = "reserved";
+      delete submission.deliveryId;
+      submission.updatedAt = timestamp;
+      changed = true;
+      continue;
+    }
+    if ((submission.status === "exposed" && submission.sdkStartedAt)
+      || (submission.status === "reserved" && submission.sdkStartedAt)) {
       submission.status = "ambiguous";
       submission.outcome = "sdk_error";
       submission.code = "delivery_ambiguous";
@@ -1193,7 +1242,7 @@ const migrateLegacyEnvelope = (
   const migrated = migrateLegacyRecords(requests, tombstones, submissions);
   const pendingIds = new Set(migrated.requests.filter((request) => request.state === "pending").map((request) => request.id));
   return {
-    schemaVersion: 7,
+    schemaVersion: CURRENT_AGENT_INPUT_REQUEST_SCHEMA_VERSION,
     ...migrated,
     attention: attention.filter((item) => pendingIds.has(item.requestId)),
     retiredSources: [],
@@ -1240,7 +1289,7 @@ const serializedSourceBytes = (data: Envelope, sourceId: string): number => seri
   retiredSources: data.retiredSources.filter((source) => source.sourceId === sourceId),
 });
 
-const enforceSerializedQuotaGrowth = (
+export const enforceSerializedQuotaGrowth = (
   before: Envelope,
   after: Envelope,
   limits: { perSource: number; global: number },

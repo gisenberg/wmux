@@ -14,15 +14,25 @@ import {
   type OpenCodeRuntimeAttestation,
 } from "./opencode-question-contract.js";
 
-export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 6;
+export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 7;
 export const DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS = 5 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_RELAY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_CHALLENGE_TTL_MS = 15_000;
 export const DEFAULT_AGENT_INPUT_SOURCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_CREDENTIAL_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
+export const agentInputCredentialStorePathOverride = (): string | undefined => {
+  if (process.env.WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH) {
+    return process.env.WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH;
+  }
+  if (process.env.WMUX_PANE_ID || process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH) {
+    return undefined;
+  }
+  return process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH;
+};
+
 const defaultPath = (): string =>
-  process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH
+  agentInputCredentialStorePathOverride()
   ?? path.join(os.homedir(), ".wmux", "agent-input-credentials.json");
 
 const value = (max = 256) => z.string().min(1).max(max);
@@ -32,7 +42,13 @@ const contextSchema = z.object({
   paneId: value(),
   machineId: value().optional(),
   sourceKind: z.literal("opencode"),
-}).strict();
+  backendId: z.enum(["raw-pty", "durable-multiplexer", "windows-agent"]).optional(),
+  sessionIncarnation: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  endpointFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().refine((context) => {
+  const bindings = [context.backendId, context.sessionIncarnation, context.endpointFingerprint];
+  return bindings.every((value) => value === undefined) || bindings.every((value) => value !== undefined);
+}, "incomplete agent input session binding");
 const legacyHashSchema = z.object({
   salt: z.string().regex(/^[a-f0-9]{32}$/),
   digest: z.string().regex(/^[a-f0-9]{64}$/),
@@ -336,9 +352,17 @@ const envelopeV5Schema = z.object({
   capabilityTombstones: z.array(capabilityTombstoneSchema).max(8_000),
   challenges: z.array(challengeSchema).max(4_000),
 }).strict();
+const envelopeV6Schema = envelopeSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(6),
+}).strict();
 type Envelope = z.infer<typeof envelopeSchema>;
 export type AgentInputSourceRecord = z.infer<typeof sourceSchema>;
 export type AgentInputSourceContext = z.infer<typeof contextSchema>;
+export interface AgentInputSessionBinding {
+  backendId: "raw-pty" | "durable-multiplexer" | "windows-agent";
+  sessionIncarnation: string;
+  endpointFingerprint: string;
+}
 
 export interface AgentInputRegistrationPrincipal {
   kind: "agent-input-registration";
@@ -445,6 +469,12 @@ export class AgentInputCredentialStore extends EventEmitter {
     const secret = crypto.randomBytes(32).toString("base64url");
     const expiresAt = nowMs + this.capabilityTtlMs;
     this.commit((draft) => {
+      const supersededIds = new Set(draft.capabilities
+        .filter((candidate) => candidate.usedAt === undefined && sameContext(candidate.context, context))
+        .map((candidate) => candidate.id));
+      draft.capabilities = draft.capabilities.filter((candidate) => !supersededIds.has(candidate.id));
+      draft.challenges = draft.challenges.filter((candidate) => candidate.binding.kind !== "registration"
+        || !supersededIds.has(candidate.binding.capabilityId));
       draft.capabilities.push({
         id,
         verifier: this.verifier("capability", id, secret),
@@ -518,7 +548,8 @@ export class AgentInputCredentialStore extends EventEmitter {
     const capability = /^aic_([0-9a-f-]{36})\.([A-Za-z0-9_-]{32,256})$/.exec(presented);
     if (capability) {
       const record = this.data.capabilities.find((candidate) => candidate.id === capability[1]);
-      if (!record || record.usedAt !== undefined || record.expiresAt <= nowMs
+      if (!record || record.expiresAt <= nowMs
+        || (record.usedAt !== undefined && (!record.exchangeNonce || !record.sourceId))
         || !this.verify("capability", record.id, capability[2], record.verifier)) return undefined;
       return { kind: "agent-input-registration", capabilityId: record.id, paneId: record.context.paneId };
     }
@@ -554,9 +585,16 @@ export class AgentInputCredentialStore extends EventEmitter {
         throw new AgentInputCredentialError("invalid_capability");
       }
       if (capability.usedAt !== undefined) {
+        if (capability.exchangeNonce !== parsed.instanceNonce || !capability.sourceId) {
+          throw new AgentInputCredentialError("invalid_capability");
+        }
         return { outcome: "already_exchanged" as const, sourceId: capability.sourceId ?? "unavailable" };
       }
       this.consumeRuntimeChallenge(draft, principal, capability.context, parsed, nowMs);
+      if (draft.sources.some((source) => source.revokedAt === undefined && source.expiresAt > nowMs
+        && sameContext(source.context, capability.context))) {
+        throw new AgentInputCredentialError("source_already_registered");
+      }
       if (draft.sources.length >= 2_000) throw new AgentInputCredentialError("source_limit");
       const sourceUuid = crypto.randomUUID();
       const sourceId = `source_${sourceUuid}`;
@@ -850,6 +888,31 @@ export class AgentInputCredentialStore extends EventEmitter {
           migrated: true,
         };
       }
+      if (version === 6) {
+        const old = envelopeV6Schema.parse(input);
+        const nowMs = Date.now();
+        return {
+          data: {
+            schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
+            capabilities: old.capabilities.map((capability) => ({
+              ...capability,
+              expiresAt: Math.min(capability.expiresAt, nowMs),
+              usedAt: capability.usedAt ?? nowMs,
+            })),
+            sources: old.sources.map((source) => ({
+              ...source,
+              runtimeAttestation: undefined,
+              runtimeReady: false,
+              supported: false,
+              diagnostic: "recovery_invalidated" as const,
+              revokedAt: source.revokedAt ?? nowMs,
+            })),
+            capabilityTombstones: old.capabilityTombstones,
+            challenges: [],
+          },
+          migrated: true,
+        };
+      }
       const parsed = envelopeSchema.safeParse(input);
       return parsed.success ? { data: parsed.data, migrated: false } : undefined;
     } catch (error) {
@@ -931,6 +994,7 @@ export const issueAgentInputRegistrationCapabilityForPane = (
   store: AgentInputCredentialStore,
   state: StateStore,
   paneId: string,
+  binding?: AgentInputSessionBinding,
   nowMs = Date.now(),
 ): AgentInputRegistrationCapability => {
   const context = state.findPaneContext(paneId);
@@ -941,8 +1005,19 @@ export const issueAgentInputRegistrationCapabilityForPane = (
     paneId: context.pane.id,
     machineId: context.pane.machineId,
     sourceKind: "opencode",
+    ...(binding ?? {}),
   }, nowMs);
 };
+
+export const contextSessionBinding = (
+  context: AgentInputSourceContext,
+): AgentInputSessionBinding | undefined => context.backendId && context.sessionIncarnation && context.endpointFingerprint
+  ? {
+      backendId: context.backendId,
+      sessionIncarnation: context.sessionIncarnation,
+      endpointFingerprint: context.endpointFingerprint,
+    }
+  : undefined;
 
 const emptyEnvelope = (): Envelope => ({
   schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
@@ -1108,7 +1183,10 @@ const sameContext = (left: AgentInputSourceContext, right: AgentInputSourceConte
   && left.tabId === right.tabId
   && left.paneId === right.paneId
   && left.machineId === right.machineId
-  && left.sourceKind === right.sourceKind;
+  && left.sourceKind === right.sourceKind
+  && left.backendId === right.backendId
+  && left.sessionIncarnation === right.sessionIncarnation
+  && left.endpointFingerprint === right.endpointFingerprint;
 
 const sameChallengeBinding = (
   left: z.infer<typeof challengeBindingSchema>,
