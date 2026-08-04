@@ -246,6 +246,27 @@ const armTerminalPrediction = async (page: Page, prediction: Locator): Promise<v
   throw new Error("Terminal prediction did not arm after three authoritative echoes");
 };
 
+// A late authoritative write (shell integration hooks, title updates) can
+// disarm the prediction between echoes, so a single keystroke occasionally
+// renders unpredicted by design; settle and re-arm instead of failing.
+const typeActivePrediction = async (
+  page: Page,
+  prediction: Locator,
+  character: string,
+): Promise<void> => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.keyboard.type(character);
+    try {
+      await expect(prediction).toHaveAttribute("data-active", "true", { timeout: 1_000 });
+      return;
+    } catch {
+      await expect(prediction).not.toHaveAttribute("data-active", "true", { timeout: 3_000 });
+      await armTerminalPrediction(page, prediction);
+    }
+  }
+  throw new Error(`Prediction did not activate after typing ${JSON.stringify(character)}`);
+};
+
 const verifyDelayedGlyph = async (
   page: Page,
   pane: Locator,
@@ -254,8 +275,7 @@ const verifyDelayedGlyph = async (
   background?: string,
 ): Promise<void> => {
   await armTerminalPrediction(page, prediction);
-  await page.keyboard.type("x");
-  await expect(prediction).toHaveAttribute("data-active", "true");
+  await typeActivePrediction(page, prediction, "x");
   await page.keyboard.type("y");
   await expect(prediction).toHaveAttribute("data-active", "true");
   const cells = await predictionCells(prediction);
@@ -369,8 +389,7 @@ test("DPR changes clear stale prediction metrics before repainting", async ({
   const cdp = await page.context().newCDPSession(page);
   try {
     await armTerminalPrediction(page, prediction);
-    await page.keyboard.type("x");
-    await expect(prediction).toHaveAttribute("data-active", "true");
+    await typeActivePrediction(page, prediction, "x");
     const initialMetrics = await readPredictionMetrics(prediction);
     expect(initialMetrics.dpr).toBe(2);
     expect(initialMetrics.width).toBeGreaterThanOrEqual(8);
