@@ -23,6 +23,8 @@ import type { AgentInputQuestion, BootstrapPayload, MachineConfig } from "../src
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const runtime = { type: "legacy_runtime_ignored" };
+const testCapability = (marker: "C" | "D") => `aic_${marker === "C"
+  ? "11111111-1111-4111-8111-111111111111" : "22222222-2222-4222-8222-222222222222"}.${marker.repeat(43)}`;
 const serverChallenge = () => ({
   type: "server_challenge",
   handshakeSchema: 4,
@@ -412,6 +414,36 @@ test("broker migrations discard unbound metadata, require fresh registration, an
     await broker.stop();
     assert.equal(fs.readFileSync(credentialPath, "utf8"), future);
     assert.equal(calls.length, 0);
+
+    writeCredential(credentialPath);
+    const futureIntentPath = `${credentialPath}.registration.json`;
+    const futureIntent = `${JSON.stringify({ schemaVersion: 2, future: true })}\n`;
+    fs.writeFileSync(futureIntentPath, futureIntent, { mode: 0o600 });
+    broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
+    broker.send(runtime);
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready"
+      && message.supported === false && message.diagnostic === "registration_intent_invalid"));
+    await broker.stop();
+    assert.equal(fs.readFileSync(futureIntentPath, "utf8"), futureIntent,
+      "a future durable intent is preserved byte-for-byte and blocks registration");
+    assert.equal(calls.length, 0);
+
+    fs.rmSync(futureIntentPath);
+    for (const [name, contents, mode] of [
+      ["malformed", "{broken\n", 0o600],
+      ["wrong-mode", `${JSON.stringify({ schemaVersion: 1 })}\n`, 0o644],
+    ] as const) {
+      fs.writeFileSync(futureIntentPath, contents, { mode });
+      fs.chmodSync(futureIntentPath, mode);
+      broker = launchBroker(directory, fixture.base, "pane-one", credentialPath);
+      broker.send(runtime);
+      await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready"
+        && message.supported === false && message.diagnostic === "registration_intent_invalid"), () => name);
+      await broker.stop();
+      assert.equal(fs.readFileSync(futureIntentPath, "utf8"), contents);
+      assert.equal(calls.length, 0);
+      fs.rmSync(futureIntentPath);
+    }
   } finally {
     await fixture.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -452,7 +484,7 @@ test("broker stale credentials require fresh pane capability authority and recei
 
     calls.length = 0;
     writeCredential(credentialPath);
-    fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+    fs.writeFileSync(capabilityPath, `${testCapability("C")}\n`, { mode: 0o600 });
     broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath, capabilityPath);
     broker.send(runtime);
     await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
@@ -463,7 +495,8 @@ test("broker stale credentials require fresh pane capability authority and recei
       "/api/agent-input/sources/register",
     ]);
     assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, "source-restarted");
-    assert.equal(fs.existsSync(capabilityPath), false, "successful replacement consumes the new pane capability");
+    assert.equal(fs.readFileSync(capabilityPath, "utf8").trim(), testCapability("C"),
+      "the server-owned capability mailbox remains broker-read-only");
 
     const key = "a".repeat(64);
     const digest = "b".repeat(64);
@@ -546,13 +579,19 @@ test("running broker backs off until durable reattachment stages replacement aut
       registrationAttempts += 1;
       registrationSeeds.push(body.relaySecretSeed);
       if (registrationAttempts === 1) {
-        fs.writeFileSync(capabilityPath, `${"D".repeat(43)}\n`, { mode: 0o600 });
+        fs.writeFileSync(capabilityPath, `${testCapability("D")}\n`, { mode: 0o600 });
         return send(401, { error: "superseded" });
       }
       if (registrationAttempts === 2) {
         request.socket.destroy();
         return;
       }
+      if (registrationAttempts === 3) {
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end('{"sourceId":');
+        return;
+      }
+      if (registrationAttempts === 4) return send(200, { outcome: "unexpected" });
       return send(200, {
         outcome: "already_exchanged", sourceId: recoveredSourceId, expiresAt: Date.now() + 600_000,
         supported: true, credentialGeneration: 1,
@@ -576,19 +615,84 @@ test("running broker backs off until durable reattachment stages replacement aut
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(calls.length, callsBeforeWait, "missing replacement capability causes no HTTP retry storm");
 
-    fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+    fs.writeFileSync(capabilityPath, `${testCapability("C")}\n`, { mode: 0o600 });
     await waitFor(() => broker.messages.filter((message) => message.type === "runtime_ready" && message.supported === true).length === 2);
     await waitFor(() => calls.some((requestPath) => requestPath.startsWith(`/api/agent-input/sources/${recoveredSourceId}/deliveries?`)));
     assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, recoveredSourceId);
-    assert.equal(registrationAttempts, 3);
+    assert.equal(registrationAttempts, 5);
     assert.notEqual(registrationSeeds[0], registrationSeeds[1],
       "replacement authority starts an independent registration attempt");
-    assert.equal(registrationSeeds[1], registrationSeeds[2], "response-loss retry preserves the client-held relay seed");
+    assert.equal(registrationSeeds[1], registrationSeeds[2], "pre-header response loss preserves the client-held relay seed");
+    assert.equal(registrationSeeds[2], registrationSeeds[3], "malformed success body preserves the durable relay seed");
+    assert.equal(registrationSeeds[3], registrationSeeds[4], "incorrect 200 success shape remains an exact retry");
     assert.equal(recoveredAuthorization,
       `Bearer ais_${recoveredSourceId.slice("source_".length)}.${registrationSeeds[1]}`);
     assert.ok(calls.includes("/api/agent-input/sources/challenge"));
     assert.ok(calls.includes("/api/agent-input/sources/register"));
-    assert.equal(fs.existsSync(capabilityPath), false);
+    assert.equal(fs.readFileSync(capabilityPath, "utf8").trim(), testCapability("D"));
+    assert.equal(fs.existsSync(`${credentialPath}.registration.json`), false);
+  } finally {
+    await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable registration intent recovers after broker death following server commit", { skip: process.platform === "win32" }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-registration-restart-"));
+  const credentialPath = path.join(directory, "pane.json");
+  const capabilityPath = `${credentialPath}.cap`;
+  const registrationBodies: any[] = [];
+  const recoveredSourceId = `source_${crypto.randomUUID()}`;
+  let committedResolve!: () => void;
+  const committed = new Promise<void>((resolve) => { committedResolve = resolve; });
+  let committedOnce = false;
+  const server = http.createServer(async (request, response) => {
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const requestPath = request.url ?? "";
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
+    };
+    if (requestPath === "/api/agent-input/sources/source-one/challenge") return send(401, { error: "stale" });
+    if (requestPath === "/api/agent-input/sources/challenge") return send(201, serverChallenge());
+    if (requestPath === "/api/agent-input/sources/register") {
+      registrationBodies.push(body);
+      if (!committedOnce) {
+        committedOnce = true;
+        committedResolve();
+        request.socket.destroy();
+        return;
+      }
+      return send(200, {
+        outcome: "already_exchanged", sourceId: recoveredSourceId, expiresAt: Date.now() + 600_000,
+        supported: true, credentialGeneration: 1,
+      });
+    }
+    if (requestPath.startsWith(`/api/agent-input/sources/${recoveredSourceId}/deliveries?`)) {
+      return send(200, { epoch: "relay-restarted", cursor: 0, deliveries: [] });
+    }
+    return send(404, { error: "not_found" });
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+  writeCredential(credentialPath);
+  fs.writeFileSync(capabilityPath, `${testCapability("C")}\n`, { mode: 0o600 });
+  let broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath, capabilityPath);
+  try {
+    broker.send(runtime);
+    await committed;
+    await broker.stop();
+    assert.equal(fs.existsSync(`${credentialPath}.registration.json`), true,
+      "the exact exchange intent precedes the first registration request");
+
+    broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath, capabilityPath);
+    broker.send(runtime);
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
+    assert.equal(registrationBodies.length, 2);
+    assert.deepEqual(registrationBodies[1], registrationBodies[0]);
+    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, recoveredSourceId);
+    assert.equal(fs.existsSync(`${credentialPath}.registration.json`), false);
+    assert.equal(fs.readFileSync(capabilityPath, "utf8").trim(), testCapability("C"));
   } finally {
     await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
     fs.rmSync(directory, { recursive: true, force: true });

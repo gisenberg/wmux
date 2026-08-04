@@ -22,12 +22,15 @@ const baseUrl = (process.env.WMUX_URL || readText(path.join(home, ".wmux", "url"
 const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH
   || path.join(home, ".wmux", "agent-input", `${safeName(paneId)}.json`);
 const capabilityPath = process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH?.trim() || "";
+const pendingRegistrationPath = credentialPath ? `${credentialPath}.registration.json` : "";
 const statusPath = credentialPath ? `${credentialPath}.status.json` : "";
 const contractPath = process.env.WMUX_OPENCODE_QUESTION_CONTRACT_PATH?.trim()
   || path.join(path.dirname(fileURLToPath(import.meta.url)), "opencode-question-contract.json");
 const contract = loadContract();
 let futureCredential = false;
 let credential = loadCredential();
+let pendingRegistrationBlocked = false;
+let pendingRegistration = loadPendingRegistration();
 let stopping = false;
 let pollAbort = new AbortController();
 let drainPromise;
@@ -222,6 +225,94 @@ function persistCredential() {
   }
 }
 
+function validPendingRegistration(value) {
+  const request = value?.request;
+  const capability = typeof value?.capability === "string"
+    ? /^aic_([0-9a-f-]{36})\.([A-Za-z0-9_-]{32,256})$/.exec(value.capability) : undefined;
+  return exactKeys(value, ["schemaVersion", "kind", "capability", "capabilityId", "paneId", "preparedAt", "request"])
+    && value.schemaVersion === 1 && value.kind === "agent-input-registration-intent"
+    && capability && value.capabilityId === capability[1] && value.paneId === paneId
+    && Number.isSafeInteger(value.preparedAt) && value.preparedAt >= 0
+    && exactKeys(request, ["instanceNonce", "kind", "runtimeAttestation", "relaySecretSeed"])
+    && typeof request.instanceNonce === "string" && /^[A-Za-z0-9_-]{43}$/.test(request.instanceNonce)
+    && request.kind === "opencode" && typeof request.relaySecretSeed === "string"
+    && /^[A-Za-z0-9_-]{43}$/.test(request.relaySecretSeed)
+    && request.runtimeAttestation && typeof request.runtimeAttestation === "object"
+    && request.runtimeAttestation.type === "runtime_attestation"
+    && request.runtimeAttestation.handshakeSchema === contract?.handshakeSchema
+    && request.runtimeAttestation.contractDigest === contract?.canonicalContractDigest
+    && Buffer.byteLength(JSON.stringify(value)) <= MAX_LINE_BYTES;
+}
+
+function loadPendingRegistration() {
+  if (!pendingRegistrationPath || !fs.existsSync(pendingRegistrationPath)) return undefined;
+  try {
+    assertPrivateFile(pendingRegistrationPath);
+    const stat = fs.statSync(pendingRegistrationPath);
+    if (stat.size > MAX_LINE_BYTES) throw new Error("registration_intent_capacity");
+    const parsed = JSON.parse(fs.readFileSync(pendingRegistrationPath, "utf8"));
+    if (Number.isSafeInteger(parsed?.schemaVersion) && parsed.schemaVersion > 1) {
+      pendingRegistrationBlocked = true;
+      return undefined;
+    }
+    if (!validPendingRegistration(parsed)) throw new Error("registration_intent_invalid");
+    return parsed;
+  } catch {
+    pendingRegistrationBlocked = true;
+    return undefined;
+  }
+}
+
+function persistPendingRegistration(value) {
+  if (!validPendingRegistration(value)) throw new Error("registration_intent_invalid");
+  const resolved = path.resolve(pendingRegistrationPath);
+  const directory = path.dirname(resolved);
+  assertPrivateDirectory(directory, true);
+  if (fs.existsSync(resolved)) assertPrivateFile(resolved);
+  const temporary = path.join(directory, `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`);
+  try {
+    const handle = fs.openSync(temporary, "wx", 0o600);
+    try { fs.writeFileSync(handle, `${JSON.stringify(value)}\n`); fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
+    fs.renameSync(temporary, resolved);
+    const directoryHandle = fs.openSync(directory, "r");
+    try { fs.fsyncSync(directoryHandle); } finally { fs.closeSync(directoryHandle); }
+    assertPrivateFile(resolved);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+function clearPendingRegistration() {
+  if (!pendingRegistrationPath || !fs.existsSync(pendingRegistrationPath)) return;
+  assertPrivateFile(pendingRegistrationPath);
+  fs.rmSync(pendingRegistrationPath);
+  const directoryHandle = fs.openSync(path.dirname(path.resolve(pendingRegistrationPath)), "r");
+  try { fs.fsyncSync(directoryHandle); } finally { fs.closeSync(directoryHandle); }
+}
+
+async function readBoundedJsonResponse(response) {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_LINE_BYTES) throw new Error("response_capacity");
+  if (!response.body) return {};
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_LINE_BYTES) throw new Error("response_capacity");
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  return JSON.parse(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total).toString("utf8"));
+}
+
 async function request(pathname, token, init = {}, signal, timeoutMs = REQUEST_TIMEOUT_MS) {
   if (!baseUrl || !token) return { status: 0, body: { error: "unavailable" } };
   const timeout = new AbortController();
@@ -233,9 +324,10 @@ async function request(pathname, token, init = {}, signal, timeoutMs = REQUEST_T
       ...init, headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, signal: timeout.signal,
     });
     let body = {};
-    try { body = await response.json(); } catch {}
-    return { status: response.status, body };
-  } catch { return { status: 0, body: { error: signal?.aborted ? "cancelled" : "unavailable" } }; }
+    let parsed = false;
+    try { body = await readBoundedJsonResponse(response); parsed = true; } catch {}
+    return { status: response.status, body, parsed };
+  } catch { return { status: 0, body: { error: signal?.aborted ? "cancelled" : "unavailable" }, parsed: false }; }
   finally { clearTimeout(timer); signal?.removeEventListener("abort", forward); }
 }
 
@@ -314,31 +406,6 @@ function readCapability() {
   try { assertPrivateFile(capabilityPath); return fs.readFileSync(capabilityPath, "utf8").trim(); } catch { return ""; }
 }
 
-function consumeExactCapability(expected) {
-  if (!capabilityPath || !expected) return;
-  const claimedPath = `${capabilityPath}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.consumed`;
-  let claimed = false;
-  let restore = false;
-  try {
-    assertPrivateFile(capabilityPath);
-    fs.renameSync(capabilityPath, claimedPath);
-    claimed = true;
-    assertPrivateFile(claimedPath);
-    restore = fs.readFileSync(claimedPath, "utf8").trim() !== expected;
-    if (restore) {
-      try { fs.linkSync(claimedPath, capabilityPath); } catch (error) {
-        if (error?.code !== "EEXIST") throw error;
-      }
-    }
-  } catch {
-    if (claimed && restore) {
-      try { fs.linkSync(claimedPath, capabilityPath); } catch {}
-    }
-  } finally {
-    if (claimed) try { fs.rmSync(claimedPath, { force: true }); } catch {}
-  }
-}
-
 async function obtainServerChallenge() {
   const useSource = credential && !credential.requiresFreshRegistration;
   const token = useSource ? credential.relaySecret : readCapability();
@@ -403,35 +470,66 @@ function requestRuntimeAttestation(serverChallenge) {
 }
 
 async function register(attestation) {
-  if (!capabilityPath || attestationDiagnostic(attestation) !== "ok") return false;
-  let capability = readCapability();
-  if (!capability) return false;
-  const relaySecretSeed = crypto.randomBytes(32).toString("base64url");
-  const body = JSON.stringify({
-    instanceNonce: attestation.nonce,
-    kind: "opencode",
-    runtimeAttestation: attestation,
-    relaySecretSeed,
-  });
-  let response = { status: 0, body: {} };
-  try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      response = await request("/api/agent-input/sources/register", capability, { method: "POST", body });
-      if (response.status === 201 || response.status === 200) break;
-      if (response.status !== 0 && response.status !== 408 && response.status !== 429 && response.status < 500) break;
-      if (attempt === 0) await sleep(100);
-    }
+  if (pendingRegistrationBlocked || !capabilityPath) return false;
+  if (!pendingRegistration) {
+    if (attestationDiagnostic(attestation) !== "ok") return false;
+    const capability = readCapability();
+    const capabilityMatch = /^aic_([0-9a-f-]{36})\.([A-Za-z0-9_-]{32,256})$/.exec(capability);
+    if (!capabilityMatch) return false;
+    pendingRegistration = {
+      schemaVersion: 1,
+      kind: "agent-input-registration-intent",
+      capability,
+      capabilityId: capabilityMatch[1],
+      paneId,
+      preparedAt: Date.now(),
+      request: {
+        instanceNonce: attestation.nonce,
+        kind: "opencode",
+        runtimeAttestation: attestation,
+        relaySecretSeed: crypto.randomBytes(32).toString("base64url"),
+      },
+    };
+    persistPendingRegistration(pendingRegistration);
+  }
+  let failures = 0;
+  while (!stopping && pendingRegistration) {
+    const intent = pendingRegistration;
+    const response = await request("/api/agent-input/sources/register", intent.capability, {
+      method: "POST", body: JSON.stringify(intent.request),
+    });
     const recovered = response.status === 200 && response.body?.outcome === "already_exchanged";
     const issued = response.status === 201;
-    if ((!issued && !recovered) || typeof response.body.sourceId !== "string"
-      || typeof response.body.expiresAt !== "number" || !Number.isInteger(response.body.credentialGeneration)) return false;
+    const successStatus = response.status === 200 || response.status === 201;
+    const validSuccess = response.parsed && (issued || recovered) && typeof response.body.sourceId === "string"
+      && typeof response.body.expiresAt === "number" && Number.isInteger(response.body.credentialGeneration);
+    if (!validSuccess) {
+      const ambiguous = response.status === 0 || response.status === 408 || response.status === 425
+        || response.status === 429 || response.status >= 500 || successStatus;
+      if (!ambiguous) {
+        clearPendingRegistration();
+        pendingRegistration = undefined;
+        return false;
+      }
+      failures = Math.min(MAX_BACKOFF_ATTEMPTS, failures + 1);
+      await sleep(Math.min(5_000, 100 * (2 ** (failures - 1))));
+      continue;
+    }
     let relaySecret = response.body.relaySecret;
     if (recovered) {
       const source = /^source_([0-9a-f-]{36})$/.exec(response.body.sourceId);
-      if (!source || response.body.supported !== true) return false;
-      relaySecret = `ais_${source[1]}.${relaySecretSeed}`;
+      if (!source || response.body.supported !== true) {
+        failures = Math.min(MAX_BACKOFF_ATTEMPTS, failures + 1);
+        await sleep(Math.min(5_000, 100 * (2 ** (failures - 1))));
+        continue;
+      }
+      relaySecret = `ais_${source[1]}.${intent.request.relaySecretSeed}`;
     }
-    if (typeof relaySecret !== "string") return false;
+    if (typeof relaySecret !== "string") {
+      failures = Math.min(MAX_BACKOFF_ATTEMPTS, failures + 1);
+      await sleep(Math.min(5_000, 100 * (2 ** (failures - 1))));
+      continue;
+    }
     credential = {
       schemaVersion: SCHEMA_VERSION, sourceId: response.body.sourceId, relaySecret,
       expiresAt: response.body.expiresAt, supported: response.body.supported === true,
@@ -440,13 +538,11 @@ async function register(attestation) {
        streams: {}, receipts: [], outbox: [], quarantines: [], requiresFreshAttestation: false,
     };
     persistCredential();
+    clearPendingRegistration();
+    pendingRegistration = undefined;
     return true;
-  } finally {
-    const terminal = response.status === 200 || response.status === 201
-      || [400, 401, 403, 404, 409, 410, 422].includes(response.status);
-    if (terminal) consumeExactCapability(capability);
-    capability = "";
   }
+  return false;
 }
 
 async function refresh(attestation) {
@@ -1084,6 +1180,24 @@ async function serve() {
     persistStatus("failed", !contract ? "contract_invalid" : "pane_prerequisite_missing");
     emit({ type: "runtime_ready", supported: false, diagnostic: !contract ? "contract_invalid" : "pane_prerequisite_missing" });
     return;
+  }
+  if (pendingRegistrationBlocked) {
+    persistStatus("failed", "registration_intent_invalid");
+    emit({ type: "runtime_ready", supported: false, diagnostic: "registration_intent_invalid" });
+    stop();
+    return;
+  }
+  if (pendingRegistration) {
+    const recovered = await register(undefined);
+    if (stopping) return;
+    if (recovered && credential?.supported === true) {
+      runtimeReady = true;
+      persistStatus("ready", "runtime_ready");
+      emit({ type: "runtime_ready", supported: true, eventSequence: credential.lastEventSequence });
+      void drainOutbox();
+      await poll();
+      return;
+    }
   }
   if (credential?.requiresFreshRegistration) {
     persistCredential();

@@ -160,6 +160,17 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
     assert.equal(replayResult.supported, true);
     assert.equal(replayResult.credentialGeneration, 1);
     assert.equal("relaySecret" in replayResult, false);
+    const changedAttestationReplay = await fetch(`${base}/api/agent-input/sources/register`, {
+      method: "POST", headers: bearer(capability.capability), body: JSON.stringify({
+        ...registrationRequest,
+        runtimeAttestation: {
+          ...registrationRequest.runtimeAttestation,
+          observedAt: registrationRequest.runtimeAttestation.observedAt + 1,
+        },
+      }),
+    });
+    assert.equal(changedAttestationReplay.status, 401,
+      "exact replay receipt binds the complete attestation, not only its nonce and seed");
     const sourceChallengeResponse = await fetch(`${base}/api/agent-input/sources/${source.sourceId}/challenge`, {
       method: "POST", headers: bearer(source.relaySecret), body: JSON.stringify({ kind: "opencode" }),
     });

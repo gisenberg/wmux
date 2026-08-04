@@ -189,8 +189,11 @@ answer digests used for idempotency, and contentless attention markers. It does
 not persist raw answers or relay deliveries. Source and registration secrets and
 pending challenge nonces are stored only as keyed HMAC verifiers in the server's
 owner-only credential store. Challenge records are bounded, short-lived, pruned,
-and removed atomically on successful exchange or refresh; plaintext exists only
-in the challenge response and runtime attestation in flight. The broker's source credential, occurrence epoch,
+and removed atomically on successful exchange or refresh. During registration,
+the pane-local broker temporarily stores the exact capability, relay seed, and
+attestation in an owner-only atomic intent file so response loss and broker death
+can replay the same exchange; successful local credential commit removes that
+file. It never contains a question answer. The broker's source credential, occurrence epoch,
 transient server relay epoch and cursor, per-key ordinal/current occurrence and
 last event sequence, bounded asked-event receipts, and exact server bindings are
 stored in its owner-only pane file under
@@ -223,14 +226,18 @@ revokes every recovered source before authentication resumes; a fresh pane
 registration is required. Recovery from a request-store backup closes every
 recovered pending request and settles its submission as already resolved,
 because the lost primary may have recorded answer exposure. Generation anchors
-and already-terminal outcomes remain intact. Credential schema 7 binds every new
+and already-terminal outcomes remain intact. Credential schema 8 binds every new
 registration capability and source to the live pane's backend ID, one
 live-attachment session incarnation, and immutable endpoint fingerprint. Abnormal exit or
 backend/endpoint replacement retires the old source and pending requests. Its
 schema-6 migration invalidates unbound capabilities and sources. Credential
-schema 7 also uses
+schema 8 also uses
 record-ID-scoped HMAC-SHA-256 verifiers and constant-time comparison; plaintext
-capabilities, relay secrets, and challenge nonces are never stored. Migration from schema 0 or 1
+capabilities, relay secrets, and challenge nonces are never stored server-side.
+Its exact registration-request verifier permits metadata-only recovery while the
+source credential is current; refresh or revocation fences replay. Schema-7
+consumed capabilities migrate without that verifier and remain non-replayable.
+Migration from schema 0 or 1
 cannot reconstruct HMAC verifiers from legacy salted hashes, so it deliberately
 marks every legacy capability used and every legacy source revoked. Open a new
 pane to issue fresh credentials after that migration. Migration from schema 2
@@ -294,10 +301,19 @@ public `failed` state for deterministic non-retryable SDK errors while retaining
   a durable pane reattaches, its new random session-incarnation epoch revokes the
   predecessor even if the pane ID and endpoint are unchanged. Durable terminal
   processes may survive, but structured answering requires a freshly staged
-  capability and restarted OpenCode process. Reattaching a durable pane stages
-  a replacement capability; a restarted broker may discard only its stale
-  source authority and exchange that exact capability. A pane that predates
-  agent-input staging still requires a new pane. Server
+  capability. Reattaching a durable pane stages that replacement; a surviving
+  broker waits with capped backoff, discards only its stale source authority,
+  and exchanges the fresh capability without restarting OpenCode. Registration
+  is a durable local transaction: before exchange, the broker atomically stores
+  an owner-only exact intent beside its credential. Ambiguous or truncated
+  success responses and broker restarts replay only that intent. The server
+  retains an HMAC verifier bound to the capability, pane/session incarnation,
+  attestation, nonce, and broker-held relay seed, and returns metadata rather
+  than replaying relay plaintext. Local credential commit removes the intent
+  and forces a complete native snapshot. The broker never modifies the
+  server/session-owned capability mailbox, so a concurrent replacement cannot
+  be deleted by an older exchange. Relay rotation or revocation invalidates the
+  old intent. A pane that predates agent-input staging still requires a new pane. Server
   restart retains only sanitized request/credential history and never a raw
   answer. A never-exposed interrupted submission can be retried only when a new
   authoritative source owns the still-applicable request; SDK-started or

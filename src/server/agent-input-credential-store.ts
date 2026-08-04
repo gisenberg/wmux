@@ -14,7 +14,7 @@ import {
   type OpenCodeRuntimeAttestation,
 } from "./opencode-question-contract.js";
 
-export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 7;
+export const CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION = 8;
 export const DEFAULT_AGENT_INPUT_CAPABILITY_TTL_MS = 5 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_RELAY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_AGENT_INPUT_CHALLENGE_TTL_MS = 15_000;
@@ -66,6 +66,7 @@ const capabilitySchema = z.object({
   usedAt: z.number().int().nonnegative().optional(),
   exchangeNonce: value().optional(),
   sourceId: value().optional(),
+  exchangeRequestVerifier: verifierSchema.optional(),
 }).strict();
 const attestationlessSourceFields = {
   id: value(),
@@ -355,6 +356,9 @@ const envelopeV5Schema = z.object({
 const envelopeV6Schema = envelopeSchema.omit({ schemaVersion: true }).extend({
   schemaVersion: z.literal(6),
 }).strict();
+const envelopeV7Schema = envelopeSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(7),
+}).strict();
 type Envelope = z.infer<typeof envelopeSchema>;
 export type AgentInputSourceRecord = z.infer<typeof sourceSchema>;
 export type AgentInputSourceContext = z.infer<typeof contextSchema>;
@@ -556,7 +560,7 @@ export class AgentInputCredentialStore extends EventEmitter {
     if (capability) {
       const record = this.data.capabilities.find((candidate) => candidate.id === capability[1]);
       if (!record || record.expiresAt <= nowMs
-        || (record.usedAt !== undefined && (!record.exchangeNonce || !record.sourceId))
+        || (record.usedAt !== undefined && (!record.exchangeNonce || !record.sourceId || !record.exchangeRequestVerifier))
         || !this.verify("capability", record.id, capability[2], record.verifier)) return undefined;
       return { kind: "agent-input-registration", capabilityId: record.id, paneId: record.context.paneId };
     }
@@ -593,11 +597,14 @@ export class AgentInputCredentialStore extends EventEmitter {
         throw new AgentInputCredentialError("invalid_capability");
       }
       if (capability.usedAt !== undefined) {
-        if (capability.exchangeNonce !== parsed.instanceNonce || !capability.sourceId) {
+        if (capability.exchangeNonce !== parsed.instanceNonce || !capability.sourceId
+          || !capability.exchangeRequestVerifier
+          || !this.verifyRegistrationRequest(capability, parsed)) {
           throw new AgentInputCredentialError("invalid_capability");
         }
         const source = draft.sources.find((candidate) => candidate.id === capability.sourceId);
-        if (!source || (parsed.relaySecretSeed
+        if (!source || source.revokedAt !== undefined || !source.runtimeReady || !source.supported
+          || (parsed.relaySecretSeed
           && !this.verify("source", source.id, parsed.relaySecretSeed, source.secretVerifier))) {
           throw new AgentInputCredentialError("invalid_capability");
         }
@@ -638,6 +645,11 @@ export class AgentInputCredentialStore extends EventEmitter {
       capability.usedAt = nowMs;
       capability.exchangeNonce = parsed.instanceNonce;
       capability.sourceId = sourceId;
+      capability.exchangeRequestVerifier = this.registrationRequestVerifier(capability, parsed);
+      // Once consumed, this token can only replay the exact HMAC-bound exchange.
+      // Keep that recovery receipt alive for the source lifetime, not merely the
+      // shorter unused-capability staging window.
+      capability.expiresAt = source.expiresAt;
       draft.capabilityTombstones.push({
         id: capability.id,
         sourceId,
@@ -793,6 +805,29 @@ export class AgentInputCredentialStore extends EventEmitter {
     };
   }
 
+  private registrationRequestVerifier(
+    capability: Pick<z.infer<typeof capabilitySchema>, "id" | "context">,
+    input: RegisterAgentInputSource,
+  ): z.infer<typeof verifierSchema> {
+    return {
+      kind: "hmac-sha256",
+      digest: crypto.createHmac("sha256", this.options.hashKey)
+        .update("wmux-agent-input-registration-request\0")
+        .update(JSON.stringify({ capabilityId: capability.id, context: capability.context, input }))
+        .digest("hex"),
+    };
+  }
+
+  private verifyRegistrationRequest(
+    capability: z.infer<typeof capabilitySchema>,
+    input: RegisterAgentInputSource,
+  ): boolean {
+    if (!capability.exchangeRequestVerifier) return false;
+    const actual = Buffer.from(this.registrationRequestVerifier(capability, input).digest, "hex");
+    const expected = Buffer.from(capability.exchangeRequestVerifier.digest, "hex");
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  }
+
   private verify(
     kind: "capability" | "source" | "challenge",
     id: string,
@@ -928,6 +963,16 @@ export class AgentInputCredentialStore extends EventEmitter {
             })),
             capabilityTombstones: old.capabilityTombstones,
             challenges: [],
+          },
+          migrated: true,
+        };
+      }
+      if (version === 7) {
+        const old = envelopeV7Schema.parse(input);
+        return {
+          data: {
+            ...old,
+            schemaVersion: CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION,
           },
           migrated: true,
         };

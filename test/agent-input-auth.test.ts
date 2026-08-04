@@ -99,6 +99,8 @@ test("single-use capability exchange persists hashes only and relay refresh rota
       outcome: "already_exchanged", sourceId: exchange.sourceId,
       expiresAt: exchange.expiresAt, supported: true, credentialGeneration: 1,
     });
+    assert.equal(store.exchange(registrationPrincipal, registrationBody, 1_101).outcome, "already_exchanged",
+      "the exact replay receipt survives the shorter unused-capability TTL");
     assert.throws(() => store.exchange(registrationPrincipal, {
       ...registrationBody, instanceNonce: "D".repeat(43),
     }, 1_003), /invalid_capability/);
@@ -106,18 +108,31 @@ test("single-use capability exchange persists hashes only and relay refresh rota
       ...registrationBody, relaySecretSeed: "Z".repeat(43),
     }, 1_003), /invalid_capability/);
 
-    const sourcePrincipal = store.authenticate(exchange.relaySecret, 1_010);
+    const v7Path = path.join(directory, "credentials-v7.json");
+    const v7 = store.snapshot();
+    fs.writeFileSync(v7Path, `${JSON.stringify({
+      ...v7,
+      schemaVersion: 7,
+      capabilities: v7.capabilities.map(({ exchangeRequestVerifier: _verifier, ...capability }) => capability),
+    })}\n`, { mode: 0o600 });
+    const migratedV7 = new AgentInputCredentialStore(v7Path, { hashKey: "server-key" });
+    assert.equal(migratedV7.snapshot().schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
+    assert.equal(migratedV7.authenticate(issued.capability, 1_003), undefined,
+      "a consumed schema-7 capability has no exact replay receipt and remains non-replayable");
+    assert.equal(migratedV7.authenticate(exchange.relaySecret, 1_003)?.kind, "agent-input-source");
+
+    const sourcePrincipal = store.authenticate(exchange.relaySecret, 1_110);
     assert.equal(sourcePrincipal?.kind, "agent-input-source");
     if (sourcePrincipal?.kind !== "agent-input-source") return;
     assert.equal(sourcePrincipal.sourceId, exchange.sourceId);
     assert.equal(sourcePrincipal.paneId, context.paneId);
-    const refreshed = store.refresh(sourcePrincipal, registration(store, sourcePrincipal, "R".repeat(43), 1_020), 1_020);
+    const refreshed = store.refresh(sourcePrincipal, registration(store, sourcePrincipal, "R".repeat(43), 1_120), 1_120);
     assert.notEqual(refreshed.relaySecret, exchange.relaySecret);
-    assert.equal(store.authenticate(exchange.relaySecret, 1_021), undefined);
-    const refreshedPrincipal = store.authenticate(refreshed.relaySecret, 1_021);
+    assert.equal(store.authenticate(exchange.relaySecret, 1_121), undefined);
+    const refreshedPrincipal = store.authenticate(refreshed.relaySecret, 1_121);
     assert.equal(refreshedPrincipal?.kind, "agent-input-source");
-    assert.equal(store.revoke(exchange.sourceId, 1_030), true);
-    assert.equal(store.authenticate(refreshed.relaySecret, 1_031), undefined);
+    assert.equal(store.revoke(exchange.sourceId, 1_130), true);
+    assert.equal(store.authenticate(refreshed.relaySecret, 1_131), undefined);
     const disabledCapability = store.issueRegistrationCapability(context, 2_000);
     assert.equal(store.invalidateCapabilities(2_001), 1);
     assert.equal(store.authenticate(disabledCapability.capability, 2_002), undefined);

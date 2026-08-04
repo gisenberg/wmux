@@ -14,6 +14,7 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const fixtureClientFactoryKey = "__wmuxCreateStructuredOpencodeClient";
 const fixtureImportFailureKey = "__wmuxFailStructuredOpencodeImport";
+const testCapability = `aic_11111111-1111-4111-8111-111111111111.${"C".repeat(43)}`;
 const setFixtureStructuredClient = (factory: (config: unknown) => unknown): void => {
   (globalThis as any)[fixtureClientFactoryKey] = factory;
 };
@@ -51,7 +52,7 @@ test("generated plugin allowlists top-level questions and uses only typed questi
   const capabilityPath = path.join(home, ".wmux", "agent-input", "pane.cap");
   const credentialPath = path.join(home, ".wmux", "agent-input", "pane.json");
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; method?: string; body: any; authorization?: string }> = [];
   const healthHeaders: http.IncomingHttpHeaders[] = [];
   const startRequests: string[] = [];
@@ -464,7 +465,7 @@ test("generated plugin serializes structured question delivery when resolution v
   const credentialPath = path.join(home, "pane.json");
   const messagesPath = path.join(home, "broker-messages.jsonl");
   const brokerPath = path.join(home, "broker-wrapper.mjs");
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   fs.writeFileSync(brokerPath, `#!/usr/bin/env node
 import fs from "node:fs";
 process.stdout.write(JSON.stringify({ type: "runtime_ready", supported: true, eventSequence: 0 }) + "\\n");
@@ -596,7 +597,7 @@ test("generated plugin fails closed on an in-band session lookup error", { skip:
   const credentialPath = path.join(home, "pane.json");
   const messagesPath = path.join(home, "broker-messages.jsonl");
   const brokerPath = path.join(home, "broker-wrapper.mjs");
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   fs.writeFileSync(brokerPath, `#!/usr/bin/env node
 import fs from "node:fs";
 process.stdout.write(JSON.stringify({ type: "runtime_ready", supported: true, eventSequence: 0 }) + "\\n");
@@ -701,7 +702,7 @@ test("generated plugin bounds snapshot count, aggregate bytes, concurrency, and 
       const credentialPath = path.join(home, "pane.json");
       const messagesPath = path.join(home, "broker-messages.jsonl");
       const brokerPath = path.join(home, "broker-wrapper.mjs");
-      fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+      fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
       fs.writeFileSync(brokerPath, `#!/usr/bin/env node
 import fs from "node:fs";
 process.stdout.write(JSON.stringify({ type: "runtime_ready", supported: true, eventSequence: 0 }) + "\\n");
@@ -779,7 +780,7 @@ test("new generated plugin fails structured handling closed against an old serve
   const configHome = path.join(home, "config");
   const capabilityPath = path.join(home, ".wmux", "agent-input", "pane.cap");
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; body: any }> = [];
   const server = http.createServer(async (request, response) => {
     if (serveOpenCodeHealth(request, response)) return;
@@ -896,7 +897,7 @@ test("generated plugin reports sanitized injected-transport, health, and method 
       const capabilityPath = path.join(inputDirectory, "pane.cap");
       const credentialPath = path.join(inputDirectory, "pane.json");
       fs.mkdirSync(inputDirectory, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+      fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
       const calls: Array<{ path: string; body: any }> = [];
       const server = http.createServer(async (request, response) => {
         const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -973,7 +974,7 @@ test("generated plugin records broker spawn failure without paths, credentials, 
   const capabilityPath = path.join(inputDirectory, "pane.cap");
   const credentialPath = path.join(inputDirectory, "pane.json");
   fs.mkdirSync(inputDirectory, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, WMUX_URL: "http://127.0.0.1:9",
     WMUX_PANE_ID: "pane-spawn", WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
     WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath, WMUX_TOKEN: "BROAD_TOKEN_SENTINEL" };
@@ -1008,7 +1009,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
   const capabilityPath = path.join(home, ".wmux", "agent-input", "pane.cap");
   const credentialPath = path.join(home, ".wmux", "agent-input", "pane.json");
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const captures: Array<{ path: string; body: any }> = [];
   const server = http.createServer(async (request, response) => {
     if (serveOpenCodeHealth(request, response)) return;
@@ -1112,7 +1113,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
   const capabilityPath = path.join(home, ".wmux", "agent-input", "pane.cap");
   const credentialPath = path.join(home, ".wmux", "agent-input", "pane.json");
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const calls: Array<{ path: string; body: any }> = [];
   const bindings = new Map<string, { id: string; generation: number; state: string }>();
   const server = http.createServer(async (request, response) => {
@@ -1249,7 +1250,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
   const capabilityPath = path.join(home, ".wmux", "agent-input", "pane.cap");
   const credentialPath = path.join(home, ".wmux", "agent-input", "pane.json");
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const captures: Array<{ requestId: string; occurrenceId: string; ordinal: number; generation: number }> = [];
   const nativeLists: any[] = [];
   const operationGenerations = new Map<string, number>();
@@ -1376,7 +1377,7 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
     assert.equal(attestations.length, 2, "registration and restart refresh each submit current runtime evidence");
     assert.notEqual(attestations[0].nonce, attestations[1].nonce);
     assert.notEqual(attestations[0].serverChallenge.id, attestations[1].serverChallenge.id);
-    assert.deepEqual(challengeAuthorizations, [`Bearer ${"C".repeat(43)}`, `Bearer ${"S".repeat(43)}`],
+    assert.deepEqual(challengeAuthorizations, [`Bearer ${testCapability}`, `Bearer ${"S".repeat(43)}`],
       "restart challenge authority comes from the existing source credential, not the consumed constructor capability");
   } finally {
     if (firstPlugin) await firstPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
@@ -1397,7 +1398,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
   const configHome = path.join(home, "config");
   const capabilityPath = path.join(home, ".wmux", "agent-input", "pane.cap");
   fs.mkdirSync(path.dirname(capabilityPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+  fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
   const pending: any[] = [];
   const starts: Array<{ deliveryId: string; at: number }> = [];
   const sdkCalls: Array<{ requestID: string; at: number }> = [];
@@ -1516,7 +1517,7 @@ test("generated plugin uses injected transport from a separate import/cache cont
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-question-package-"));
       const configHome = variant.customXdg ? path.join(home, "custom-config") : path.join(home, ".config");
       const capabilityPath = path.join(home, "pane.cap");
-      fs.writeFileSync(capabilityPath, `${"C".repeat(43)}\n`, { mode: 0o600 });
+      fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
       let requests = 0;
       const requestPaths: string[] = [];
       const server = http.createServer((request, response) => {
