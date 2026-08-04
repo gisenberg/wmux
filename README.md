@@ -595,8 +595,12 @@ and compatibility details are in
 Plugin/broker refresh can retain structured-question authority while the same
 wmux backend attachment remains live. A wmux service restart deliberately
 changes that authority epoch: durable terminal sessions still reattach, but the
-old structured-question source is retired and OpenCode must restart with a
-freshly staged pane capability before structured answering resumes.
+old structured-question source is retired. Durable reattachment stages a fresh
+pane capability; a surviving OpenCode broker waits with capped backoff,
+re-registers without restarting OpenCode, and reconciles a complete native
+question snapshot before structured answering resumes. Its owner-only durable
+registration intent also converges repeated response loss or broker termination
+after server commit without replaying relay plaintext from the server.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.

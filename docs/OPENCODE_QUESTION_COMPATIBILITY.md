@@ -154,12 +154,16 @@ durable, browser-visible `retryable: false` quarantine. Credential loss cannot
 fall back to the broad wmux, helper,
 or automation credential; create a new pane to obtain a fresh registration
 capability.
-The initial capability exchange retries one transiently lost HTTP response with
-the exact same nonce and attestation. A retry that receives a fresh `201`
-recovers normally. If the first exchange committed but its one-time plaintext
-relay secret was lost, the server returns only `already_exchanged`; the broker
-records `registration_response_lost` and requires a fresh pane rather than
-reconstructing or reissuing that secret.
+Before the initial capability exchange, the broker atomically persists a bounded
+owner-only intent containing the exact capability, nonce, attestation, and
+broker-generated relay seed. Ambiguous responses—including repeated transport
+loss, truncated or malformed success bodies, and broker termination after the
+server commit—replay that exact intent with capped backoff. An exact
+`already_exchanged` response returns metadata only; the broker reconstructs its
+credential from the retained seed, commits it locally, removes the intent, and
+requests a complete native snapshot. Conflicting responses never consume the
+intent, while a typed stale-capability rejection waits for freshly staged pane
+authority rather than falling back to a broad credential.
 The generated plugin starts the broker with an explicit environment allowlist;
 shared, helper, automation, and registration tokens are not inherited by the
 broker process.
