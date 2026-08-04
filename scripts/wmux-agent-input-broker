@@ -469,6 +469,28 @@ function requestRuntimeAttestation(serverChallenge) {
   return result.finally(() => { if (pendingAttestation === pending) pendingAttestation = undefined; });
 }
 
+function registrationSuccess(response, intent) {
+  if (!response.parsed || !response.body || typeof response.body !== "object") return undefined;
+  const source = typeof response.body.sourceId === "string"
+    ? /^source_([0-9a-f-]{36})$/.exec(response.body.sourceId) : undefined;
+  if (!source || response.body.supported !== true
+    || !Number.isSafeInteger(response.body.expiresAt) || response.body.expiresAt <= Date.now()
+    || !Number.isSafeInteger(response.body.credentialGeneration) || response.body.credentialGeneration <= 0) return undefined;
+  const relaySecret = `ais_${source[1]}.${intent.request.relaySecretSeed}`;
+  if (response.status === 200) {
+    if (!exactKeys(response.body, ["outcome", "sourceId", "expiresAt", "supported", "credentialGeneration"])
+      || response.body.outcome !== "already_exchanged") return undefined;
+    return { ...response.body, relaySecret };
+  }
+  if (response.status !== 201
+    || !exactKeys(response.body, ["outcome", "sourceId", "relaySecret", "expiresAt", "supported", "credentialGeneration", "limits"])
+    || response.body.outcome !== "issued" || response.body.relaySecret !== relaySecret
+    || !exactKeys(response.body.limits, ["maxQuestions", "maxOptions", "maxAnswerBytes", "maxPollWaitMs"])
+    || response.body.limits.maxQuestions !== 32 || response.body.limits.maxOptions !== 128
+    || response.body.limits.maxAnswerBytes !== 16_384 || response.body.limits.maxPollWaitMs !== 30_000) return undefined;
+  return { ...response.body, relaySecret };
+}
+
 async function register(attestation) {
   if (pendingRegistrationBlocked || !capabilityPath) return false;
   if (!pendingRegistration) {
@@ -498,12 +520,9 @@ async function register(attestation) {
     const response = await request("/api/agent-input/sources/register", intent.capability, {
       method: "POST", body: JSON.stringify(intent.request),
     });
-    const recovered = response.status === 200 && response.body?.outcome === "already_exchanged";
-    const issued = response.status === 201;
     const successStatus = response.status === 200 || response.status === 201;
-    const validSuccess = response.parsed && (issued || recovered) && typeof response.body.sourceId === "string"
-      && typeof response.body.expiresAt === "number" && Number.isInteger(response.body.credentialGeneration);
-    if (!validSuccess) {
+    const success = registrationSuccess(response, intent);
+    if (!success) {
       const ambiguous = response.status === 0 || response.status === 408 || response.status === 425
         || response.status === 429 || response.status >= 500 || successStatus;
       if (!ambiguous) {
@@ -515,25 +534,10 @@ async function register(attestation) {
       await sleep(Math.min(5_000, 100 * (2 ** (failures - 1))));
       continue;
     }
-    let relaySecret = response.body.relaySecret;
-    if (recovered) {
-      const source = /^source_([0-9a-f-]{36})$/.exec(response.body.sourceId);
-      if (!source || response.body.supported !== true) {
-        failures = Math.min(MAX_BACKOFF_ATTEMPTS, failures + 1);
-        await sleep(Math.min(5_000, 100 * (2 ** (failures - 1))));
-        continue;
-      }
-      relaySecret = `ais_${source[1]}.${intent.request.relaySecretSeed}`;
-    }
-    if (typeof relaySecret !== "string") {
-      failures = Math.min(MAX_BACKOFF_ATTEMPTS, failures + 1);
-      await sleep(Math.min(5_000, 100 * (2 ** (failures - 1))));
-      continue;
-    }
     credential = {
-      schemaVersion: SCHEMA_VERSION, sourceId: response.body.sourceId, relaySecret,
-      expiresAt: response.body.expiresAt, supported: response.body.supported === true,
-      credentialGeneration: response.body.credentialGeneration, cursor: 0,
+      schemaVersion: SCHEMA_VERSION, sourceId: success.sourceId, relaySecret: success.relaySecret,
+      expiresAt: success.expiresAt, supported: true,
+      credentialGeneration: success.credentialGeneration, cursor: 0,
        occurrenceEpoch: crypto.randomUUID(), relayEpoch: null, lastEventSequence: 0,
        streams: {}, receipts: [], outbox: [], quarantines: [], requiresFreshAttestation: false,
     };

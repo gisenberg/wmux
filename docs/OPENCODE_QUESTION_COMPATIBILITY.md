@@ -348,10 +348,10 @@ plugin, and require `wmux-hooks status` to report `opencodeParity: true` (or
 compare `wmux-hooks hash opencode` with the reported expected hash). Rollout must
 update wmux, install the generated plugin, and restart each OpenCode process so
 it loads handshake schema 4; old processes fail structured handling closed while
-generic lifecycle events continue. Credential schema 7 is downgrade-refused.
-Before starting the upgraded server, retain an owner-only schema-6 credential
+  generic lifecycle events continue. Credential schema 8 is downgrade-refused.
+Before starting the upgraded server, retain an owner-only schema-7 credential
 store backup if binary rollback is required. Otherwise, rollback requires
-stopping wmux and replacing the schema-7 credential store with a fresh empty
+stopping wmux and replacing the schema-8 credential store with a fresh empty
 store, then opening fresh panes; never hand-edit or down-convert it. Old browser
 clients still ignore the additive bootstrap field. Do not delete or replace
 state files while wmux is running.

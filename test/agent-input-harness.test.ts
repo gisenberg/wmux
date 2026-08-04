@@ -25,6 +25,16 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const runtime = { type: "legacy_runtime_ignored" };
 const testCapability = (marker: "C" | "D") => `aic_${marker === "C"
   ? "11111111-1111-4111-8111-111111111111" : "22222222-2222-4222-8222-222222222222"}.${marker.repeat(43)}`;
+const testRegistrationSourceId = "source_33333333-3333-4333-8333-333333333333";
+const issuedRegistration = (body: any, sourceId = testRegistrationSourceId) => ({
+  outcome: "issued",
+  sourceId,
+  relaySecret: `ais_${sourceId.slice("source_".length)}.${body.relaySecretSeed}`,
+  expiresAt: Date.now() + 600_000,
+  supported: true,
+  credentialGeneration: 1,
+  limits: { maxQuestions: 32, maxOptions: 128, maxAnswerBytes: 16_384, maxPollWaitMs: 30_000 },
+});
 const serverChallenge = () => ({
   type: "server_challenge",
   handshakeSchema: 4,
@@ -464,10 +474,7 @@ test("broker stale credentials require fresh pane capability authority and recei
     };
     if (requestPath === "/api/agent-input/sources/source-one/challenge") return send(401, { error: "stale" });
     if (requestPath === "/api/agent-input/sources/challenge") return send(201, serverChallenge());
-    if (requestPath === "/api/agent-input/sources/register") return send(201, {
-      sourceId: "source-restarted", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000,
-      supported: true, credentialGeneration: 1,
-    });
+    if (requestPath === "/api/agent-input/sources/register") return send(201, issuedRegistration(body));
     if (requestPath.includes("/deliveries?")) return send(200, { epoch: "relay-restarted", cursor: 0, deliveries: [] });
     return send(404, { error: "not_found" });
   });
@@ -494,7 +501,7 @@ test("broker stale credentials require fresh pane capability authority and recei
       "/api/agent-input/sources/challenge",
       "/api/agent-input/sources/register",
     ]);
-    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, "source-restarted");
+    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, testRegistrationSourceId);
     assert.equal(fs.readFileSync(capabilityPath, "utf8").trim(), testCapability("C"),
       "the server-owned capability mailbox remains broker-read-only");
 
@@ -592,6 +599,10 @@ test("running broker backs off until durable reattachment stages replacement aut
         return;
       }
       if (registrationAttempts === 4) return send(200, { outcome: "unexpected" });
+      if (registrationAttempts === 5) return send(201, {
+        ...issuedRegistration(body, recoveredSourceId),
+        outcome: "unexpected",
+      });
       return send(200, {
         outcome: "already_exchanged", sourceId: recoveredSourceId, expiresAt: Date.now() + 600_000,
         supported: true, credentialGeneration: 1,
@@ -619,12 +630,13 @@ test("running broker backs off until durable reattachment stages replacement aut
     await waitFor(() => broker.messages.filter((message) => message.type === "runtime_ready" && message.supported === true).length === 2);
     await waitFor(() => calls.some((requestPath) => requestPath.startsWith(`/api/agent-input/sources/${recoveredSourceId}/deliveries?`)));
     assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, recoveredSourceId);
-    assert.equal(registrationAttempts, 5);
+    assert.equal(registrationAttempts, 6);
     assert.notEqual(registrationSeeds[0], registrationSeeds[1],
       "replacement authority starts an independent registration attempt");
     assert.equal(registrationSeeds[1], registrationSeeds[2], "pre-header response loss preserves the client-held relay seed");
     assert.equal(registrationSeeds[2], registrationSeeds[3], "malformed success body preserves the durable relay seed");
     assert.equal(registrationSeeds[3], registrationSeeds[4], "incorrect 200 success shape remains an exact retry");
+    assert.equal(registrationSeeds[4], registrationSeeds[5], "field-complete invalid 201 remains an exact retry");
     assert.equal(recoveredAuthorization,
       `Bearer ais_${recoveredSourceId.slice("source_".length)}.${registrationSeeds[1]}`);
     assert.ok(calls.includes("/api/agent-input/sources/challenge"));

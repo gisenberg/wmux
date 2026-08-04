@@ -15,6 +15,16 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const fixtureClientFactoryKey = "__wmuxCreateStructuredOpencodeClient";
 const fixtureImportFailureKey = "__wmuxFailStructuredOpencodeImport";
 const testCapability = `aic_11111111-1111-4111-8111-111111111111.${"C".repeat(43)}`;
+const testSourceId = "source_33333333-3333-4333-8333-333333333333";
+const issuedRegistration = (body: any) => ({
+  outcome: "issued",
+  sourceId: testSourceId,
+  relaySecret: `ais_${testSourceId.slice("source_".length)}.${body.relaySecretSeed}`,
+  expiresAt: Date.now() + 600_000,
+  supported: true,
+  credentialGeneration: 1,
+  limits: { maxQuestions: 32, maxOptions: 128, maxAnswerBytes: 16_384, maxPollWaitMs: 30_000 },
+});
 const setFixtureStructuredClient = (factory: (config: unknown) => unknown): void => {
   (globalThis as any)[fixtureClientFactoryKey] = factory;
 };
@@ -92,10 +102,10 @@ test("generated plugin allowlists top-level questions and uses only typed questi
         request.socket.destroy();
         return;
       }
-      send(201, { sourceId: "source-one", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
-    } else if (request.url === "/api/agent-input/sources/source-one/refresh") {
-      send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
-    } else if (request.url === "/api/agent-input/sources/source-one/requests" && request.method === "POST") {
+      send(201, issuedRegistration(body));
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/refresh`) {
+      send(200, { sourceId: testSourceId, relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/requests` && request.method === "POST") {
       const questionId = body.id as string;
       const requestId = questionId === "question-one" ? "input-one" : `input-${questionId}`;
       const duplicate = deliveredQuestions.has(questionId);
@@ -111,9 +121,9 @@ test("generated plugin allowlists top-level questions and uses only typed questi
         });
       }
       send(duplicate ? 200 : 201, { id: requestId, generation: 1, state: "pending", eventRevision: cursor });
-    } else if (request.url?.startsWith("/api/agent-input/sources/source-one/deliveries?") && pendingDeliveries.length > 0) {
+    } else if (request.url?.startsWith(`/api/agent-input/sources/${testSourceId}/deliveries?`) && pendingDeliveries.length > 0) {
       send(200, { epoch: "relay-plugin", cursor, deliveries: [pendingDeliveries.shift()] });
-    } else if (request.url?.startsWith("/api/agent-input/sources/source-one/deliveries?")) {
+    } else if (request.url?.startsWith(`/api/agent-input/sources/${testSourceId}/deliveries?`)) {
       send(200, { epoch: "relay-plugin", cursor, deliveries: [] });
     } else if (request.url?.endsWith("/start")) {
       const deliveryId = request.url.split("/").at(-2)!;
@@ -248,8 +258,8 @@ exec "${path.join(repoRoot, "scripts", "wmux-agent-input-broker")}" "$@"
       questions[1],
       questions[2],
     ];
-    await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/source-one/requests"), () => JSON.stringify(captures));
-    const snapshotCapture = captures.find((capture) => capture.path === "/api/agent-input/sources/source-one/requests")!;
+    await waitFor(() => captures.some((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`), () => JSON.stringify(captures));
+    const snapshotCapture = captures.find((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)!;
     assert.deepEqual(snapshotCapture.body.questions, normalizedQuestions,
       "complete snapshots project absent/false/true custom values in exact question order");
     await waitFor(() => fs.existsSync(`${credentialPath}.status.json`)
@@ -289,7 +299,7 @@ exec "${path.join(repoRoot, "scripts", "wmux-agent-input-broker")}" "$@"
     await plugin.event({ event: { id: "event-question-one", type: "question.asked", properties: { id: "question-one", sessionID: "session-one", questions } } });
     await waitFor(() => replies.length === 1, () => JSON.stringify(captures));
     assert.deepEqual(replies, [{ requestID: "question-one", answers: [["Safe"], ["Tests", "Types"], ["custom note"]] }]);
-    const questionOneCaptures = captures.filter((capture) => capture.path === "/api/agent-input/sources/source-one/requests");
+    const questionOneCaptures = captures.filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`);
     for (const capture of questionOneCaptures) {
       assert.deepEqual(capture.body.questions, normalizedQuestions,
         "snapshot uses the absent/false/true projection");
@@ -1024,10 +1034,10 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     if (request.url?.endsWith("/challenge")) {
       send(201, serverChallenge());
     } else if (request.url === "/api/agent-input/sources/register") {
-      send(201, { sourceId: "source-partial", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
-    } else if (request.url === "/api/agent-input/sources/source-partial/refresh") {
-      send(200, { sourceId: "source-partial", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
-    } else if (request.url === "/api/agent-input/sources/source-partial/requests") {
+      send(201, issuedRegistration(body));
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/refresh`) {
+      send(200, { sourceId: testSourceId, relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/requests`) {
       send(201, { id: `input-${body.id}`, generation: 1, state: "pending", eventRevision: 1 });
     } else if (request.url?.includes("/deliveries?")) {
       send(200, { epoch: "relay-partial", cursor: 0, deliveries: [] });
@@ -1079,7 +1089,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/register"), () => JSON.stringify(captures));
     await new Promise((resolve) => setTimeout(resolve, 250));
     const capturedIds = captures
-      .filter((capture) => capture.path === "/api/agent-input/sources/source-partial/requests")
+      .filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)
       .map((capture) => capture.body.id);
     assert.deepEqual(capturedIds, [], "a partial list publishes no member or absence mutation");
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
@@ -1125,12 +1135,9 @@ test("snapshot cut fencing survives delayed list and session validation for new 
       response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
     };
     if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
-    if (requestPath === "/api/agent-input/sources/register") return send(201, {
-      sourceId: "source-cut", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000,
-      supported: true, credentialGeneration: 1,
-    });
+    if (requestPath === "/api/agent-input/sources/register") return send(201, issuedRegistration(body));
     if (requestPath.endsWith("/refresh")) return send(200, {
-      sourceId: "source-cut", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2,
+      sourceId: testSourceId, relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2,
     });
     if (requestPath.endsWith("/requests")) {
       const binding = bindings.get(body.occurrenceId) ?? {
@@ -1272,11 +1279,11 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
       send(201, serverChallenge());
     } else if (request.url === "/api/agent-input/sources/register") {
       attestations.push(body.runtimeAttestation);
-      send(201, { sourceId: "source-reuse", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
-    } else if (request.url === "/api/agent-input/sources/source-reuse/refresh") {
+      send(201, issuedRegistration(body));
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/refresh`) {
       attestations.push(body.runtimeAttestation);
-      send(200, { sourceId: "source-reuse", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
-    } else if (request.url === "/api/agent-input/sources/source-reuse/requests") {
+      send(200, { sourceId: testSourceId, relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/requests`) {
       let generation = operationGenerations.get(body.occurrenceId);
       if (generation === undefined) {
         if (pendingGeneration === undefined) pendingGeneration = ++currentGeneration;
@@ -1377,7 +1384,9 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
     assert.equal(attestations.length, 2, "registration and restart refresh each submit current runtime evidence");
     assert.notEqual(attestations[0].nonce, attestations[1].nonce);
     assert.notEqual(attestations[0].serverChallenge.id, attestations[1].serverChallenge.id);
-    assert.deepEqual(challengeAuthorizations, [`Bearer ${testCapability}`, `Bearer ${"S".repeat(43)}`],
+    assert.equal(challengeAuthorizations[0], `Bearer ${testCapability}`);
+    assert.match(challengeAuthorizations[1] ?? "",
+      new RegExp(`^Bearer ais_${testSourceId.slice("source_".length)}\\.[A-Za-z0-9_-]{43}$`),
       "restart challenge authority comes from the existing source credential, not the consumed constructor capability");
   } finally {
     if (firstPlugin) await firstPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
@@ -1418,8 +1427,8 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
       send(201, serverChallenge());
     } else if (request.url === "/api/agent-input/sources/register") {
       registered = true;
-      send(201, { sourceId: "source-serial", relaySecret: "S".repeat(43), expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1 });
-    } else if (request.url === "/api/agent-input/sources/source-serial/requests") {
+      send(201, issuedRegistration(body));
+    } else if (request.url === `/api/agent-input/sources/${testSourceId}/requests`) {
       cursor += 1;
       pending.push({ deliveryId: `delivery-${body.id}`, cursor, requestId: `input-${body.id}`, expectedGeneration: 1, openCodeRequestId: body.id, answers: [[body.id]] });
       send(201, { id: `input-${body.id}`, generation: 1, state: "pending", eventRevision: cursor });
@@ -1520,15 +1529,15 @@ test("generated plugin uses injected transport from a separate import/cache cont
       fs.writeFileSync(capabilityPath, `${testCapability}\n`, { mode: 0o600 });
       let requests = 0;
       const requestPaths: string[] = [];
-      const server = http.createServer((request, response) => {
+      const server = http.createServer(async (request, response) => {
         requests += 1;
         requestPaths.push(request.url ?? "");
         if (serveOpenCodeHealth(request, response)) return;
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
         response.writeHead(201, { "content-type": "application/json" });
-        response.end(JSON.stringify(request.url?.endsWith("/challenge") ? serverChallenge() : {
-          sourceId: "unexpected", relaySecret: "S".repeat(43), expiresAt: Date.now() + 60_000,
-          supported: true, credentialGeneration: 1,
-        }));
+        response.end(JSON.stringify(request.url?.endsWith("/challenge") ? serverChallenge() : issuedRegistration(body)));
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address();
