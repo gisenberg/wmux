@@ -1072,6 +1072,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     ];
     let listCalls = 0;
     const listCallTimes: number[] = [];
+    let malformedSessionResults = true;
     let unavailableSessionReady = false;
     let unavailableSessionCalls = 0;
     const client = {
@@ -1079,9 +1080,11 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
         list: async () => {
           listCalls += 1;
           listCallTimes.push(Date.now());
-          if (listCalls === 1 || (listCalls >= 4 && listCalls <= 7)) throw new Error("list unavailable");
+          if (listCalls === 1 || listCalls === 6 || listCalls === 7) throw new Error("list unavailable");
           if (listCalls === 2) return { data: {}, response: { status: 200 } };
           if (listCalls === 3) return { data: Array.from({ length: 257 }, () => questionList[0]), response: { status: 200 } };
+          if (listCalls === 4) return { data: questionList, error: { name: "conflicting result" }, response: { status: 200 } };
+          if (listCalls === 5) return { data: questionList, response: {} };
           return { data: questionList, response: { status: 200 } };
         },
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -1089,6 +1092,10 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       session: {
         get: async (input: { sessionID?: string; path?: { id: string } }) => {
           const id = input.sessionID ?? input.path?.id ?? "";
+          if (malformedSessionResults && id === "top-session") {
+            return { data: { title: "Top" }, error: { name: "conflicting result" }, response: { status: 200 } };
+          }
+          if (malformedSessionResults && id === "child-session") return { data: { parentID: "top-session" }, response: {} };
           if (id === "unavailable-session") unavailableSessionCalls += 1;
           if (id === "unavailable-session" && !unavailableSessionReady) throw new Error("partial session lookup failure");
           return { data: id === "child-session" ? { parentID: "top-session" } : { title: "Top" }, response: { status: 200 } };
@@ -1108,7 +1115,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
         `snapshot retry ${index + 1} did not use capped exponential backoff: ${JSON.stringify(retryIntervals)}`);
     }
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
-      "thrown, malformed, oversized, and partially validated lists cannot produce a complete barrier");
+      "thrown, malformed, oversized, conflicting, missing-status, and partial results cannot produce a complete barrier");
     const capturedIds = captures
       .filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)
       .map((capture) => capture.body.id);
@@ -1116,6 +1123,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
       "one failed required session.get makes the whole absence snapshot incomplete");
 
+    malformedSessionResults = false;
     unavailableSessionReady = true;
     await waitFor(() => captures.some((capture) => capture.path.endsWith("/native-list")), () => JSON.stringify(captures), 7_000);
     await waitFor(() => captures.filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`).length === 2,

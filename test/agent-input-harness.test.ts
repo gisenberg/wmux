@@ -864,7 +864,7 @@ test("capture metadata survives more than eight transient failures and recovers 
   }
 });
 
-test("capture quota retries use one source-wide backoff instead of amplifying every queued operation", { skip: process.platform === "win32" }, async () => {
+test("capture 429 retries use one source-wide backoff even when the response body is malformed", { skip: process.platform === "win32" }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-capture-quota-"));
   const credentialPath = path.join(directory, "pane.json");
   const attemptTimes: number[] = [];
@@ -876,7 +876,9 @@ test("capture quota retries use one source-wide backoff instead of amplifying ev
     if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     if (requestPath.endsWith("/requests")) {
       attemptTimes.push(Date.now());
-      return send(429, { error: "source_pending_limit" });
+      response.writeHead(429, { "content-type": "application/json" });
+      response.end(attemptTimes.length === 1 ? "{" : "");
+      return;
     }
     if (requestPath.includes("/deliveries?")) return send(200, { epoch: "relay-quota", cursor: 0, deliveries: [] });
     return send(200, { outcome: "pending" });

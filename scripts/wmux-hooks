@@ -1663,7 +1663,7 @@ export default (async ({ client, directory }) => {
     snapshotInFlight = true
     const deadline = Date.now() + 10_000
     void snapshotSdkCall((signal) => structuredClient.question.list({ directory }, { signal }), deadline).then(async (result) => {
-      if ((result?.response?.status !== undefined && result.response.status !== 200)
+      if (result?.response?.status !== 200 || result.error !== undefined
         || !Array.isArray(result?.data) || result.data.length > 256) {
         sendSnapshot(cutSequence, false, [])
         scheduleSnapshotRetry()
@@ -1688,7 +1688,7 @@ export default (async ({ client, directory }) => {
           const session = await snapshotSdkCall((signal) => structuredClient.session.get(
             { sessionID: request.sessionID, directory }, { signal },
           ), deadline).catch(() => undefined)
-          if (!session?.data || (session.response?.status !== undefined && session.response.status !== 200)) {
+          if (session?.response?.status !== 200 || session.error !== undefined || !session.data) {
             checked[index] = undefined
           } else if (session.data.parentID) {
             checked[index] = null

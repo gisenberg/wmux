@@ -1051,7 +1051,7 @@ async function drainOutbox() {
             const attempts = Math.min(MAX_BACKOFF_ATTEMPTS, prior.attempts + 1);
             const nextAt = Date.now() + Math.min(5_000, 100 * (2 ** (attempts - 1)));
             retries.set(operation.opId, { attempts, nextAt });
-            if (operation.type === "capture" && result.status === 429 && result.code?.endsWith("_limit")) {
+            if (operation.type === "capture" && result.status === 429) {
               const quotaAttempts = Math.min(MAX_BACKOFF_ATTEMPTS, captureQuotaBackoff.attempts + 1);
               captureQuotaBackoff = {
                 attempts: quotaAttempts,
