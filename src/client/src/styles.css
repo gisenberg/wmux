@@ -3600,6 +3600,14 @@ button.active-tool {
   padding: clamp(14px, 4vw, 52px);
 }
 
+/* Once bootstrap is ready the app shell mounts underneath; the boot screen
+   keeps covering it while terminals attach behind the sequence. */
+.retro-boot-screen.retro-boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+
 .retro-boot-zx-spectrum {
   --retro-tape-header-a: #00d7d7;
   --retro-tape-header-b: #d70000;

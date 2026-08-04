@@ -1,4 +1,4 @@
-import { createNestedWorkspacePair, expect, test, type E2eWorkspace } from "./fixtures";
+import { awaitAppShell, createNestedWorkspacePair, expect, test, type E2eWorkspace } from "./fixtures";
 
 test("navigates, persists, targets spaces, and moves nested workspaces", async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
@@ -43,7 +43,7 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
 
   try {
     await page.goto(rootPath);
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await openWorkspaceNavigation();
     await expect(rootItem()).toHaveAttribute("aria-level", "1");
     await expect(rootItem()).toHaveAttribute("aria-expanded", "true");
@@ -60,7 +60,7 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
     }).toContain(root.id);
 
     await page.reload();
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await openWorkspaceNavigation();
     await expect(rootItem()).toHaveAttribute("aria-expanded", "false");
     await expect(childItem()).toHaveCount(0);
@@ -139,7 +139,7 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
       }).toBe(true);
 
       await page.reload();
-      await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+      await awaitAppShell(page);
       await expect(childItem()).toHaveAttribute("data-favorite", "true");
       await childItem().press("Shift+F10");
       await expect(agentMenu.getByRole("menuitem", { name: /Unfavorite$/ })).toBeVisible();
@@ -252,7 +252,7 @@ test("Agents rail keeps an inactive agent tab on its reporting host", async ({ p
     });
 
     await page.goto(`/workspaces/${workspace.id}/tabs/${supportTabId}`);
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     const agentItem = page.locator(`a[role="treeitem"][href^="/workspaces/${workspace.id}/"]`);
     await expect(agentItem).toHaveAttribute(
       "href",
@@ -286,7 +286,7 @@ test("workspace close grace hides immediately, restores on undo, and closes afte
 
   try {
     await page.goto(targetPath);
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await expect(targetItem).toBeVisible();
 
     await closeFromPalette();
@@ -328,7 +328,7 @@ test("mobile sidebar opens and activates workspaces by touch", async ({ page, re
 
   try {
     await page.goto(rootPath);
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await expect(mobileActions).toHaveCount(3);
     await expect(mobileActions.nth(0)).toHaveAccessibleName("Open workspaces and hosts");
     await expect(mobileActions.nth(1)).toHaveAccessibleName("Open chat");
@@ -394,10 +394,9 @@ test("desktop agent group menu closes every workspace on its host", async ({ pag
     }
 
     await page.reload();
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
-    // The shell now mounts as soon as bootstrap completes, so wait for the
-    // asynchronously initialized terminal before asserting keyboard focus on
-    // surrounding chrome.
+    await awaitAppShell(page);
+    // Keyboard focus on the chrome needs the asynchronously initialized
+    // terminal, not just the mounted shell.
     await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     const group = page.getByRole("navigation", { name: "Spaces" })
       .getByRole("button", { name: new RegExp(`^${machineName},`) });
@@ -440,7 +439,7 @@ test("keeps the loaded UI and recovers when a wake-up bootstrap briefly fails", 
   });
 
   await page.evaluate(() => window.dispatchEvent(new Event("online")));
-  await expect(page.locator("main.app-shell")).toBeVisible();
+  await awaitAppShell(page);
   await expect(page.getByText(/wmux failed to load/i)).toHaveCount(0);
   await expect.poll(() => failures).toBe(2);
   await expect.poll(() => requests, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);

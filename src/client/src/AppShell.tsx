@@ -626,6 +626,13 @@ export function AppShell() {
     });
   }, []);
 
+  // Nothing focuses the active terminal while the boot overlay covers the
+  // shell, so request focus once when the overlay lifts.
+  useEffect(() => {
+    if (!bootComplete || mobileViewport.isMobile) return;
+    if (activeWorkspace && activeTab) requestTerminalFocus(activeWorkspace.id, activeTab.id);
+  }, [bootComplete]);
+
   const { refresh, activateWorkspaceTab, activatePane } = useAppRouting({
     store,
     activeWorkspace,
@@ -1245,7 +1252,7 @@ export function AppShell() {
   useKeyboardShortcuts({
     keybindings,
     apple: appleKeybindings,
-    modalOpen: settingsOpen || machineManagerOpen || commandPaletteOpen || diagnosticsOpen || agentFleetOpen,
+    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || diagnosticsOpen || agentFleetOpen,
     openCommandPalette,
     openSettings,
     toggleSidebar,
@@ -1607,18 +1614,6 @@ export function AppShell() {
       </div>
     );
   }
-  if (!state || !bootComplete || authRequired) {
-    return (
-      <RetroBootScreen
-        authRequired={authRequired}
-        isMobile={mobileViewport.isMobile}
-        ready={Boolean(state) && !authRequired}
-        onAuthenticated={() => void loadBootstrap()}
-        onComplete={finishBoot}
-      />
-    );
-  }
-
   const appClassName = [
     "app-shell",
     sidebarCollapsed ? "sidebar-collapsed" : "",
@@ -1629,12 +1624,19 @@ export function AppShell() {
     .filter(Boolean)
     .join(" ");
 
+  // The shell mounts as soon as state is available so terminals attach while
+  // the boot overlay still covers the screen. RetroBootScreen must keep a
+  // stable position in this fragment; remounting it would restart the boot
+  // sequence with a fresh profile mid-transition.
   return (
+    <>
+    {state && !authRequired ? (
     <ColorSchemeProvider id={settings.colorScheme}>
     <main
       className={appClassName}
       style={appStyle}
       aria-busy={pendingActions.length > 0}
+      aria-hidden={!bootComplete || undefined}
     >
       <Toasts toasts={toasts} dismissToast={dismissToast} />
       {pendingActions.length > 0 ? (
@@ -2012,6 +2014,17 @@ export function AppShell() {
       ) : null}
     </main>
     </ColorSchemeProvider>
+    ) : null}
+    {!state || !bootComplete || authRequired ? (
+      <RetroBootScreen
+        authRequired={authRequired}
+        isMobile={mobileViewport.isMobile}
+        ready={Boolean(state) && !authRequired}
+        onAuthenticated={() => void loadBootstrap()}
+        onComplete={finishBoot}
+      />
+    ) : null}
+    </>
   );
 }
 

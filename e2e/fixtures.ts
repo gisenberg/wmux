@@ -7,6 +7,14 @@ import {
 
 export { expect };
 
+// The app shell mounts beneath the retro boot overlay as soon as bootstrap
+// resolves and stays covered until the sequence completes; interaction,
+// keyboard shortcuts, and screenshots need the overlay lifted.
+export const awaitAppShell = async (page: Page): Promise<void> => {
+  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".retro-boot-screen")).toHaveCount(0, { timeout: 20_000 });
+};
+
 export interface E2eWorkspace {
   id: string;
   name: string;
@@ -108,7 +116,7 @@ export const test = base.extend<WmuxFixtures>({
       Math.random = () => 0;
     });
     await page.goto("/");
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await use(page);
   },
   waitForTerminalOutput: async ({ authenticatedPage }, use) => {

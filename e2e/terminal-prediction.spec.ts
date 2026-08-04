@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { awaitAppShell } from "./fixtures";
 
 interface PredictionCell {
   col: number;
@@ -97,10 +98,10 @@ const openDelayedTerminal = async (
   const settings = await request.post("/api/settings", { data: { terminalFontSize: fontSize } });
   expect(settings.ok()).toBeTruthy();
   await page.goto("/");
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   const workspace = await createWorkspace(request);
   await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   const pane = page.locator(".terminal-pane.active");
   await expect(pane).toHaveClass(/terminal-ready/, { timeout: 20_000 });
   await pane.locator(".terminal-host textarea").evaluate((element: HTMLTextAreaElement) => element.focus());
@@ -459,7 +460,7 @@ test("prediction layout crosses a wrapped row and confirms without residue", asy
 test("renders Unicode quadrant blocks as exact cell geometry", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "canvas block rendering coverage");
   await page.goto("/");
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   const projectRoot = process.cwd().replaceAll("\\", "/");
   const ghosttyUrl = `/@fs${path.posix.join(projectRoot, "node_modules/ghostty-web/dist/ghostty-web.es.js")}`;
   const result = await page.evaluate(async ({ ghosttyUrl }) => {
@@ -561,7 +562,7 @@ test("mobile WebKit prediction ink matches Ghostty canvas metrics", async ({ pag
   test.setTimeout(75_000);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   const projectRoot = process.cwd().replaceAll("\\", "/");
   const ghosttyUrl = `/@fs${path.posix.join(projectRoot, "node_modules/ghostty-web/dist/ghostty-web.es.js")}`;
   const predictionUrl = `/@fs${path.posix.join(projectRoot, "src/client/src/terminal-prediction-renderer.ts")}`;

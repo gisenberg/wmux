@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { awaitAppShell } from "./fixtures";
 
 const captureEnabled =
   process.env.WMUX_CAPTURE_DOCS === "1" || process.env.npm_lifecycle_event === "docs:screenshots";
@@ -68,7 +69,7 @@ async function openApp(page: Page): Promise<void> {
     Math.random = () => 0;
   });
   await page.goto("/");
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   await page.evaluate(async () => {
     await document.fonts.ready;
   });

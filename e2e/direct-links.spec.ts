@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { awaitAppShell, expect, test } from "./fixtures";
 
 test("publishes standalone app metadata for direct workspace routes", async ({ page, request }) => {
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#0c0d0f");
@@ -52,7 +52,7 @@ test("workspace tooltips expose the active pane session identifier", async ({ pa
 
   try {
     await page.goto("/");
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     const canvas = page.locator(".open-tui-sidebar canvas");
     await expect(canvas).toBeVisible();
     const found = await canvas.evaluate((element: HTMLCanvasElement, expected) => {

@@ -1,4 +1,4 @@
-import { routeTerminalFontFamily, expect, test } from "./fixtures";
+import { awaitAppShell, routeTerminalFontFamily, expect, test } from "./fixtures";
 
 const waitForSimulatedTerminalRoundTrip = async (
   page: import("@playwright/test").Page,
@@ -28,6 +28,7 @@ test("uses a configured shortcut while preserving defaults for omitted actions",
     (window as unknown as { __wmuxKeybindingInputs: string[] }).__wmuxKeybindingInputs = inputs;
   });
   await page.reload();
+  await awaitAppShell(page);
   const activePane = page.locator(".terminal-pane.active");
   await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
   await activePane.locator(".terminal-host textarea").evaluate((textarea: HTMLTextAreaElement) => textarea.focus());
@@ -45,6 +46,7 @@ test("registers and loads the bundled Meslo terminal font", async ({ page }, tes
   test.skip(testInfo.project.name !== "chromium", "desktop Chromium font coverage");
   await routeTerminalFontFamily(page, '"MesloLGM Nerd Font"');
   await page.reload();
+  await awaitAppShell(page);
   await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
 
   const result = await page.evaluate(() => {
@@ -81,7 +83,7 @@ test("does not block terminal startup on slow bundled fonts", async ({ page }, t
   await routeTerminalFontFamily(page, '"MesloLGM Nerd Font"');
 
   await page.reload();
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   const startedAt = Date.now();
   await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 3_500 });
   expect(Date.now() - startedAt).toBeLessThan(3_500);
@@ -113,6 +115,7 @@ test("pastes text after a full reload without forwarding Ctrl+V to the pane", as
     (window as unknown as { __wmuxPasteInputs: string[] }).__wmuxPasteInputs = inputs;
   });
   await page.reload();
+  await awaitAppShell(page);
 
   const activePane = page.locator(".terminal-pane.active");
   await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
@@ -158,7 +161,7 @@ test("copies tmux default-selection OSC 52 requests to the browser clipboard", a
     const created = await request.post("/api/workspaces", { data: { machineId: "local" } });
     expect(created.ok()).toBeTruthy();
     await page.reload();
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     bootstrapResponse = await request.get("/api/bootstrap");
     bootstrap = await bootstrapResponse.json();
   }
@@ -239,6 +242,7 @@ test("predicts bounded shell and alternate-screen input locally", async ({
   };
   try {
     await page.goto(`/workspaces/${payload.workspace.id}/tabs/${payload.workspace.activeTabId}`);
+    await awaitAppShell(page);
     const activePane = page.locator(".terminal-pane.active");
     await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     const textarea = activePane.locator(".terminal-host textarea");
@@ -363,6 +367,7 @@ test("sends Shift+Enter as one Ctrl+J newline while preserving plain Enter", asy
     expect(createResponse.ok()).toBeTruthy();
   }
   await page.reload();
+  await awaitAppShell(page);
 
   const activePane = page.locator(".terminal-pane.active");
   await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
@@ -393,7 +398,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
 
   try {
     await page.goto("/");
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await page.keyboard.press("Control+K");
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("textbox").fill("Open settings");
@@ -426,7 +431,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
       return (await response.json() as { settings: { colorScheme: string } }).settings.colorScheme;
     }).toBe("flock");
     await page.reload();
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     await expect.poll(() => page.locator("html").evaluate((element) =>
       element.style.getPropertyValue("--black"),
     )).toBe("#0c0d0f");
@@ -438,6 +443,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
       serverSocket.onMessage((message) => setTimeout(() => browserSocket.send(message), 250));
     });
     await page.reload();
+    await awaitAppShell(page);
     const activePane = page.locator(".terminal-pane.active");
     await expect(activePane).toHaveClass(/terminal-ready/, { timeout: 10_000 });
     await activePane.locator(".terminal-host textarea").evaluate((element: HTMLTextAreaElement) => element.focus());
@@ -471,7 +477,7 @@ test("completes a Ctrl+Alt-drag rectangle on outside mouseup and clears it on ke
     response = await request.post("/api/workspaces", { data: { machineId: "local" } });
     expect(response.ok()).toBeTruthy();
     await page.reload();
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     response = await request.get("/api/bootstrap");
     bootstrap = await response.json();
   }

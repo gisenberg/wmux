@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { awaitAppShell, expect, test } from "./fixtures";
 
 test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }, testInfo) => {
   if (testInfo.project.name.startsWith("mobile-")) {
@@ -44,6 +44,6 @@ test("creates a workspace through the command palette and preserves its direct l
   const directPath = `/workspaces/${workspace?.id}/tabs/${workspace?.activeTabId}`;
   await expect(page).toHaveURL(new RegExp(`${directPath.replaceAll("/", "\\/")}$`));
   await page.reload();
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   await expect(page).toHaveURL(new RegExp(`${directPath.replaceAll("/", "\\/")}$`));
 });

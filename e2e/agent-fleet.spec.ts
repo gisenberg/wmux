@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { awaitAppShell } from "./fixtures";
 
 interface FleetWorkspace {
   id: string;
@@ -118,9 +119,7 @@ test("shows three concurrent agents on two machines within one event revision", 
     }
 
     await navigateToApp(page);
-    await expect(page.locator("main.app-shell")).toBeVisible({
-      timeout: 20_000,
-    });
+    await awaitAppShell(page);
     await page.keyboard.press("Control+K");
     const palette = page.getByRole("dialog", { name: "Command palette" });
     const search = palette.getByPlaceholder(
