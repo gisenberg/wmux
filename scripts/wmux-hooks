@@ -1580,6 +1580,8 @@ export default (async ({ client, directory }) => {
   }
   let snapshotInFlight = false
   let snapshotPending = false
+  let snapshotRetryFailures = 0
+  let snapshotRetryTimer: ReturnType<typeof setTimeout> | undefined
   const snapshotSdkCall = async <T>(
     call: (signal: AbortSignal) => Promise<T>,
     deadline: number,
@@ -1620,12 +1622,34 @@ export default (async ({ client, directory }) => {
     const message = { type: "snapshot", complete, cutSequence, members }
     if (Buffer.byteLength(JSON.stringify(message)) > 128 * 1024) {
       questionBroker?.send({ type: "snapshot", complete: false, cutSequence, members: [] })
-      return
+      return false
     }
     questionBroker?.send(message)
+    return complete
+  }
+  const scheduleSnapshotRetry = () => {
+    if (snapshotRetryTimer || !questionBroker?.isReady()) return
+    snapshotRetryFailures = Math.min(snapshotRetryFailures + 1, 8)
+    const delay = Math.min(5_000, 100 * (2 ** (snapshotRetryFailures - 1)))
+    snapshotRetryTimer = setTimeout(() => {
+      snapshotRetryTimer = undefined
+      sendQuestionSnapshot()
+    }, delay)
+    snapshotRetryTimer.unref?.()
+  }
+  const recordSnapshotResult = (complete: boolean) => {
+    if (!complete) {
+      scheduleSnapshotRetry()
+      return
+    }
+    snapshotRetryFailures = 0
+    if (snapshotRetryTimer) clearTimeout(snapshotRetryTimer)
+    snapshotRetryTimer = undefined
   }
   const sendQuestionSnapshot = () => {
     if (!questionBroker?.isReady()) return
+    if (snapshotRetryTimer) clearTimeout(snapshotRetryTimer)
+    snapshotRetryTimer = undefined
     if (snapshotInFlight) {
       snapshotPending = true
       return
@@ -1642,6 +1666,7 @@ export default (async ({ client, directory }) => {
       if ((result?.response?.status !== undefined && result.response.status !== 200)
         || !Array.isArray(result?.data) || result.data.length > 256) {
         sendSnapshot(cutSequence, false, [])
+        scheduleSnapshotRetry()
         return
       }
       if (!result.data.every((request) => request && typeof request.id === "string"
@@ -1649,6 +1674,7 @@ export default (async ({ client, directory }) => {
         && request.questions.length >= 1 && request.questions.length <= 32
         && request.questions.every(validQuestion))) {
         sendSnapshot(cutSequence, false, [])
+        scheduleSnapshotRetry()
         return
       }
       const validated = result.data as Array<{ id: string; sessionID: string; questions: any[] }>
@@ -1683,8 +1709,11 @@ export default (async ({ client, directory }) => {
       const members = complete
         ? checked.filter((member): member is { id: string; sessionID: string; questions: any[] } => member !== null && member !== undefined)
         : []
-      sendSnapshot(cutSequence, complete, members)
-    }).catch(() => sendSnapshot(cutSequence, false, []))
+      recordSnapshotResult(sendSnapshot(cutSequence, complete, members))
+    }).catch(() => {
+      sendSnapshot(cutSequence, false, [])
+      scheduleSnapshotRetry()
+    })
       .finally(() => {
         snapshotInFlight = false
         if (snapshotPending) {

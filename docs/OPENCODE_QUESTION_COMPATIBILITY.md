@@ -354,9 +354,12 @@ update wmux, install the generated plugin, and restart each OpenCode process so
 it loads handshake schema 4; old processes fail structured handling closed while
   generic lifecycle events continue. Credential schema 8 is downgrade-refused.
 Before starting the upgraded server, retain an owner-only schema-7 credential
-store backup if binary rollback is required. Otherwise, rollback requires
-stopping wmux and replacing the schema-8 credential store with a fresh empty
-store, then opening fresh panes; never hand-edit or down-convert it. Old browser
+store backup and an owner-only pre-upgrade schema-6 `state.json` backup if binary
+rollback is required. A pre-schema-7 binary must be started only after wmux is
+stopped and that state backup is restored; retaining live schema-7 state causes
+downgrade refusal. Without both backups, do not roll back to a schema-6 binary.
+Replacing the schema-8 credential store with a fresh empty store additionally
+requires opening fresh panes; never hand-edit or down-convert either store. Old browser
 clients still ignore the additive bootstrap field. Do not delete or replace
 state files while wmux is running.
 

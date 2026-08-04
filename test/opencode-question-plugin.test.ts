@@ -1060,7 +1060,6 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
   const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
   Object.assign(process.env, env);
   let plugin: any;
-  let secondPlugin: any;
   try {
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], { env });
     installFixturePackages(configHome);
@@ -1071,14 +1070,24 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       { id: "child-question", sessionID: "child-session", questions: [{ header: "Child", question: "Child", options: [], multiple: false, custom: true }] },
       { id: "uncertain-question", sessionID: "unavailable-session", questions: [{ header: "Unknown", question: "Unknown", options: [], multiple: false, custom: true }] },
     ];
+    let listReady = false;
+    let listCalls = 0;
+    let unavailableSessionReady = false;
+    let unavailableSessionCalls = 0;
     const client = {
       question: {
-        list: async () => ({ data: questionList, response: { status: 200 } }),
+        list: async () => {
+          listCalls += 1;
+          if (!listReady) throw new Error("list unavailable");
+          return { data: questionList, response: { status: 200 } };
+        },
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
       },
       session: {
-        get: async ({ path: { id } }: { path: { id: string } }) => {
-          if (id === "unavailable-session") throw new Error("partial session lookup failure");
+        get: async (input: { sessionID?: string; path?: { id: string } }) => {
+          const id = input.sessionID ?? input.path?.id ?? "";
+          if (id === "unavailable-session") unavailableSessionCalls += 1;
+          if (id === "unavailable-session" && !unavailableSessionReady) throw new Error("partial session lookup failure");
           return { data: id === "child-session" ? { parentID: "top-session" } : { title: "Top" }, response: { status: 200 } };
         },
         messages: async () => ({ data: [] }),
@@ -1088,6 +1097,12 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     plugin = await module.default({ client: withInjectedTransport(client), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/register"), () => JSON.stringify(captures));
     await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.ok(listCalls >= 1, "startup reconciliation attempts question.list");
+    assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
+      "question.list failure cannot produce a complete barrier or close absent requests");
+
+    listReady = true;
+    await waitFor(() => unavailableSessionCalls >= 1, () => JSON.stringify(captures));
     const capturedIds = captures
       .filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)
       .map((capture) => capture.body.id);
@@ -1095,17 +1110,16 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
       "one failed required session.get makes the whole absence snapshot incomplete");
 
-    const listCallsBefore = captures.length;
-    const failingListClient = { ...client, question: { ...client.question, list: async () => { throw new Error("list unavailable"); } } };
-    setFixtureStructuredClient(() => failingListClient);
-    secondPlugin = await module.default({ client: withInjectedTransport(failingListClient), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    assert.equal(brokerChildIds().length, 1, "plugin replacement retires the predecessor broker before taking ownership");
-    assert.equal(captures.slice(listCallsBefore).some((capture) => capture.path.endsWith("/native-list")), false,
-      "question.list failure cannot produce a complete barrier or close absent requests");
+    unavailableSessionReady = true;
+    await waitFor(() => captures.some((capture) => capture.path.endsWith("/native-list")), () => JSON.stringify(captures));
+    await waitFor(() => captures.filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`).length === 2,
+      () => JSON.stringify(captures));
+    assert.deepEqual(captures
+      .filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)
+      .map((capture) => capture.body.id).sort(), ["top-question", "uncertain-question"],
+    "an incomplete startup snapshot retries autonomously and preserves top-level filtering");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
-    if (secondPlugin) await secondPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) {
