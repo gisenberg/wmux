@@ -1,4 +1,4 @@
-import { createNestedWorkspacePair, expect, test } from "./fixtures";
+import { awaitAppShell, createNestedWorkspacePair, expect, test } from "./fixtures";
 
 const waitForLifeFrameWindow = async (
   page: import("@playwright/test").Page,
@@ -40,7 +40,7 @@ test("legacy query parameters canonicalize to the canvas chrome", async ({ page 
   test.skip(testInfo.project.name !== "chromium", "canvas desktop routing coverage");
   test.setTimeout(60_000);
   await page.goto("/?legacy=1");
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   await expect(page.locator(".open-tui-sidebar canvas")).toBeVisible();
   await expect.poll(() => new URL(page.url()).searchParams.has("legacy")).toBe(false);
 });
@@ -51,7 +51,7 @@ test("canvas workspace tree exposes nested depth and agent origin", async ({ pag
   const { child, root } = await createNestedWorkspacePair(request);
   try {
     await page.goto(`/workspaces/${root.id}/tabs/${root.activeTabId}`);
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     const rootItem = page.locator(`a[role="treeitem"][href^="/workspaces/${root.id}/"]`);
     const childItem = page.locator(`a[role="treeitem"][href^="/workspaces/${child.id}/"]`);
     await expect(rootItem).toHaveAttribute("aria-level", "1");
@@ -163,6 +163,23 @@ test("mobile boot profiles cannot tint browser safe-area chrome", async ({ page 
   });
 });
 
+test("desktop boot overlay covers the shell until the sequence completes", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop boot overlay coverage");
+  test.setTimeout(60_000);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/");
+  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  const overlay = page.locator(".retro-boot-screen.retro-boot-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(page.locator("main.app-shell")).toHaveAttribute("aria-hidden", "true");
+  expect(await page.evaluate(() =>
+    document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
+      ?.closest(".retro-boot-screen") !== null,
+  )).toBe(true);
+  await expect(page.locator(".retro-boot-screen")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.locator("main.app-shell")).not.toHaveAttribute("aria-hidden", "true");
+});
+
 test("mobile boot exits without a decorative delay once bootstrap is ready", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile-"), "mobile-only boot timing coverage");
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -177,6 +194,7 @@ test("mobile boot exits without a decorative delay once bootstrap is ready", asy
   await page.goto("/");
   await bootstrapReady;
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 2_000 });
+  await expect(page.locator(".retro-boot-screen")).toHaveCount(0, { timeout: 2_000 });
 });
 
 test("Spectrum tape phases animate their native palettes and stop under reduced motion", async ({

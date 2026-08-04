@@ -153,7 +153,7 @@ export function RetroGraphicalBootScreen({
   return (
     <main
       ref={hostRef}
-      className={`retro-boot-screen retro-graphical-boot retro-graphical-${shell}`}
+      className={`retro-boot-screen retro-graphical-boot retro-graphical-${shell}${ready ? " retro-boot-overlay" : ""}`}
       style={style}
       data-boot-profile={profile.id}
       data-boot-presentation="graphical"

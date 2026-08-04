@@ -325,7 +325,7 @@ function RetroTerminalBootScreen({
   return (
     <main
       ref={screenRef}
-      className={`retro-boot-screen retro-boot-${profile.id} ${tapeBorderClass}`}
+      className={`retro-boot-screen retro-boot-${profile.id} ${tapeBorderClass}${ready ? " retro-boot-overlay" : ""}`}
       style={style}
       data-boot-profile={profile.id}
       data-tape-border={tapeBorderPhase ?? undefined}

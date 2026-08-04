@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { awaitAppShell } from "./fixtures";
 import { readAuthE2eRuntime } from "./auth-runtime.js";
 
 const runtime = readAuthE2eRuntime();
@@ -49,7 +50,7 @@ test("login-only gates legacy browser credentials and permits browser sessions",
   await page.getByLabel("Password").fill(runtime.password);
   await page.getByRole("button", { name: "Sign in" }).click();
   try {
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
   } catch {
     const ui = await page.evaluate(() => ({
       login: Boolean(document.querySelector(".wmux-login")),
@@ -87,7 +88,7 @@ test("login-only gates legacy browser credentials and permits browser sessions",
 
   await page.reload();
   try {
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
   } catch {
     const ui = await page.evaluate(() => ({
       login: Boolean(document.querySelector(".wmux-login")),
@@ -135,7 +136,7 @@ test("login-only retries transient auth discovery and session validation", async
   await page.getByRole("textbox", { name: "Username" }).fill(runtime.username);
   await page.getByLabel("Password").fill(runtime.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+  await awaitAppShell(page);
   expect(sessionAttempts).toBe(3);
   expect(await page.evaluate(() => window.localStorage.getItem("wmux.token"))).toBeNull();
 });

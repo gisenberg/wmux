@@ -1,7 +1,7 @@
-import { expect, test } from "./fixtures";
+import { awaitAppShell, expect, test } from "./fixtures";
 
 test("boots the application shell", async ({ page }) => {
-  await expect(page.locator("main.app-shell")).toBeVisible();
+  await awaitAppShell(page);
 });
 
 test("loads an authenticated browser session", async ({ page, request }) => {

@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { awaitAppShell, expect, test } from "./fixtures";
 
 test("drags canvas workspace rows into a persisted order", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop canvas drag coverage");
@@ -11,7 +11,7 @@ test("drags canvas workspace rows into a persisted order", async ({ page, reques
 
   try {
     await page.goto("/");
-    await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
+    await awaitAppShell(page);
     const canvas = page.locator(".open-tui-sidebar canvas");
     await expect(canvas).toBeVisible();
     const bounds = await canvas.evaluate((element: HTMLCanvasElement, names) => {
