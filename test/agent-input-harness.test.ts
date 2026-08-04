@@ -594,12 +594,21 @@ test("running broker backs off until durable reattachment stages replacement aut
         return;
       }
       if (registrationAttempts === 3) {
+        return send(200, {
+          outcome: "already_exchanged", sourceId: `source_${"-".repeat(36)}`,
+          expiresAt: Date.now() + 600_000, supported: true, credentialGeneration: 1,
+        });
+      }
+      if (registrationAttempts === 4) return send(201, {
+        ...issuedRegistration(body, `source_${"-".repeat(36)}`),
+      });
+      if (registrationAttempts === 5) {
         response.writeHead(201, { "content-type": "application/json" });
         response.end('{"sourceId":');
         return;
       }
-      if (registrationAttempts === 4) return send(200, { outcome: "unexpected" });
-      if (registrationAttempts === 5) return send(201, {
+      if (registrationAttempts === 6) return send(200, { outcome: "unexpected" });
+      if (registrationAttempts === 7) return send(201, {
         ...issuedRegistration(body, recoveredSourceId),
         outcome: "unexpected",
       });
@@ -627,16 +636,19 @@ test("running broker backs off until durable reattachment stages replacement aut
     assert.equal(calls.length, callsBeforeWait, "missing replacement capability causes no HTTP retry storm");
 
     fs.writeFileSync(capabilityPath, `${testCapability("C")}\n`, { mode: 0o600 });
-    await waitFor(() => broker.messages.filter((message) => message.type === "runtime_ready" && message.supported === true).length === 2);
+    await waitFor(() => broker.messages.filter((message) => message.type === "runtime_ready" && message.supported === true).length === 2,
+      () => JSON.stringify({ registrationAttempts, messages: broker.messages }), 15_000);
     await waitFor(() => calls.some((requestPath) => requestPath.startsWith(`/api/agent-input/sources/${recoveredSourceId}/deliveries?`)));
     assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).sourceId, recoveredSourceId);
-    assert.equal(registrationAttempts, 6);
+    assert.equal(registrationAttempts, 8);
     assert.notEqual(registrationSeeds[0], registrationSeeds[1],
       "replacement authority starts an independent registration attempt");
     assert.equal(registrationSeeds[1], registrationSeeds[2], "pre-header response loss preserves the client-held relay seed");
-    assert.equal(registrationSeeds[2], registrationSeeds[3], "malformed success body preserves the durable relay seed");
-    assert.equal(registrationSeeds[3], registrationSeeds[4], "incorrect 200 success shape remains an exact retry");
-    assert.equal(registrationSeeds[4], registrationSeeds[5], "field-complete invalid 201 remains an exact retry");
+    assert.equal(registrationSeeds[2], registrationSeeds[3], "malformed 200 source identity remains an exact retry");
+    assert.equal(registrationSeeds[3], registrationSeeds[4], "malformed 201 source identity remains an exact retry");
+    assert.equal(registrationSeeds[4], registrationSeeds[5], "malformed success body preserves the durable relay seed");
+    assert.equal(registrationSeeds[5], registrationSeeds[6], "incorrect 200 success shape remains an exact retry");
+    assert.equal(registrationSeeds[6], registrationSeeds[7], "field-complete invalid 201 remains an exact retry");
     assert.equal(recoveredAuthorization,
       `Bearer ais_${recoveredSourceId.slice("source_".length)}.${registrationSeeds[1]}`);
     assert.ok(calls.includes("/api/agent-input/sources/challenge"));

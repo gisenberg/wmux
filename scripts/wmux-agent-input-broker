@@ -472,7 +472,8 @@ function requestRuntimeAttestation(serverChallenge) {
 function registrationSuccess(response, intent) {
   if (!response.parsed || !response.body || typeof response.body !== "object") return undefined;
   const source = typeof response.body.sourceId === "string"
-    ? /^source_([0-9a-f-]{36})$/.exec(response.body.sourceId) : undefined;
+    ? /^source_([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/.exec(response.body.sourceId)
+    : undefined;
   if (!source || response.body.supported !== true
     || !Number.isSafeInteger(response.body.expiresAt) || response.body.expiresAt <= Date.now()
     || !Number.isSafeInteger(response.body.credentialGeneration) || response.body.credentialGeneration <= 0) return undefined;
