@@ -15,6 +15,7 @@ interface RetroGraphicalBootScreenProps {
   authRequired: boolean;
   ready: boolean;
   onAuthenticated: () => void;
+  onComplete: () => void;
 }
 
 type GraphicalPhase = "boot" | "username" | "password" | "verifying" | "failed" | "token" | "ready";
@@ -33,6 +34,7 @@ export function RetroGraphicalBootScreen({
   authRequired,
   ready,
   onAuthenticated,
+  onComplete,
 }: RetroGraphicalBootScreenProps) {
   const shell = profile.graphicalShell;
   if (!shell) throw new Error(`Graphical boot profile ${profile.id} has no graphical shell`);
@@ -85,6 +87,13 @@ export function RetroGraphicalBootScreen({
       stopPostSound();
     };
   }, [authRequired, profile.bootStatus, profile.id, shell]);
+
+  useEffect(() => {
+    if (!ready || authRequired || phase !== "ready") return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timeout = window.setTimeout(onComplete, reducedMotion ? 0 : 3_500);
+    return () => window.clearTimeout(timeout);
+  }, [authRequired, onComplete, phase, ready]);
 
   const submit = async () => {
     if (phase === "username") {

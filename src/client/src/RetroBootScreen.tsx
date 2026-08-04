@@ -17,8 +17,10 @@ import { setToken } from "./token";
 
 interface RetroBootScreenProps {
   authRequired: boolean;
+  isMobile: boolean;
   ready: boolean;
   onAuthenticated: () => void;
+  onComplete: () => void;
 }
 
 const LAST_BOOT_PROFILE_KEY = "wmux:last-retro-boot-profile";
@@ -42,8 +44,13 @@ const chooseBootProfile = () => {
   return profile;
 };
 
-export function RetroBootScreen(props: RetroBootScreenProps) {
+export function RetroBootScreen({ isMobile, ...props }: RetroBootScreenProps) {
   const [profile] = useState(chooseBootProfile);
+  // Mobile skips the artificial boot hold and enters the app as soon as the
+  // bootstrap is ready; the extended retro sequence is a desktop affordance.
+  useEffect(() => {
+    if (isMobile && props.ready && !props.authRequired) props.onComplete();
+  }, [isMobile, props.authRequired, props.onComplete, props.ready]);
   if (profile.graphicalShell) return <RetroGraphicalBootScreen profile={profile} {...props} />;
   return <RetroTerminalBootScreen profile={profile} {...props} />;
 }
@@ -53,12 +60,14 @@ function RetroTerminalBootScreen({
   authRequired,
   ready,
   onAuthenticated,
-}: RetroBootScreenProps & { profile: RetroBootProfile }) {
+  onComplete,
+}: Omit<RetroBootScreenProps, "isMobile"> & { profile: RetroBootProfile }) {
   const screenRef = useRef<HTMLElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const authRequiredRef = useRef(authRequired);
   const readyRef = useRef(ready);
   const onAuthenticatedRef = useRef(onAuthenticated);
+  const onCompleteRef = useRef(onComplete);
   const hasBootArtwork = profile.showBootArtwork !== false;
   const isAmiga = profile.id === "amiga-workbench" || profile.id === "amiga-guru-meditation";
   const [visualPhase, setVisualPhase] = useState<BootVisualPhase>(() =>
@@ -79,6 +88,10 @@ function RetroTerminalBootScreen({
   useEffect(() => {
     onAuthenticatedRef.current = onAuthenticated;
   }, [onAuthenticated]);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     let stopPostSound = profile.id === "amiga-workbench" ? () => undefined : playRetroPostSound(profile.id);
@@ -284,7 +297,11 @@ function RetroTerminalBootScreen({
       if (cancelled) return;
 
       setStatus("Running wmux");
+      await pause(650);
+      if (cancelled) return;
       write(challenged ? `${profile.auth.granted}${profile.auth.ready}` : `\n${profile.auth.ready}`);
+      await pause(3_500);
+      if (!cancelled) onCompleteRef.current();
     };
 
     void start();
