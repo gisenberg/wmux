@@ -374,6 +374,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.checkpoint,
       true,
     );
+    if (current.kind === "checkpoint") {
+      const seeded = this.checkpoint.snapshotWithScrollbackSeed();
+      if (seeded) current.data = seeded;
+    }
     if (!this.restoredCheckpoint || this.liveOutputObserved) return current;
     return this.restoredCheckpoint;
   }

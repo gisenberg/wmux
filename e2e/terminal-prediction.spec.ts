@@ -413,6 +413,9 @@ test("DPR changes clear stale prediction metrics before repainting", async ({
     }), metrics);
     expect(backingScale.x).toBeCloseTo(backingScale.expected, 8);
     expect(backingScale.y).toBeCloseTo(backingScale.expected, 8);
+    // Let the pre-check glyph receive its delayed authoritative echo before
+    // the helper begins a fresh prediction cycle.
+    await expect(prediction).not.toHaveAttribute("data-active", "true", { timeout: 2_000 });
     await verifyDelayedGlyph(page, pane, prediction);
   } finally {
     await cdp.send("Emulation.clearDeviceMetricsOverride");

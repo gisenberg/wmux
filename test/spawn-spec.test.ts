@@ -121,7 +121,7 @@ test("screen sessions start detached before wmux attaches a client", { skip: pro
   }
 });
 
-test("tmux sessions override user destroy-unattached preferences", { skip: process.platform === "win32" }, () => {
+test("tmux sessions override unsafe user lifecycle and mouse preferences", { skip: process.platform === "win32" }, () => {
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-tmux-spawn-"));
   const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = runtimeDir;
@@ -134,6 +134,7 @@ test("tmux sessions override user destroy-unattached preferences", { skip: proce
     );
     const runtime = fs.readFileSync(spec.args[0], "utf8");
     assert.match(runtime, /tmux set-option -t 'wmux_pane_tmux_detach' destroy-unattached off/);
+    assert.match(runtime, /tmux set-option -t 'wmux_pane_tmux_detach' mouse off/);
   } finally {
     if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
     else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;

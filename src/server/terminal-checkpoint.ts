@@ -13,6 +13,9 @@ const require = createRequire(import.meta.url);
 const excludedPrivateModes = new Set([7, 25, 47, 1047, 1049, 2026]);
 const privateModePattern = /\x1b\[\?([0-9;]+)([hl])/g;
 const modeCarryLimit = 96;
+const maxCheckpointScrollbackLines = 10_000;
+const maxCheckpointScrollbackBytes = 2 * 1024 * 1024;
+type ScrollbackSeed = "none" | "history" | "history-and-viewport";
 
 interface CheckpointThemeConfig {
   fgColor?: number;
@@ -107,7 +110,7 @@ export class TerminalCheckpoint {
     if (!this.terminal) return;
     const targetCols = normalizeCols(cols);
     const targetRows = normalizeRows(rows);
-    const snapshot = this.snapshotForDimensions(targetCols, targetRows);
+    const snapshot = this.snapshotForDimensions(targetCols, targetRows, "history");
     if (!snapshot || !this.terminal) return;
     try {
       const next = loadGhostty()?.createTerminal(targetCols, targetRows, this.themeConfig);
@@ -124,10 +127,20 @@ export class TerminalCheckpoint {
   snapshot(): string {
     const terminal = this.terminal;
     if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows);
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, "none");
   }
 
-  private snapshotForDimensions(targetCols: number, targetRows: number): string {
+  snapshotWithScrollbackSeed(): string {
+    const terminal = this.terminal;
+    if (!terminal) return "";
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, "history-and-viewport");
+  }
+
+  private snapshotForDimensions(
+    targetCols: number,
+    targetRows: number,
+    scrollbackSeed: ScrollbackSeed,
+  ): string {
     const terminal = this.terminal;
     if (!terminal) return "";
     try {
@@ -137,7 +150,21 @@ export class TerminalCheckpoint {
       const paintCols = Math.min(terminal.cols, targetCols);
       const paintRows = Math.min(terminal.rows, targetRows);
       const output: string[] = ["\x1bc"];
-      if (terminal.isAlternateScreen()) output.push("\x1b[?1049h");
+      const alternateScreen = terminal.isAlternateScreen();
+      if (alternateScreen) output.push("\x1b[?1049h");
+
+      if (scrollbackSeed !== "none" && !alternateScreen) {
+        output.push("\x1b[?7l", "\x1b[2J", "\x1b[H");
+        const viewportLines = scrollbackSeed === "history-and-viewport"
+          ? Array.from({ length: paintRows }, (_, row) =>
+            cellsToText(cells.slice(row * terminal.cols, (row + 1) * terminal.cols), paintCols))
+          : [];
+        const viewportBytes = viewportLines.reduce((total, line) => total + Buffer.byteLength(line) + 2, 0);
+        output.push(...this.scrollbackSeedLines(Math.max(0, maxCheckpointScrollbackBytes - viewportBytes))
+          .flatMap((line) => [line, "\r\n"]));
+        output.push(...viewportLines.flatMap((line) => [line, "\r\n"]));
+        output.push("\r\n".repeat(Math.max(0, targetRows - 1)));
+      }
 
       // Disable wrapping while painting absolute rows so a glyph in the final
       // column cannot introduce an extra scroll or line wrap.
@@ -188,6 +215,24 @@ export class TerminalCheckpoint {
       lines.push(line);
     }
     return lines;
+  }
+
+  private scrollbackSeedLines(byteLimit: number): string[] {
+    const terminal = this.terminal;
+    if (!terminal || byteLimit <= 0) return [];
+    const available = terminal.getScrollbackLength();
+    const retained: string[] = [];
+    let retainedBytes = 0;
+    const oldest = Math.max(0, available - maxCheckpointScrollbackLines);
+    for (let offset = available - 1; offset >= oldest; offset -= 1) {
+      const line = cellsToText(terminal.getScrollbackLine(offset), terminal.cols);
+      const lineBytes = Buffer.byteLength(line) + 2;
+      if (retainedBytes + lineBytes > byteLimit) break;
+      retained.push(line);
+      retainedBytes += lineBytes;
+    }
+    retained.reverse();
+    return retained;
   }
 
   cursor(): { x: number; y: number; visible: boolean } | undefined {
@@ -257,6 +302,18 @@ const cellStyleSequence = (cell: GhosttyCell): string => {
   if (cell.flags & CellFlags.STRIKETHROUGH) codes.push(9);
   codes.push(38, 2, cell.fg_r, cell.fg_g, cell.fg_b, 48, 2, cell.bg_r, cell.bg_g, cell.bg_b);
   return `\x1b[${codes.join(";")}m`;
+};
+
+const cellsToText = (cells: GhosttyCell[] | null, cols: number): string => {
+  if (!cells) return "";
+  let line = "";
+  for (let col = 0; col < Math.min(cols, cells.length); col += 1) {
+    const cell = cells[col];
+    if (!cell || cell.width === 0) continue;
+    if (col + cell.width > cols) continue;
+    line += cell.codepoint === 0 ? " " : String.fromCodePoint(cell.codepoint);
+  }
+  return line.trimEnd();
 };
 
 const cursorStyleSequence = (style: string, blinking: boolean): string => {
