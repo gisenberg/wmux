@@ -149,6 +149,7 @@ export function AppShell() {
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
   const [newMachineId, setNewMachineId] = useState(() => loadMachineTargetId(window.localStorage));
+  const [bootComplete, setBootComplete] = useState(false);
   const { toasts, pushToast, dismissToast } = useToasts();
   useEffect(() => {
     if (!authoritativeState) return;
@@ -218,6 +219,7 @@ export function AppShell() {
   const terminalFocusToken = useRef(0);
   const mobileSidebarRef = useRef<HTMLElement | null>(null);
   const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
+  const finishBoot = useCallback(() => setBootComplete(true), []);
   const dismissMobileClose = useCallback(() => setPendingMobileClose(null), []);
   const openMobileNavigation = useCallback(() => {
     if (!sidebarCollapsed) return;
@@ -1605,12 +1607,14 @@ export function AppShell() {
       </div>
     );
   }
-  if (!state || authRequired) {
+  if (!state || !bootComplete || authRequired) {
     return (
       <RetroBootScreen
         authRequired={authRequired}
+        isMobile={mobileViewport.isMobile}
         ready={Boolean(state) && !authRequired}
         onAuthenticated={() => void loadBootstrap()}
+        onComplete={finishBoot}
       />
     );
   }
