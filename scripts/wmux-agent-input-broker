@@ -622,6 +622,10 @@ function validQuestion(question) {
     && typeof question.multiple === "boolean" && typeof question.custom === "boolean";
 }
 
+function validQuestionIdentifier(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 256;
+}
+
 function validMetadata(value) {
   return value && typeof value.occurrenceId === "string" && /^[a-f0-9]{64}$/.test(value.occurrenceKey)
     && Number.isSafeInteger(value.ordinal) && value.ordinal > 0 && /^[a-f0-9]{64}$/.test(value.payloadDigest)
@@ -784,7 +788,7 @@ function allocateOccurrence(sessionID, requestID, questions, eventId, eventSeque
 function acceptAsked(message) {
   if (typeof message.eventId !== "string" || message.eventId.length < 1 || message.eventId.length > 256
     || !Number.isSafeInteger(message.eventSequence) || message.eventSequence <= 0
-    || typeof message.id !== "string" || typeof message.sessionID !== "string"
+    || !validQuestionIdentifier(message.id) || !validQuestionIdentifier(message.sessionID)
     || !Array.isArray(message.questions) || message.questions.length < 1 || message.questions.length > 32
     || !message.questions.every(validQuestion)) return failClosed("invalid-asked");
   allocateOccurrence(message.sessionID, message.id, message.questions, message.eventId,
@@ -809,7 +813,7 @@ function finishSnapshotRequest() {
 }
 
 function acceptResolved(message) {
-  if (typeof message.requestID !== "string" || typeof message.sessionID !== "string"
+  if (!validQuestionIdentifier(message.requestID) || !validQuestionIdentifier(message.sessionID)
     || !Number.isSafeInteger(message.eventSequence) || message.eventSequence <= 0
     || !["replied", "rejected"].includes(message.result)) return failClosed("invalid-resolution");
   const key = identityKey(message.sessionID, message.requestID);
@@ -854,7 +858,7 @@ function acceptSnapshot(message) {
   const identities = new Set();
   const validated = [];
   for (const member of message.members) {
-    if (!member || typeof member.id !== "string" || typeof member.sessionID !== "string"
+    if (!member || !validQuestionIdentifier(member.id) || !validQuestionIdentifier(member.sessionID)
       || !Array.isArray(member.questions) || member.questions.length < 1 || member.questions.length > 32
       || !member.questions.every(validQuestion)) return failClosed("invalid-snapshot-member");
     const key = identityKey(member.sessionID, member.id);
@@ -963,7 +967,9 @@ async function execute(operation) {
         occurrenceId: member.occurrenceId, occurrenceKey: member.occurrenceKey, ordinal: member.ordinal,
         payloadDigest: member.payloadDigest, sessionID: member.sessionID, requestID: member.requestID, questions: member.questions,
       })), ...(operation.occurrenceKeys ? { occurrenceKeys: operation.occurrenceKeys } : {}), cutSequence: operation.cutSequence }) });
-    return response.status === 200 ? { kind: "done" } : classify(response);
+    return response.status === 200 && response.body?.outcome === "reconciled"
+      && Number.isInteger(response.body.closed) && response.body.closed >= 0
+      ? { kind: "done" } : classify(response);
   }
   response = await request(`/api/agent-input/sources/${encodeURIComponent(credential.sourceId)}/deliveries/${encodeURIComponent(operation.deliveryId)}/ack`,
     credential.relaySecret, { method: "POST", body: JSON.stringify({ id: operation.id, generation: operation.generation,
@@ -974,6 +980,7 @@ async function execute(operation) {
       : operation.outcome === "already_resolved" ? ["already_resolved"]
         : ["sdk_error", "already_resolved"];
     if (expected.includes(response.body?.outcome)) return { kind: "done" };
+    if (typeof response.body?.outcome !== "string") return classify(response);
     requestSnapshot();
     return { kind: "quarantine", status: 200 };
   }

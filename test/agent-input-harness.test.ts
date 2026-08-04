@@ -396,6 +396,55 @@ test("broker quarantines acknowledgement conflicts and requests native reconcili
   }
 });
 
+test("broker retains snapshot and acknowledgement operations after malformed HTTP 200 responses", { skip: process.platform === "win32" }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-malformed-success-"));
+  const credentialPath = path.join(directory, "pane.json");
+  let snapshotCalls = 0;
+  let acknowledgementCalls = 0;
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume */ }
+    const requestPath = request.url ?? "";
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value));
+    };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
+    if (requestPath.endsWith("/refresh")) return send(200, {
+      sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2,
+    });
+    if (requestPath.endsWith("/requests")) return send(201, { id: "input-snapshot", generation: 1, state: "pending" });
+    if (requestPath.endsWith("/pending")) return send(200, { outcome: "pending" });
+    if (requestPath.endsWith("/native-list")) {
+      snapshotCalls += 1;
+      return send(200, snapshotCalls === 1 ? {} : { outcome: "reconciled", closed: 0 });
+    }
+    if (requestPath.endsWith("/ack")) {
+      acknowledgementCalls += 1;
+      return send(200, acknowledgementCalls === 1 ? {} : { outcome: "delivered" });
+    }
+    if (requestPath.includes("/deliveries?")) return send(200, { epoch: "relay-malformed-success", cursor: 0, deliveries: [] });
+    return send(404, { error: "not_found" });
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+  writeCredential(credentialPath);
+  const broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath);
+  try {
+    broker.send(runtime);
+    await waitFor(() => broker.messages.some((message) => message.type === "runtime_ready" && message.supported === true));
+    broker.send({ type: "snapshot", complete: true, cutSequence: 0,
+      members: [{ id: "snapshot-question", sessionID: "snapshot-session", questions: [question] }] });
+    broker.send({ type: "ack", deliveryId: "delivery-malformed", id: "input-malformed", generation: 1, outcome: "applied" });
+    await waitFor(() => snapshotCalls >= 2 && acknowledgementCalls >= 2,
+      () => JSON.stringify({ snapshotCalls, acknowledgementCalls }));
+    await waitFor(() => JSON.parse(fs.readFileSync(credentialPath, "utf8")).outbox.length === 0);
+    const persisted = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
+    assert.equal(persisted.quarantines.some((item: any) => ["snapshot", "ack"].includes(item.type)), false);
+  } finally {
+    await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("broker migrations discard unbound metadata, require fresh registration, and preserve future schemas byte-for-byte", { skip: process.platform === "win32" }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-migration-"));
   const credentialPath = path.join(directory, "pane.json");

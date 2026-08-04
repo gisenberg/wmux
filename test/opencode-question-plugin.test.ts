@@ -125,6 +125,10 @@ test("generated plugin allowlists top-level questions and uses only typed questi
       send(200, { epoch: "relay-plugin", cursor, deliveries: [pendingDeliveries.shift()] });
     } else if (request.url?.startsWith(`/api/agent-input/sources/${testSourceId}/deliveries?`)) {
       send(200, { epoch: "relay-plugin", cursor, deliveries: [] });
+    } else if (request.url?.endsWith("/native-list")) {
+      send(200, { outcome: "reconciled", closed: 0 });
+    } else if (request.url?.endsWith("/ack")) {
+      send(200, { outcome: body.outcome === "applied" ? "delivered" : body.outcome });
     } else if (request.url?.endsWith("/start")) {
       const deliveryId = request.url.split("/").at(-2)!;
       startRequests.push(deliveryId);
@@ -204,7 +208,7 @@ exec "${path.join(repoRoot, "scripts", "wmux-agent-input-broker")}" "$@"
         const sessionID = decodeURIComponent(session[1]);
         structuredSessionInputs.push({ sessionID, directory: url.searchParams.get("directory") });
         genericCalls.get += 1;
-        return json({ title: sessionID === "child-session" ? "Child" : "Top level",
+        return json({ id: sessionID, title: sessionID === "child-session" ? "Child" : "Top level",
           ...(sessionID === "child-session" ? { parentID: "session-one" } : {}) });
       }
       if (request.method === "GET" && /^\/session\/[^/]+\/message$/.test(url.pathname)) {
@@ -526,7 +530,7 @@ process.stdin.on("data", (chunk) => {
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
       },
       session: {
-        get: async (_input?: unknown, options?: { signal?: AbortSignal }) => {
+        get: async (input?: { sessionID?: string; path?: { id: string } }, options?: { signal?: AbortSignal }) => {
           sessionCalls += 1;
           if (hangLookups) {
             await new Promise<void>((_resolve, reject) => {
@@ -537,7 +541,7 @@ process.stdin.on("data", (chunk) => {
             askLookupStarted();
             await askGate;
           }
-          return { data: { title: "Top" }, response: { status: 200 } };
+          return { data: { id: input?.sessionID ?? input?.path?.id, title: "Top" }, response: { status: 200 } };
         },
         messages: async () => ({ data: [] }),
       },
@@ -1073,18 +1077,19 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     let listCalls = 0;
     const listCallTimes: number[] = [];
     let malformedSessionResults = true;
-    let unavailableSessionReady = false;
     let unavailableSessionCalls = 0;
     const client = {
       question: {
         list: async () => {
           listCalls += 1;
           listCallTimes.push(Date.now());
-          if (listCalls === 1 || listCalls === 6 || listCalls === 7) throw new Error("list unavailable");
+          if (listCalls === 1) throw new Error("list unavailable");
           if (listCalls === 2) return { data: {}, response: { status: 200 } };
           if (listCalls === 3) return { data: Array.from({ length: 257 }, () => questionList[0]), response: { status: 200 } };
           if (listCalls === 4) return { data: questionList, error: { name: "conflicting result" }, response: { status: 200 } };
           if (listCalls === 5) return { data: questionList, response: {} };
+          if (listCalls === 6) return { data: [{ ...questionList[0], id: "" }], response: { status: 200 } };
+          if (listCalls === 7) return { data: [questionList[0], questionList[0]], response: { status: 200 } };
           return { data: questionList, response: { status: 200 } };
         },
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -1093,12 +1098,14 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
         get: async (input: { sessionID?: string; path?: { id: string } }) => {
           const id = input.sessionID ?? input.path?.id ?? "";
           if (malformedSessionResults && id === "top-session") {
-            return { data: { title: "Top" }, error: { name: "conflicting result" }, response: { status: 200 } };
+            return { data: { id: "wrong-session", title: "Top" }, error: { name: "conflicting result" }, response: { status: 200 } };
           }
-          if (malformedSessionResults && id === "child-session") return { data: { parentID: "top-session" }, response: {} };
+          if (malformedSessionResults && id === "child-session") return { data: { id, parentID: 7 }, response: { status: 200 } };
           if (id === "unavailable-session") unavailableSessionCalls += 1;
-          if (id === "unavailable-session" && !unavailableSessionReady) throw new Error("partial session lookup failure");
-          return { data: id === "child-session" ? { parentID: "top-session" } : { title: "Top" }, response: { status: 200 } };
+          if (malformedSessionResults && id === "unavailable-session") {
+            return { data: { id, detail: "x".repeat(70 * 1024) }, response: { status: 200 } };
+          }
+          return { data: id === "child-session" ? { id, parentID: "top-session" } : { id, title: "Top" }, response: { status: 200 } };
         },
         messages: async () => ({ data: [] }),
       },
@@ -1115,16 +1122,15 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
         `snapshot retry ${index + 1} did not use capped exponential backoff: ${JSON.stringify(retryIntervals)}`);
     }
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
-      "thrown, malformed, oversized, conflicting, missing-status, and partial results cannot produce a complete barrier");
+      "thrown, malformed, oversized, conflicting, missing-status, invalid-identity, duplicate, and partial results cannot produce a complete barrier");
     const capturedIds = captures
       .filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)
       .map((capture) => capture.body.id);
     assert.deepEqual(capturedIds, [], "a partial list publishes no member or absence mutation");
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
-      "one failed required session.get makes the whole absence snapshot incomplete");
+      "malformed required session results make the whole absence snapshot incomplete");
 
     malformedSessionResults = false;
-    unavailableSessionReady = true;
     await waitFor(() => captures.some((capture) => capture.path.endsWith("/native-list")), () => JSON.stringify(captures), 7_000);
     await waitFor(() => captures.filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`).length === 2,
       () => JSON.stringify(captures));
@@ -1210,7 +1216,11 @@ test("snapshot cut fencing survives delayed list and session validation for new 
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
       },
       session: {
-        get: async () => { sessionCalls += 1; await sessionGate; return { data: { title: "Top" }, response: { status: 200 } }; },
+        get: async (input: { sessionID?: string; path?: { id: string } }) => {
+          sessionCalls += 1;
+          await sessionGate;
+          return { data: { id: input.sessionID ?? input.path?.id, title: "Top" }, response: { status: 200 } };
+        },
         messages: async () => ({ data: [] }),
       },
     };
@@ -1372,7 +1382,9 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
       },
       session: {
-        get: async () => ({ data: { title: "Top" }, response: { status: 200 } }),
+        get: async (input: { sessionID?: string; path?: { id: string } }) => ({
+          data: { id: input.sessionID ?? input.path?.id, title: "Top" }, response: { status: 200 },
+        }),
         messages: async () => ({ data: [] }),
       },
     };
@@ -1500,7 +1512,9 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
           return { data: true, error: undefined, response: { status: 200 } };
         },
       },
-      session: { get: async () => ({ data: { title: "Top" }, response: { status: 200 } }), messages: async () => ({ data: [] }) },
+      session: { get: async (input: { sessionID?: string; path?: { id: string } }) => ({
+        data: { id: input.sessionID ?? input.path?.id, title: "Top" }, response: { status: 200 },
+      }), messages: async () => ({ data: [] }) },
     };
     setFixtureStructuredClient(() => client);
     plugin = await module.default({ client: withInjectedTransport(client), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });

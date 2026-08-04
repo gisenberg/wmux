@@ -981,6 +981,17 @@ const validQuestion = (value: any) => value && typeof value === "object"
   && (value.multiple === undefined || typeof value.multiple === "boolean")
   && (value.custom === undefined || typeof value.custom === "boolean")
 
+const validQuestionIdentifier = (value: unknown) => typeof value === "string"
+  && value.length > 0 && value.length <= 256
+
+const validSessionResult = (result: any, expectedID: string) => {
+  if (result?.response?.status !== 200 || result.error !== undefined
+    || !result.data || typeof result.data !== "object"
+    || result.data.id !== expectedID || !validQuestionIdentifier(result.data.id)
+    || (result.data.parentID !== undefined && !validQuestionIdentifier(result.data.parentID))) return false
+  try { return Buffer.byteLength(JSON.stringify(result.data)) <= 64 * 1024 } catch { return false }
+}
+
 const questionBrokerPrerequisites = () => {
   const capabilityPath = process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH ?? ""
   const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
@@ -1562,7 +1573,7 @@ export default (async ({ client, directory }) => {
   const questionEventTasks = new Map<number, Promise<void>>()
   let questionEventTail: Promise<void> = Promise.resolve()
   const forwardQuestion = (request: any, nativePending: boolean, eventId: string, eventSequence: number) => {
-    if (!request || typeof request.id !== "string" || typeof request.sessionID !== "string"
+    if (!request || !validQuestionIdentifier(request.id) || !validQuestionIdentifier(request.sessionID)
       || typeof eventId !== "string" || eventId.length < 1 || eventId.length > 256
       || !Number.isSafeInteger(eventSequence) || eventSequence <= 0
       || !Array.isArray(request.questions) || request.questions.length < 1
@@ -1669,10 +1680,11 @@ export default (async ({ client, directory }) => {
         scheduleSnapshotRetry()
         return
       }
-      if (!result.data.every((request) => request && typeof request.id === "string"
-        && typeof request.sessionID === "string" && Array.isArray(request.questions)
+      if (!result.data.every((request) => request && validQuestionIdentifier(request.id)
+        && validQuestionIdentifier(request.sessionID) && Array.isArray(request.questions)
         && request.questions.length >= 1 && request.questions.length <= 32
-        && request.questions.every(validQuestion))) {
+        && request.questions.every(validQuestion))
+        || new Set(result.data.map((request) => JSON.stringify([request.sessionID, request.id]))).size !== result.data.length) {
         sendSnapshot(cutSequence, false, [])
         scheduleSnapshotRetry()
         return
@@ -1688,7 +1700,7 @@ export default (async ({ client, directory }) => {
           const session = await snapshotSdkCall((signal) => structuredClient.session.get(
             { sessionID: request.sessionID, directory }, { signal },
           ), deadline).catch(() => undefined)
-          if (session?.response?.status !== 200 || session.error !== undefined || !session.data) {
+          if (!validSessionResult(session, request.sessionID)) {
             checked[index] = undefined
           } else if (session.data.parentID) {
             checked[index] = null
@@ -1803,7 +1815,7 @@ export default (async ({ client, directory }) => {
                   (signal) => structuredClient.session.get({ sessionID, directory }, { signal }),
                   Date.now() + QUESTION_EVENT_TIMEOUT_MS,
                 )
-                if (session?.response?.status !== 200 || !session.data || session.error !== undefined) {
+                if (!validSessionResult(session, sessionID)) {
                   questionBroker.disable()
                   return
                 }
