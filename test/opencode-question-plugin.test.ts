@@ -1070,15 +1070,18 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       { id: "child-question", sessionID: "child-session", questions: [{ header: "Child", question: "Child", options: [], multiple: false, custom: true }] },
       { id: "uncertain-question", sessionID: "unavailable-session", questions: [{ header: "Unknown", question: "Unknown", options: [], multiple: false, custom: true }] },
     ];
-    let listReady = false;
     let listCalls = 0;
+    const listCallTimes: number[] = [];
     let unavailableSessionReady = false;
     let unavailableSessionCalls = 0;
     const client = {
       question: {
         list: async () => {
           listCalls += 1;
-          if (!listReady) throw new Error("list unavailable");
+          listCallTimes.push(Date.now());
+          if (listCalls === 1 || (listCalls >= 4 && listCalls <= 7)) throw new Error("list unavailable");
+          if (listCalls === 2) return { data: {}, response: { status: 200 } };
+          if (listCalls === 3) return { data: Array.from({ length: 257 }, () => questionList[0]), response: { status: 200 } };
           return { data: questionList, response: { status: 200 } };
         },
         reply: async () => ({ data: true, error: undefined, response: { status: 200 } }),
@@ -1096,13 +1099,16 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     setFixtureStructuredClient(() => client);
     plugin = await module.default({ client: withInjectedTransport(client), directory: repoRoot, serverUrl: new URL(env.WMUX_URL) });
     await waitFor(() => captures.some((capture) => capture.path === "/api/agent-input/sources/register"), () => JSON.stringify(captures));
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    assert.ok(listCalls >= 1, "startup reconciliation attempts question.list");
+    await waitFor(() => listCalls >= 8 && unavailableSessionCalls >= 1, () => JSON.stringify(listCallTimes), 14_000);
+    const retryIntervals = listCallTimes.slice(1).map((time, index) => time - listCallTimes[index]);
+    const expectedIntervals = [100, 200, 400, 800, 1_600, 3_200, 5_000];
+    assert.equal(retryIntervals.length, expectedIntervals.length);
+    for (const [index, expected] of expectedIntervals.entries()) {
+      assert.ok(retryIntervals[index] >= expected - 50 && retryIntervals[index] <= expected + 2_000,
+        `snapshot retry ${index + 1} did not use capped exponential backoff: ${JSON.stringify(retryIntervals)}`);
+    }
     assert.equal(captures.some((capture) => capture.path.endsWith("/native-list")), false,
-      "question.list failure cannot produce a complete barrier or close absent requests");
-
-    listReady = true;
-    await waitFor(() => unavailableSessionCalls >= 1, () => JSON.stringify(captures));
+      "thrown, malformed, oversized, and partially validated lists cannot produce a complete barrier");
     const capturedIds = captures
       .filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`)
       .map((capture) => capture.body.id);
@@ -1111,7 +1117,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
       "one failed required session.get makes the whole absence snapshot incomplete");
 
     unavailableSessionReady = true;
-    await waitFor(() => captures.some((capture) => capture.path.endsWith("/native-list")), () => JSON.stringify(captures));
+    await waitFor(() => captures.some((capture) => capture.path.endsWith("/native-list")), () => JSON.stringify(captures), 7_000);
     await waitFor(() => captures.filter((capture) => capture.path === `/api/agent-input/sources/${testSourceId}/requests`).length === 2,
       () => JSON.stringify(captures));
     assert.deepEqual(captures

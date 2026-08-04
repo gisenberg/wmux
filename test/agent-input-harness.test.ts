@@ -864,6 +864,47 @@ test("capture metadata survives more than eight transient failures and recovers 
   }
 });
 
+test("capture quota retries use one source-wide backoff instead of amplifying every queued operation", { skip: process.platform === "win32" }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-capture-quota-"));
+  const credentialPath = path.join(directory, "pane.json");
+  const attemptTimes: number[] = [];
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request body */ }
+    const requestPath = request.url ?? "";
+    const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
+    if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
+    if (requestPath.endsWith("/requests")) {
+      attemptTimes.push(Date.now());
+      return send(429, { error: "source_pending_limit" });
+    }
+    if (requestPath.includes("/deliveries?")) return send(200, { epoch: "relay-quota", cursor: 0, deliveries: [] });
+    return send(200, { outcome: "pending" });
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture unavailable");
+  writeCredential(credentialPath);
+  const broker = launchBroker(directory, `http://127.0.0.1:${address.port}`, "pane-one", credentialPath);
+  try {
+    broker.send(runtime);
+    for (let index = 0; index < 24; index += 1) {
+      broker.send({ type: "asked", eventId: `quota-${index}`, eventSequence: index + 1,
+        id: `quota-${index}`, sessionID: "session", questions: [question], nativePending: false });
+    }
+    await waitFor(() => JSON.parse(fs.readFileSync(credentialPath, "utf8")).outbox.length === 24);
+    await waitFor(() => attemptTimes.length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    assert.ok(attemptTimes.length <= 4, `quota retries were amplified across the outbox: ${attemptTimes.length}`);
+    assert.ok(attemptTimes.every((time, index) => index === 0 || time - attemptTimes[index - 1] >= 75),
+      `source-wide quota backoff collapsed: ${JSON.stringify(attemptTimes)}`);
+    assert.equal(JSON.parse(fs.readFileSync(credentialPath, "utf8")).outbox.length, 24,
+      "retryable quota responses retain bounded metadata for later recovery");
+  } finally {
+    await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("broker runtime attestation rejects every predicate with stable sanitized diagnostics and drops pre-ready events", { skip: process.platform === "win32" }, async (t) => {
   const baseAttestation = (challenge: any) => ({
     ...createOpenCodeRuntimeAttestation(challenge.nonce, challenge.serverChallenge),

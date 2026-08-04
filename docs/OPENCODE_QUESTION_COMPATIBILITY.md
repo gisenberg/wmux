@@ -326,6 +326,9 @@ public `failed` state for deterministic non-retryable SDK errors while retaining
   SDK acknowledgements and unrelated keys continue while one key backs off.
   Transport, HTTP 408/429, 5xx, and untyped response failures keep the bounded
   durable operation and retry indefinitely with capped exponential backoff.
+  Capture quota responses additionally apply one source-wide backoff so a full
+  outbox cannot amplify a persistent quota condition into one retry stream per
+  queued capture.
   Only an authenticated typed permanent conflict consumes/quarantines the
   affected operation. An acknowledgement conflict is never treated as success:
   it is quarantined with metadata only and requests native snapshot
@@ -352,16 +355,20 @@ plugin, and require `wmux-hooks status` to report `opencodeParity: true` (or
 compare `wmux-hooks hash opencode` with the reported expected hash). Rollout must
 update wmux, install the generated plugin, and restart each OpenCode process so
 it loads handshake schema 4; old processes fail structured handling closed while
-  generic lifecycle events continue. Credential schema 8 is downgrade-refused.
-Before starting the upgraded server, retain an owner-only schema-7 credential
-store backup and an owner-only pre-upgrade schema-6 `state.json` backup if binary
-rollback is required. A pre-schema-7 binary must be started only after wmux is
-stopped and that state backup is restored; retaining live schema-7 state causes
-downgrade refusal. Without both backups, do not roll back to a schema-6 binary.
-Replacing the schema-8 credential store with a fresh empty store additionally
-requires opening fresh panes; never hand-edit or down-convert either store. Old browser
-clients still ignore the additive bootstrap field. Do not delete or replace
-state files while wmux is running.
+generic lifecycle events continue. State schema 7, server credential schema 8,
+request schema 8, and pane-local broker schema 10 are downgrade-refused. A binary
+rollback must target a specific older release and restore owner-only, pre-upgrade
+backups of every store that release cannot read: normally schema-6 `state.json`,
+schema-7 `agent-input-credentials.json`, schema-7 `agent-input-requests.json`, and
+schema-9 files under `~/.wmux/agent-input/`. Stop wmux and every affected OpenCode
+process/broker before restoring the complete matching backup set. Without that
+set, do not roll back to a question-enabled older binary. The only safe fresh-
+state fallback is to disable structured answering, stop all affected processes,
+archive and remove the incompatible server agent-input stores and pane-local
+broker files, restore a state file the target binary supports, and open fresh
+panes so no old capability or source credential is reused. Never hand-edit or
+down-convert a store, and never delete or replace state while wmux is running.
+Old browser clients still ignore the additive bootstrap field.
 
 ## Automated and live proof boundary
 

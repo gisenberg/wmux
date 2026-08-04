@@ -34,6 +34,7 @@ let pendingRegistration = loadPendingRegistration();
 let stopping = false;
 let pollAbort = new AbortController();
 let drainPromise;
+let captureQuotaBackoff = { attempts: 0, nextAt: 0 };
 let refreshPromise;
 let runtimeReady = false;
 let challenge;
@@ -984,7 +985,10 @@ async function execute(operation) {
 }
 
 function classify(response) {
-  if (response.status === 0 || response.status === 408 || response.status === 429 || response.status >= 500) return { kind: "retry", status: response.status };
+  const code = typeof response.body?.error === "string" ? response.body.error : undefined;
+  if (response.status === 0 || response.status === 408 || response.status === 429 || response.status >= 500) {
+    return { kind: "retry", status: response.status, ...(code ? { code } : {}) };
+  }
   if (response.status === 401 || response.status === 403) return { kind: "auth", status: response.status };
   if (response.status === 409 && typeof response.body?.error === "string" && response.body.error.length > 0) {
     return { kind: "quarantine", status: response.status };
@@ -1005,9 +1009,13 @@ async function drainOutbox() {
     while (!stopping && runtimeReady && credential?.supported && credential.outbox.length > 0) {
       const now = Date.now();
       const candidates = credential.outbox.filter((operation) => !inFlightOperations.has(operation.opId)
-        && operationReady(operation) && (retries.get(operation.opId)?.nextAt ?? 0) <= now);
+        && operationReady(operation) && (retries.get(operation.opId)?.nextAt ?? 0) <= now
+        && (operation.type !== "capture" || captureQuotaBackoff.nextAt <= now));
       if (candidates.length === 0) {
-        const next = Math.min(...credential.outbox.map((operation) => retries.get(operation.opId)?.nextAt ?? now + 250));
+        const next = Math.min(...credential.outbox.map((operation) => Math.max(
+          retries.get(operation.opId)?.nextAt ?? now + 250,
+          operation.type === "capture" ? captureQuotaBackoff.nextAt : 0,
+        )));
         await waitForDrain(Math.max(1, Math.min(1_000, next - now)));
         continue;
       }
@@ -1025,6 +1033,7 @@ async function drainOutbox() {
           if (result.kind === "done") {
             credential.outbox = credential.outbox.filter((candidate) => candidate.opId !== operation.opId);
             retries.delete(operation.opId);
+            if (operation.type === "capture") captureQuotaBackoff = { attempts: 0, nextAt: 0 };
             persistCredential();
           } else if (result.kind === "retired") {
             consumeOccurrence(operation.occurrenceId, "retired", result.status);
@@ -1040,7 +1049,15 @@ async function drainOutbox() {
           } else {
             const prior = retries.get(operation.opId) ?? { attempts: 0, nextAt: 0 };
             const attempts = Math.min(MAX_BACKOFF_ATTEMPTS, prior.attempts + 1);
-            retries.set(operation.opId, { attempts, nextAt: Date.now() + Math.min(5_000, 100 * (2 ** (attempts - 1))) });
+            const nextAt = Date.now() + Math.min(5_000, 100 * (2 ** (attempts - 1)));
+            retries.set(operation.opId, { attempts, nextAt });
+            if (operation.type === "capture" && result.status === 429 && result.code?.endsWith("_limit")) {
+              const quotaAttempts = Math.min(MAX_BACKOFF_ATTEMPTS, captureQuotaBackoff.attempts + 1);
+              captureQuotaBackoff = {
+                attempts: quotaAttempts,
+                nextAt: Date.now() + Math.min(5_000, 100 * (2 ** (quotaAttempts - 1))),
+              };
+            }
           }
         } finally { inFlightOperations.delete(operation.opId); wakeDrain(); }
       }));
