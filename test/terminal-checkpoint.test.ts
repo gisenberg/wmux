@@ -117,6 +117,19 @@ test("checkpoint snapshots retain split private input-mode sequences", () => {
   }
 });
 
+test("normal-screen checkpoints can seed the visible viewport into scrollback", () => {
+  const checkpoint = new TerminalCheckpoint(12, 3);
+  try {
+    checkpoint.write("first\r\nsecond\r\nthird");
+    const replay = checkpoint.snapshotWithScrollbackSeed();
+    assert.equal(replay.split("first").length - 1, 2);
+    assert.equal(replay.split("second").length - 1, 2);
+    assert.equal(replay.split("third").length - 1, 2);
+  } finally {
+    checkpoint.dispose();
+  }
+});
+
 test("Windows-style reframing keeps the viewport and cursor anchored from the top", () => {
   const checkpoint = new TerminalCheckpoint(12, 3);
   try {

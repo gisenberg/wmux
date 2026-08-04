@@ -318,6 +318,7 @@ backend.write_terminal_response(
 backend.write_terminal_response(
     b"\x1b]10;rgb:c0c0/caca/f5f5\x1b\\\x1b[24;80R"
 )
+backend.write_terminal_response(b"\x1b[4;1007;1305t\x1b[8;53;145t")
 backend.write_terminal_response(b"\x1b[?62;22cuser-input")
 __import__("time").sleep(0.01)
 backend.write_terminal_response(b"\x1b[?62;22c")
@@ -340,6 +341,7 @@ print(json.dumps({
       background,
       "\x1b[>1;0;0c\x1bP>|libghostty 0.1.0-dev\x1b\\",
       "\x1b[24;80R",
+      "\x1b[4;1007;1305t\x1b[8;53;145t",
       "\x1b[?62;22cuser-input",
       "user-input",
     ],

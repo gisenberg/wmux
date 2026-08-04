@@ -10,6 +10,8 @@ test("terminal protocol replies are distinguished from keyboard input", () => {
   assert.equal(isTerminalProtocolResponse("\x1b[>1;2;3c"), true);
   assert.equal(isTerminalProtocolResponse("\x1b[0n"), true);
   assert.equal(isTerminalProtocolResponse("\x1b[24;80R"), true);
+  assert.equal(isTerminalProtocolResponse("\x1b[4;1007;1305t"), true);
+  assert.equal(isTerminalProtocolResponse("\x1b[8;53;145t"), true);
   assert.equal(isTerminalProtocolResponse("\x1b[?62;22c\x1b[?62;22c"), true);
   assert.equal(isTerminalProtocolResponse("\x1bP>|libghostty\x1b\\"), true);
   assert.equal(isTerminalProtocolResponse("\x1bP>|libghostty 0.1.0-dev\x1b\\"), true);

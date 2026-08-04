@@ -124,10 +124,16 @@ export class TerminalCheckpoint {
   snapshot(): string {
     const terminal = this.terminal;
     if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows);
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, false);
   }
 
-  private snapshotForDimensions(targetCols: number, targetRows: number): string {
+  snapshotWithScrollbackSeed(): string {
+    const terminal = this.terminal;
+    if (!terminal) return "";
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, true);
+  }
+
+  private snapshotForDimensions(targetCols: number, targetRows: number, seedScrollback = false): string {
     const terminal = this.terminal;
     if (!terminal) return "";
     try {
@@ -137,7 +143,23 @@ export class TerminalCheckpoint {
       const paintCols = Math.min(terminal.cols, targetCols);
       const paintRows = Math.min(terminal.rows, targetRows);
       const output: string[] = ["\x1bc"];
-      if (terminal.isAlternateScreen()) output.push("\x1b[?1049h");
+      const alternateScreen = terminal.isAlternateScreen();
+      if (alternateScreen) output.push("\x1b[?1049h");
+
+      if (seedScrollback && !alternateScreen) {
+        output.push("\x1b[?7l", "\x1b[2J", "\x1b[H");
+        for (let row = 0; row < paintRows; row += 1) {
+          let line = "";
+          for (let col = 0; col < paintCols; col += 1) {
+            const cell = cells[row * terminal.cols + col];
+            if (!cell || cell.width === 0) continue;
+            if (col + cell.width > paintCols) continue;
+            line += cell.codepoint === 0 ? " " : String.fromCodePoint(cell.codepoint);
+          }
+          output.push(line.trimEnd(), "\r\n");
+        }
+        output.push("\r\n".repeat(Math.max(0, targetRows - 1)));
+      }
 
       // Disable wrapping while painting absolute rows so a glyph in the final
       // column cannot introduce an extra scroll or line wrap.
