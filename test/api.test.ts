@@ -92,6 +92,7 @@ test("ordinary settings updates never transmit synchronized sidebar state", asyn
     inactiveTabStreaming: "suspend" as const,
     tuiFrameRate: 30 as const,
     terminalScrollMode: "immediate" as const,
+    groupSidebarSessionsByHost: false,
     machineAliases: { local: "Local" },
     collapsedWorkspaceIds: ["newer-collapse"],
     favoriteWorkspaceIds: ["favorite"],
@@ -105,6 +106,7 @@ test("ordinary settings updates never transmit synchronized sidebar state", asyn
   assert.deepEqual(body, modalSettingsUpdate(settings));
   assert.equal(Object.hasOwn(body ?? {}, "collapsedWorkspaceIds"), false);
   assert.equal(Object.hasOwn(body ?? {}, "favoriteWorkspaceIds"), false);
+  assert.equal(body?.groupSidebarSessionsByHost, false);
 });
 
 test("workspace reorder conflicts expose the server's latest state without replay", async () => {

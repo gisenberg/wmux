@@ -258,7 +258,8 @@ export const sortFavoriteWorkspaceRows = <
 // targets the Nth visible row.
 export const orderWorkspaceRowsForDisplay = <
   T extends { id: string; machineId: string; parentId?: string; favorite: boolean },
->(rows: readonly T[], machineIds: readonly string[]): T[] => {
+>(rows: readonly T[], machineIds: readonly string[], groupByHost = true): T[] => {
+  if (!groupByHost) return sortFavoriteWorkspaceRows(rows);
   const grouped = new Map<string, T[]>();
   for (const row of rows) {
     const group = grouped.get(row.machineId) ?? [];
@@ -269,6 +270,20 @@ export const orderWorkspaceRowsForDisplay = <
     (machineId, index, ids) => grouped.has(machineId) && ids.indexOf(machineId) === index,
   );
   return orderedMachineIds.flatMap((machineId) => sortFavoriteWorkspaceRows(grouped.get(machineId) ?? []));
+};
+
+export const groupSidebarWorkspaceRows = <
+  T extends { id: string; parentId?: string; favorite: boolean; machineId: string },
+>(rows: readonly T[], machineIds: readonly string[], groupByHost: boolean): Array<{ machineId?: string; rows: T[] }> => {
+  if (!groupByHost) return [{ rows: orderWorkspaceRowsForDisplay(rows, machineIds, false) }];
+  const orderedRows = orderWorkspaceRowsForDisplay(rows, machineIds);
+  const groups = new Map<string, T[]>();
+  for (const row of orderedRows) {
+    const group = groups.get(row.machineId) ?? [];
+    group.push(row);
+    groups.set(row.machineId, group);
+  }
+  return [...groups].map(([machineId, groupedRows]) => ({ machineId, rows: groupedRows }));
 };
 
 export const workspaceMoveIntents = (

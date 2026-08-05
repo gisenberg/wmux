@@ -20,7 +20,7 @@ import type { MachineVersionStatus, Workspace, WorkspaceReorderPosition } from "
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 import { WorkspaceMoveDialog } from "./WorkspaceMoveDialog";
 import {
-  orderWorkspaceRowsForDisplay,
+  groupSidebarWorkspaceRows,
   remainingWorkspaceRowCount,
   workspacePointerMovePosition,
   type WorkspaceAgentStatus,
@@ -96,6 +96,7 @@ interface OpenTuiSidebarProps {
   onRequestCloseWorkspaceGroup?: (machineId: string) => void | Promise<void>;
   onToggleFavoriteWorkspace?: (workspaceId: string) => void | Promise<void>;
   allWorkspaces: Workspace[];
+  groupSidebarSessionsByHost: boolean;
 }
 
 type HitAction =
@@ -121,6 +122,7 @@ interface SidebarRenderModel {
   targetMachineId: string;
   targetMachineName: string;
   targetMachineReachable: boolean;
+  groupSidebarSessionsByHost: boolean;
   animationTick: number;
   workspaces: OpenTuiSidebarWorkspace[];
   machines: OpenTuiSidebarMachine[];
@@ -196,6 +198,7 @@ export function OpenTuiSidebar({
   onRequestCloseWorkspaceGroup,
   onToggleFavoriteWorkspace,
   allWorkspaces,
+  groupSidebarSessionsByHost,
 }: OpenTuiSidebarProps) {
   const theme = useOpenTuiTheme();
   const [animationTick, setAnimationTick] = useState(0);
@@ -240,6 +243,7 @@ export function OpenTuiSidebar({
       targetMachineId,
       targetMachineName,
       targetMachineReachable,
+      groupSidebarSessionsByHost,
       animationTick,
       workspaces,
       machines,
@@ -247,7 +251,7 @@ export function OpenTuiSidebar({
       workspaceScrollOffset,
       movesDisabled,
     }),
-    [animationTick, machines, movesDisabled, targetMachineId, targetMachineName, targetMachineReachable, workspaceDropPreview, workspaceScrollOffset, workspaces],
+    [animationTick, groupSidebarSessionsByHost, machines, movesDisabled, targetMachineId, targetMachineName, targetMachineReachable, workspaceDropPreview, workspaceScrollOffset, workspaces],
   );
   const renderModelRef = useRef(renderModel);
 
@@ -372,9 +376,7 @@ export function OpenTuiSidebar({
     const hit = hitAt(event.clientX, event.clientY);
     if (!hit) return;
     if (hit.action.type === "create-workspace") onCreateWorkspace();
-    if (hit.action.type === "select-space") {
-      onTargetMachineChange(hit.action.machineId);
-    }
+    if (hit.action.type === "select-space") onTargetMachineChange(hit.action.machineId);
     if (hit.action.type === "workspace") onActivateWorkspace(hit.action.workspaceId, hit.action.tabId);
     if (hit.action.type === "toggle-workspace") void onToggleWorkspace(hit.action.workspaceId);
     if (hit.action.type === "outdent-workspace" && !movesDisabled) void onReorderWorkspace(hit.action.workspaceId, undefined, "out-of");
@@ -538,7 +540,7 @@ export function OpenTuiSidebar({
           }}
         />
         <div className="open-tui-sidebar-semantics">
-          <nav aria-label="Spaces">
+          {groupSidebarSessionsByHost ? <nav aria-label="Spaces">
             {semanticSpaces.map(({ machine, row, rowCount }) => (
               <button
                 key={machine.id}
@@ -561,11 +563,39 @@ export function OpenTuiSidebar({
                 }}
               />
             ))}
-          </nav>
+          </nav> : (
+            <nav aria-label="Target host">
+              <div
+                className="open-tui-global-target"
+                style={{ top: 3 * metricsRef.current.height, height: 2 * metricsRef.current.height }}
+              >
+                <select
+                  aria-label="Target host"
+                  value={targetMachineId}
+                  onChange={(event) => onTargetMachineChange(event.currentTarget.value)}
+                >
+                  {machines.map((machine) => (
+                    <option key={machine.id} value={machine.id}>
+                      {machine.name} [{machine.reachable ? "ONLINE" : "OFFLINE"}]
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  aria-label={`Create agent session on ${targetMachineName}`}
+                  title={`Create agent session on ${targetMachineName}`}
+                  disabled={!targetMachineReachable}
+                  onClick={onCreateWorkspace}
+                >
+                  [+]
+                </button>
+              </div>
+            </nav>
+          )}
           <div
             role="tree"
             aria-label="Agents"
-            data-grouping="space"
+            data-grouping={groupSidebarSessionsByHost ? "space" : "global"}
             data-target-space-id={targetMachineId}
           >
           {semanticRows.map(({ workspace, row, rowCount }) => (
@@ -580,10 +610,11 @@ export function OpenTuiSidebar({
                 aria-level={workspace.depth + 1}
                 aria-current={workspace.active ? "page" : undefined}
                 aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
-                aria-label={`${workspace.title}${workspace.favorite ? ", favorite" : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
+                aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
                 data-agent-created={workspace.agentCreated ? "true" : undefined}
                 data-agent-machine={workspace.machineId}
                 data-favorite={workspace.favorite ? "true" : "false"}
+                data-presentation-machine-id={workspace.machineId}
                 draggable={!pointerReorderDisabled && !movesDisabled}
                 onClick={(event) => {
                   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -867,19 +898,20 @@ const drawSidebarGrid = (
   write(row, 1, "WMUX", rgba.gold, 700);
   row += 2;
 
-  section(row, "spaces");
-  const spaceCount = String(model.machines.length);
-  write(row, Math.max(10, cols - spaceCount.length - 1), spaceCount, rgba.faint, 700);
-  if (model.targetMachineReachable) {
-    const newLabel = "[+]";
-    const newCol = Math.max(10, cols - spaceCount.length - newLabel.length - 3);
-    write(row, newCol, newLabel, rgba.gold, 700);
-    actionCells(row, newCol, newLabel.length, `New agent session on ${model.targetMachineName}`, { type: "create-workspace" });
-  }
-  row++;
-  const maxVisibleSpaces = Math.max(1, Math.floor((rows - row - 12) / 2));
-  const visibleSpaces = model.machines.slice(0, maxVisibleSpaces);
-  for (const machine of visibleSpaces) {
+  if (model.groupSidebarSessionsByHost) {
+    section(row, "spaces");
+    const spaceCount = String(model.machines.length);
+    write(row, Math.max(10, cols - spaceCount.length - 1), spaceCount, rgba.faint, 700);
+    if (model.targetMachineReachable) {
+      const newLabel = "[+]";
+      const newCol = Math.max(10, cols - spaceCount.length - newLabel.length - 3);
+      write(row, newCol, newLabel, rgba.gold, 700);
+      actionCells(row, newCol, newLabel.length, `New agent session on ${model.targetMachineName}`, { type: "create-workspace" });
+    }
+    row++;
+    const maxVisibleSpaces = Math.max(1, Math.floor((rows - row - 12) / 2));
+    const visibleSpaces = model.machines.slice(0, maxVisibleSpaces);
+    for (const machine of visibleSpaces) {
     const itemStart = row;
     const activeTarget = machine.id === model.targetMachineId;
     for (let offset = 0; offset < 2; offset += 1) {
@@ -913,16 +945,21 @@ const drawSidebarGrid = (
     actionRows(itemStart, 2, `Select ${machine.name} space`, { type: "select-space", machineId: machine.id });
     semanticSpaces.push({ machine, row: itemStart, rowCount: 2 });
     row++;
-  }
-  const hiddenSpaceCount = model.machines.length - visibleSpaces.length;
-  if (hiddenSpaceCount > 0) {
-    write(row, 6, `+${hiddenSpaceCount} more spaces`, rgba.faint);
-    row++;
+    }
+    const hiddenSpaceCount = model.machines.length - visibleSpaces.length;
+    if (hiddenSpaceCount > 0) {
+      write(row, 6, `+${hiddenSpaceCount} more spaces`, rgba.faint);
+      row++;
+    }
+  } else {
+    fillRow(row, rgba.panel);
+    fillRow(row + 1, rgba.panel);
+    row += 2;
   }
 
   write(row, 0, "─".repeat(cols), rgba.panel);
   row++;
-  section(row, "agents");
+  section(row, model.groupSidebarSessionsByHost ? "agents" : "agent sessions");
   const activeAgentCount = model.workspaces.filter((workspace) =>
     workspace.agentStatus === "running" || workspace.agentStatus === "waiting").length;
   const workspaceCountLabel = activeAgentCount > 0
@@ -942,10 +979,8 @@ const drawSidebarGrid = (
     write(row, 3, "NO AGENT SESSIONS", rgba.faint, 700);
     row += 2;
   } else {
-    const orderedWorkspaces = orderWorkspaceRowsForDisplay(
-      model.workspaces,
-      model.machines.map((machine) => machine.id),
-    );
+    const allGroups = groupSidebarWorkspaceRows(model.workspaces, model.machines.map((machine) => machine.id), model.groupSidebarSessionsByHost);
+    const orderedWorkspaces = allGroups.flatMap((group) => group.rows);
     const remainingWorkspaces = orderedWorkspaces.slice(model.workspaceScrollOffset);
     const groupedWorkspaces = new Map<string, OpenTuiSidebarWorkspace[]>();
     for (const workspace of remainingWorkspaces) {
@@ -953,12 +988,16 @@ const drawSidebarGrid = (
       group.push(workspace);
       groupedWorkspaces.set(workspace.machineId, group);
     }
-    const orderedMachineIds = [...groupedWorkspaces.keys()];
+    const orderedMachineIds = model.groupSidebarSessionsByHost
+      ? allGroups.map((group) => group.machineId!).filter((machineId) => groupedWorkspaces.has(machineId))
+      : ["global"];
 
     groupLoop:
     for (const machineId of orderedMachineIds) {
-      const machineWorkspaces = groupedWorkspaces.get(machineId) ?? [];
-      if (row + 3 >= workspaceEndRow) break;
+      const machineWorkspaces = model.groupSidebarSessionsByHost
+        ? groupedWorkspaces.get(machineId) ?? []
+        : remainingWorkspaces;
+      if (row + (model.groupSidebarSessionsByHost ? 3 : 2) >= workspaceEndRow) break;
       const machine = model.machines.find((candidate) => candidate.id === machineId);
       const groupWorkspaceCount = machine?.workspaceCount ?? machineWorkspaces.length;
       const groupActiveCount = machine?.activeAgentCount ?? machineWorkspaces.filter((workspace) =>
@@ -966,24 +1005,23 @@ const drawSidebarGrid = (
       const groupCountLabel = groupActiveCount > 0
         ? `${groupWorkspaceCount}/${groupActiveCount}`
         : String(groupWorkspaceCount);
-      write(row, 2, machineId === model.targetMachineId ? ">" : " ", machineId === model.targetMachineId ? rgba.gold : rgba.faint, 700);
-      write(row, 4, (machine?.name ?? machineWorkspaces[0]?.host ?? machineId).toUpperCase(), machineId === model.targetMachineId ? rgba.goldDim : rgba.faint, 700);
-      write(row, Math.max(10, cols - groupCountLabel.length - 1), groupCountLabel, groupActiveCount > 0 ? rgba.goldDim : rgba.faint, 700);
-      actionCells(
-        row,
-        0,
-        cols,
-        `Agent group actions for ${machine?.name ?? machineId}`,
-        { type: "machine-group", machineId },
-      );
-      row++;
+      if (model.groupSidebarSessionsByHost) {
+        write(row, 2, machineId === model.targetMachineId ? ">" : " ", machineId === model.targetMachineId ? rgba.gold : rgba.faint, 700);
+        write(row, 4, (machine?.name ?? machineWorkspaces[0]?.host ?? machineId).toUpperCase(), machineId === model.targetMachineId ? rgba.goldDim : rgba.faint, 700);
+        write(row, Math.max(10, cols - groupCountLabel.length - 1), groupCountLabel, groupActiveCount > 0 ? rgba.goldDim : rgba.faint, 700);
+        actionCells(row, 0, cols, `Agent group actions for ${machine?.name ?? machineId}`, { type: "machine-group", machineId });
+        row++;
+      }
 
       for (const workspace of machineWorkspaces) {
         const statusContext = [
           workspace.agentStatus ? sidebarAgentStatusLabel[workspace.agentStatus] : "",
           workspace.agentName,
         ].filter(Boolean);
-        const statusContextLine = statusContext.join(" · ");
+        const statusContextLine = [
+          ...statusContext,
+          ...(model.groupSidebarSessionsByHost ? [] : [workspace.host]),
+        ].filter(Boolean).join(" · ");
         const cwd = workspace.cwd?.trim() ?? "";
         const itemRows = 3;
         if (row + itemRows >= workspaceEndRow) break groupLoop;

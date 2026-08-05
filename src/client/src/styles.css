@@ -664,6 +664,72 @@ button.active-tool {
   outline-offset: -2px;
 }
 
+.open-tui-global-target {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 1px;
+  padding: 2px 4px;
+  background: var(--panel);
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.open-tui-global-target select,
+.open-tui-global-target button {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--black);
+  color: var(--text);
+  font: 700 10px/1 var(--wmux-mono-font);
+}
+
+.open-tui-global-target select {
+  padding: 0 4px;
+}
+
+.open-tui-global-target button {
+  padding: 0;
+  color: var(--gold);
+}
+
+.open-tui-global-target select:focus-visible,
+.open-tui-global-target button:focus-visible {
+  outline: 2px solid var(--gold-hot);
+  outline-offset: -2px;
+}
+
+.open-tui-settings-semantic,
+.open-tui-settings-save-semantic {
+  position: absolute;
+  z-index: 2;
+  opacity: 0.001;
+  pointer-events: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  min-height: 0;
+  background: transparent;
+  color: transparent;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.open-tui-settings-semantic:focus-visible,
+.open-tui-settings-save-semantic:focus-visible {
+  opacity: 1;
+  background: transparent;
+  outline: 2px solid var(--gold-hot);
+  outline-offset: -2px;
+}
+
 .sidebar-context-menu {
   position: fixed;
   z-index: 110;
