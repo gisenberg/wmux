@@ -49,6 +49,28 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     const unavailable = makeRequest("input-rendered-unavailable", [
       { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
     ]);
+    const submitting = makeRequest("input-rendered-submitting", [
+      { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
+    ]);
+    const deliveredPending = makeRequest("input-rendered-delivered-pending", [
+      { header: "Mode", question: "Choose", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
+    ]);
+    const resolveRequest = (
+      requestItem: AgentInputRequest,
+      state: AgentInputRequest["state"],
+    ): AgentInputRequest => ({
+      ...requestItem,
+      state,
+      resolution: "plugin",
+      updatedAt: now,
+      resolvedAt: now,
+    });
+    const answeredMain = resolveRequest(main, "answered");
+    const answeredAlreadyResolved = resolveRequest(alreadyResolved, "answered");
+    const failedSdkError = resolveRequest(sdkError, "failed");
+    const staleRejected = resolveRequest(makeRequest("input-rendered-stale-rejected", sdkError.questions), "rejected");
+    const staleCancelled = resolveRequest(makeRequest("input-rendered-stale-cancelled", sdkError.questions), "cancelled");
+    const staleClosed = resolveRequest(makeRequest("input-rendered-stale-closed", sdkError.questions), "closed");
     const gapRequest = makeRequest("input-rendered-gap", [
       { header: "Gap", question: "Recovered", options: [{ label: "OK", description: "OK" }], multiple: false, custom: false },
     ]);
@@ -73,7 +95,19 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       ...payload,
       activeWorkspaceId: createdWorkspace.id,
       notifications: [...payload.notifications, notification],
-      agentInputRequests: [main, sdkError, alreadyResolved, conflict, timedOut, unavailable],
+      agentInputRequests: [
+        main,
+        sdkError,
+        alreadyResolved,
+        conflict,
+        timedOut,
+        unavailable,
+        submitting,
+        deliveredPending,
+        staleRejected,
+        staleCancelled,
+        staleClosed,
+      ],
       futureServerField: { ignoredByOlderClients: true },
     };
     let bootstrapCalls = 0;
@@ -81,6 +115,8 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     let currentRevision = payload.eventRevision;
     const submissions: Array<{ id: string; body: any }> = [];
     let paneInputCalls = 0;
+    let releaseSubmitting: () => void = () => undefined;
+    const submittingGate = new Promise<void>((resolve) => { releaseSubmitting = resolve; });
     await page.route("**/api/bootstrap", async (route) => {
       bootstrapCalls += 1;
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(bootstrapPayload) });
@@ -88,22 +124,25 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await page.route("**/api/agent-input/requests/*/answer", async (route) => {
       const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
       submissions.push({ id, body: route.request().postDataJSON() });
+      if (id === submitting.id) await submittingGate;
       const result = id === main.id
         ? { status: 200, body: { outcome: "delivered" } }
-        : id === sdkError.id
-          ? { status: 502, body: { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false } }
-          : id === alreadyResolved.id
-            ? { status: 200, body: { outcome: "already_resolved" } }
-            : id === conflict.id
-              ? { status: 409, body: { outcome: "conflict", code: "idempotency_conflict" } }
-              : id === timedOut.id
-                ? { status: 503, body: { outcome: "delivery_timeout" } }
-                : { status: 503, body: { outcome: "source_unavailable" } };
+        : id === deliveredPending.id
+          ? { status: 200, body: { outcome: "delivered" } }
+          : id === sdkError.id
+            ? { status: 502, body: { outcome: "sdk_error", code: "delivery_ambiguous", retryable: false } }
+            : id === alreadyResolved.id
+              ? { status: 200, body: { outcome: "already_resolved" } }
+              : id === conflict.id
+                ? { status: 409, body: { outcome: "conflict", code: "idempotency_conflict" } }
+                : id === timedOut.id
+                  ? { status: 503, body: { outcome: "delivery_timeout" } }
+                  : { status: 503, body: { outcome: "source_unavailable" } };
       await route.fulfill({ status: result.status, contentType: "application/json", body: JSON.stringify(result.body) });
       const terminal = id === main.id || id === alreadyResolved.id
-        ? { request: id === main.id ? main : alreadyResolved, state: "answered" as const, resolution: "plugin" as const }
+        ? id === main.id ? answeredMain : answeredAlreadyResolved
         : id === sdkError.id
-          ? { request: sdkError, state: "failed" as const, resolution: "plugin" as const }
+          ? failedSdkError
           : undefined;
       if (terminal && eventSocket) {
         const baseEventRevision = currentRevision;
@@ -112,7 +151,7 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
           type: "delta", baseEventRevision, eventRevision: currentRevision,
           revision: payload.revision, healthEpoch: payload.healthEpoch,
           agentInputRequests: { upserted: [{
-            ...terminal.request, state: terminal.state, resolution: terminal.resolution,
+            ...terminal,
             updatedAt: new Date().toISOString(), resolvedAt: new Date().toISOString(),
           }], removedIds: [] },
         }));
@@ -139,7 +178,10 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
     await expect.poll(() => Boolean(eventSocket)).toBeTruthy();
     await page.waitForTimeout(200);
-    expect(await page.evaluate(async () => (await (await fetch("/api/bootstrap")).json()).agentInputRequests.length)).toBe(6);
+    expect(await page.evaluate(async () => (await (await fetch("/api/bootstrap")).json()).agentInputRequests.length)).toBe(11);
+    for (const requestItem of [staleRejected, staleCancelled, staleClosed]) {
+      await expect(page.locator(`[data-request-id="${requestItem.id}"]`)).toHaveCount(0);
+    }
 
     const mainCard = page.locator(`[data-request-id="${main.id}"]`);
     await expect(mainCard).toBeVisible();
@@ -161,21 +203,21 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await expect(mainCard.getByRole("textbox", { name: "Mode custom answer" })).toHaveCount(0);
     await expect(mainCard.getByRole("textbox", { name: "Checks custom answer" })).toHaveCount(0);
     await expect(mainCard.getByRole("textbox", { name: "Note custom answer" })).toHaveAttribute("maxlength", "4096");
+    await mainCard.getByRole("button", { name: /OPEN TERMINAL/ }).click();
+    expect(paneInputCalls).toBe(0);
 
     await mainCard.locator("fieldset").nth(0).getByRole("radio").check();
     await mainCard.locator("fieldset").nth(1).getByRole("checkbox").nth(0).check();
     await mainCard.locator("fieldset").nth(1).getByRole("checkbox").nth(1).check();
     await mainCard.getByLabel("Note custom answer").fill("rendered custom answer");
     await mainCard.getByRole("button", { name: /SUBMIT/ }).click();
-    await expect(mainCard).toHaveAttribute("data-state", "answered");
+    await expect(mainCard).toHaveCount(0);
     expect(submissions.find((item) => item.id === main.id)?.body.answers).toEqual([
       ["Safe"], ["Tests", "Types"], ["rendered custom answer"],
     ]);
-    await expect(mainCard.getByLabel("Note custom answer")).toHaveValue("");
 
     for (const [requestItem, expectedState] of [
       [sdkError, "failed"],
-      [alreadyResolved, "answered"],
       [conflict, "conflict"],
       [timedOut, "delivery_timeout"],
       [unavailable, "source_unavailable"],
@@ -186,8 +228,24 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       await expect(card).toHaveAttribute("data-state", expectedState);
       await expect(card.locator("header span")).toHaveText(expectedState.replaceAll("_", " "));
     }
-    await mainCard.getByRole("button", { name: /OPEN TERMINAL/ }).click();
-    expect(paneInputCalls).toBe(0);
+    const alreadyResolvedCard = page.locator(`[data-request-id="${alreadyResolved.id}"]`);
+    await alreadyResolvedCard.getByRole("radio").check();
+    await alreadyResolvedCard.getByRole("button", { name: /SUBMIT/ }).click();
+    await expect(alreadyResolvedCard).toHaveCount(0);
+
+    const submittingCard = page.locator(`[data-request-id="${submitting.id}"]`);
+    await submittingCard.getByRole("radio").check();
+    await submittingCard.getByRole("button", { name: /SUBMIT/ }).click();
+    await expect(submittingCard).toHaveAttribute("data-state", "submitting");
+    await expect(submittingCard).toBeVisible();
+    releaseSubmitting();
+    await expect(submittingCard).toHaveAttribute("data-state", "source_unavailable");
+
+    const deliveredPendingCard = page.locator(`[data-request-id="${deliveredPending.id}"]`);
+    await deliveredPendingCard.getByRole("radio").check();
+    await deliveredPendingCard.getByRole("button", { name: /SUBMIT/ }).click();
+    await expect(deliveredPendingCard).toHaveAttribute("data-state", "delivered");
+    await expect(deliveredPendingCard).toBeVisible();
 
     eventSocket!.send(JSON.stringify({
       type: "delta",
@@ -213,17 +271,27 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       (window as any).__wmuxNotifications.find((item: any) => item.options?.tag === tag).onclick()
     ), notification.id);
     await expect(page).toHaveURL(new RegExp(target.id));
-    await expect(mainCard).toBeVisible();
-    await expect(mainCard.getByRole("button", { name: /OPEN TERMINAL/ })).toBeFocused();
-    await page.waitForTimeout(700);
-    await expect(mainCard).toHaveAttribute("data-state", "answered");
-    await expect(mainCard.getByRole("button", { name: /OPEN TERMINAL/ })).toBeFocused();
+    await expect(mainCard).toHaveCount(0);
 
     const callsBeforeGap = bootstrapCalls;
     bootstrapPayload = {
       ...payload,
       eventRevision: currentRevision + 10,
-      agentInputRequests: [main, sdkError, alreadyResolved, conflict, timedOut, unavailable, contiguousRequest, gapRequest],
+      agentInputRequests: [
+        answeredMain,
+        failedSdkError,
+        answeredAlreadyResolved,
+        conflict,
+        timedOut,
+        unavailable,
+        submitting,
+        deliveredPending,
+        staleRejected,
+        staleCancelled,
+        staleClosed,
+        contiguousRequest,
+        gapRequest,
+      ],
       futureServerField: { ignoredByOlderClients: true },
     };
     eventSocket!.send(JSON.stringify({

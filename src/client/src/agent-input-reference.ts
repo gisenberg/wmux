@@ -1,8 +1,14 @@
-import type { AgentInputQuestion } from "./types";
+import type { AgentInputQuestion, AgentInputRequestState } from "./types";
 
 const MAX_ANSWER_VALUE_BYTES = 4_096;
 const MAX_ANSWER_BYTES = 16_384;
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
+
+export const isAgentInputRequestVisible = (state: AgentInputRequestState): boolean =>
+  state !== "answered"
+  && state !== "rejected"
+  && state !== "cancelled"
+  && state !== "closed";
 
 export const buildAgentInputAnswers = (
   questions: AgentInputQuestion[],

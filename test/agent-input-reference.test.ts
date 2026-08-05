@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAgentInputAnswers,
+  isAgentInputRequestVisible,
   newAgentInputSubmissionId,
   validAgentInputAnswer,
   validAgentInputAnswers,
 } from "../src/client/src/agent-input-reference.js";
 import { api } from "../src/client/src/api.js";
-import type { AgentInputQuestion } from "../src/shared/protocol.js";
+import type { AgentInputQuestion, AgentInputRequestState } from "../src/shared/protocol.js";
 
 const questions: AgentInputQuestion[] = [
   { header: "Mode", question: "Choose one", options: [{ label: "Safe", description: "Safe" }], multiple: false, custom: false },
@@ -57,6 +58,20 @@ test("reference harness creates a stable caller-owned submission id", () => {
   assert.ok(id.length > 8);
   const retainedAcrossRetries = id;
   assert.equal(retainedAcrossRetries, id);
+});
+
+test("reference harness hides only authoritative terminal request states", () => {
+  const visibility: Record<AgentInputRequestState, boolean> = {
+    pending: true,
+    failed: true,
+    answered: false,
+    rejected: false,
+    cancelled: false,
+    closed: false,
+  };
+  for (const [state, visible] of Object.entries(visibility) as Array<[AgentInputRequestState, boolean]>) {
+    assert.equal(isAgentInputRequestVisible(state), visible, state);
+  }
 });
 
 test("reference answer retries use only the user CAS route and emit zero pane-input requests", async () => {

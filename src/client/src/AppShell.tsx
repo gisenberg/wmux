@@ -15,6 +15,7 @@ import { DiagnosticsModal } from "./DiagnosticsModal";
 import { ActivityPanel, buildActivityItems } from "./ActivityPanel";
 import { AgentFleet, type AgentFleetRow } from "./AgentFleet";
 import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
+import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { SettingsModal, cleanAlias, defaultSettings } from "./SettingsModal";
 import { MachineManagerModal } from "./MachineManagerModal";
@@ -886,7 +887,9 @@ export function AppShell() {
   const showMobileModeBar = mobileViewport.isMobile;
   const showMobileAgentSurface = showMobileModeBar && mobileSurfaceMode === "agent";
   const activeAgentInputRequests = activePane
-    ? (state?.agentInputRequests ?? []).filter((request) => request.paneId === activePane.id)
+    ? (state?.agentInputRequests ?? []).filter((request) => (
+      request.paneId === activePane.id && isAgentInputRequestVisible(request.state)
+    ))
     : [];
   const mobileHeaderMachine = activePane
     ? machineFor(displayMachines, activePane.machineId)
