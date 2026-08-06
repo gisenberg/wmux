@@ -9,7 +9,7 @@ test("creates a workspace through the command palette and preserves its direct l
   const before = await request.get("/api/bootstrap");
   expect(before.ok()).toBeTruthy();
   const beforePayload = await before.json() as { workspaces: unknown[] };
-  let releaseCreation = () => undefined;
+  let releaseCreation: () => void = () => undefined;
   const creationGate = new Promise<void>((resolve) => {
     releaseCreation = resolve;
   });

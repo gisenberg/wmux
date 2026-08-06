@@ -30,7 +30,7 @@
     "test:e2e:browser:webkit": "playwright test --config=playwright.browser.config.ts --project=mobile-webkit",
     "test:e2e:serve": "node --import tsx e2e/remote-server.ts",
     "docs:screenshots": "playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.e2e.json",
     "check:scripts": "node scripts/check-scripts.mjs",
     "check:contracts": "node --import tsx scripts/generate-agent-contract.mjs --check",
     "generate:contracts": "node --import tsx scripts/generate-agent-contract.mjs",
