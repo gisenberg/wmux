@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $ActionName = if ($args.Count -gt 0) { [string]$args[0] } else { 'install' }
 $TaskName = if ($env:WMUX_WINDOWS_AGENT_TASK) { $env:WMUX_WINDOWS_AGENT_TASK } else { 'wmux-windows-agent' }
-$StateDir = Join-Path $HOME '.wmux'
+$StateDir = if ($env:WMUX_WINDOWS_AGENT_STATE_DIR) { $env:WMUX_WINDOWS_AGENT_STATE_DIR } else { Join-Path $HOME '.wmux' }
 $LogDir = Join-Path $StateDir 'logs'
 $Config = if ($env:WMUX_WINDOWS_AGENT_CONFIG) { $env:WMUX_WINDOWS_AGENT_CONFIG } else { Join-Path $StateDir 'windows-agent.json' }
 $HelperDir = if ($env:WMUX_HELPER_DIR) { $env:WMUX_HELPER_DIR } else { Join-Path $env:LOCALAPPDATA 'wmux\bin' }
@@ -20,6 +20,8 @@ $RequestedLogonType = ''
 $ExpectedRelease = ''
 $ExpectedProtocol = 0
 $ExpectedHelpers = ''
+$LockHoldMs = 0
+$LockTracePath = ''
 if (@($args | Where-Object { [string]$_ -like '--password*' }).Count -gt 0) {
   Write-Error 'Passwords must be entered at the private interactive prompt; --password is not supported.'
   exit 2
@@ -30,6 +32,8 @@ for ($Index = 0; $Index -lt $args.Count - 1; $Index += 1) {
   if ([string]$args[$Index] -eq '--expected-release') { $ExpectedRelease = [string]$args[$Index + 1] }
   if ([string]$args[$Index] -eq '--expected-protocol') { $ExpectedProtocol = [int]$args[$Index + 1] }
   if ([string]$args[$Index] -eq '--expected-helpers') { $ExpectedHelpers = [string]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--hold-ms') { $LockHoldMs = [int]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--trace') { $LockTracePath = [string]$args[$Index + 1] }
 }
 
 function ConvertTo-PowerShellLiteral {
@@ -430,22 +434,34 @@ function Show-Usage {
   Write-Error 'usage: wmux-windows-agent-service [install [--logon-type Interactive|S4U|Password]|refresh-credentials|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
 }
 
+function Open-GenerationLock {
+  param([int]$Port)
+  [System.IO.Directory]::CreateDirectory($StateDir) | Out-Null
+  $LockPath = Join-Path $StateDir "windows-agent-$Port.lock"
+  $Deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    try {
+      return [System.IO.File]::Open(
+        $LockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+    } catch [System.IO.IOException] {
+      Start-Sleep -Milliseconds 50
+    }
+  } while ([DateTime]::UtcNow -lt $Deadline)
+  throw "timed out waiting to reserve Windows agent generation $Port"
+}
+
 function Start-AgentGeneration {
   param([int]$Port)
   if ($Port -lt 1 -or $Port -gt 65535) { throw 'rollout-update requires a valid --port' }
   $GenerationTaskName = "$TaskName-$Port"
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
-  $OwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-  $GenerationMutex = [System.Threading.Mutex]::new($false, "Local\wmux-agent-generation-$OwnerSid-$Port")
-  $GenerationMutexHeld = $false
+  $GenerationLock = Open-GenerationLock -Port $Port
   try {
-    try {
-      $GenerationMutexHeld = $GenerationMutex.WaitOne([TimeSpan]::FromSeconds(30))
-    } catch [System.Threading.AbandonedMutexException] {
-      $GenerationMutexHeld = $true
-    }
-    if (-not $GenerationMutexHeld) { throw "timed out waiting to reserve Windows agent generation $Port" }
   $PasswordPool = Test-PasswordTaskPool
   $ExistingTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   if ($PasswordPool -and -not $ExistingTask) {
@@ -563,8 +579,7 @@ function Start-AgentGeneration {
   } while ([DateTime]::UtcNow -lt $Deadline)
   throw "Windows agent generation on port $Port did not become healthy"
   } finally {
-    if ($GenerationMutexHeld) { $GenerationMutex.ReleaseMutex() }
-    $GenerationMutex.Dispose()
+    $GenerationLock.Dispose()
   }
 }
 
@@ -737,6 +752,20 @@ while ($true) {
 }
 
 switch ($ActionName) {
+  'generation-lock-test' {
+    if ($env:WMUX_WINDOWS_AGENT_LOCK_TEST -ne '1') { throw 'generation-lock-test is disabled' }
+    if ($GenerationPort -lt 1 -or $GenerationPort -gt 65535) { throw 'generation-lock-test requires --port' }
+    if ($LockHoldMs -lt 1 -or $LockHoldMs -gt 5000) { throw 'generation-lock-test requires --hold-ms between 1 and 5000' }
+    if (-not $LockTracePath) { throw 'generation-lock-test requires --trace' }
+    $GenerationLock = Open-GenerationLock -Port $GenerationPort
+    try {
+      [System.IO.File]::AppendAllText($LockTracePath, "start|$PID|$([DateTime]::UtcNow.Ticks)`n")
+      Start-Sleep -Milliseconds $LockHoldMs
+      [System.IO.File]::AppendAllText($LockTracePath, "end|$PID|$([DateTime]::UtcNow.Ticks)`n")
+    } finally {
+      $GenerationLock.Dispose()
+    }
+  }
   'install' {
     if (-not (Test-Path -LiteralPath $Agent -PathType Leaf)) {
       Write-Error "wmux-windows-agent was not found at $Agent"

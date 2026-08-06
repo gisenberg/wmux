@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,9 @@ import {
 } from "../src/shared/windows-agent-protocol.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const pwshAvailable = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
+  encoding: "utf8",
+}).status === 0;
 
 test("Windows agent protocol exports stable paths and bounded polling semantics", () => {
   assert.equal(WINDOWS_AGENT_PROTOCOL_VERSION, 6);
@@ -209,21 +213,76 @@ test("rollout slot activation is owner-serialized and reuses an already-current 
     path.join(repoRoot, "scripts/windows/wmux-windows-agent-service.ps1"),
     "utf8",
   );
-  const mutex = service.indexOf("[System.Threading.Mutex]::new");
-  const wait = service.indexOf("$GenerationMutex.WaitOne", mutex);
-  const currentCheck = service.indexOf("$ExistingRelease -eq $ExpectedRelease", wait);
+  const lockFunction = service.indexOf("function Open-GenerationLock");
+  const exclusive = service.indexOf("[System.IO.FileShare]::None", lockFunction);
+  const acquire = service.indexOf("$GenerationLock = Open-GenerationLock -Port $Port", exclusive);
+  const currentCheck = service.indexOf("$ExistingRelease -eq $ExpectedRelease", acquire);
   const reuse = service.indexOf("reused = $true", currentCheck);
   const stop = service.indexOf("Stop-ScheduledTask -TaskName $GenerationTaskName", reuse);
-  const release = service.indexOf("$GenerationMutex.ReleaseMutex()", stop);
-  assert.ok(mutex > 0);
-  assert.ok(wait > mutex);
-  assert.ok(currentCheck > wait);
+  const release = service.indexOf("$GenerationLock.Dispose()", stop);
+  assert.ok(lockFunction > 0);
+  assert.ok(exclusive > lockFunction);
+  assert.ok(acquire > exclusive);
+  assert.ok(currentCheck > acquire);
   assert.ok(reuse > currentCheck);
   assert.ok(stop > reuse);
   assert.ok(release > stop);
   assert.match(service, /--expected-release/);
   assert.match(service, /--expected-protocol/);
   assert.match(service, /--expected-helpers/);
+});
+
+test("real PowerShell helper processes serialize one rollout slot", { skip: !pwshAvailable }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-generation-lock-"));
+  const tracePath = path.join(directory, "trace.log");
+  const servicePath = path.join(repoRoot, "scripts/windows/wmux-windows-agent-service.ps1");
+  const run = () => new Promise<void>((resolve, reject) => {
+    const child = spawn("pwsh", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      servicePath,
+      "generation-lock-test",
+      "--port",
+      "3482",
+      "--hold-ms",
+      "300",
+      "--trace",
+      tracePath,
+    ], {
+      env: {
+        ...process.env,
+        LOCALAPPDATA: directory,
+        WMUX_WINDOWS_AGENT_STATE_DIR: directory,
+        WMUX_WINDOWS_AGENT_LOCK_TEST: "1",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`PowerShell lock helper exited ${code}: ${stderr}`));
+    });
+  });
+  try {
+    const first = run();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const second = run();
+    await Promise.all([first, second]);
+    const entries = fs.readFileSync(tracePath, "utf8").trim().split("\n").map((line) => {
+      const [event, pid, ticks] = line.split("|");
+      return { event, pid, ticks: BigInt(ticks) };
+    });
+    assert.deepEqual(entries.map(({ event }) => event), ["start", "end", "start", "end"]);
+    assert.notEqual(entries[0].pid, entries[2].pid);
+    assert.ok(entries[2].ticks >= entries[1].ticks);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("Windows agent heartbeat advertises its live callback credentials", () => {
