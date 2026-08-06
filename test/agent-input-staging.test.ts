@@ -372,7 +372,7 @@ test("local and SSH agent backends carry pane capability only as an authenticate
         response.end(JSON.stringify({ ok: true, protocolVersion: 6, capabilities: ["posix-runtime-files-v1"] }));
         return;
       }
-      if (request.method === "POST" && request.url?.startsWith("/sessions/")) {
+      if (request.method === "POST" && /^\/sessions\/[^/]+$/.test(request.url ?? "")) {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
         captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
