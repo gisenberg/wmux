@@ -25,6 +25,44 @@ const waitUntil = async (predicate: () => boolean, timeoutMs = 1000) => {
   }
 };
 
+const listen = (server: http.Server, port: number) => new Promise<void>((resolve, reject) => {
+  const onError = (error: Error) => {
+    server.off("listening", onListening);
+    reject(error);
+  };
+  const onListening = () => {
+    server.off("error", onError);
+    resolve();
+  };
+  server.once("error", onError);
+  server.once("listening", onListening);
+  server.listen(port, "127.0.0.1");
+});
+
+const closeServer = async (server: http.Server) => {
+  if (!server.listening) return;
+  const closed = once(server, "close");
+  server.close();
+  server.closeAllConnections();
+  await closed;
+};
+
+const listenOnAdjacentPorts = async (currentServer: http.Server, sideServer: http.Server) => {
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    await listen(currentServer, 0);
+    const address = currentServer.address();
+    assert.ok(address && typeof address === "object");
+    const currentPort = address.port;
+    try {
+      await listen(sideServer, currentPort + 1);
+      return { currentPort, sidePort: currentPort + 1 };
+    } catch {
+      await closeServer(currentServer);
+    }
+  }
+  throw new Error("could not reserve adjacent loopback ports after 32 attempts");
+};
+
 test("Windows agent updates use a bounded encoded SSH command with an explicit acknowledgement", () => {
   const invocation = buildWindowsAgentUpdateSshInvocation({
     id: "windows",
@@ -476,6 +514,140 @@ test("an idle pinned Windows generation refreshes itself instead of the base age
     session.detach();
     server.close();
     await once(server, "close");
+  }
+});
+
+test("a concurrent create makes same-port refresh defer to a side-by-side generation", async () => {
+  const expectedRelease = expectedWindowsAgentReleaseVersion();
+  const expectedProtocol = expectedWindowsAgentProtocolVersion();
+  let concurrentSessions = 0;
+  let samePortRefreshes = 0;
+  let sidePortRefreshes = 0;
+  let currentDeletes = 0;
+  let sideCreates = 0;
+  let sideGenerationActive = false;
+  let sideAuthorization = "";
+  let sideEnvironment: Record<string, string> | undefined;
+  const currentServer = http.createServer((request, response) => {
+    const requestPath = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && requestPath === "/health") {
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedRelease,
+        protocolVersion: expectedProtocol,
+        helperBundleVersion: "stale",
+        activeSessions: concurrentSessions,
+        draining: false,
+      }));
+      return;
+    }
+    if (request.method === "GET" && requestPath === "/sessions") {
+      response.end(JSON.stringify({
+        sessions: concurrentSessions > 0
+          ? [{ id: "pane_concurrent", status: "running", pid: 44 }]
+          : [],
+      }));
+      return;
+    }
+    if (request.method === "POST" && requestPath.startsWith("/sessions/__wmux_update_")) {
+      response.end(JSON.stringify({ id: requestPath.split("/")[2], status: "running" }));
+      return;
+    }
+    if (request.method === "DELETE" && requestPath.startsWith("/sessions/")) {
+      currentDeletes += 1;
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  const sideServer = http.createServer(async (request, response) => {
+    const requestPath = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && requestPath === "/health") {
+      if (!sideGenerationActive) {
+        response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedRelease,
+        protocolVersion: expectedProtocol,
+        helperBundleVersion: windowsHelperBundleVersion(),
+        activeSessions: sideCreates,
+      }));
+      return;
+    }
+    if (request.method === "POST" && requestPath === "/sessions/pane_refresh_race") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      sideAuthorization = String(request.headers.authorization ?? "");
+      sideEnvironment = (JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        env?: Record<string, string>;
+      }).env;
+      sideCreates += 1;
+      response.end(JSON.stringify({ id: "pane_refresh_race", pid: 45, base: 0, cursor: 0 }));
+      return;
+    }
+    if (request.method === "GET" && requestPath.startsWith("/sessions/pane_refresh_race/output")) {
+      response.end(JSON.stringify({ base: 0, cursor: 0, dataBase64: "", exited: false }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  const { currentPort, sidePort } = await listenOnAdjacentPorts(currentServer, sideServer);
+  const selected: Array<{ port: number; origin: string }> = [];
+  const session = new WindowsAgentSession(
+    {
+      id: "pane_refresh_race",
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "changed-dns.internal",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${currentPort}`,
+      agentPort: currentPort,
+      agentToken: "pinned-token",
+    },
+    80,
+    24,
+    {},
+    async (_machine, rolloutPort) => {
+      if (rolloutPort === currentPort) {
+        samePortRefreshes += 1;
+        concurrentSessions = 1;
+        throw new Error("generation_refresh_busy");
+      }
+      assert.equal(rolloutPort, sidePort);
+      sidePortRefreshes += 1;
+      sideGenerationActive = true;
+      return sidePort;
+    },
+    1_000,
+    undefined,
+    currentPort - 1,
+  );
+  session.on("agentPort", (port, origin) => selected.push({ port, origin }));
+  try {
+    await session.attachReady;
+    assert.equal(session.isExited, false, session.replayOutput);
+    assert.equal(samePortRefreshes, 1);
+    assert.equal(sidePortRefreshes, 1);
+    assert.equal(concurrentSessions, 1, "the session that won the refresh race remains active");
+    assert.equal(currentDeletes, 1, "only the temporary helper staging session is deleted");
+    assert.equal(sideCreates, 1);
+    assert.equal(sideAuthorization, "Bearer pinned-token");
+    assert.equal(sideEnvironment?.WMUX_MACHINE_ID, "windows");
+    assert.deepEqual(selected, [{ port: sidePort, origin: `http://127.0.0.1:${sidePort}` }]);
+  } finally {
+    session.detach();
+    await Promise.all([closeServer(currentServer), closeServer(sideServer)]);
   }
 });
 

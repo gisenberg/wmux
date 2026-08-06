@@ -110,6 +110,99 @@ test("session-agent URL construction rejects public and DNS fallbacks", () => {
   }), "http://100.64.0.8:3481");
 });
 
+test("agent hard-drain and pending-update fences are atomic against concurrent creates", () => {
+  const source = String.raw`
+import json
+import runpy
+import threading
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+
+class FakeSession:
+    def __init__(self, session_id, config, payload, on_exit):
+        self.id = session_id
+        self.exited = False
+        self.on_exit = on_exit
+    def snapshot(self):
+        return {"id": self.id, "status": "exited" if self.exited else "running"}
+    def terminate(self):
+        self.exited = True
+
+module["AgentState"].get_or_create.__globals__["Session"] = FakeSession
+hard_create_wins = 0
+hard_fence_wins = 0
+pending_create_wins = 0
+pending_fence_wins = 0
+
+for index in range(100):
+    state = module["AgentState"]({"backend": "stdio"})
+    barrier = threading.Barrier(2)
+    result = {}
+    def create():
+        barrier.wait()
+        try:
+            state.get_or_create("pane", {})
+            result["created"] = True
+        except module["AgentDrainingError"]:
+            result["created"] = False
+    def fence():
+        barrier.wait()
+        result["health"] = state.begin_drain(False, False)
+    threads = [threading.Thread(target=create), threading.Thread(target=fence)]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join()
+    health = state.health()
+    if result["created"]:
+        hard_create_wins += 1
+        assert health["activeSessions"] == 1
+    else:
+        hard_fence_wins += 1
+        assert health["activeSessions"] == 0 and health["draining"] is True
+
+for index in range(100):
+    state = module["AgentState"]({"backend": "stdio"})
+    old = state.get_or_create("old", {})
+    old.exited = True
+    with state.lock:
+        state.update_pending = True
+        state.restart_when_idle = True
+    barrier = threading.Barrier(2)
+    result = {}
+    def create_pending():
+        barrier.wait()
+        try:
+            state.get_or_create("new", {})
+            result["created"] = True
+        except module["AgentDrainingError"]:
+            result["created"] = False
+    def transition_pending():
+        barrier.wait()
+        state._restart_if_still_idle()
+    threads = [threading.Thread(target=create_pending), threading.Thread(target=transition_pending)]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join()
+    health = state.health()
+    if result["created"]:
+        pending_create_wins += 1
+        assert health["activeSessions"] == 1 and state.restart_requested is False
+    else:
+        pending_fence_wins += 1
+        assert health["activeSessions"] == 0 and health["draining"] is True and state.restart_requested is True
+
+print(json.dumps({
+    "hardCreateWins": hard_create_wins,
+    "hardFenceWins": hard_fence_wins,
+    "pendingCreateWins": pending_create_wins,
+    "pendingFenceWins": pending_fence_wins,
+}))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const outcomes = JSON.parse(result.stdout);
+  assert.equal(outcomes.hardCreateWins + outcomes.hardFenceWins, 100);
+  assert.equal(outcomes.pendingCreateWins + outcomes.pendingFenceWins, 100);
+});
+
 test("Windows agent heartbeat advertises its live callback credentials", () => {
   const source = String.raw`
 import json

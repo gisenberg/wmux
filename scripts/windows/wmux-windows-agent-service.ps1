@@ -435,6 +435,46 @@ function Start-AgentGeneration {
   if ($PasswordPool -and -not $ExistingTask) {
     throw "Password-backed rollout slot $GenerationTaskName is missing. Run wmux-windows-setup refresh-agent-credentials from an interactive shell."
   }
+  if (Test-Path -LiteralPath $GenerationConfig -PathType Leaf) {
+    $ExistingDocument = Get-Content -LiteralPath $GenerationConfig -Raw | ConvertFrom-Json
+    $ExistingHost = if ($ExistingDocument.host) { [string]$ExistingDocument.host } else { '127.0.0.1' }
+    if ($ExistingHost -in @('0.0.0.0', '::')) { $ExistingHost = '127.0.0.1' }
+    $ExistingHeaders = @{}
+    if ($ExistingDocument.token) { $ExistingHeaders.Authorization = "Bearer $($ExistingDocument.token)" }
+    $ExistingHealthUrl = "http://${ExistingHost}:$Port/health"
+    $ExistingDrainUrl = "http://${ExistingHost}:$Port/drain"
+    try {
+      $ExistingHealth = Invoke-RestMethod -Method GET -Uri $ExistingHealthUrl -Headers $ExistingHeaders -TimeoutSec 3
+    } catch {
+      if ($ExistingTask -and [string]$ExistingTask.State -eq 'Running') {
+        throw "refusing to refresh generation $Port because its active sessions cannot be verified"
+      }
+      $ExistingHealth = $null
+    }
+    if ($ExistingHealth) {
+      # Fence session creation under the same agent lock used by create. If a
+      # create won after wmux observed idle, keep that generation intact.
+      $Fence = Invoke-RestMethod `
+        -Method POST `
+        -Uri $ExistingDrainUrl `
+        -Headers $ExistingHeaders `
+        -ContentType 'application/json' `
+        -Body (@{ restartWhenIdle = $false; allowNewSessions = $false } | ConvertTo-Json -Compress) `
+        -TimeoutSec 3
+      $ActiveSessions = Get-ActiveSessionCount $Fence
+      if ($ActiveSessions -gt 0) {
+        Invoke-RestMethod -Method DELETE -Uri $ExistingDrainUrl -Headers $ExistingHeaders -TimeoutSec 3 | Out-Null
+        throw "generation_refresh_busy: generation $Port gained $ActiveSessions active pane session(s)"
+      }
+      # Creates cannot pass the hard fence, so a non-zero recheck always aborts.
+      $FencedHealth = Invoke-RestMethod -Method GET -Uri $ExistingHealthUrl -Headers $ExistingHeaders -TimeoutSec 3
+      $ActiveSessions = Get-ActiveSessionCount $FencedHealth
+      if ($ActiveSessions -gt 0) {
+        Invoke-RestMethod -Method DELETE -Uri $ExistingDrainUrl -Headers $ExistingHeaders -TimeoutSec 3 | Out-Null
+        throw "generation_refresh_busy: generation $Port owns $ActiveSessions active pane session(s) after fencing"
+      }
+    }
+  }
   $Document = if (Test-Path -LiteralPath $Config -PathType Leaf) {
     Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
   } else {
