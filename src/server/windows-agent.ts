@@ -344,6 +344,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     private readonly activateUpdate: WindowsAgentUpdateActivator = activateWindowsAgentUpdate,
     private readonly updateRestartTimeoutMs = UPDATE_RESTART_TIMEOUT_MS,
     private readonly restoredCheckpoint?: AttachReplay,
+    private readonly configuredBaseAgentPort?: number,
     private readonly runtimeFiles: BackendRuntimeFile[] = [],
   ) {
     super();

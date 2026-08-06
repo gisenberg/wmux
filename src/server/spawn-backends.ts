@@ -804,9 +804,9 @@ unset -f __wmux_stage_agent_input_v1;`
     return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
   if (backend === "screen") {
-    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
-  return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
+  return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; ${fallbackShell}`;
 };
 
 const stageLocalRuntime = (sessionName: string, innerScript: string): string => {
