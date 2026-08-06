@@ -682,6 +682,10 @@ export function AppShell() {
     const request = (state.agentInputRequests ?? []).find((candidate) => candidate.id === requestId);
     if (!request || (agentInputDeepLink.generation !== undefined
       && request.generation !== agentInputDeepLink.generation)) return;
+    if (!isAgentInputRequestVisible(request.state)) {
+      setAgentInputDeepLink(null);
+      return;
+    }
     if (activeWorkspace?.id !== request.workspaceId || activeTab?.id !== request.tabId) {
       activateWorkspaceTab(request.workspaceId, request.tabId);
       return;

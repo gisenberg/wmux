@@ -304,6 +304,13 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     }));
     await expect.poll(() => bootstrapCalls).toBeGreaterThan(callsBeforeGap);
     await expect(page.locator(`[data-request-id="${gapRequest.id}"]`)).toBeVisible();
+    await page.evaluate((path) => {
+      window.history.pushState(null, "", path);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, `/workspaces/${createdWorkspace.id}/tabs/${createdWorkspace.tabs[0]!.id}`);
+    await expect(page).toHaveURL(new RegExp(createdWorkspace.id));
+    await page.waitForTimeout(700);
+    await expect(page).toHaveURL(new RegExp(createdWorkspace.id));
   } finally {
     await request.delete(`/api/workspaces/${createdWorkspace.id}`).catch(() => undefined);
   }
