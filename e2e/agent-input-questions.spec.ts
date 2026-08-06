@@ -271,6 +271,7 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       (window as any).__wmuxNotifications.find((item: any) => item.options?.tag === tag).onclick()
     ), notification.id);
     await expect(page).toHaveURL(new RegExp(target.id));
+    await expect(page.locator(`a[href="/workspaces/${target.id}/tabs/${targetTab.id}"]`)).toHaveAttribute("aria-current", "page");
     await expect(mainCard).toHaveCount(0);
 
     const callsBeforeGap = bootstrapCalls;
@@ -309,8 +310,10 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       window.dispatchEvent(new PopStateEvent("popstate"));
     }, `/workspaces/${createdWorkspace.id}/tabs/${createdWorkspace.tabs[0]!.id}`);
     await expect(page).toHaveURL(new RegExp(createdWorkspace.id));
+    await expect(page.locator(`a[href="/workspaces/${createdWorkspace.id}/tabs/${createdWorkspace.tabs[0]!.id}"]`)).toHaveAttribute("aria-current", "page");
     await page.waitForTimeout(700);
     await expect(page).toHaveURL(new RegExp(createdWorkspace.id));
+    await expect(page.locator(`a[href="/workspaces/${createdWorkspace.id}/tabs/${createdWorkspace.tabs[0]!.id}"]`)).toHaveAttribute("aria-current", "page");
   } finally {
     await request.delete(`/api/workspaces/${createdWorkspace.id}`).catch(() => undefined);
   }

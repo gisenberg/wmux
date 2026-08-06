@@ -682,16 +682,18 @@ export function AppShell() {
     const request = (state.agentInputRequests ?? []).find((candidate) => candidate.id === requestId);
     if (!request || (agentInputDeepLink.generation !== undefined
       && request.generation !== agentInputDeepLink.generation)) return;
-    if (!isAgentInputRequestVisible(request.state)) {
-      setAgentInputDeepLink(null);
-      return;
-    }
+    const requestVisible = isAgentInputRequestVisible(request.state);
     if (activeWorkspace?.id !== request.workspaceId || activeTab?.id !== request.tabId) {
       activateWorkspaceTab(request.workspaceId, request.tabId);
       return;
     }
     if (activePane?.id !== request.paneId) {
       activatePane(request.tabId, request.paneId);
+      if (!requestVisible) setAgentInputDeepLink(null);
+      return;
+    }
+    if (!requestVisible) {
+      setAgentInputDeepLink(null);
       return;
     }
     let settleTimer: number | undefined;
