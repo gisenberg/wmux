@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "./fixtures";
+import { awaitAppShell, expect, test, type Page } from "./fixtures";
 import { e2eRegistrationToken } from "./config-auth.js";
 
 interface FleetWorkspace {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test, type APIRequestContext, type Page } from "./fixtures";
+import { awaitAppShell, expect, test, type APIRequestContext, type Page } from "./fixtures";
 
 const captureEnabled =
   process.env.WMUX_CAPTURE_DOCS === "1" || process.env.npm_lifecycle_event === "docs:screenshots";

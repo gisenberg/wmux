@@ -1,4 +1,4 @@
-import { createNestedWorkspacePair, expect, test, type E2eWorkspace } from "./fixtures";
+import { awaitAppShell, createNestedWorkspacePair, expect, test, type E2eWorkspace } from "./fixtures";
 import { e2eRegistrationToken } from "./config-auth.js";
 
 test("navigates, persists, targets spaces, and moves nested workspaces", async ({ page, request }, testInfo) => {
