@@ -14,6 +14,8 @@ import { api, modalSettingsUpdate, UnauthorizedError, WorkspaceReorderConflictEr
 import { DiagnosticsModal } from "./DiagnosticsModal";
 import { ActivityPanel, buildActivityItems } from "./ActivityPanel";
 import { AgentFleet, type AgentFleetRow } from "./AgentFleet";
+import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
+import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { SettingsModal, cleanAlias, defaultSettings } from "./SettingsModal";
 import { MachineManagerModal } from "./MachineManagerModal";
@@ -107,6 +109,23 @@ import type {
 } from "./types";
 
 const maxMountedTabViews = 6;
+
+const currentAgentInputDeepLink = (): { id: string; generation?: number } | null => {
+  const query = new URLSearchParams(window.location.search);
+  const id = query.get("agentInput");
+  if (!id) return null;
+  const rawGeneration = query.get("generation");
+  const generation = rawGeneration && /^\d+$/.test(rawGeneration) ? Number(rawGeneration) : undefined;
+  return { id, ...(generation && Number.isSafeInteger(generation) ? { generation } : {}) };
+};
+
+const removeCurrentAgentInputDeepLink = (): void => {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("agentInput") && !url.searchParams.has("generation")) return;
+  url.searchParams.delete("agentInput");
+  url.searchParams.delete("generation");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+};
 
 interface MountedTabView {
   key: string;
@@ -217,6 +236,7 @@ export function AppShell() {
   const favoriteWriteVersion = useRef(0);
   const desiredFavoriteWorkspaceIds = useRef<string[] | null>(null);
   const terminalFocusToken = useRef(0);
+  const [agentInputDeepLink, setAgentInputDeepLink] = useState(() => currentAgentInputDeepLink());
   const mobileSidebarRef = useRef<HTMLElement | null>(null);
   const mobileSidebarCloseRef = useRef<HTMLButtonElement | null>(null);
   const finishBoot = useCallback(() => setBootComplete(true), []);
@@ -235,7 +255,7 @@ export function AppShell() {
   const rebaseIncomingState = useCallback((payload: BootstrapPayload): BootstrapPayload =>
     rebaseFavoriteWorkspaceIds(
       rebaseCollapsedWorkspaceIds(
-        applyOptimisticCreations(payload, optimisticCreations.current.values()),
+        applyOptimisticCreations({ ...payload, agentInputRequests: payload.agentInputRequests ?? [] }, optimisticCreations.current.values()),
         desiredCollapsedWorkspaceIds.current,
       ),
       desiredFavoriteWorkspaceIds.current,
@@ -631,9 +651,13 @@ export function AppShell() {
   }, []);
 
   // Nothing focuses the active terminal while the boot overlay covers the
-  // shell, so request focus once when the overlay lifts.
+  // shell, so request focus once when the overlay lifts. This is a fallback:
+  // if another surface (an agent-input question card opened from a deep link)
+  // already holds focus, it must keep it.
   useEffect(() => {
     if (!bootComplete || mobileViewport.isMobile) return;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && !focused.closest(".retro-boot-screen")) return;
     if (activeWorkspace && activeTab) requestTerminalFocus(activeWorkspace.id, activeTab.id);
   }, [bootComplete]);
 
@@ -652,6 +676,73 @@ export function AppShell() {
     rebaseIncomingState,
   });
   refreshRef.current = refresh;
+
+  useEffect(() => {
+    const update = () => setAgentInputDeepLink(currentAgentInputDeepLink());
+    const notificationNavigate = () => update();
+    window.addEventListener("popstate", update);
+    window.addEventListener("wmux-notification-navigate", notificationNavigate);
+    return () => {
+      window.removeEventListener("popstate", update);
+      window.removeEventListener("wmux-notification-navigate", notificationNavigate);
+    };
+  }, []);
+
+  const clearAgentInputDeepLink = useCallback(() => {
+    removeCurrentAgentInputDeepLink();
+    setAgentInputDeepLink(null);
+  }, []);
+
+  useEffect(() => {
+    const requestId = agentInputDeepLink?.id;
+    if (!requestId || !state) return;
+    const request = (state.agentInputRequests ?? []).find((candidate) => candidate.id === requestId);
+    if (!request || (agentInputDeepLink.generation !== undefined
+      && request.generation !== agentInputDeepLink.generation)) return;
+    const requestVisible = isAgentInputRequestVisible(request.state);
+    if (activeWorkspace?.id !== request.workspaceId || activeTab?.id !== request.tabId) {
+      activateWorkspaceTab(request.workspaceId, request.tabId);
+      return;
+    }
+    if (activePane?.id !== request.paneId) {
+      activatePane(request.tabId, request.paneId);
+      if (!requestVisible) clearAgentInputDeepLink();
+      return;
+    }
+    if (!requestVisible) {
+      clearAgentInputDeepLink();
+      return;
+    }
+    // The navigation above also queued a terminal focus request. Drop it so a
+    // terminal that finishes mounting after the reassert window below cannot
+    // steal focus from the question card on slow hardware.
+    setTerminalFocusRequest(null);
+    let settleTimer: number | undefined;
+    let focusInterval: number | undefined;
+    const focusCard = (settled: boolean) => {
+      const card = document.querySelector<HTMLElement>(`[data-request-id="${CSS.escape(requestId)}"]`);
+      const focusTarget = card?.querySelector<HTMLElement>("input:not(:disabled), button:not(:disabled)") ?? card;
+      focusTarget?.focus({ preventScroll: false });
+      card?.scrollIntoView({ block: "nearest" });
+      if (card && settled) clearAgentInputDeepLink();
+    };
+    const frame = window.requestAnimationFrame(() => {
+      focusCard(false);
+      // Terminal startup also requests focus in several mount phases. Reassert
+      // through that bounded window so the stable request generation wins.
+      focusInterval = window.setInterval(() => focusCard(false), 50);
+      settleTimer = window.setTimeout(() => {
+        if (focusInterval) window.clearInterval(focusInterval);
+        focusInterval = undefined;
+        focusCard(true);
+      }, 500);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (focusInterval) window.clearInterval(focusInterval);
+      if (settleTimer) window.clearTimeout(settleTimer);
+    };
+  }, [activatePane, activateWorkspaceTab, activePane?.id, activeTab?.id, activeWorkspace?.id, agentInputDeepLink, clearAgentInputDeepLink, state]);
 
   const persistCollapsedWorkspaceIds = useCallback((collapsedWorkspaceIds: string[]): Promise<void> => {
     const version = ++collapseWriteVersion.current;
@@ -822,6 +913,11 @@ export function AppShell() {
   } as CSSProperties;
   const showMobileModeBar = mobileViewport.isMobile;
   const showMobileAgentSurface = showMobileModeBar && mobileSurfaceMode === "agent";
+  const activeAgentInputRequests = activePane
+    ? (state?.agentInputRequests ?? []).filter((request) => (
+      request.paneId === activePane.id && isAgentInputRequestVisible(request.state)
+    ))
+    : [];
   const mobileHeaderMachine = activePane
     ? machineFor(displayMachines, activePane.machineId)
     : activeWorkspace
@@ -1245,6 +1341,10 @@ export function AppShell() {
     if (!latest) return;
     activateWorkspaceTab(latest.workspaceId, latest.tabId);
     await activatePaneInTab(latest.tabId, latest.paneId);
+    if (latest.href && latest.agentInputRequestId) {
+      window.history.pushState(null, "", latest.href);
+      setAgentInputDeepLink(currentAgentInputDeepLink());
+    }
   };
 
   const openCommandPalette = () => {
@@ -1869,6 +1969,14 @@ export function AppShell() {
             onCopyLink={copyActiveLink}
             onEnableNotifications={enableBrowserNotifications}
             onMarkRead={markWorkspaceRead}
+          />
+        ) : null}
+        {!showMobileModeBar && activeAgentInputRequests.length > 0 ? (
+          <AgentInputRequestShelf
+            requests={activeAgentInputRequests}
+            onOpenTerminal={() => {
+              if (activeWorkspace && activeTab) requestTerminalFocus(activeWorkspace.id, activeTab.id);
+            }}
           />
         ) : null}
         {showMobileAgentSurface ? (

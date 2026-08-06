@@ -1,4 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { WebSocket } from "ws";
 import { OscColorQueryParser } from "../shared/terminal-color-queries.js";
 import {
@@ -9,8 +12,13 @@ import type { BrowserAuthMode } from "./auth.js";
 import { AgentSessionService } from "./agent-sessions.js";
 import type { MachineConfig, MachineSource, PaneClientMessage, PaneServerMessage, PaneState } from "./types.js";
 import type { StateStore } from "./state.js";
+import type {
+  AgentInputRegistrationCapability,
+  AgentInputSessionBinding,
+} from "./agent-input-credential-store.js";
 import {
   createSessionBackend,
+  type BackendRuntimeFile,
   type BackendSession,
   type SessionBackend,
 } from "./backends/index.js";
@@ -138,6 +146,7 @@ export class SessionManager {
   private socketState = new Map<WebSocket, SocketState>();
   private ignoredSessionExits = new WeakSet<BackendSession>();
   private sessionMachines = new Map<string, MachineConfig>();
+  private agentInputSessionBindings = new Map<string, AgentInputSessionBinding>();
   private paneInputEpochs = new Map<string, number>();
   private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
   private durableRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -154,6 +163,11 @@ export class SessionManager {
   private readonly currentMachines: () => MachineConfig[];
   private readonly terminalCheckpoints: TerminalCheckpointStore;
   private readonly durableEndpoints: DurableEndpointStore;
+  private agentInputCapabilityIssuer?: (
+    paneId: string,
+    binding: AgentInputSessionBinding,
+  ) => AgentInputRegistrationCapability;
+  private agentInputSourceRetirer?: (paneId: string, binding: AgentInputSessionBinding) => void;
 
   constructor(
     private readonly state: StateStore,
@@ -209,9 +223,30 @@ export class SessionManager {
     return [...this.sessions.values()].some((session) => session.pane.machineId === machineId && !session.isExited);
   }
 
-  hasLivePaneSession(paneId: string): boolean {
+  setAgentInputCapabilityIssuer(
+    issuer: ((paneId: string, binding: AgentInputSessionBinding) => AgentInputRegistrationCapability) | undefined,
+  ): void {
+    this.agentInputCapabilityIssuer = issuer;
+  }
+
+  setAgentInputSourceRetirer(
+    retirer: ((paneId: string, binding: AgentInputSessionBinding) => void) | undefined,
+  ): void {
+    this.agentInputSourceRetirer = retirer;
+  }
+
+  hasLivePaneSession(paneId: string, expectedBinding?: AgentInputSessionBinding): boolean {
+    const pane = this.state.findPane(paneId);
     const session = this.sessions.get(paneId);
-    return Boolean(this.state.findPane(paneId) && session && !session.isExited && this.sessionMachines.has(paneId));
+    const binding = this.agentInputSessionBindings.get(paneId);
+    return Boolean(pane?.status === "running" && session && !session.isExited
+      && this.sessionMachines.has(paneId) && binding
+      && (!expectedBinding || sameAgentInputSessionBinding(binding, expectedBinding)));
+  }
+
+  agentInputSessionBinding(paneId: string): AgentInputSessionBinding | undefined {
+    const binding = this.agentInputSessionBindings.get(paneId);
+    return binding ? structuredClone(binding) : undefined;
   }
 
   async readKittyGraphicsSource(paneId: string, request: KittyGraphicsSourceRequest): Promise<Buffer> {
@@ -540,12 +575,50 @@ export class SessionManager {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
     const backend = createSessionBackend(machine, this.pasteImages, { windowsAgentBasePort });
+    const agentInputBinding = createAgentInputSessionBinding(
+      pane.id,
+      backend,
+      machine,
+    );
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
       const previousBackend = this.backends.get(pane.id)
         ?? createSessionBackend(previousSessionMachine, this.pasteImages);
       void previousBackend.dispose(pane.id, undefined, { kill: false });
     }
     const context = this.state.findPaneContext(pane.id);
+    let agentInputEnvironment: Record<string, string> = {};
+    let runtimeFiles: BackendRuntimeFile[] | undefined;
+    if (this.agentInputCapabilityIssuer && (machine.kind === "local" || machine.kind === "ssh")) {
+      try {
+        const issued = this.agentInputCapabilityIssuer(pane.id, agentInputBinding);
+        if (machine.sessionBackend === "agent") {
+          runtimeFiles = [{ purpose: "agent-input-capability", data: Buffer.from(`${issued.capability}\n`, "utf8") }];
+        } else {
+          agentInputEnvironment = machine.kind === "local"
+            ? stageLocalAgentInputCapability(pane.id, issued.capability)
+            : { WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: issued.capability };
+        }
+      } catch {
+        // Structured questions fail closed; terminal startup remains available.
+      }
+    } else if (machine.kind === "local") {
+      removeLocalAgentInputCapability(pane.id);
+    }
+    const processReplacementRuntimeFiles = (): BackendRuntimeFile[] => {
+      const previousBinding = this.agentInputSessionBindings.get(pane.id);
+      if (previousBinding) this.agentInputSourceRetirer?.(pane.id, previousBinding);
+      const replacementBinding = createAgentInputSessionBinding(pane.id, backend, machine);
+      this.agentInputSessionBindings.set(pane.id, replacementBinding);
+      if (!this.agentInputCapabilityIssuer || (machine.kind !== "local" && machine.kind !== "ssh")) {
+        return [];
+      }
+      try {
+        const issued = this.agentInputCapabilityIssuer(pane.id, replacementBinding);
+        return [{ purpose: "agent-input-capability", data: Buffer.from(`${issued.capability}\n`, "utf8") }];
+      } catch {
+        return [];
+      }
+    };
     const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
     const streamPath = streamPathForMachine(machine.id);
     const sessionEnv = {
@@ -558,6 +631,7 @@ export class SessionManager {
           : this.helperToken,
         this.browserAuthMode,
       ),
+      ...agentInputEnvironment,
       WMUX_URL: resolveHelperUrl(`http://${process.env.WMUX_HOST ?? "127.0.0.1"}:${process.env.WMUX_PORT ?? "3478"}`),
       WMUX_WORKSPACE_ID: context?.workspace.id ?? "",
       WMUX_WORKSPACE_NAME: context?.workspace.name ?? "",
@@ -585,12 +659,15 @@ export class SessionManager {
       cols,
       rows,
       env: sessionEnv,
+      ...(runtimeFiles ? { runtimeFiles } : {}),
+      processReplacementRuntimeFiles,
       ...(restoredCheckpoint ? { restoredCheckpoint } : {}),
     });
     const startedAt = Date.now();
     this.sessions.set(pane.id, session);
     this.backends.set(pane.id, backend);
     this.sessionMachines.set(pane.id, structuredClone(machine));
+    this.agentInputSessionBindings.set(pane.id, agentInputBinding);
     this.durableEndpoints.bind(pane.id, machine, backend.id);
     this.state.updatePane(pane.id, { status: "running", exitCode: undefined, title: pane.title });
     this.cancelPaneCwdRefresh(pane.id);
@@ -649,6 +726,7 @@ export class SessionManager {
         }
       }
       this.sessions.delete(pane.id);
+      const exitedAgentInputBinding = this.agentInputSessionBindings.get(pane.id);
       this.resizeOwners.delete(pane.id);
       this.paneSizes.delete(pane.id);
       const context = this.state.findPaneContext(pane.id);
@@ -659,6 +737,8 @@ export class SessionManager {
         // flaky SSH host or transient error never deletes the workspace. The
         // pane is re-spawned when a client next attaches.
         this.state.updatePane(pane.id, { status: "exited", exitCode: code ?? null });
+        if (exitedAgentInputBinding) this.agentInputSourceRetirer?.(pane.id, exitedAgentInputBinding);
+        this.agentInputSessionBindings.delete(pane.id);
         return;
       }
 
@@ -670,6 +750,7 @@ export class SessionManager {
       this.terminalCheckpoints.delete(pane.id);
       this.backends.delete(pane.id);
       this.sessionMachines.delete(pane.id);
+      this.agentInputSessionBindings.delete(pane.id);
       this.durableEndpoints.deleteActiveForPane(pane.id);
       this.paneInputEpochs.delete(pane.id);
       if (exitedMachine) void this.pasteImages.cleanupPane(pane.id, exitedMachine);
@@ -821,20 +902,23 @@ export class SessionManager {
     }
     for (const timer of this.durableRefreshTimers) clearTimeout(timer);
     this.durableRefreshTimers.clear();
+    for (const pending of this.pendingWorkspaceCloses.values()) clearTimeout(pending.timer);
+    this.pendingWorkspaceCloses.clear();
     this.durableCwdRefreshTimers.clear();
     this.durableCwdRefreshInFlight.clear();
     this.durableCwdLastReadAt.clear();
     for (const timer of this.pausedSessions.values()) clearInterval(timer);
     this.pausedSessions.clear();
-    for (const pending of this.pendingWorkspaceCloses.values()) clearTimeout(pending.timer);
-    this.pendingWorkspaceCloses.clear();
-    for (const session of this.sessions.values()) {
+    for (const [paneId, session] of this.sessions) {
+      const binding = this.agentInputSessionBindings.get(paneId);
+      if (binding) this.agentInputSourceRetirer?.(paneId, binding);
       this.ignoredSessionExits.add(session);
-      this.backends.get(session.pane.id)?.detach(session);
+      this.backends.get(paneId)?.detach(session);
     }
     this.sessions.clear();
     this.backends.clear();
     this.sessionMachines.clear();
+    this.agentInputSessionBindings.clear();
     this.paneInputEpochs.clear();
     this.resizeOwners.clear();
     this.paneSizes.clear();
@@ -890,6 +974,9 @@ export class SessionManager {
     this.resizeOwners.delete(pane.id);
     this.paneSizes.delete(pane.id);
     const backend = this.backends.get(pane.id);
+    const binding = this.agentInputSessionBindings.get(pane.id);
+    if (binding) this.agentInputSourceRetirer?.(pane.id, binding);
+    this.agentInputSessionBindings.delete(pane.id);
     if (backend) {
       backend.detach(existing);
     } else {
@@ -1003,6 +1090,7 @@ export class SessionManager {
     this.sessions.delete(paneId);
     this.backends.delete(paneId);
     this.sessionMachines.delete(paneId);
+    this.agentInputSessionBindings.delete(paneId);
     this.paneInputEpochs.delete(paneId);
     this.resizeOwners.delete(paneId);
     this.paneSizes.delete(paneId);
@@ -1146,9 +1234,90 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
   return null;
 };
 
+const stageLocalAgentInputCapability = (
+  paneId: string,
+  capability: string,
+): Record<string, string> => {
+  const directory = path.join(os.homedir(), ".wmux", "agent-input");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const directoryStat = fs.lstatSync(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()
+    || fs.realpathSync(directory) !== path.resolve(directory)
+    || (typeof process.getuid === "function" && directoryStat.uid !== process.getuid())
+    || (directoryStat.mode & 0o077) !== 0) {
+    throw new Error("agent input staging directory is unsafe");
+  }
+  const capabilityPath = path.join(directory, `${paneId}.cap`);
+  const credentialPath = path.join(directory, `${paneId}.json`);
+  const temporary = `${capabilityPath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  try {
+    if (fs.existsSync(capabilityPath)) {
+      const existing = fs.lstatSync(capabilityPath);
+      if (!existing.isFile() || existing.isSymbolicLink()
+        || (typeof process.getuid === "function" && existing.uid !== process.getuid())) {
+        throw new Error("agent input capability path is unsafe");
+      }
+    }
+    fs.writeFileSync(temporary, `${capability}\n`, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, capabilityPath);
+    fs.chmodSync(capabilityPath, 0o600);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+  return {
+    WMUX_AGENT_INPUT_CAPABILITY_PATH: capabilityPath,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: credentialPath,
+  };
+};
+
+const removeLocalAgentInputCapability = (paneId: string): void => {
+  if (!/^[A-Za-z0-9._-]{1,256}$/.test(paneId)) return;
+  const candidate = path.join(os.homedir(), ".wmux", "agent-input", `${paneId}.cap`);
+  try {
+    const stat = fs.lstatSync(candidate);
+    if (!stat.isFile() || stat.isSymbolicLink()) return;
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) return;
+    fs.rmSync(candidate);
+  } catch {
+    // Absence or an unsafe path is already fail-closed.
+  }
+};
+
 export const isTerminalProtocolResponseInput = isTerminalProtocolResponse;
 
 const normalizeSize = (cols: number, rows: number): { cols: number; rows: number } => ({
   cols: Number.isFinite(cols) && cols >= 2 ? Math.floor(cols) : 80,
   rows: Number.isFinite(rows) && rows >= 1 ? Math.floor(rows) : 24,
 });
+
+export const createAgentInputSessionBinding = (
+  paneId: string,
+  backend: Pick<SessionBackend, "id">,
+  machine: MachineConfig,
+): AgentInputSessionBinding => {
+  const endpointFingerprint = crypto.createHash("sha256").update(JSON.stringify({
+    id: machine.id,
+    kind: machine.kind,
+    host: machine.host,
+    user: machine.user,
+    port: machine.port,
+    sessionBackend: machine.sessionBackend,
+    agentUrl: machine.agentUrl,
+    agentPort: machine.agentPort,
+  })).digest("hex");
+  // This authority epoch is created for one live wmux-to-backend attachment.
+  // Client recycling, process replacement, exit, and restart all rotate it so
+  // pane-id or endpoint reuse cannot revive an old source credential.
+  void paneId;
+  const sessionIncarnation = crypto.randomBytes(32).toString("hex");
+  return { backendId: backend.id, sessionIncarnation, endpointFingerprint };
+};
+
+const sameAgentInputSessionBinding = (
+  left: AgentInputSessionBinding,
+  right: AgentInputSessionBinding,
+): boolean => left.backendId === right.backendId
+  && left.sessionIncarnation === right.sessionIncarnation
+  && left.endpointFingerprint === right.endpointFingerprint;

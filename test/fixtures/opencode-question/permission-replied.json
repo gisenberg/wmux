@@ -1,0 +1,5 @@
+{
+  "id": "event-permission-replied-synthetic",
+  "type": "permission.replied",
+  "properties": { "requestID": "permission-synthetic", "sessionID": "session-synthetic", "response": "once" }
+}

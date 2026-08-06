@@ -9,8 +9,13 @@ export const authorizeHttpPrincipal = (
 ): boolean => {
   if (policy.access === "public") return true;
   if (policy.access === "registration") return principal.kind === "registration";
+  if (policy.access === "agent-input-registration") return principal.kind === "agent-input-registration";
+  if (policy.access === "agent-input-source") return principal.kind === "agent-input-source";
+  if (principal.kind === "agent-input-registration" || principal.kind === "agent-input-source") return false;
   if (principal.kind === "registered-host") return Boolean(policy.registeredHost);
   if (!auth.enabled) return true;
+  if (policy.userOnly) return principal.kind === "browser-session"
+    || (principal.kind === "legacy-shared" && (auth.browserAuthMode ?? "shared-or-login") === "shared-or-login");
   if (policy.browserSessionOnly) return principal.kind === "browser-session";
   if (principal.kind === "browser-session") return !policy.browserDenied;
   if (principal.kind === "legacy-shared") return (auth.browserAuthMode ?? "shared-or-login") === "shared-or-login";

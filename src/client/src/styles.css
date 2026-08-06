@@ -7459,3 +7459,31 @@ button.active-tool {
     animation: none;
   }
 }
+/* Structured agent input stays in chrome; terminal canvases remain untouched. */
+.agent-input-shelf {
+  position: absolute;
+  z-index: 30;
+  top: 38px;
+  right: 12px;
+  width: min(430px, calc(100% - 24px));
+  max-height: calc(100% - 54px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--wmux-mono-font);
+  box-shadow: 8px 8px 0 color-mix(in srgb, var(--terminal-background) 75%, transparent);
+}
+
+.agent-input-card { padding: 10px; }
+.agent-input-card > header,
+.agent-input-card > footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.agent-input-card > header { border-bottom: 1px solid var(--line); padding-bottom: 7px; text-transform: uppercase; }
+.agent-input-card fieldset { border: 0; border-bottom: 1px solid var(--line); margin: 0; padding: 10px 0; }
+.agent-input-card legend { color: var(--gold); font-weight: 700; text-transform: uppercase; }
+.agent-input-card p { margin: 5px 0 8px; }
+.agent-input-card label { display: flex; gap: 8px; padding: 4px 0; }
+.agent-input-card label small { display: block; opacity: 0.7; }
+.agent-input-custom { width: 100%; margin-top: 6px; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); padding: 6px; }
+.agent-input-card button { border: 0; background: transparent; color: var(--gold); font: inherit; padding: 8px 0; cursor: pointer; }
+.agent-input-card button:disabled { opacity: 0.45; cursor: default; }

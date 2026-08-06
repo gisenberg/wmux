@@ -17,6 +17,8 @@ test("OpenCode installer writes an idempotent global plugin without touching con
   const configPath = path.join(configHome, "opencode", "opencode.json");
   const config = '{"unrelated":true}\n';
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.chmodSync(configHome, 0o700);
+  fs.chmodSync(path.join(configHome, "opencode"), 0o700);
   fs.writeFileSync(configPath, config);
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome };
   const hooks = path.join(repoRoot, "scripts", "wmux-hooks");
@@ -32,6 +34,7 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.match(plugin, /question\.asked/);
     assert.match(plugin, /question\.replied/);
     assert.match(plugin, /question\.rejected/);
+    assert.match(plugin, /custom: question\.custom \?\? true/);
     assert.match(plugin, /permission\.asked/);
     assert.match(plugin, /permission\.replied/);
     assert.match(plugin, /event\.type === "session\.updated"/);
@@ -48,16 +51,106 @@ test("OpenCode installer writes an idempotent global plugin without touching con
     assert.match(plugin, /\^New session - \\d\{4\}/);
     assert.match(plugin, /cacheTitle\(input\.sessionID, session\.data\?\.title\)/);
     assert.match(plugin, /const title = titles\.get\(sessionID\) \|\| sessionTitle\(session\?\.data\?\.title\) \|\| current\.title/);
+    assert.match(plugin, /if \(!await beginDelivery\(delivery\)\) \{[\s\S]*deliveryStates\.delete\(invocationKey\)/,
+      "an unstarted delivery remains eligible after broker refresh or start-response loss");
+    assert.match(plugin, /result\.data\.length > 256/,
+      "the v9 compatibility contract bounds snapshot validation before per-session SDK calls");
+    assert.match(plugin, /Buffer\.byteLength\(JSON\.stringify\(message\)\) > MAX_BROKER_LINE_BYTES/,
+      "complete snapshots cannot be silently dropped at the broker-control line bound");
+    assert.match(plugin, /return questionBroker\?\.send\(\{[\s\S]*type: "asked"[\s\S]*\}\) === true/,
+      "direct asks report broker-line admission instead of silently succeeding");
+    assert.match(plugin, /Math\.min\(8, validated\.length\)/,
+      "snapshot session validation uses bounded concurrency under one deadline");
+    assert.match(plugin, /Symbol\.for\("wmux\.opencode\.question-broker-owner"\)/,
+      "plugin replacement owns and retires one broker process");
     await execFileAsync(process.execPath, ["--experimental-strip-types", "--check", pluginPath]);
     const before = fs.statSync(pluginPath).mtimeMs;
+    fs.chmodSync(pluginPath, 0o644);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await execFileAsync(hooks, ["install", "opencode"], { env });
     assert.equal(fs.statSync(pluginPath).mtimeMs, before);
+    assert.equal(fs.statSync(pluginPath).mode & 0o777, 0o600, "unchanged managed plugins still receive owner-only mode repair");
     assert.equal(fs.readFileSync(configPath, "utf8"), config);
     const { stdout } = await execFileAsync(hooks, ["status"], { env });
     const status = JSON.parse(stdout) as Record<string, unknown>;
     assert.equal(status.opencode, "installed");
     assert.equal(status.opencodePath, pluginPath);
+    assert.equal(status.opencodeParity, true);
+    assert.match(String(status.opencodeExpectedHash), /^[a-f0-9]{64}$/);
+    assert.equal(status.opencodeExpectedHash, status.opencodeInstalledHash);
+    const hash = (await execFileAsync(hooks, ["hash", "opencode"], { env })).stdout.trim();
+    assert.equal(hash, status.opencodeExpectedHash);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode installer refuses a symlinked plugin staging path", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-hooks-opencode-link-"));
+  const configHome = path.join(home, "config");
+  const pluginDirectory = path.join(configHome, "opencode", "plugins");
+  const target = path.join(home, "target.ts");
+  fs.mkdirSync(pluginDirectory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, "unmanaged\n", { mode: 0o600 });
+  fs.symlinkSync(target, path.join(pluginDirectory, "wmux.ts"));
+  try {
+    await assert.rejects(
+      execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "opencode"], {
+        env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome },
+      }),
+      /non-symlink/,
+    );
+    assert.equal(fs.readFileSync(target, "utf8"), "unmanaged\n");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode installer rejects unsafe ancestors and files without mutating unmanaged content", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-hooks-opencode-integrity-"));
+  const hooks = path.join(repoRoot, "scripts", "wmux-hooks");
+  try {
+    const unsafeRoot = path.join(home, "unsafe-root");
+    fs.mkdirSync(unsafeRoot, { mode: 0o777 });
+    fs.chmodSync(unsafeRoot, 0o777);
+    await assert.rejects(
+      execFileAsync(hooks, ["install", "opencode"], { env: { ...process.env, HOME: home, XDG_CONFIG_HOME: unsafeRoot } }),
+      /group\/world writable/,
+    );
+    assert.equal(fs.existsSync(path.join(unsafeRoot, "opencode", "plugins", "wmux.ts")), false);
+
+    const configHome = path.join(home, "safe-root");
+    const pluginDirectory = path.join(configHome, "opencode", "plugins");
+    fs.mkdirSync(pluginDirectory, { recursive: true, mode: 0o700 });
+    const pluginPath = path.join(pluginDirectory, "wmux.ts");
+    fs.writeFileSync(pluginPath, "user-owned plugin\n", { mode: 0o600 });
+    await assert.rejects(
+      execFileAsync(hooks, ["install", "opencode"], { env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome } }),
+      /unmanaged file/,
+    );
+    assert.equal(fs.readFileSync(pluginPath, "utf8"), "user-owned plugin\n");
+
+    fs.rmSync(pluginPath);
+    await execFileAsync(hooks, ["install", "opencode"], { env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome } });
+    const managed = fs.readFileSync(pluginPath, "utf8");
+    fs.chmodSync(pluginPath, 0o666);
+    await assert.rejects(
+      execFileAsync(hooks, ["install", "opencode"], { env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome } }),
+      /plugin file must not be group\/world writable/,
+    );
+    assert.equal(fs.readFileSync(pluginPath, "utf8"), managed);
+    assert.equal(fs.statSync(pluginPath).mode & 0o777, 0o666, "unsafe files are rejected rather than silently mutated");
+
+    const linkedRoot = path.join(home, "linked-root");
+    const linkTarget = path.join(home, "linked-target");
+    fs.mkdirSync(linkedRoot, { mode: 0o700 });
+    fs.mkdirSync(linkTarget, { mode: 0o700 });
+    fs.symlinkSync(linkTarget, path.join(linkedRoot, "opencode"));
+    await assert.rejects(
+      execFileAsync(hooks, ["install", "opencode"], { env: { ...process.env, HOME: home, XDG_CONFIG_HOME: linkedRoot } }),
+      /ancestors must not use symlinks/,
+    );
+    assert.equal(fs.existsSync(path.join(linkTarget, "plugins", "wmux.ts")), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -154,8 +247,12 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
     WMUX_TOKEN_PATH: process.env.WMUX_TOKEN_PATH,
     WMUX_PANE_ID: process.env.WMUX_PANE_ID,
     WMUX_WORKSPACE_ID: process.env.WMUX_WORKSPACE_ID,
+    WMUX_AGENT_INPUT_CAPABILITY_PATH: process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH,
+    WMUX_AGENT_INPUT_CREDENTIAL_PATH: process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH,
   };
   try {
+    delete process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH;
+    delete process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH;
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     assert.ok(address && typeof address === "object");
@@ -206,8 +303,8 @@ test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip
       { message: { id: "user-1" }, parts: [{ type: "text", text: "fix hooks" }] },
     );
     const dispatches = [
-      plugin.event({ event: { type: "question.asked", properties: { sessionID: "session-1", id: "question-1" } } }),
-      plugin.event({ event: { type: "question.asked", properties: { sessionID: "session-1", id: "question-1" } } }),
+      plugin.event({ event: { id: "event-question-1", type: "question.asked", properties: { sessionID: "session-1", id: "question-1" } } }),
+      plugin.event({ event: { id: "event-question-1", type: "question.asked", properties: { sessionID: "session-1", id: "question-1" } } }),
       plugin.event({ event: { type: "permission.asked", properties: { sessionID: "session-1", id: "permission-1" } } }),
       plugin.event({ event: { type: "question.replied", properties: { sessionID: "session-1", requestID: "question-1" } } }),
       plugin.event({ event: { type: "permission.replied", properties: { sessionID: "session-1", requestID: "permission-1" } } }),

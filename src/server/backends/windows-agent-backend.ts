@@ -46,6 +46,8 @@ export class WindowsAgentBackend implements SessionBackend {
       undefined,
       spec.restoredCheckpoint,
       this.baseAgentPort,
+      spec.runtimeFiles,
+      spec.processReplacementRuntimeFiles,
     );
   }
 

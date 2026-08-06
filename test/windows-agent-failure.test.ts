@@ -909,6 +909,7 @@ test("Windows agent recreates a live pane when the remote agent loses its sessio
   let remoteCols = 80;
   let remoteRows = 24;
   const createBodies: Array<Record<string, unknown>> = [];
+  let replacementCapabilities = 0;
   const server = http.createServer(async (request, response) => {
     const path = request.url ?? "";
     response.setHeader("content-type", "application/json");
@@ -988,6 +989,16 @@ test("Windows agent recreates a live pane when the remote agent loses its sessio
     },
     80,
     24,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    [],
+    () => {
+      replacementCapabilities += 1;
+      return [{ purpose: "agent-input-capability", data: Buffer.from("replacement-capability\n") }];
+    },
   );
   const output: string[] = [];
   session.on("output", (data) => output.push(data));
@@ -1005,6 +1016,11 @@ test("Windows agent recreates a live pane when the remote agent loses its sessio
   assert.equal(createBodies[1]?.cwd, "C:\\work");
   assert.equal(createBodies[1]?.cols, 120);
   assert.equal(createBodies[1]?.rows, 35);
+  assert.equal(replacementCapabilities, 1);
+  const replacementRuntimeFiles = createBodies[1]?.runtimeFiles as Array<{ purpose: string; dataBase64: string }>;
+  assert.equal(replacementRuntimeFiles.length, 1);
+  assert.equal(replacementRuntimeFiles[0].purpose, "agent-input-capability");
+  assert.equal(Buffer.from(replacementRuntimeFiles[0].dataBase64, "base64").toString("utf8"), "replacement-capability\n");
   assert.match(output.join(""), /Session agent restarted; opened a new shell for this pane/);
   assert.doesNotMatch(output.join(""), /unknown_session/);
 

@@ -3,6 +3,7 @@ import type { ClientSplitIds, ClientTabIds, ClientWorkspaceIds } from "./optimis
 import type {
   AgentFollowUpRequest,
   AgentFollowUpResult,
+  AgentInputAnswerResult,
   BootstrapPayload,
   DoctorReport,
   DurableSessionAudit,
@@ -76,6 +77,7 @@ export class UnauthorizedError extends Error {
   constructor() {
     super("unauthorized");
     this.name = "UnauthorizedError";
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("wmux-auth-required"));
   }
 }
 
@@ -158,6 +160,22 @@ export interface ScopedCredentialMetadata {
 
 export const api = {
   bootstrap: () => json<BootstrapPayload>("/api/bootstrap"),
+  answerAgentInputRequest: async (
+    id: string,
+    expectedGeneration: number,
+    idempotencyKey: string,
+    answers: string[][],
+  ): Promise<AgentInputAnswerResult> => {
+    const response = await fetch(`/api/agent-input/requests/${encodeURIComponent(id)}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ expectedGeneration, idempotencyKey, answers }),
+    });
+    if (response.status === 401) throw new UnauthorizedError();
+    const body = await response.json() as AgentInputAnswerResult;
+    if ([200, 409, 422, 502, 503].includes(response.status)) return body;
+    throw new Error(`HTTP ${response.status}`);
+  },
   authInfo: async (): Promise<AuthInfo> => {
     const response = await fetch("/api/auth-info", { headers: { "cache-control": "no-store" } });
     if (!response.ok) throw new Error(await response.text());

@@ -1,11 +1,20 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolveExternalE2eToken } from "./e2e/config-auth.js";
 import { resolveE2ePort } from "./e2e/config-port.js";
 import { prepareStandardE2eRuntime } from "./e2e/standard-runtime.js";
 
 const port = resolveE2ePort();
 const externalBaseURL = process.env.WMUX_E2E_BASE_URL?.trim().replace(/\/+$/, "");
 const baseURL = externalBaseURL || `http://127.0.0.1:${port}`;
+const externalToken = resolveExternalE2eToken(externalBaseURL);
 const runtime = externalBaseURL ? undefined : prepareStandardE2eRuntime({ baseURL });
+const externalStorageState = externalBaseURL && externalToken ? {
+  cookies: [],
+  origins: [{
+    origin: new URL(externalBaseURL).origin,
+    localStorage: [{ name: "wmux.token", value: externalToken }],
+  }],
+} : undefined;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -18,19 +27,18 @@ export default defineConfig({
   reporter: process.env.CI ? [["line"], ["html", { outputFolder: "test-results/playwright-report", open: "never" }]] : "line",
   use: {
     baseURL,
-    reducedMotion: "reduce",
-    trace: "retain-on-failure",
+    contextOptions: { reducedMotion: "reduce" },
+    trace: externalBaseURL ? "off" : "retain-on-failure",
     screenshot: "only-on-failure",
+    ...(externalStorageState ? { storageState: externalStorageState } : {}),
   },
   webServer: runtime ? {
     command: `node --import tsx src/server/index.ts --dev --host 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: {
-      ...process.env,
-      ...runtime.environment,
-    },
+    // Playwright already merges this over process.env for the spawned server.
+    env: runtime.environment,
   } : undefined,
   projects: [
     {

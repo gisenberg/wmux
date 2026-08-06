@@ -9,8 +9,13 @@ import type {
   BrowserSessionStore,
 } from "./browser-session-store.js";
 import type { ScopedCredentialStore } from "./scoped-credential-store.js";
+import type {
+  AgentInputCredentialStore,
+  AgentInputRegistrationPrincipal,
+  AgentInputSourcePrincipal,
+} from "./agent-input-credential-store.js";
 
-const wmuxHome = (): string => path.join(os.homedir(), ".wmux");
+const wmuxHome = (): string => path.join(process.env.HOME || os.homedir(), ".wmux");
 const defaultTokenPath = (): string => path.join(wmuxHome(), "token");
 const defaultAuthPath = (): string => path.join(wmuxHome(), "auth.json");
 const defaultSessionSecretPath = (): string => path.join(wmuxHome(), "session-secret");
@@ -30,7 +35,9 @@ export type AuthPrincipal =
   | { kind: "automation" }
   | { kind: "helper" }
   | { kind: "registration" }
-  | { kind: "registered-host"; machineId: string };
+  | { kind: "registered-host"; machineId: string }
+  | AgentInputRegistrationPrincipal
+  | AgentInputSourcePrincipal;
 
 export interface AuthCredentials {
   username: string;
@@ -402,10 +409,15 @@ export const authenticateRequest = (
   browserSessions?: BrowserSessionStore,
   scopedCredentials?: ScopedCredentialStore,
   browserObservation: BrowserSessionObservation = {},
+  agentInputCredentials?: AgentInputCredentialStore,
 ): AuthPrincipal => {
+  const bearer = requestBearerToken(request);
+  if (bearer) {
+    const agentInputPrincipal = agentInputCredentials?.authenticate(bearer, nowMs);
+    if (agentInputPrincipal) return agentInputPrincipal;
+  }
   if (!auth.enabled) return { kind: "anonymous" };
   const browserAuthMode = auth.browserAuthMode ?? "shared-or-login";
-  const bearer = requestBearerToken(request);
   if (bearer) {
     const scopedPrincipal = scopedCredentials?.authenticate(bearer, nowMs);
     if (scopedPrincipal) return { kind: scopedPrincipal };

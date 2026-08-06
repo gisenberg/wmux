@@ -96,6 +96,12 @@ export const useStoreLifecycle = ({
     };
   }, [load, store]);
 
+  useEffect(() => {
+    const requireAuthentication = () => setAuthRequired(true);
+    window.addEventListener("wmux-auth-required", requireAuthentication);
+    return () => window.removeEventListener("wmux-auth-required", requireAuthentication);
+  }, []);
+
   const eventStream = useEventStream({
     enabled: !authRequired,
     onResync: (payload) => {

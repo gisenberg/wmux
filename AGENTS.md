@@ -38,7 +38,7 @@ This is intentionally not a multi-tenant SaaS app. Bearer authentication is defe
 - `npm run test:e2e:browser` runs the complementary browser-only group, which can use a fixture service on another trusted private-network host.
 - `npm run test:e2e:browser:chromium` runs the browser-only Chromium projects for cross-host execution on win-ci.
 - `npm run test:e2e:browser:webkit` runs the browser-only WebKit project on homelab, where its networking is reliable.
-- `npm run test:e2e:serve` starts an isolated standard-suite service on the explicit private IP in `WMUX_E2E_SERVER_HOST`; a browser-only runner connects by setting `WMUX_E2E_BASE_URL`.
+- `npm run test:e2e:serve` starts an authenticated isolated standard-suite service on the explicit private IP in `WMUX_E2E_SERVER_HOST`; server and browser-only runner must share a strong per-run `WMUX_E2E_TOKEN`, and the runner also sets `WMUX_E2E_BASE_URL`.
 - Run concurrent E2E groups against separate fixture-service instances so their state mutations remain isolated.
 - `npm run docs:screenshots` regenerates the tracked desktop and mobile README screenshots from the isolated Playwright fixture.
 - `npm run start -- --host 127.0.0.1 --port 3478` runs the built service.

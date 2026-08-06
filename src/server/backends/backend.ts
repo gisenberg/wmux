@@ -42,7 +42,14 @@ export interface BackendSpawnSpec {
   cols: number;
   rows: number;
   env: Record<string, string>;
+  runtimeFiles?: BackendRuntimeFile[];
+  processReplacementRuntimeFiles?: () => BackendRuntimeFile[];
   restoredCheckpoint?: AttachReplay;
+}
+
+export interface BackendRuntimeFile {
+  purpose: "agent-input-capability";
+  data: Buffer;
 }
 
 export interface StageFileMetadata {

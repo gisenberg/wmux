@@ -35,6 +35,15 @@ import type { SettingsStore } from "./settings.js";
 import type { StaticMachineStore } from "./static-machine-store.js";
 import { HttpError, type ServerDeps } from "./routes/route.js";
 import { clientRoot } from "./static-files.js";
+import {
+  AgentInputCredentialStore,
+  agentInputCredentialStorePathOverride,
+  contextSessionBinding,
+  issueAgentInputRegistrationCapabilityForPane,
+  loadOrCreateAgentInputSecret,
+} from "./agent-input-credential-store.js";
+import { AgentInputRequestStore } from "./agent-input-request-store.js";
+import { AgentInputRelay } from "./agent-input-relay.js";
 
 export { readBinaryBody } from "./request-dispatch.js";
 
@@ -79,6 +88,10 @@ export const createHttpServer = (
     browserSessions?: BrowserSessionStore;
     scopedCredentials?: ScopedCredentialStore;
     browserSessionCookieSecure?: boolean;
+    agentInputCredentials?: AgentInputCredentialStore;
+    agentInputRequests?: AgentInputRequestStore;
+    agentInputRelay?: AgentInputRelay;
+    agentInputEnabled?: boolean;
   },
 ): Promise<WmuxHttpServer> => {
   const {
@@ -121,6 +134,88 @@ export const createHttpServer = (
     ?? new AgentFollowUpService(state, agentSessions, repositoryReviews);
   const root = clientRoot();
   const streamRequests = new StreamRequestStore();
+  const agentInputSecret = options.agentInputCredentials && options.agentInputRequests
+    ? undefined
+    : loadOrCreateAgentInputSecret(
+      process.env.WMUX_AGENT_INPUT_SECRET_PATH
+      ?? path.join(state.storageDirectory(), "agent-input-secret"),
+    );
+  const agentInputCredentials = options.agentInputCredentials
+    ?? new AgentInputCredentialStore(
+      agentInputCredentialStorePathOverride()
+      ?? path.join(state.storageDirectory(), "agent-input-credentials.json"),
+      { hashKey: agentInputSecret! },
+    );
+  const agentInputRequests = options.agentInputRequests
+    ?? new AgentInputRequestStore(
+      process.env.WMUX_AGENT_INPUT_REQUEST_PATH
+      ?? path.join(state.storageDirectory(), "agent-input-requests.json"),
+      { answerDigestKey: agentInputSecret! },
+    );
+  const agentInputEnabled = options.agentInputEnabled ?? process.env.WMUX_AGENT_INPUT_ENABLED !== "0";
+  const agentInputNow = Date.now();
+  const credentialSources = agentInputCredentials.snapshot().sources;
+  const credentialSourcesById = new Map(credentialSources.map((source) => [source.id, source]));
+  for (const sourceId of agentInputRequests.pendingSourceIds()) {
+    const source = credentialSourcesById.get(sourceId);
+    if (!agentInputEnabled || !source || source.revokedAt !== undefined || source.expiresAt <= agentInputNow) {
+      agentInputRequests.retireSource(sourceId, agentInputNow);
+    }
+  }
+  agentInputCredentials.prune(agentInputNow);
+  agentInputRequests.prune();
+  const isAgentInputContextLive = (context: Parameters<typeof contextSessionBinding>[0]): boolean => {
+    const found = state.findPaneContext(context.paneId);
+    const binding = contextSessionBinding(context);
+    return Boolean(binding && found && found.pane.status === "running"
+      && found.workspace.id === context.workspaceId
+      && found.tab.id === context.tabId
+      && found.pane.machineId === context.machineId
+      && sessions.hasLivePaneSession?.(context.paneId, binding));
+  };
+  const agentInputRelay = options.agentInputRelay
+    ?? new AgentInputRelay(agentInputRequests, agentInputCredentials, {
+      enabled: agentInputEnabled,
+      isPaneLive: (source) => isAgentInputContextLive(source.context),
+    });
+  sessions.setAgentInputCapabilityIssuer?.(agentInputEnabled
+    ? (paneId, binding) => issueAgentInputRegistrationCapabilityForPane(
+        agentInputCredentials, state, paneId, binding,
+      )
+    : undefined);
+  sessions.setAgentInputSourceRetirer?.(agentInputEnabled
+    ? (paneId, binding) => {
+        for (const source of agentInputCredentials.snapshot().sources) {
+          const sourceBinding = contextSessionBinding(source.context);
+          if (source.context.paneId !== paneId || !sourceBinding
+            || JSON.stringify(sourceBinding) !== JSON.stringify(binding)) continue;
+          agentInputRequests.retireSource(source.id);
+          agentInputCredentials.revoke(source.id);
+        }
+      }
+    : undefined);
+  const reconcileAgentInputSources = (): void => {
+    for (const source of agentInputCredentials.snapshot().sources) {
+      if (source.revokedAt !== undefined) continue;
+      const context = state.findPaneContext(source.context.paneId);
+      const identityMatches = Boolean(context
+        && context.workspace.id === source.context.workspaceId
+        && context.tab.id === source.context.tabId
+        && context.pane.machineId === source.context.machineId);
+      const expectedBinding = contextSessionBinding(source.context);
+      const currentBinding = sessions.agentInputSessionBinding?.(source.context.paneId);
+      const replaced = Boolean(currentBinding && (!expectedBinding
+        || JSON.stringify(currentBinding) !== JSON.stringify(expectedBinding)));
+      const unattachedEphemeral = Boolean(!currentBinding && expectedBinding?.backendId === "raw-pty");
+      if (!identityMatches || context?.pane.status === "exited" || replaced || unattachedEphemeral) {
+        if (!identityMatches) agentInputRequests.resolvePane(source.context.paneId);
+        else agentInputRequests.retireSource(source.id);
+        agentInputCredentials.revoke(source.id);
+      }
+    }
+  };
+  state.on("change", reconcileAgentInputSources);
+  reconcileAgentInputSources();
   let vite: ViteDevServer | undefined;
   const protocol = options.tls ? "https" : "http";
 
@@ -146,6 +241,7 @@ export const createHttpServer = (
     agentSessions,
     settings,
     streamRequests,
+    agentInputRequests,
     currentMachines,
     machineStatusResolver,
     streamStatusResolver,
@@ -159,6 +255,19 @@ export const createHttpServer = (
     auth,
     browserSessions,
     scopedCredentials,
+    agentInputRequests,
+    agentInputCredentials,
+    agentInputRelay,
+    agentInputEnabled,
+    issueAgentInputRegistrationCapability: (paneId) => {
+      const binding = sessions.agentInputSessionBinding?.(paneId);
+      if (!binding || !sessions.hasLivePaneSession?.(paneId, binding)) {
+        throw new HttpError(409, "pane_unavailable");
+      }
+      return issueAgentInputRegistrationCapabilityForPane(
+        agentInputCredentials, state, paneId, binding,
+      );
+    },
     browserSessionCookieSecure,
     agentFollowUps,
     agentSessions,
@@ -203,6 +312,7 @@ export const createHttpServer = (
     auth,
     browserSessions,
     scopedCredentials,
+    agentInputCredentials,
     registrationToken,
     hostRegistry,
     currentMachines,
@@ -246,11 +356,18 @@ export const createHttpServer = (
 
   server.on("close", () => {
     hostRegistry?.off("change", onRegistryChange);
+    state.off("change", reconcileAgentInputSources);
     agentFollowUps.dispose();
+    agentInputRelay.dispose();
+    agentInputRequests.dispose();
+    agentInputCredentials.dispose();
     events.dispose();
   });
   server.on("wmux-shutdown", () => {
     agentFollowUps.dispose();
+    agentInputRelay.dispose();
+    agentInputRequests.dispose();
+    agentInputCredentials.dispose();
   });
 
   return setupDevServer().then(() => server);

@@ -308,6 +308,35 @@ test("version 6 state migrates with existing workspaces retained indefinitely", 
   });
 });
 
+test("version 7 state migrates before notification deep links are persisted", () => {
+  withTempState((filePath) => {
+    const previous = new StateStore(machines, filePath).snapshot();
+    const workspace = previous.workspaces[0];
+    const tab = workspace.tabs[0];
+    const pane = tab.panes[0];
+    previous.notifications = [{
+      id: "note_v7",
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      paneId: pane.id,
+      title: "Legacy notification",
+      subtitle: "completed",
+      body: "No structured request link",
+      createdAt: "2026-08-06T00:00:00.000Z",
+      read: false,
+    }];
+    const v7 = previous as unknown as Record<string, unknown>;
+    v7.schemaVersion = 7;
+    fs.writeFileSync(filePath, JSON.stringify(v7));
+
+    const migrated = new StateStore(machines, filePath).snapshot();
+    assert.equal(migrated.schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+    assert.equal(migrated.notifications[0].id, "note_v7");
+    assert.equal(migrated.notifications[0].requestId, undefined);
+    assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+  });
+});
+
 test("state recovers from the last validated backup", () => {
   withTempState((filePath, dir) => {
     const store = new StateStore(machines, filePath);

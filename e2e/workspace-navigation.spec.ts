@@ -1,4 +1,5 @@
 import { awaitAppShell, createNestedWorkspacePair, expect, test, type E2eWorkspace } from "./fixtures";
+import { e2eRegistrationToken } from "./config-auth.js";
 
 test("navigates, persists, targets spaces, and moves nested workspaces", async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
@@ -374,7 +375,7 @@ test("desktop agent group menu closes every workspace on its host", async ({ pag
 
   try {
     const registered = await request.post("/api/registry/hosts", {
-      headers: { authorization: "Bearer e2e-registration-token" },
+      headers: { authorization: `Bearer ${e2eRegistrationToken()}` },
       data: {
         machine: {
           id: machineId,

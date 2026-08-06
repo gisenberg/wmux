@@ -12,8 +12,10 @@ import type { StateStore } from "./state.js";
 import type { AgentSessionService } from "./agent-sessions.js";
 import type { SettingsStore } from "./settings.js";
 import type { StreamRequestStore } from "./streams.js";
+import type { AgentInputRequestStore } from "./agent-input-request-store.js";
 import type {
   AgentActivity,
+  AgentInputRequest,
   AgentSessionTimeline,
   BootstrapPayload,
   DelegationRecord,
@@ -58,6 +60,7 @@ interface EventBroadcastOptions {
   agentSessions: AgentSessionService;
   settings: SettingsStore;
   streamRequests: StreamRequestStore;
+  agentInputRequests: AgentInputRequestStore;
   currentMachines: () => MachineConfig[];
   machineStatusResolver: (
     machines: MachineConfig[],
@@ -139,6 +142,7 @@ export class EventBroadcastRuntime {
     options.state.on("change", this.onStateChange);
     options.agentSessions.timelines.on("change", this.onTimelineChange);
     options.settings.on("change", this.onSettingsChange);
+    options.agentInputRequests.on("change", this.onAgentInputChange);
     options.state.on("notification", this.onNotification);
     options.state.on("media", this.onMedia);
     options.state.on("clipboard", this.onClipboard);
@@ -166,6 +170,7 @@ export class EventBroadcastRuntime {
     this.streamHealthTimer.unref();
     this.agentNotificationTimer.unref();
     queueMicrotask(this.notifyExceededAgentBudgets);
+    queueMicrotask(this.reconcileAgentInputNotifications);
   }
 
   readonly currentPayload = () => {
@@ -205,6 +210,8 @@ export class EventBroadcastRuntime {
       keybindings: this.options.keybindings ?? resolveKeybindings(),
       settingsDefaults: this.options.settings.defaultsSnapshot(),
       streams: this.streamStatuses,
+      agentInputRequests: this.options.agentInputRequests.snapshot()
+        .filter((request) => visiblePaneIds.has(request.paneId)),
     };
   };
 
@@ -346,6 +353,7 @@ export class EventBroadcastRuntime {
     this.options.state.off("change", this.onStateChange);
     this.options.agentSessions.timelines.off("change", this.onTimelineChange);
     this.options.settings.off("change", this.onSettingsChange);
+    this.options.agentInputRequests.off("change", this.onAgentInputChange);
     this.options.state.off("notification", this.onNotification);
     this.options.state.off("media", this.onMedia);
     this.options.state.off("clipboard", this.onClipboard);
@@ -514,6 +522,11 @@ export class EventBroadcastRuntime {
     const settings = sameValue(previous.settings, next.settings)
       ? undefined
       : next.settings;
+    const agentInputRequests = collectionDelta<AgentInputRequest>(
+      previous.agentInputRequests,
+      next.agentInputRequests,
+      (request) => request.id,
+    );
     const unconvertedChanged = !sameValue(previous.machines, next.machines)
       || !sameValue(previous.delegation, next.delegation)
       || previous.terminalFontFamily !== next.terminalFontFamily
@@ -533,6 +546,7 @@ export class EventBroadcastRuntime {
       && !agents
       && !runs
       && !settings
+      && !agentInputRequests
     ) {
       return;
     }
@@ -553,6 +567,7 @@ export class EventBroadcastRuntime {
       ...(agents ? { agents } : {}),
       ...(runs ? { runs } : {}),
       ...(settings ? { settings } : {}),
+      ...(agentInputRequests ? { agentInputRequests } : {}),
     });
   }
 
@@ -566,6 +581,33 @@ export class EventBroadcastRuntime {
 
   private readonly onTimelineChange = (): void => {
     this.publishStateDelta();
+  };
+
+  private readonly onAgentInputChange = (): void => {
+    this.reconcileAgentInputNotifications();
+    this.publishStateDelta();
+  };
+
+  private readonly reconcileAgentInputNotifications = (): void => {
+    if (this.disposed) return;
+    for (const attention of this.options.agentInputRequests.attentionSnapshot()) {
+      const request = attention.request;
+      if (!this.options.state.findPaneContext(request.paneId)) continue;
+      this.options.state.ensureNotification({
+        id: attention.notificationId,
+        workspaceId: request.workspaceId,
+        tabId: request.tabId,
+        paneId: request.paneId,
+        title: "Agent input requested",
+        subtitle: "OpenCode needs attention",
+        body: "",
+        createdAt: attention.createdAt,
+        read: request.state !== "pending",
+        agentInputRequestId: request.id,
+        href: `/workspaces/${encodeURIComponent(request.workspaceId)}/tabs/${encodeURIComponent(request.tabId)}?agentInput=${encodeURIComponent(request.id)}&generation=${request.generation}`,
+      });
+      if (request.state !== "pending") this.options.state.markNotificationRead(attention.notificationId);
+    }
   };
 
   private readonly onNotification = (

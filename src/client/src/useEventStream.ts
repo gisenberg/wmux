@@ -159,8 +159,15 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
 const showBrowserNotification = (notification: TerminalNotification): void => {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const title = notification.subtitle ? `${notification.title}: ${notification.subtitle}` : notification.title;
-  new Notification(title, {
+  const browserNotification = new Notification(title, {
     body: notification.body,
     tag: notification.id,
+    data: notification.href ? { href: notification.href } : undefined,
   });
+  if (notification.href) browserNotification.onclick = () => {
+    window.focus();
+    window.history.pushState(null, "", notification.href!);
+    window.dispatchEvent(new CustomEvent("wmux-notification-navigate", { detail: { href: notification.href } }));
+    browserNotification.close();
+  };
 };

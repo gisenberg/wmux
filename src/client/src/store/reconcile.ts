@@ -194,6 +194,15 @@ export const applyEventDelta = (
         }
       : {}),
     ...(delta.settings ? { settings: delta.settings } : {}),
+    ...(delta.agentInputRequests
+      ? {
+          agentInputRequests: applyCollectionDelta(
+            current.agentInputRequests ?? [],
+            delta.agentInputRequests,
+            (request) => request.id,
+          ),
+        }
+      : {}),
   });
 };
 

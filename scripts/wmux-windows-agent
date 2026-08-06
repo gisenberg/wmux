@@ -82,6 +82,7 @@ AGENT_RESTART_EXIT_CODE = 75
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30
 DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 15
 DEFAULT_STREAM_RESTART_MAX_SECONDS = 30
+POSIX_RUNTIME_FILE_CAPABILITY = "posix-runtime-files-v1"
 
 
 def agent_program_name() -> str:
@@ -895,6 +896,138 @@ def agent_release_version(config: dict[str, Any]) -> str:
     except (OSError, ValueError, TypeError):
         pass
     return "v0.0.0-linux"
+
+
+def _owned_directory(path: str, private: bool) -> None:
+    status = os.lstat(path)
+    if not os.path.isdir(path) or os.path.islink(path) or os.path.realpath(path) != os.path.abspath(path):
+        raise ValueError("runtime_directory_unsafe")
+    if hasattr(os, "getuid") and status.st_uid != os.getuid():
+        raise ValueError("runtime_directory_unsafe")
+    if private and status.st_mode & 0o077:
+        raise ValueError("runtime_directory_unsafe")
+
+
+def _private_child_directory(parent: str, name: str) -> str:
+    _owned_directory(parent, True)
+    child = os.path.join(parent, name)
+    try:
+        os.mkdir(child, 0o700)
+    except FileExistsError:
+        pass
+    _owned_directory(child, True)
+    os.chmod(child, 0o700)
+    return child
+
+
+def runtime_file_directory(session_id: str) -> str:
+    if os.name == "nt":
+        raise ValueError("runtime_files_unsupported")
+    runtime_base = os.environ.get("XDG_RUNTIME_DIR", "")
+    if runtime_base:
+        if not os.path.isabs(runtime_base):
+            raise ValueError("runtime_directory_unsafe")
+        _owned_directory(runtime_base, True)
+        wmux_root = _private_child_directory(runtime_base, "wmux")
+    else:
+        home = os.path.abspath(os.path.expanduser("~"))
+        _owned_directory(home, False)
+        wmux_home = os.path.join(home, ".wmux")
+        try:
+            os.mkdir(wmux_home, 0o700)
+        except FileExistsError:
+            pass
+        _owned_directory(wmux_home, True)
+        os.chmod(wmux_home, 0o700)
+        wmux_root = _private_child_directory(wmux_home, "run")
+    runtime_root = _private_child_directory(wmux_root, "session-files")
+    session_name = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
+    return _private_child_directory(runtime_root, session_name)
+
+
+def _private_runtime_file(path: str) -> None:
+    status = os.lstat(path)
+    if not os.path.isfile(path) or os.path.islink(path) or os.path.realpath(path) != os.path.abspath(path):
+        raise ValueError("runtime_file_unsafe")
+    if hasattr(os, "getuid") and status.st_uid != os.getuid():
+        raise ValueError("runtime_file_unsafe")
+    if status.st_mode & 0o777 != 0o600:
+        raise ValueError("runtime_file_unsafe")
+
+
+def _write_private_runtime_file(path: str, data: bytes) -> None:
+    if os.path.lexists(path):
+        _private_runtime_file(path)
+    temporary = os.path.join(
+        os.path.dirname(path),
+        f".{os.path.basename(path)}.{os.getpid()}.{threading.get_ident()}.tmp",
+    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        _private_runtime_file(path)
+        directory = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def stage_runtime_files(payload: dict[str, Any], session_id: str) -> None:
+    payload_env = payload.get("env")
+    if not isinstance(payload_env, dict):
+        payload_env = {}
+        payload["env"] = payload_env
+    for key in (
+        "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY",
+        "WMUX_AGENT_INPUT_CAPABILITY_PATH",
+        "WMUX_AGENT_INPUT_CREDENTIAL_PATH",
+    ):
+        payload_env.pop(key, None)
+    entries = payload.get("runtimeFiles")
+    if entries is None or entries == []:
+        return
+    if os.name == "nt" or not isinstance(entries, list) or len(entries) != 1:
+        raise ValueError("invalid_runtime_files")
+    entry = entries[0]
+    if not isinstance(entry, dict) or entry.get("purpose") != "agent-input-capability":
+        raise ValueError("invalid_runtime_file")
+    data = base64.b64decode(str(entry.get("dataBase64") or ""), validate=True)
+    expected = str(entry.get("sha256") or "").lower()
+    if not data or len(data) > 4096 or not expected or not hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected):
+        raise ValueError("invalid_runtime_file")
+    directory = runtime_file_directory(session_id)
+    capability_path = os.path.join(directory, "agent-input.cap")
+    credential_path = os.path.join(directory, "agent-input.json")
+    if os.path.lexists(credential_path):
+        _private_runtime_file(credential_path)
+    _write_private_runtime_file(capability_path, data)
+    payload_env["WMUX_AGENT_INPUT_CAPABILITY_PATH"] = capability_path
+    payload_env["WMUX_AGENT_INPUT_CREDENTIAL_PATH"] = credential_path
+
+
+def delete_session_runtime_files(session_id: str) -> None:
+    if os.name == "nt":
+        return
+    try:
+        directory = runtime_file_directory(session_id)
+        _owned_directory(directory, True)
+        shutil.rmtree(directory)
+    except (FileNotFoundError, OSError, ValueError):
+        pass
 
 
 def refresh_callback_state(payload: dict[str, Any]) -> None:
@@ -1861,7 +1994,8 @@ class Handler(BaseHTTPRequestHandler):
                     "version": release_version,
                     "releaseVersion": release_version,
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": list(WINDOWS_AGENT_CAPABILITIES),
+                    "capabilities": [capability for capability in WINDOWS_AGENT_CAPABILITIES
+                                     if capability != POSIX_RUNTIME_FILE_CAPABILITY or os.name != "nt"],
                     "machine": config_string(self.state.config, "machine", "windows"),
                     "pid": os.getpid(),
                     **lifecycle,
@@ -1916,6 +2050,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json()
                 stage_helper_bundle(self.state.config, payload)
+                stage_runtime_files(payload, parts[1])
                 session = self.state.get_or_create(parts[1], payload)
             except AgentDrainingError as error:
                 self.send_json({"error": "agent_draining", "message": str(error)}, status=503)
@@ -1990,6 +2125,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 2 and parts[0] == "sessions":
             removed = self.state.delete(parts[1])
             delete_session_paste_images(self.state.config, parts[1])
+            delete_session_runtime_files(parts[1])
             self.send_json({"removed": removed})
             return
         if len(parts) == 4 and parts[0] == "sessions" and parts[2] == "paste-images":

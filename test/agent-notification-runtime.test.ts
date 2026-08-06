@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { AgentSessionService } from "../src/server/agent-sessions.js";
+import { AgentInputRequestStore } from "../src/server/agent-input-request-store.js";
 import { EventBroadcastRuntime } from "../src/server/event-broadcast.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
@@ -53,6 +54,7 @@ test("the agent heartbeat emits one durable exceeded-budget notification", async
     agentSessions: agents,
     settings: new SettingsStore(path.join(directory, "settings.json")),
     streamRequests: new StreamRequestStore(),
+    agentInputRequests: new AgentInputRequestStore(path.join(directory, "agent-input.json"), { answerDigestKey: "key" }),
     currentMachines: () => machines,
     machineStatusResolver: async () => [],
     streamStatusResolver: async () => [],

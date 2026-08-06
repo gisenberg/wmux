@@ -15,7 +15,7 @@ export default defineConfig({
   globalTeardown: "./e2e/auth.global-teardown.ts",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
-    reducedMotion: "reduce",
+    contextOptions: { reducedMotion: "reduce" },
     trace: "off",
     screenshot: "off",
   },

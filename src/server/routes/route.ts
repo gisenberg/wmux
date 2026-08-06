@@ -11,6 +11,10 @@ import type { SessionManager } from "../session-manager.js";
 import type { SettingsStore } from "../settings.js";
 import type { StaticMachineStore } from "../static-machine-store.js";
 import type { StateStore } from "../state.js";
+import type { AgentInputRequestStore } from "../agent-input-request-store.js";
+import type { AgentInputCredentialStore } from "../agent-input-credential-store.js";
+import type { AgentInputRegistrationCapability } from "../agent-input-credential-store.js";
+import type { AgentInputRelay } from "../agent-input-relay.js";
 import type { StreamRequestStore } from "../streams.js";
 import type {
   MachineConfig,
@@ -21,7 +25,7 @@ import type {
 
 export type ApiMethod = "GET" | "POST" | "PUT" | "DELETE";
 type ScopedPrincipal = "automation" | "helper";
-export type RouteAccess = "public" | "normal" | "registration";
+export type RouteAccess = "public" | "normal" | "registration" | "agent-input-registration" | "agent-input-source";
 
 export interface HttpRoutePolicy {
   id: string;
@@ -32,6 +36,7 @@ export interface HttpRoutePolicy {
   browserSessionOnly?: boolean;
   browserDenied?: boolean;
   registeredHost?: boolean;
+  userOnly?: boolean;
 }
 
 export class HttpError extends Error {
@@ -45,6 +50,11 @@ export interface ServerDeps {
   auth: AuthConfig;
   browserSessions?: BrowserSessionStore;
   scopedCredentials?: ScopedCredentialStore;
+  agentInputRequests: AgentInputRequestStore;
+  agentInputCredentials: AgentInputCredentialStore;
+  agentInputRelay: AgentInputRelay;
+  agentInputEnabled: boolean;
+  issueAgentInputRegistrationCapability: (paneId: string) => AgentInputRegistrationCapability;
   browserSessionCookieSecure?: boolean;
   agentFollowUps: AgentFollowUpService;
   agentSessions: AgentSessionService;
