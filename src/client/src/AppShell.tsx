@@ -566,8 +566,12 @@ export function AppShell() {
   // The same visible order the sidebar renders; digit and previous/next
   // workspace shortcuts index into this list.
   const displayOrderedWorkspaces = useMemo(
-    () => orderWorkspaceRowsForDisplay(openTuiWorkspaces, openTuiMachines.map((machine) => machine.id)),
-    [openTuiMachines, openTuiWorkspaces],
+    () => orderWorkspaceRowsForDisplay(
+      openTuiWorkspaces,
+      openTuiMachines.map((machine) => machine.id),
+      settings.groupSidebarSessionsByHost,
+    ),
+    [openTuiMachines, openTuiWorkspaces, settings.groupSidebarSessionsByHost],
   );
   const openTuiActivityRows = useMemo<OpenTuiActivityRow[]>(
     () => {
@@ -1653,6 +1657,7 @@ export function AppShell() {
           targetMachineReachable={Boolean(selectedMachine?.reachable)}
           workspaces={openTuiWorkspaces}
           machines={openTuiMachines}
+          groupSidebarSessionsByHost={settings.groupSidebarSessionsByHost}
           onTargetMachineChange={setNewMachineId}
           onCreateWorkspace={() => createWorkspace(targetMachineId)}
           onActivateWorkspace={activateWorkspaceFromChrome}
@@ -1674,6 +1679,7 @@ export function AppShell() {
           targetMachineReachable={Boolean(selectedMachine?.reachable)}
           workspaces={openTuiWorkspaces}
           machines={openTuiMachines}
+          groupSidebarSessionsByHost={settings.groupSidebarSessionsByHost}
           onTargetMachineChange={setNewMachineId}
           onCreateWorkspace={() => createWorkspace(targetMachineId)}
           onActivateWorkspace={activateWorkspaceFromChrome}

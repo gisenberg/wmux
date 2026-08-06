@@ -63,7 +63,7 @@ interface OpenTuiSettingsModalProps {
 }
 
 type FieldId = "font" | "scrollback" | `alias:${string}`;
-type ChoiceId = "scheme" | "inactive-streaming" | "frame-rate" | "terminal-scroll";
+type ChoiceId = "scheme" | "inactive-streaming" | "frame-rate" | "terminal-scroll" | "sidebar-host-grouping";
 type FocusId = FieldId | ChoiceId | "manage" | "close" | "audit" | "reset" | "cancel" | "save" | `cleanup:${string}` | `revoke:${string}` | `rotate:${string}`;
 
 interface EditState {
@@ -213,6 +213,7 @@ export function OpenTuiSettingsModal({
   const [editing, setEditing] = useState<EditState | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [viewportRows, setViewportRows] = useState(32);
+  const [semanticMetrics, setSemanticMetrics] = useState<CellMetrics>(metricsRef.current);
   const compiledKeybindings = useMemo(() => compileKeybindings(keybindings), [keybindings]);
 
   useEffect(() => {
@@ -298,6 +299,10 @@ export function OpenTuiSettingsModal({
     const paint = (entry?: ResizeObserverEntry) => {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
+      setSemanticMetrics((current) =>
+        current.width === metrics.width && current.height === metrics.height && current.cols === metrics.cols && current.rows === metrics.rows
+          ? current
+          : metrics);
       setViewportRows((current) => (current === metrics.rows ? current : metrics.rows));
       painter.paint(drawSettings(metrics, layout, focusId, editing, scrollOffset, saving, hitsRef.current, theme));
     };
@@ -362,6 +367,11 @@ export function OpenTuiSettingsModal({
     applyNextDraft({ ...current, terminalScrollMode: current.terminalScrollMode === "batched" ? "immediate" : "batched" });
     setFocusId("terminal-scroll");
   };
+  const toggleSidebarHostGrouping = () => {
+    const current = commitEditing();
+    applyNextDraft({ ...current, groupSidebarSessionsByHost: !current.groupSidebarSessionsByHost });
+    setFocusId("sidebar-host-grouping");
+  };
   const adjustFrameRate = (direction: -1 | 1) => {
     const current = commitEditing();
     const rates = [15, 30, 60] as const;
@@ -405,6 +415,7 @@ export function OpenTuiSettingsModal({
     }
     if (id === "frame-rate") { adjustFrameRate(1); return; }
     if (id === "terminal-scroll") { adjustTerminalScroll(); return; }
+    if (id === "sidebar-host-grouping") { toggleSidebarHostGrouping(); return; }
     if (id.startsWith("cleanup:")) {
       commitEditing();
       const [backend, name, cleanupKey] = JSON.parse(
@@ -495,21 +506,23 @@ export function OpenTuiSettingsModal({
       moveFocus(-1);
       return;
     }
-    if (event.key === "ArrowLeft" && (focusId === "font" || focusId === "scrollback" || focusId === "scheme" || focusId === "inactive-streaming" || focusId === "frame-rate" || focusId === "terminal-scroll")) {
+    if (event.key === "ArrowLeft" && (focusId === "font" || focusId === "scrollback" || focusId === "scheme" || focusId === "inactive-streaming" || focusId === "frame-rate" || focusId === "terminal-scroll" || focusId === "sidebar-host-grouping")) {
       event.preventDefault();
       if (focusId === "scheme") adjustScheme(-1);
       else if (focusId === "inactive-streaming") adjustInactiveStreaming();
       else if (focusId === "frame-rate") adjustFrameRate(-1);
       else if (focusId === "terminal-scroll") adjustTerminalScroll();
+      else if (focusId === "sidebar-host-grouping") toggleSidebarHostGrouping();
       else adjustNumber(focusId, -1);
       return;
     }
-    if (event.key === "ArrowRight" && (focusId === "font" || focusId === "scrollback" || focusId === "scheme" || focusId === "inactive-streaming" || focusId === "frame-rate" || focusId === "terminal-scroll")) {
+    if (event.key === "ArrowRight" && (focusId === "font" || focusId === "scrollback" || focusId === "scheme" || focusId === "inactive-streaming" || focusId === "frame-rate" || focusId === "terminal-scroll" || focusId === "sidebar-host-grouping")) {
       event.preventDefault();
       if (focusId === "scheme") adjustScheme(1);
       else if (focusId === "inactive-streaming") adjustInactiveStreaming();
       else if (focusId === "frame-rate") adjustFrameRate(1);
       else if (focusId === "terminal-scroll") adjustTerminalScroll();
+      else if (focusId === "sidebar-host-grouping") toggleSidebarHostGrouping();
       else adjustNumber(focusId, 1);
       return;
     }
@@ -543,19 +556,21 @@ export function OpenTuiSettingsModal({
     const hit = hitFromEvent(event.clientX, event.clientY);
     panelRef.current?.focus();
     if (!hit) return;
-    if (hit.action === "increment" && (hit.id === "font" || hit.id === "scrollback" || hit.id === "scheme" || hit.id === "inactive-streaming" || hit.id === "frame-rate" || hit.id === "terminal-scroll")) {
+    if (hit.action === "increment" && (hit.id === "font" || hit.id === "scrollback" || hit.id === "scheme" || hit.id === "inactive-streaming" || hit.id === "frame-rate" || hit.id === "terminal-scroll" || hit.id === "sidebar-host-grouping")) {
       if (hit.id === "scheme") adjustScheme(1);
       else if (hit.id === "inactive-streaming") adjustInactiveStreaming();
       else if (hit.id === "frame-rate") adjustFrameRate(1);
       else if (hit.id === "terminal-scroll") adjustTerminalScroll();
+      else if (hit.id === "sidebar-host-grouping") toggleSidebarHostGrouping();
       else adjustNumber(hit.id, 1);
       return;
     }
-    if (hit.action === "decrement" && (hit.id === "font" || hit.id === "scrollback" || hit.id === "scheme" || hit.id === "inactive-streaming" || hit.id === "frame-rate" || hit.id === "terminal-scroll")) {
+    if (hit.action === "decrement" && (hit.id === "font" || hit.id === "scrollback" || hit.id === "scheme" || hit.id === "inactive-streaming" || hit.id === "frame-rate" || hit.id === "terminal-scroll" || hit.id === "sidebar-host-grouping")) {
       if (hit.id === "scheme") adjustScheme(-1);
       else if (hit.id === "inactive-streaming") adjustInactiveStreaming();
       else if (hit.id === "frame-rate") adjustFrameRate(-1);
       else if (hit.id === "terminal-scroll") adjustTerminalScroll();
+      else if (hit.id === "sidebar-host-grouping") toggleSidebarHostGrouping();
       else adjustNumber(hit.id, -1);
       return;
     }
@@ -637,6 +652,18 @@ export function OpenTuiSettingsModal({
     );
   };
 
+  const sidebarGroupingItem = layout.items.find((item): item is LayoutChoice =>
+    item.kind === "choice" && item.id === "sidebar-host-grouping");
+  const contentTop = 4;
+  const footerTop = Math.max(contentTop + 1, semanticMetrics.rows - 3);
+  const groupingRow = sidebarGroupingItem
+    ? contentTop + sidebarGroupingItem.start - scrollOffset
+    : -1;
+  const groupingVisible = Boolean(sidebarGroupingItem
+    && groupingRow >= contentTop
+    && groupingRow + sidebarGroupingItem.height <= footerTop);
+  const saveCol = Math.max(2, semanticMetrics.cols - 9);
+
   return (
     <div className="settings-backdrop open-tui-settings-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onCancel()}>
       <div
@@ -657,6 +684,39 @@ export function OpenTuiSettingsModal({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerEnd}
           onPointerCancel={onPointerEnd}
+        />
+        {groupingVisible && sidebarGroupingItem ? (
+          <button
+            type="button"
+            className="open-tui-settings-semantic"
+            style={{
+              top: groupingRow * semanticMetrics.height,
+              height: sidebarGroupingItem.height * semanticMetrics.height,
+              left: semanticMetrics.width,
+              right: semanticMetrics.width,
+            }}
+            aria-label="Group sidebar sessions by host"
+            aria-pressed={draft.groupSidebarSessionsByHost}
+            onClick={toggleSidebarHostGrouping}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+            }}
+          />
+        ) : null}
+        <button
+          type="button"
+          className="open-tui-settings-save-semantic"
+          style={{
+            top: (footerTop + 1) * semanticMetrics.height,
+            left: saveCol * semanticMetrics.width,
+            width: (saving ? "[saving]" : "[save]").length * semanticMetrics.width,
+            height: semanticMetrics.height,
+          }}
+          aria-label="Save settings"
+          onClick={() => void activate("save")}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+          }}
         />
         {editing ? (
           <input
@@ -727,6 +787,13 @@ const buildLayout = (
   });
   push({ kind: "choice", id: "frame-rate", label: "full-screen redraw", value: `${draft.tuiFrameRate} FPS`, height: 2 });
   push({ kind: "choice", id: "terminal-scroll", label: "terminal scrolling", value: draft.terminalScrollMode === "batched" ? "Performance (batched)" : "Smooth (immediate)", height: 2 });
+  push({
+    kind: "choice",
+    id: "sidebar-host-grouping",
+    label: "group sidebar sessions by host",
+    value: draft.groupSidebarSessionsByHost ? "Grouped" : "Global tree",
+    height: 2,
+  });
   push({
     kind: "choice",
     id: "inactive-streaming",

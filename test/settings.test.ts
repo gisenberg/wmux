@@ -35,6 +35,7 @@ test("legacy settings migrate while preserving normalized values", () => {
       inactiveTabStreaming: "suspend",
       tuiFrameRate: 15,
       terminalScrollMode: "batched",
+      groupSidebarSessionsByHost: true,
       machineAliases: { local: "Home" },
       collapsedWorkspaceIds: [],
       favoriteWorkspaceIds: [],
@@ -88,6 +89,7 @@ test("version 1 and version 2 settings migrate to inactive tab suspension", () =
       inactiveTabStreaming: "suspend",
       tuiFrameRate: 15,
       terminalScrollMode: "batched",
+      groupSidebarSessionsByHost: true,
       machineAliases: { local: "Home" },
       collapsedWorkspaceIds: [],
       favoriteWorkspaceIds: [],
@@ -179,5 +181,18 @@ test("settings persist terminal scroll mode and normalize invalid values", () =>
     assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).terminalScrollMode, "immediate");
     fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION, terminalScrollMode: "invalid" }));
     assert.equal(new SettingsStore(filePath).snapshot().terminalScrollMode, "batched");
+  });
+});
+
+test("version 7 settings migrate sidebar host grouping and preserve false", () => {
+  withTempSettings((filePath) => {
+    fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 7 }));
+    assert.equal(new SettingsStore(filePath).snapshot().groupSidebarSessionsByHost, true);
+    const store = new SettingsStore(filePath);
+    store.update({ groupSidebarSessionsByHost: false });
+    assert.equal(store.snapshot().groupSidebarSessionsByHost, false);
+    assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).groupSidebarSessionsByHost, false);
+    fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION, groupSidebarSessionsByHost: "invalid" }));
+    assert.equal(new SettingsStore(filePath).snapshot().groupSidebarSessionsByHost, true);
   });
 });

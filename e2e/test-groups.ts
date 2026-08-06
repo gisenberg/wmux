@@ -7,6 +7,7 @@ export const serverCoupledE2eSpecs = [
   "docs-screenshots.spec.ts",
   "fonts-and-keybindings.spec.ts",
   "shell-command-tracking.spec.ts",
+  "sidebar-host-grouping.spec.ts",
   "terminal-prediction.spec.ts",
 ];
 

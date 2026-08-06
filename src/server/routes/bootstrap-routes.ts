@@ -104,6 +104,7 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
         inactiveTabStreaming?: WmuxSettings["inactiveTabStreaming"];
         tuiFrameRate?: WmuxSettings["tuiFrameRate"];
         terminalScrollMode?: WmuxSettings["terminalScrollMode"];
+        groupSidebarSessionsByHost?: boolean;
         machineAliases?: Record<string, string>;
         collapsedWorkspaceIds?: string[];
         favoriteWorkspaceIds?: string[];
@@ -115,6 +116,7 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
         inactiveTabStreaming: body.inactiveTabStreaming,
         tuiFrameRate: body.tuiFrameRate,
         terminalScrollMode: body.terminalScrollMode,
+        groupSidebarSessionsByHost: body.groupSidebarSessionsByHost,
         machineAliases: body.machineAliases,
         collapsedWorkspaceIds: body.collapsedWorkspaceIds,
         favoriteWorkspaceIds: body.favoriteWorkspaceIds,

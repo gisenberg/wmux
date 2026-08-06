@@ -16,6 +16,7 @@ export const defaultSettings: WmuxSettings = {
   inactiveTabStreaming: "suspend",
   tuiFrameRate: 15,
   terminalScrollMode: "batched",
+  groupSidebarSessionsByHost: true,
   machineAliases: {},
   collapsedWorkspaceIds: [],
   favoriteWorkspaceIds: [],
@@ -212,6 +213,9 @@ const normalizeSettings = (
   terminalScrollMode: settings.terminalScrollMode === "batched" || settings.terminalScrollMode === "immediate"
     ? settings.terminalScrollMode
     : defaultSettings.terminalScrollMode,
+  groupSidebarSessionsByHost: typeof settings.groupSidebarSessionsByHost === "boolean"
+    ? settings.groupSidebarSessionsByHost
+    : defaultSettings.groupSidebarSessionsByHost,
   machineAliases: Object.fromEntries(
     Object.entries(settings.machineAliases ?? {})
       .map(([machineId, alias]) => [machineId, cleanAlias(alias)] as const)

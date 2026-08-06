@@ -15,7 +15,7 @@ import {
 } from "../shared/protocol.js";
 
 const defaultPath = (): string => path.join(os.homedir(), ".wmux", "settings.json");
-export const CURRENT_SETTINGS_SCHEMA_VERSION = 7;
+export const CURRENT_SETTINGS_SCHEMA_VERSION = 8;
 
 const persistedSettingsSchema = z.object({
   schemaVersion: z.literal(CURRENT_SETTINGS_SCHEMA_VERSION),
@@ -25,6 +25,7 @@ const persistedSettingsSchema = z.object({
   inactiveTabStreaming: z.unknown().optional(),
   tuiFrameRate: z.unknown().optional(),
   terminalScrollMode: z.unknown().optional(),
+  groupSidebarSessionsByHost: z.unknown().optional(),
   machineAliases: z.unknown().optional(),
   collapsedWorkspaceIds: z.unknown().optional(),
   favoriteWorkspaceIds: z.unknown().optional(),
@@ -37,6 +38,7 @@ export const defaultSettings: WmuxSettings = {
   inactiveTabStreaming: "suspend",
   tuiFrameRate: 15,
   terminalScrollMode: "batched",
+  groupSidebarSessionsByHost: true,
   machineAliases: {},
   collapsedWorkspaceIds: [],
   favoriteWorkspaceIds: [],
@@ -75,6 +77,7 @@ export class SettingsStore extends EventEmitter {
       inactiveTabStreaming: input.inactiveTabStreaming ?? this.settings.inactiveTabStreaming,
       tuiFrameRate: input.tuiFrameRate ?? this.settings.tuiFrameRate,
       terminalScrollMode: input.terminalScrollMode ?? this.settings.terminalScrollMode,
+      groupSidebarSessionsByHost: input.groupSidebarSessionsByHost ?? this.settings.groupSidebarSessionsByHost,
       machineAliases: input.machineAliases ?? this.settings.machineAliases,
       collapsedWorkspaceIds: input.collapsedWorkspaceIds ?? this.settings.collapsedWorkspaceIds,
       favoriteWorkspaceIds: input.favoriteWorkspaceIds ?? this.settings.favoriteWorkspaceIds,
@@ -135,7 +138,7 @@ export class SettingsStore extends EventEmitter {
           `settings schema ${version} is newer than this wmux build supports (${CURRENT_SETTINGS_SCHEMA_VERSION})`,
         );
       }
-      const candidate = version === undefined || version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6
+      const candidate = version === undefined || version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7
         ? { ...record, schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION, colorScheme: record.colorScheme ?? defaultSettings.colorScheme }
         : record;
       const parsed = persistedSettingsSchema.parse(candidate);
@@ -169,6 +172,7 @@ const normalizeSettings = (input: {
   inactiveTabStreaming?: unknown;
   tuiFrameRate?: unknown;
   terminalScrollMode?: unknown;
+  groupSidebarSessionsByHost?: unknown;
   machineAliases?: unknown;
   collapsedWorkspaceIds?: unknown;
   favoriteWorkspaceIds?: unknown;
@@ -179,6 +183,9 @@ const normalizeSettings = (input: {
   inactiveTabStreaming: cleanInactiveTabStreaming(input.inactiveTabStreaming),
   tuiFrameRate: cleanTuiFrameRate(input.tuiFrameRate),
   terminalScrollMode: cleanTerminalScrollMode(input.terminalScrollMode),
+  groupSidebarSessionsByHost: typeof input.groupSidebarSessionsByHost === "boolean"
+    ? input.groupSidebarSessionsByHost
+    : defaultSettings.groupSidebarSessionsByHost,
   machineAliases: cleanAliases(input.machineAliases),
   collapsedWorkspaceIds: cleanWorkspaceIds(input.collapsedWorkspaceIds),
   favoriteWorkspaceIds: cleanWorkspaceIds(input.favoriteWorkspaceIds),

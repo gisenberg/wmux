@@ -614,7 +614,7 @@ test("health polls publish only meaningful typed deltas to every browser", async
   }
 });
 
-test("POST /api/settings persists terminal scroll mode", async () => {
+test("POST /api/settings persists terminal scroll mode and sidebar host grouping", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-settings-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const settingsPath = path.join(dir, "settings.json");
@@ -628,13 +628,16 @@ test("POST /api/settings persists terminal scroll mode", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/api/settings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ terminalScrollMode: "immediate" }),
+      body: JSON.stringify({ terminalScrollMode: "immediate", groupSidebarSessionsByHost: false }),
     });
     const payload = (await response.json()) as { settings: BootstrapPayload["settings"] };
     assert.equal(response.status, 200);
     assert.equal(payload.settings.terminalScrollMode, "immediate");
+    assert.equal(payload.settings.groupSidebarSessionsByHost, false);
     assert.equal(settings.snapshot().terminalScrollMode, "immediate");
+    assert.equal(settings.snapshot().groupSidebarSessionsByHost, false);
     assert.equal(JSON.parse(fs.readFileSync(settingsPath, "utf8")).terminalScrollMode, "immediate");
+    assert.equal(JSON.parse(fs.readFileSync(settingsPath, "utf8")).groupSidebarSessionsByHost, false);
   } finally {
     state.flush();
     await close(server);
