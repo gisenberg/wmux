@@ -119,6 +119,10 @@ test("display order groups by machine in machine-list order with favorites first
     orderWorkspaceRowsForDisplay(rows, ["a", "b", "empty"]).map((row) => row.id),
     ["a-favorite", "a-plain", "b-plain", "b-child", "orphan"],
   );
+  assert.deepEqual(
+    orderWorkspaceRowsForDisplay(rows, ["a", "b", "empty"], false).map((row) => row.id),
+    ["a-favorite", "b-plain", "b-child", "a-plain", "orphan"],
+  );
   assert.deepEqual(orderWorkspaceRowsForDisplay([], ["a"]), []);
 });
 

@@ -566,8 +566,12 @@ export function AppShell() {
   // The same visible order the sidebar renders; digit and previous/next
   // workspace shortcuts index into this list.
   const displayOrderedWorkspaces = useMemo(
-    () => orderWorkspaceRowsForDisplay(openTuiWorkspaces, openTuiMachines.map((machine) => machine.id)),
-    [openTuiMachines, openTuiWorkspaces],
+    () => orderWorkspaceRowsForDisplay(
+      openTuiWorkspaces,
+      openTuiMachines.map((machine) => machine.id),
+      settings.groupSidebarSessionsByHost,
+    ),
+    [openTuiMachines, openTuiWorkspaces, settings.groupSidebarSessionsByHost],
   );
   const openTuiActivityRows = useMemo<OpenTuiActivityRow[]>(
     () => {
