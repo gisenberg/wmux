@@ -185,13 +185,15 @@ export class DurableEndpointStore {
   reconcile(
     paneIds: ReadonlySet<string>,
     currentMachines: readonly MachineConfig[],
+    persistedPaneMachines: ReadonlyMap<string, MachineConfig> = new Map(),
   ): void {
     const machines = new Map(currentMachines.map((machine) => [machine.id, machine]));
     let changed = false;
     const now = new Date().toISOString();
     for (const record of this.records.values()) {
       if (record.status !== "active") continue;
-      const current = machines.get(record.machine.id);
+      const current = persistedPaneMachines.get(record.paneId)
+        ?? machines.get(record.machine.id);
       if (
         paneIds.has(record.paneId)
         && current

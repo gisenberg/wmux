@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
-import net from "node:net";
 import {
   WINDOWS_AGENT_LONG_POLL,
   WINDOWS_AGENT_PATHS,
@@ -24,13 +23,17 @@ import {
 } from "./windows-helpers.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
 import { captureOsc7 } from "./osc7.js";
+import {
+  sessionAgentOriginAtPort,
+  sessionAgentOriginForEndpoint,
+} from "./session-agent-origin.js";
 import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./terminal-checkpoint.js";
 
 interface AgentEvents {
   output: [string];
   title: [string];
   cwd: [string];
-  agentPort: [number];
+  agentPort: [number, string];
   phase: [PaneStartupPhase, string];
   exit: [number | null];
 }
@@ -51,13 +54,7 @@ const RESIZE_REPAINT_QUIET_MS = 120;
 const RESIZE_REPAINT_MAX_WAIT_MS = 1000;
 
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
-  if (machine.agentUrl) return machine.agentUrl.replace(/\/+$/, "");
-  if (machine.kind === "local" && machine.sessionBackend === "agent") {
-    return `http://127.0.0.1:${machine.agentPort ?? 3481}`;
-  }
-  if (!machine.host) return undefined;
-  const host = net.isIP(machine.host) === 6 ? `[${machine.host}]` : machine.host;
-  return `http://${host}:${machine.agentPort ?? 3481}`;
+  return sessionAgentOriginForEndpoint(machine);
 };
 
 const agentPortFromUrl = (url: string): number => {
@@ -932,12 +929,9 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   private urlForAgentPort(port: number): string {
     if (!this.agentUrl) throw new Error(`machine ${this.machine.id} is missing Windows agent URL`);
-    const parsed = new URL(this.agentUrl);
-    parsed.port = String(port);
-    parsed.pathname = "";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString().replace(/\/+$/, "");
+    const candidate = sessionAgentOriginAtPort(this.agentUrl, port);
+    if (!candidate) throw new Error(`machine ${this.machine.id} has an invalid Windows agent origin`);
+    return candidate;
   }
 
   private async generationHealth(port: number, timeoutMs = 750): Promise<WindowsAgentHealth | undefined> {
@@ -986,7 +980,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   private routeToAgentPort(port: number): void {
     this.agentUrl = this.urlForAgentPort(port);
-    this.emit("agentPort", port);
+    this.emit("agentPort", port, this.agentUrl);
   }
 
   private reportPendingUpdate(actual: string, expected: string, activeSessions: number): void {

@@ -107,7 +107,9 @@ export interface MachineStatus {
 export interface PaneState {
   id: string;
   machineId: string;
-  /** Windows agent generation port pinned for restart-safe side-by-side rollouts. */
+  /** Session-agent origin pinned for restart-safe side-by-side rollouts. */
+  agentUrl?: string;
+  /** Windows agent generation port retained for compatibility and display. */
   agentPort?: number;
   title: string;
   cwd?: string;

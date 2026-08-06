@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { configSchema, machineSchema } from "./config.js";
+import { sessionAgentOriginForEndpoint } from "./session-agent-origin.js";
 import type { MachineConfig } from "./types.js";
 
 const defaultPath = (): string => path.join(os.homedir(), ".wmux", "config.json");
@@ -71,6 +72,12 @@ export class StaticMachineStore extends EventEmitter {
     const existing = this.machines[index];
     const parsed = parseEditableMachine(input);
     if (parsed.id !== id) throw new StaticMachineStoreError(409, "machine_id_immutable");
+    if (
+      existing.agentToken
+      && sessionAgentOriginForEndpoint(existing) !== sessionAgentOriginForEndpoint(parsed)
+    ) {
+      throw new StaticMachineStoreError(409, "agent_endpoint_immutable_with_token");
+    }
     const machine: MachineConfig = {
       ...parsed,
       agentToken: existing.agentToken,

@@ -42,6 +42,11 @@ import {
 } from "./kitty-graphics-source.js";
 import { terminalThemeFromEnvironment } from "./terminal-theme.js";
 import { windowsAgentPort } from "./windows-agent.js";
+import {
+  normalizeSessionAgentOrigin,
+  sessionAgentOriginAtPort,
+  sessionAgentOriginForEndpoint,
+} from "./session-agent-origin.js";
 
 export type ClientMessage = PaneClientMessage;
 
@@ -108,6 +113,33 @@ export const resolveDisposalMachine = (
   currentMachines: MachineConfig[],
   machineId: string | undefined,
 ): MachineConfig | undefined => sessionMachine ?? currentMachines.find((machine) => machine.id === machineId);
+
+export const resolvePersistedPaneMachine = (
+  pane: PaneState,
+  configuredMachine: MachineConfig,
+  recoveredEndpoint?: MachineConfig,
+): MachineConfig => {
+  if (configuredMachine.sessionBackend !== "agent") return configuredMachine;
+  if (pane.agentUrl) {
+    const pinnedOrigin = normalizeSessionAgentOrigin(pane.agentUrl);
+    if (!pinnedOrigin) throw new Error(`pane ${pane.id} has an invalid persisted session-agent origin`);
+    const pinnedPort = Number(new URL(pinnedOrigin).port);
+    if (pane.agentPort !== undefined && pane.agentPort !== pinnedPort) {
+      throw new Error(`pane ${pane.id} has inconsistent persisted session-agent endpoint fields`);
+    }
+    return { ...configuredMachine, agentUrl: pinnedOrigin, agentPort: pinnedPort };
+  }
+  if (pane.agentPort === undefined) return configuredMachine;
+  const recoveredOrigin = recoveredEndpoint?.agentPort === pane.agentPort
+    ? sessionAgentOriginForEndpoint(recoveredEndpoint)
+    : undefined;
+  const baseOrigin = recoveredOrigin ?? sessionAgentOriginForEndpoint(configuredMachine);
+  const pinnedOrigin = baseOrigin
+    ? sessionAgentOriginAtPort(baseOrigin, pane.agentPort)
+    : undefined;
+  if (!pinnedOrigin) throw new Error(`pane ${pane.id} is missing its persisted session-agent origin`);
+  return { ...configuredMachine, agentUrl: pinnedOrigin, agentPort: pane.agentPort };
+};
 
 const sameMachineEndpoint = (left: MachineConfig, right: MachineConfig): boolean =>
   JSON.stringify({
@@ -198,12 +230,27 @@ export class SessionManager {
         process.env.WMUX_SESSION_ENDPOINT_PATH
           ?? path.join(state.storageDirectory(), "session-endpoints.json"),
       );
+    const persistedPanes = state.snapshot().workspaces.flatMap((workspace) =>
+      workspace.tabs.flatMap((tab) => tab.panes));
+    const configuredMachines = this.currentMachines();
+    const configuredById = new Map(configuredMachines.map((machine) => [machine.id, machine]));
+    const persistedPaneMachines = new Map<string, MachineConfig>();
+    for (const pane of persistedPanes) {
+      const configured = configuredById.get(pane.machineId);
+      if (!configured) continue;
+      persistedPaneMachines.set(
+        pane.id,
+        resolvePersistedPaneMachine(
+          pane,
+          configured,
+          this.durableEndpoints.activeForPane(pane.id)?.machine,
+        ),
+      );
+    }
     this.durableEndpoints.reconcile(
-      new Set(
-        state.snapshot().workspaces.flatMap((workspace) =>
-          workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id))),
-      ),
-      this.currentMachines(),
+      new Set(persistedPanes.map((pane) => pane.id)),
+      configuredMachines,
+      persistedPaneMachines,
     );
     this.sweepExpiredAgentWorkspaces();
     this.agentWorkspaceCleanupTimer = setInterval(
@@ -565,9 +612,7 @@ export class SessionManager {
       ?? this.durableEndpoints.activeForPane(pane.id)?.machine;
     const configuredMachine = this.currentMachines().find((candidate) => candidate.id === pane.machineId);
     if (!configuredMachine) throw new Error(`machine ${pane.machineId} not found`);
-    const machine = pane.agentPort && configuredMachine.kind === "powershell-ssh"
-      ? { ...configuredMachine, agentPort: pane.agentPort, agentUrl: undefined }
-      : configuredMachine;
+    const machine = resolvePersistedPaneMachine(pane, configuredMachine, previousSessionMachine);
     const windowsAgentBasePort = pane.agentPort && configuredMachine.kind === "powershell-ssh"
       ? windowsAgentPort(configuredMachine)
       : undefined;
@@ -694,12 +739,17 @@ export class SessionManager {
     session.on("cwd", (cwd) => {
       this.state.updatePane(pane.id, { cwd });
     });
-    session.on("agentPort", (agentPort) => {
+    session.on("agentPort", (agentPort, agentUrl) => {
+      const pinnedOrigin = sessionAgentOriginAtPort(agentUrl, agentPort);
+      if (!pinnedOrigin) {
+        console.warn(`wmux: ignored invalid session-agent origin update for ${pane.id}`);
+        return;
+      }
       machine.agentPort = agentPort;
-      machine.agentUrl = undefined;
+      machine.agentUrl = pinnedOrigin;
       this.sessionMachines.set(pane.id, structuredClone(machine));
       this.durableEndpoints.updateActive(pane.id, machine);
-      this.state.updatePane(pane.id, { agentPort });
+      this.state.updatePane(pane.id, { agentPort, agentUrl: pinnedOrigin });
     });
     session.on("phase", (phase, label) => {
       this.broadcast(pane.id, { type: "starting", paneId: pane.id, phase, label });

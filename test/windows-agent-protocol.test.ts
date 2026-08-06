@@ -70,15 +70,44 @@ print(json.dumps({
   assert.match(commands.configuredCwd.at(-1), /Set-Location -LiteralPath 'D:\/configured'/);
 });
 
-test("Windows agent URLs bracket IPv6 callback addresses", () => {
+test("session-agent URLs reject unsupported IPv6 callback addresses", () => {
   const machine: MachineConfig = {
     id: "dynamic-v6",
     name: "Dynamic IPv6",
     kind: "powershell-ssh",
     host: "fd7a:115c:a1e0::8",
+    sessionBackend: "agent",
     agentPort: 3481,
   };
-  assert.equal(windowsAgentUrl(machine), "http://[fd7a:115c:a1e0::8]:3481");
+  assert.equal(windowsAgentUrl(machine), undefined);
+});
+
+test("session-agent URL construction rejects public and DNS fallbacks", () => {
+  assert.equal(windowsAgentUrl({
+    id: "public",
+    name: "Public",
+    kind: "ssh",
+    host: "203.0.113.8",
+    sessionBackend: "agent",
+    agentPort: 3481,
+  }), undefined);
+  assert.equal(windowsAgentUrl({
+    id: "dns",
+    name: "DNS",
+    kind: "ssh",
+    host: "changed.internal",
+    sessionBackend: "agent",
+    agentPort: 3481,
+  }), undefined);
+  assert.equal(windowsAgentUrl({
+    id: "pinned",
+    name: "Pinned",
+    kind: "ssh",
+    host: "changed.internal",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.8:3481",
+    agentPort: 3481,
+  }), "http://100.64.0.8:3481");
 });
 
 test("Windows agent heartbeat advertises its live callback credentials", () => {

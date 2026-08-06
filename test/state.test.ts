@@ -616,15 +616,16 @@ test("workspace reordering persists and ignores no-op moves", () => {
   });
 });
 
-test("Windows agent generation ports persist across restart", () => {
+test("Windows agent generation origins and ports persist across restart", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const pane = store.snapshot().workspaces[0].tabs[0].panes[0];
-    store.updatePane(pane.id, { agentPort: 3482 });
+    store.updatePane(pane.id, { agentUrl: "http://100.64.0.25:3482", agentPort: 3482 });
     store.flush();
 
     const reloadedPane = new StateStore(machines, filePath).findPane(pane.id);
     assert.equal(reloadedPane?.agentPort, 3482);
+    assert.equal(reloadedPane?.agentUrl, "http://100.64.0.25:3482");
   });
 });
 

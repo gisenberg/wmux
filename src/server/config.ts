@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -23,8 +22,11 @@ import {
   type DelegationConfig,
   type DelegationMode,
 } from "../shared/protocol.js";
-import { isAllowedBindHost } from "./bind.js";
 import { localMachine } from "./machines.js";
+import {
+  normalizeSessionAgentOrigin,
+  sessionAgentOriginForEndpoint,
+} from "./session-agent-origin.js";
 import type { MachineConfig } from "./types.js";
 
 const streamSchema = z.object({
@@ -90,48 +92,28 @@ export const machineSchema = z.object({
       message: "agent is only valid for local, ssh, and powershell-ssh machines",
     });
   }
-  if (machine.kind === "powershell-ssh" && machine.sessionBackend === "agent") {
-    let parsedAgentUrl: URL | undefined;
-    if (machine.agentUrl) {
-      try {
-        parsedAgentUrl = new URL(machine.agentUrl);
-      } catch {
-        // The field-level URL validator owns the malformed URL diagnostic.
-        return;
-      }
-      if (
-        parsedAgentUrl.protocol !== "http:"
-        || !parsedAgentUrl.port
-        || parsedAgentUrl.username
-        || parsedAgentUrl.password
-        || parsedAgentUrl.pathname !== "/"
-        || parsedAgentUrl.search
-        || parsedAgentUrl.hash
-      ) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["agentUrl"],
-          message: "agentUrl must be an HTTP origin with an explicit port and no credentials, path, query, or fragment",
-        });
-      }
+  if (machine.sessionBackend === "agent") {
+    const parsedAgentUrl = machine.agentUrl
+      ? normalizeSessionAgentOrigin(machine.agentUrl)
+      : undefined;
+    if (machine.agentUrl && !parsedAgentUrl) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agentUrl"],
+        message: "agentUrl must be a private/internal HTTP IPv4 origin with an explicit port and no credentials, path, query, or fragment",
+      });
     }
-    const agentHost = parsedAgentUrl
-      ? parsedAgentUrl.hostname.replace(/^\[|\]$/g, "")
-      : machine.host;
-    if (!agentHost || net.isIP(agentHost) !== 4 || !isAllowedBindHost(agentHost)) {
+    if (!sessionAgentOriginForEndpoint(machine)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: [machine.agentUrl ? "agentUrl" : "host"],
-        message: machine.host && !machine.agentUrl && net.isIP(machine.host) === 0
-          ? "Windows agent hosts addressed by DNS require agentUrl with an explicit private/internal IPv4 address"
-          : "Windows agent endpoint must use an explicit private/internal IPv4 address",
+        message: machine.host && !machine.agentUrl
+          ? "session-agent hosts addressed by DNS require agentUrl with an explicit private/internal IPv4 address"
+          : "session-agent endpoint must use an explicit private/internal IPv4 address",
       });
     }
-    if (
-      parsedAgentUrl?.port
-      && machine.agentPort !== undefined
-      && Number(parsedAgentUrl.port) !== machine.agentPort
-    ) {
+    if (parsedAgentUrl && machine.agentPort !== undefined
+      && Number(new URL(parsedAgentUrl).port) !== machine.agentPort) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["agentPort"],

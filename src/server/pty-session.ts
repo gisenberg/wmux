@@ -12,7 +12,7 @@ interface PtyEvents {
   output: [string];
   title: [string];
   cwd: [string];
-  agentPort: [number];
+  agentPort: [number, string];
   phase: [PaneStartupPhase, string];
   exit: [number | null];
 }
