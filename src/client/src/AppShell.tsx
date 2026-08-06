@@ -651,9 +651,13 @@ export function AppShell() {
   }, []);
 
   // Nothing focuses the active terminal while the boot overlay covers the
-  // shell, so request focus once when the overlay lifts.
+  // shell, so request focus once when the overlay lifts. This is a fallback:
+  // if another surface (an agent-input question card opened from a deep link)
+  // already holds focus, it must keep it.
   useEffect(() => {
     if (!bootComplete || mobileViewport.isMobile) return;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && !focused.closest(".retro-boot-screen")) return;
     if (activeWorkspace && activeTab) requestTerminalFocus(activeWorkspace.id, activeTab.id);
   }, [bootComplete]);
 
@@ -709,6 +713,10 @@ export function AppShell() {
       clearAgentInputDeepLink();
       return;
     }
+    // The navigation above also queued a terminal focus request. Drop it so a
+    // terminal that finishes mounting after the reassert window below cannot
+    // steal focus from the question card on slow hardware.
+    setTerminalFocusRequest(null);
     let settleTimer: number | undefined;
     let focusInterval: number | undefined;
     const focusCard = (settled: boolean) => {
