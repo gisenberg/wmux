@@ -27,7 +27,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["line"], ["html", { outputFolder: "test-results/playwright-report", open: "never" }]] : "line",
   use: {
     baseURL,
-    reducedMotion: "reduce",
+    contextOptions: { reducedMotion: "reduce" },
     trace: externalBaseURL ? "off" : "retain-on-failure",
     screenshot: "only-on-failure",
     ...(externalStorageState ? { storageState: externalStorageState } : {}),
@@ -37,10 +37,8 @@ export default defineConfig({
     url: `http://127.0.0.1:${port}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: {
-      ...process.env,
-      ...runtime.environment,
-    },
+    // Playwright already merges this over process.env for the spawned server.
+    env: runtime.environment,
   } : undefined,
   projects: [
     {
