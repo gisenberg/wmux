@@ -290,9 +290,24 @@ module["load_remote"].__globals__["urllib"].request.urlopen = fake_urlopen
 module["load_remote"]()
 print(json.dumps(authorizations))
 `;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    WMUX_TOKEN: "inherited-token",
+  };
+  for (const key of [
+    "WMUX_AUTOMATION_TOKEN",
+    "WMUX_AUTOMATION_TOKEN_PATH",
+    "WMUX_E2E_TOKEN",
+    "WMUX_HELPER_TOKEN",
+    "WMUX_HELPER_TOKEN_PATH",
+    "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_TOKEN_PATH",
+  ]) delete env[key];
   const result = spawnSync("python3", ["-c", source, helper], {
     encoding: "utf8",
-    env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_TOKEN: "inherited-token" },
+    env,
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), ["Bearer refreshed-token", "Bearer inherited-token"]);

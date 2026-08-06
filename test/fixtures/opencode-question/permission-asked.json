@@ -1,0 +1,5 @@
+{
+  "id": "event-permission-asked-synthetic",
+  "type": "permission.asked",
+  "properties": { "id": "permission-synthetic", "sessionID": "session-synthetic" }
+}

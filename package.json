@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@fontsource/fira-code": "^5.2.7",
+    "@opencode-ai/sdk": "1.18.9",
     "@vitejs/plugin-react": "^4.7.0",
     "ghostty-web": "file:vendor/ghostty-web-pr169/ghostty-web-0.4.1-pr169-faf6fbd-wmux4.tgz",
     "lucide-react": "^0.468.0",

@@ -39,6 +39,8 @@ import {
 import type { MachineConfig } from "./types.js";
 import type { BrowserSessionStore } from "./browser-session-store.js";
 import type { ScopedCredentialStore } from "./scoped-credential-store.js";
+import type { AgentInputCredentialStore } from "./agent-input-credential-store.js";
+import { mapAgentInputRouteError } from "./routes/agent-input-routes.js";
 import {
   expiredBrowserSessionCookie,
   requestBrowserSessionCookie,
@@ -51,12 +53,22 @@ const readBody = async (
   request: http.IncomingMessage,
   maxBytes = MAX_JSON_BODY,
 ): Promise<unknown> => {
+  const contentLength = request.headers["content-length"];
+  if (typeof contentLength === "string") {
+    if (!/^\d+$/.test(contentLength) || !Number.isSafeInteger(Number(contentLength))) {
+      throw new HttpError(400, "invalid_content_length");
+    }
+    if (Number(contentLength) > maxBytes) {
+      request.resume();
+      throw new HttpError(413, "payload_too_large");
+    }
+  }
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of request) {
     total += chunk.length;
     if (total > maxBytes) {
-      request.destroy();
+      request.resume();
       throw new HttpError(413, "payload_too_large");
     }
     chunks.push(Buffer.from(chunk));
@@ -120,6 +132,7 @@ interface RequestDispatcherOptions {
   auth: AuthConfig;
   browserSessions?: BrowserSessionStore;
   scopedCredentials?: ScopedCredentialStore;
+  agentInputCredentials?: AgentInputCredentialStore;
   registrationToken?: string;
   hostRegistry?: HostRegistry;
   currentMachines: () => MachineConfig[];
@@ -204,6 +217,9 @@ export const createRequestHandler = (
               options.deps.trustedProxies,
             ) ?? normalizeIpAddress(request.socket.remoteAddress) ?? "unknown",
           },
+          routePolicy.access === "agent-input-registration" || routePolicy.access === "agent-input-source"
+            ? options.agentInputCredentials
+            : undefined,
         );
     const registeredWindowsEndpoint = helperMachine?.source === "registered"
       && (
@@ -228,13 +244,14 @@ export const createRequestHandler = (
         response,
         principal.kind === "anonymous" ? 401 : 403,
         { error: "unauthorized" },
-        clearInvalidBrowserSession
-          ? {
+        {
+          ...(routePolicy.id.startsWith("agent-input-") ? { "cache-control": "no-store" } : {}),
+          ...(clearInvalidBrowserSession ? {
               "set-cookie": expiredBrowserSessionCookie(
                 Boolean(options.deps.browserSessionCookieSecure),
               ),
-            }
-          : {},
+            } : {}),
+        },
       );
       return;
     }
@@ -290,6 +307,14 @@ export const createRequestHandler = (
     }
     sendJson(response, 404, { error: "not_found" });
   } catch (error) {
+    const errorHeaders = matchedApiRoute?.route.id.startsWith("agent-input-")
+      ? { "cache-control": "no-store" }
+      : undefined;
+    const agentInputError = mapAgentInputRouteError(error);
+    if (agentInputError) {
+      sendJson(response, agentInputError.status, { error: agentInputError.code }, { "cache-control": "no-store" });
+      return;
+    }
     if (
       error instanceof HttpError
       || error instanceof HostRegistryError
@@ -299,14 +324,14 @@ export const createRequestHandler = (
       || error instanceof RepositoryReviewError
       || error instanceof AgentFollowUpError
     ) {
-      sendJson(response, error.status, { error: error.code });
+      sendJson(response, error.status, { error: error.code }, errorHeaders);
       return;
     }
     if (error instanceof StateIdConflictError) {
-      sendJson(response, 409, { error: "client_id_conflict" });
+      sendJson(response, 409, { error: "client_id_conflict" }, errorHeaders);
       return;
     }
     console.error("wmux: request handler error:", error);
-    sendJson(response, 500, { error: "server_error" });
+    sendJson(response, 500, { error: "server_error" }, errorHeaders);
   }
 };

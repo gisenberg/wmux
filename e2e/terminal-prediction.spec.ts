@@ -1,6 +1,5 @@
 import path from "node:path";
-import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { awaitAppShell } from "./fixtures";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "./fixtures";
 
 interface PredictionCell {
   col: number;

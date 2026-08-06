@@ -15,6 +15,7 @@ export const serverCoupledE2eSpecs = [
 // Playwright driver may run on a different operating system from the server.
 export const browserOnlyE2eSpecs = [
   "agent-fleet.spec.ts",
+  "agent-input-questions.spec.ts",
   "agent-notifications.spec.ts",
   "canvas-chrome.spec.ts",
   "direct-links.spec.ts",

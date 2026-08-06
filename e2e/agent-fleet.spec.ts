@@ -1,5 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-import { awaitAppShell } from "./fixtures";
+import { expect, test, type Page } from "./fixtures";
+import { e2eRegistrationToken } from "./config-auth.js";
 
 interface FleetWorkspace {
   id: string;
@@ -40,7 +40,7 @@ test("shows three concurrent agents on two machines within one event revision", 
 
   try {
     const registered = await request.post("/api/registry/hosts", {
-      headers: { authorization: "Bearer e2e-registration-token" },
+      headers: { authorization: `Bearer ${e2eRegistrationToken()}` },
       data: {
         machine: {
           id: remoteMachineId,

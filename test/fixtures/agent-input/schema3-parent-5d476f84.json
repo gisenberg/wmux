@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 3,
+  "capabilities": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "verifier": {
+        "kind": "hmac-sha256",
+        "digest": "7a79b39376272b3d8fe705b0eb197f53f0cdc3fb8bb3723b13ad09e08d5db1e6"
+      },
+      "context": {
+        "workspaceId": "workspace-parent-v3",
+        "tabId": "tab-parent-v3",
+        "paneId": "pane-parent-v3",
+        "machineId": "local",
+        "sourceKind": "opencode"
+      },
+      "issuedAt": 1000,
+      "expiresAt": 1001000,
+      "usedAt": 1002,
+      "exchangeNonce": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+      "sourceId": "source_00000000-0000-4000-8000-000000000002"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "verifier": {
+        "kind": "hmac-sha256",
+        "digest": "e0080d02842180d4aef6e61ee8a1912cfb544d09026d05963a3d121713dd9db6"
+      },
+      "context": {
+        "workspaceId": "workspace-parent-v3",
+        "tabId": "tab-parent-v3",
+        "paneId": "pane-parent-v3",
+        "machineId": "local",
+        "sourceKind": "opencode"
+      },
+      "issuedAt": 1003,
+      "expiresAt": 1001003
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_00000000-0000-4000-8000-000000000002",
+      "credentialId": "00000000-0000-4000-8000-000000000003",
+      "secretVerifier": {
+        "kind": "hmac-sha256",
+        "digest": "9b14b8c615d7120da1f50088062c426121184cb785d62eaadb12c3e62285161e"
+      },
+      "credentialGeneration": 1,
+      "context": {
+        "workspaceId": "workspace-parent-v3",
+        "tabId": "tab-parent-v3",
+        "paneId": "pane-parent-v3",
+        "machineId": "local",
+        "sourceKind": "opencode"
+      },
+      "instanceNonce": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+      "runtimeAttestation": {
+        "type": "runtime_attestation",
+        "handshakeSchema": 1,
+        "nonce": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+        "challengeIssuedAt": 1001,
+        "challengeDeadline": 6002,
+        "observedAt": 1002,
+        "contractDigest": "1feab28627744cac89922c1aaf5177a26f2f290511d1b0e457d0fd8f1671997f",
+        "compatibilityFingerprint": "opencode-question-occurrence-stream-v4-runtime-attestation-1.18.9",
+        "eventEnvelope": "legacy-properties",
+        "release": "1.18.9",
+        "health": {
+          "called": true,
+          "outcome": "ok",
+          "status": 200,
+          "healthy": true,
+          "release": "1.18.9"
+        },
+        "capabilities": {
+          "globalHealth": true,
+          "questionList": true,
+          "questionReply": true,
+          "sessionGet": true
+        },
+        "diagnostic": "ok"
+      },
+      "runtimeReady": true,
+      "supported": true,
+      "diagnostic": "runtime_ready",
+      "issuedAt": 1002,
+      "refreshedAt": 1002,
+      "expiresAt": 1001002
+    }
+  ],
+  "capabilityTombstones": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "sourceId": "source_00000000-0000-4000-8000-000000000002",
+      "exchangeNonce": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+      "expiresAt": 1001002
+    }
+  ]
+}

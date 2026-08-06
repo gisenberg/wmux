@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
+import { resolveExternalE2eToken } from "./config-auth.js";
 import { prepareStandardE2eRuntime } from "./standard-runtime.js";
 
 const host = process.env.WMUX_E2E_SERVER_HOST?.trim() ?? "";
@@ -14,7 +15,10 @@ if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 
 const bracketedHost = net.isIPv6(host) ? `[${host}]` : host;
 const baseURL = `http://${bracketedHost}:${port}`;
-const runtime = prepareStandardE2eRuntime({ baseURL });
+const authToken = resolveExternalE2eToken(baseURL);
+const runtime = prepareStandardE2eRuntime({ baseURL, authToken });
+const serverEnvironment = { ...process.env, ...runtime.environment };
+delete serverEnvironment.WMUX_E2E_TOKEN;
 const child = spawn(
   process.execPath,
   [
@@ -28,7 +32,7 @@ const child = spawn(
     String(port),
   ],
   {
-    env: { ...process.env, ...runtime.environment },
+    env: serverEnvironment,
     stdio: "inherit",
   },
 );

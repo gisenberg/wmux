@@ -13,6 +13,8 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wmuxctl = path.join(repoRoot, "skills", "wmux", "scripts", "wmuxctl.py");
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const cliHome = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-test-home-"));
+test.after(() => fs.rmSync(cliHome, { recursive: true, force: true }));
 
 const listen = async (server: http.Server) => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -36,9 +38,22 @@ const websocketFrame = (value: unknown) => {
   return Buffer.concat([header, payload]);
 };
 
+const cliEnvironment = (overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = { ...process.env, HOME: cliHome, WMUX_TOKEN: "test-token" };
+  for (const key of [
+    "WMUX_TOKEN_PATH",
+    "WMUX_AUTOMATION_TOKEN",
+    "WMUX_AUTOMATION_TOKEN_PATH",
+    "WMUX_HELPER_TOKEN",
+    "WMUX_HELPER_TOKEN_PATH",
+    "WMUX_E2E_TOKEN",
+  ]) delete environment[key];
+  return Object.assign(environment, overrides);
+};
+
 const cli = (url: string, args: string[], env: NodeJS.ProcessEnv = {}) => execFileAsync("python3", [wmuxctl, "--url", url, ...args], {
   cwd: repoRoot,
-  env: { ...process.env, WMUX_TOKEN: "test-token", ...env },
+  env: cliEnvironment(env),
 });
 
 test("wmuxctl rejects Codex-only delegation options for other runtimes", async () => {
@@ -102,7 +117,7 @@ const cliProcess = async (
 ) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
   const child = spawn("python3", [wmuxctl, "--url", url, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, WMUX_TOKEN: "test-token", ...env },
+    env: cliEnvironment(env),
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";

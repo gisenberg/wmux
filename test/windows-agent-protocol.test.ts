@@ -610,7 +610,7 @@ with tempfile.TemporaryDirectory() as root:
   assert.deepEqual(JSON.parse(result.stdout), {
     unauthorized: 401,
     accepted: 201,
-    capabilities: ["paste-images-v1", "registration-heartbeat-v1", "stream-supervision-v1"],
+    capabilities: ["paste-images-v1", "registration-heartbeat-v1", "stream-supervision-v1", "posix-runtime-files-v1"],
     protocol: 6,
     deleted: true,
     remains: false,

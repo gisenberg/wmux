@@ -236,6 +236,14 @@ const SERVER_SCOPED_ENV_KEYS = new Set([
   "WMUX_HELPER_TOKEN_PATH",
   "WMUX_REGISTRATION_TOKEN",
   "WMUX_REGISTRATION_TOKEN_PATH",
+  "WMUX_E2E_TOKEN",
+  "WMUX_AGENT_INPUT_ENABLED",
+  "WMUX_AGENT_INPUT_REQUEST_PATH",
+  "WMUX_AGENT_INPUT_SECRET_PATH",
+  "WMUX_AGENT_INPUT_CREDENTIAL_STORE_PATH",
+  "WMUX_AGENT_INPUT_CAPABILITY_PATH",
+  "WMUX_AGENT_INPUT_CREDENTIAL_PATH",
+  "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY",
 ]);
 
 const buildSpawnEnv = (machine: MachineConfig, extraEnv: Record<string, string>): Record<string, string> => {
@@ -249,6 +257,7 @@ const buildSpawnEnv = (machine: MachineConfig, extraEnv: Record<string, string>)
   env.WMUX_MACHINE_NAME = machine.name;
   env.PATH = `${process.cwd()}/scripts${path.delimiter}${path.join(os.homedir(), ".local", "bin")}${path.delimiter}${env.PATH ?? ""}`;
   for (const [key, value] of Object.entries(extraEnv)) {
+    if (key === "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY") continue;
     env[key] = value;
   }
   return env;
@@ -623,6 +632,45 @@ const sanitizeCwd = (value?: string): string | undefined => {
   return cwd;
 };
 
+const preparePrivateRuntimeDirectory = (directory: string): void => {
+  const resolved = path.resolve(directory);
+  fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(resolved);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(resolved) !== resolved
+    || (typeof process.getuid === "function" && stat.uid !== process.getuid())) {
+    throw new Error(`wmux runtime directory is unsafe: ${resolved}`);
+  }
+  fs.chmodSync(resolved, 0o700);
+};
+
+const writePrivateRuntimeFile = (filePath: string, contents: string, mode: 0o600 | 0o700): void => {
+  if (fs.existsSync(filePath)) {
+    const existing = fs.lstatSync(filePath);
+    if (!existing.isFile() || existing.isSymbolicLink()
+      || (typeof process.getuid === "function" && existing.uid !== process.getuid())) {
+      throw new Error(`wmux runtime file is unsafe: ${filePath}`);
+    }
+  }
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  let handle: number | undefined;
+  try {
+    handle = fs.openSync(temporaryPath, "wx", mode);
+    fs.writeFileSync(handle, contents);
+    fs.fchmodSync(handle, mode);
+    fs.fsyncSync(handle);
+    fs.closeSync(handle);
+    handle = undefined;
+    fs.renameSync(temporaryPath, filePath);
+  } catch (error) {
+    if (handle !== undefined) fs.closeSync(handle);
+    fs.rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+};
+
 interface DurableShellInput {
   backend: SessionBackend;
   sessionName: string;
@@ -636,7 +684,7 @@ interface DurableShellInput {
   useSystemdScope: boolean;
 }
 
-const durableShellScript = ({
+export const durableShellScript = ({
   backend,
   sessionName,
   cwd,
@@ -648,7 +696,7 @@ const durableShellScript = ({
   agentProfileOptionalAuth,
 }: DurableShellInput): string => {
   const exports = Object.entries(extraEnv)
-    .filter(([, value]) => value)
+    .filter(([key, value]) => value && key !== "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY")
     .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
     .join(" ");
   // Persist the wmux URL/helper credential to ~/.wmux on the target at every (re)attach.
@@ -663,11 +711,53 @@ const durableShellScript = ({
   const persistCredentials = credentialWrites.length > 0
     ? `( umask 077; mkdir -p "$HOME/.wmux" 2>/dev/null || true; ${credentialWrites.join(" ")} );`
     : "";
+  const agentInputCapability = extraEnv.WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY;
+  const agentInputCapabilityPath = `"$HOME/.wmux/agent-input/"${shellQuote(`${extraEnv.WMUX_PANE_ID}.cap`)}`;
+  const agentInputCredentialPath = `"$HOME/.wmux/agent-input/"${shellQuote(`${extraEnv.WMUX_PANE_ID}.json`)}`;
+  const agentInputTemporaryPath = `"$HOME/.wmux/agent-input/."${shellQuote(`${extraEnv.WMUX_PANE_ID}.cap.XXXXXX`)}`;
+  // Stage before entering tmux/screen so the capability never appears in the
+  // durable child's argv; only the stable file paths are repeated there.
+  const agentInputStage = agentInputCapability
+    ? `__wmux_stage_agent_input_v1() {
+  umask 077 || return 1
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    if [ ! -d "$1" ] || [ -L "$1" ]; then umask "$7"; return 1; fi
+  elif ! mkdir "$1"; then umask "$7"; return 1
+  fi
+  if [ -e "$2" ] || [ -L "$2" ]; then
+    if [ ! -d "$2" ] || [ -L "$2" ]; then umask "$7"; return 1; fi
+  elif ! mkdir "$2"; then umask "$7"; return 1
+  fi
+  if ! chmod 700 "$2"; then umask "$7"; return 1; fi
+  if [ -e "$3" ] || [ -L "$3" ]; then
+    if [ ! -f "$3" ] || [ -L "$3" ]; then umask "$7"; return 1; fi
+  fi
+  set -- "$@" "$(mktemp "$5")"
+  if [ -z "\${8:-}" ] || [ ! -f "$8" ] || [ -L "$8" ]; then
+    if [ -n "\${8:-}" ]; then rm -f "$8"; fi
+    umask "$7"
+    return 1
+  fi
+  if ! printf '%s\\n' "$6" > "$8"; then rm -f "$8"; umask "$7"; return 1; fi
+  set -- "$1" "$2" "$3" "$4" "$5" "" "$7" "$8"
+  if ! chmod 600 "$8"; then rm -f "$8"; umask "$7"; return 1; fi
+  if ! mv -f "$8" "$3"; then rm -f "$8"; umask "$7"; return 1; fi
+  umask "$7" || return 1
+  WMUX_AGENT_INPUT_CAPABILITY_PATH=$3
+  WMUX_AGENT_INPUT_CREDENTIAL_PATH=$4
+  export WMUX_AGENT_INPUT_CAPABILITY_PATH WMUX_AGENT_INPUT_CREDENTIAL_PATH
+}
+__wmux_stage_agent_input_v1 "$HOME/.wmux" "$HOME/.wmux/agent-input" ${agentInputCapabilityPath} ${agentInputCredentialPath} ${agentInputTemporaryPath} ${shellQuote(agentInputCapability)} "$(umask)" || { unset -f __wmux_stage_agent_input_v1; exit 1; }
+unset -f __wmux_stage_agent_input_v1;`
+    : "";
+  const agentInputPathExports = agentInputCapability
+    ? `export WMUX_AGENT_INPUT_CAPABILITY_PATH=${agentInputCapabilityPath}; export WMUX_AGENT_INPUT_CREDENTIAL_PATH=${agentInputCredentialPath};`
+    : "";
   const pathExport = helperPathExport ?? "";
   const optionalAuth = agentProfileOptionalAuth ? " --optional-auth" : "";
   const agentProfileApply = `${pathExport} if command -v wmux-agent-profile >/dev/null 2>&1; then wmux-agent-profile apply --quiet${optionalAuth} || true; fi;`;
   const startDir = cwd ? `cd ${shellQuote(cwd)} 2>/dev/null || true;` : "";
-  const paneCommand = `${startDir} ${exports} ${pathExport} ${shellCommand}`;
+  const paneCommand = `${startDir} ${agentInputPathExports} ${exports} ${pathExport} ${shellCommand}`;
   const tmuxCreateCommand = [
     "tmux",
     "-u",
@@ -711,12 +801,12 @@ const durableShellScript = ({
   const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
 
   if (backend === "tmux") {
-    return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
   if (backend === "screen") {
-    return `${persistCredentials} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
-  return `${persistCredentials} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; ${fallbackShell}`;
+  return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenAttach} || exec ${screenCreate}; exit $?; fi; ${fallbackShell}`;
 };
 
 const stageLocalRuntime = (sessionName: string, innerScript: string): string => {
@@ -724,10 +814,8 @@ const stageLocalRuntime = (sessionName: string, innerScript: string): string => 
     ? process.env.XDG_RUNTIME_DIR
     : path.join(os.homedir(), ".wmux", "run");
   const runtimeDir = path.join(base, "wmux", "runtimes");
-  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(runtimeDir, 0o700);
+  preparePrivateRuntimeDirectory(runtimeDir);
   const runtimePath = path.join(runtimeDir, `${POSIX_RUNTIME_VERSION}-${sessionName}.sh`);
-  const temporaryPath = `${runtimePath}.${process.pid}.tmp`;
   // The tmux server remains in its first transient scope after an attach
   // client exits. Each later browser attach therefore needs a fresh scope
   // name; reusing one pane-scoped name makes systemd reject the reattach while
@@ -740,9 +828,7 @@ if [ "\${WMUX_RUNTIME_SCOPED:-}" != 1 ] && command -v systemd-run >/dev/null 2>&
 fi
 ${innerScript}
 `;
-  fs.writeFileSync(temporaryPath, runtime, { mode: 0o700 });
-  fs.renameSync(temporaryPath, runtimePath);
-  fs.chmodSync(runtimePath, 0o700);
+  writePrivateRuntimeFile(runtimePath, runtime, 0o700);
   return runtimePath;
 };
 
@@ -757,15 +843,12 @@ const stageSshRuntime = (
     ? process.env.XDG_RUNTIME_DIR
     : path.join(os.homedir(), ".wmux", "run");
   const runtimeDir = path.join(base, "wmux", "ssh-runtimes");
-  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(runtimeDir, 0o700);
+  preparePrivateRuntimeDirectory(runtimeDir);
 
   const stem = `${POSIX_SSH_RUNTIME_VERSION}-${sessionName}`;
   const payloadPath = path.join(runtimeDir, `${stem}.payload.sh`);
   const wrapperPath = path.join(runtimeDir, `${stem}.sh`);
   const remoteName = `${stem}.sh`;
-  const temporaryPayloadPath = `${payloadPath}.${process.pid}.tmp`;
-  const temporaryWrapperPath = `${wrapperPath}.${process.pid}.tmp`;
   const sshOptions = [
     ...sshControlArgs(paneId, true),
     ...(machine.port ? ["-p", String(machine.port)] : []),
@@ -774,10 +857,12 @@ const stageSshRuntime = (
   const stageCommand = `
 set -eu
 wmux_runtime_dir="\${XDG_CACHE_HOME:-$HOME/.cache}/wmux/runtimes"
-mkdir -p "$wmux_runtime_dir"
-chmod 700 "$wmux_runtime_dir" 2>/dev/null || true
+if [ -e "$wmux_runtime_dir" ] || [ -L "$wmux_runtime_dir" ]; then [ -d "$wmux_runtime_dir" ] && [ ! -L "$wmux_runtime_dir" ]; else mkdir -p "$wmux_runtime_dir"; fi
+chmod 700 "$wmux_runtime_dir"
 wmux_runtime="$wmux_runtime_dir/${remoteName}"
-wmux_runtime_tmp="$wmux_runtime.tmp.$$"
+if [ -e "$wmux_runtime" ] || [ -L "$wmux_runtime" ]; then [ -f "$wmux_runtime" ] && [ ! -L "$wmux_runtime" ]; fi
+umask 077
+wmux_runtime_tmp=$(mktemp "$wmux_runtime_dir/.${remoteName}.XXXXXX")
 trap 'rm -f "$wmux_runtime_tmp"' EXIT HUP INT TERM
 cat > "$wmux_runtime_tmp"
 chmod 700 "$wmux_runtime_tmp"
@@ -802,12 +887,8 @@ rm -f "$wmux_wrapper"
 exec ssh -t ${sshOptions} ${shellQuote(target)} ${shellQuote(launchCommand)}
 `;
 
-  fs.writeFileSync(temporaryPayloadPath, payload, { mode: 0o600 });
-  fs.renameSync(temporaryPayloadPath, payloadPath);
-  fs.chmodSync(payloadPath, 0o600);
-  fs.writeFileSync(temporaryWrapperPath, wrapper, { mode: 0o700 });
-  fs.renameSync(temporaryWrapperPath, wrapperPath);
-  fs.chmodSync(wrapperPath, 0o700);
+  writePrivateRuntimeFile(payloadPath, payload, 0o600);
+  writePrivateRuntimeFile(wrapperPath, wrapper, 0o700);
   return wrapperPath;
 };
 
@@ -821,13 +902,10 @@ const stagePowerShellSshRuntime = (
     ? process.env.XDG_RUNTIME_DIR
     : path.join(os.homedir(), ".wmux", "run");
   const runtimeDir = path.join(base, "wmux", "powershell-ssh-runtimes");
-  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(runtimeDir, 0o700);
+  preparePrivateRuntimeDirectory(runtimeDir);
   const stem = `v1-${durableSessionName(paneId)}`;
   const payloadPath = path.join(runtimeDir, `${stem}.payload.ps1`);
   const wrapperPath = path.join(runtimeDir, `${stem}.sh`);
-  const temporaryPayloadPath = `${payloadPath}.${process.pid}.tmp`;
-  const temporaryWrapperPath = `${wrapperPath}.${process.pid}.tmp`;
   const sshOptions = [
     "-tt",
     ...sshControlArgs(paneId, true),
@@ -847,12 +925,8 @@ wmux_cleanup
 trap - EXIT HUP INT TERM
 exit "$wmux_status"
 `;
-  fs.writeFileSync(temporaryPayloadPath, bootstrap, { mode: 0o600 });
-  fs.renameSync(temporaryPayloadPath, payloadPath);
-  fs.chmodSync(payloadPath, 0o600);
-  fs.writeFileSync(temporaryWrapperPath, wrapper, { mode: 0o700 });
-  fs.renameSync(temporaryWrapperPath, wrapperPath);
-  fs.chmodSync(wrapperPath, 0o700);
+  writePrivateRuntimeFile(payloadPath, bootstrap, 0o600);
+  writePrivateRuntimeFile(wrapperPath, wrapper, 0o700);
   return wrapperPath;
 };
 
@@ -881,7 +955,8 @@ const installRemoteHelpersScript = (machine: MachineConfig): string => {
   );
   return `
 wmux_helper_dir="${remoteHelperDir()}";
-mkdir -p "$wmux_helper_dir";
+if [ -e "$wmux_helper_dir" ] || [ -L "$wmux_helper_dir" ]; then [ -d "$wmux_helper_dir" ] && [ ! -L "$wmux_helper_dir" ] || { echo '[wmux] unsafe helper staging directory' >&2; exit 1; }; else mkdir -p "$wmux_helper_dir"; fi;
+chmod 700 "$wmux_helper_dir";
 mkdir -p "$HOME/.wmux" 2>/dev/null || true;
 wmux_stream_agent_config="$HOME/.wmux/stream-agent.json";
 wmux_stream_agent_defaults="$HOME/.wmux/stream-agent.defaults.json";
@@ -943,6 +1018,18 @@ __WMUX_OPENCODE_RUN_HELPER__
 cat > "$wmux_helper_dir/wmux-agent-run" <<'__WMUX_AGENT_RUN_HELPER__'
 ${localHelperScript("wmux-agent-run")}
 __WMUX_AGENT_RUN_HELPER__
+wmux_agent_input_broker_tmp=$(mktemp "$wmux_helper_dir/.wmux-agent-input-broker.XXXXXX")
+cat > "$wmux_agent_input_broker_tmp" <<'__WMUX_AGENT_INPUT_BROKER__'
+${localHelperScript("wmux-agent-input-broker")}
+__WMUX_AGENT_INPUT_BROKER__
+chmod 700 "$wmux_agent_input_broker_tmp"
+mv -f "$wmux_agent_input_broker_tmp" "$wmux_helper_dir/wmux-agent-input-broker"
+wmux_opencode_question_contract_tmp=$(mktemp "$wmux_helper_dir/.opencode-question-contract.XXXXXX")
+cat > "$wmux_opencode_question_contract_tmp" <<'__WMUX_OPENCODE_QUESTION_CONTRACT__'
+${localHelperScript("opencode-question-contract.json")}
+__WMUX_OPENCODE_QUESTION_CONTRACT__
+chmod 600 "$wmux_opencode_question_contract_tmp"
+mv -f "$wmux_opencode_question_contract_tmp" "$wmux_helper_dir/opencode-question-contract.json"
 cat > "$wmux_helper_dir/wmux_agent_contract.py" <<'__WMUX_AGENT_CONTRACT__'
 ${localHelperScript("wmux_agent_contract.py")}
 __WMUX_AGENT_CONTRACT__
@@ -964,7 +1051,7 @@ __WMUX_AGENT_PROFILE_HELPER__
 cat > "$wmux_helper_dir/wmuxctl" <<'__WMUX_CTL_HELPER__'
 ${localSkillScript("wmux", "scripts", "wmuxctl.py")}
 __WMUX_CTL_HELPER__
-chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-shell-run-event" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-agent-run" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile" "$wmux_helper_dir/wmuxctl";
+chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-shell-run-event" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-agent-run" "$wmux_helper_dir/wmux-agent-input-broker" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile" "$wmux_helper_dir/wmuxctl";
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-clip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wclip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmclip" 2>/dev/null || true;
@@ -985,6 +1072,7 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-shell-run-event" "$wmux_path_dir/wmux-shell-run-event" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-opencode-run" "$wmux_path_dir/wmux-opencode-run" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-agent-run" "$wmux_path_dir/wmux-agent-run" 2>/dev/null || true;
+        ln -sf "$wmux_helper_dir/wmux-agent-input-broker" "$wmux_path_dir/wmux-agent-input-broker" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-copy" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wmux-clip" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_path_dir/wclip" 2>/dev/null || true;

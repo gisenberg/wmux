@@ -1,0 +1,33 @@
+{
+  "id": "event-asked-synthetic",
+  "type": "question.asked",
+  "properties": {
+    "id": "request-synthetic",
+    "sessionID": "session-synthetic",
+    "questions": [
+      {
+        "header": "Mode",
+        "question": "Choose one mode",
+        "options": [{ "label": "Safe", "description": "Use conservative defaults" }],
+        "multiple": false
+      },
+      {
+        "header": "Checks",
+        "question": "Choose checks",
+        "options": [
+          { "label": "Tests", "description": "Run focused tests" },
+          { "label": "Types", "description": "Run type checking" }
+        ],
+        "multiple": true,
+        "custom": false
+      },
+      {
+        "header": "Note",
+        "question": "Provide a custom note",
+        "options": [],
+        "multiple": false,
+        "custom": true
+      }
+    ]
+  }
+}

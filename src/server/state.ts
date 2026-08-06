@@ -653,6 +653,16 @@ export class StateStore extends EventEmitter {
     return structuredClone(notification);
   }
 
+  ensureNotification(notification: TerminalNotification): TerminalNotification {
+    const existing = this.state.notifications.find((candidate) => candidate.id === notification.id);
+    if (existing) return structuredClone(existing);
+    this.state.notifications.unshift(structuredClone(notification));
+    this.state.notifications = this.state.notifications.slice(0, 200);
+    this.save();
+    this.emit("notification", structuredClone(notification));
+    return structuredClone(notification);
+  }
+
   createMedia(input: CreateMediaInput): TerminalMedia {
     const target = this.resolveNotificationTarget(input);
     const media: TerminalMedia = {

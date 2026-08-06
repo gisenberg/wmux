@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { e2eRegistrationToken } from "./config-auth.js";
 
 interface NotificationWorkspace {
   id: string;
@@ -53,7 +54,7 @@ test("a remote approval gate reaches a mobile browser within one heartbeat", asy
 
   try {
     const registration = await request.post("/api/registry/hosts", {
-      headers: { authorization: "Bearer e2e-registration-token" },
+      headers: { authorization: `Bearer ${e2eRegistrationToken()}` },
       data: {
         machine: {
           id: machineId,

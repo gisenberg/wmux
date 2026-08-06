@@ -80,6 +80,8 @@ const notificationSchema = z.object({
   body: z.string().max(2000),
   createdAt: timestampSchema,
   read: z.boolean(),
+  agentInputRequestId: idSchema.optional(),
+  href: z.string().max(1_024).optional(),
 }).strict();
 
 const agentEventSchema = z.object({
@@ -438,10 +440,8 @@ export const migrateV5ToV6State = (
     : record.delegations,
 });
 
-/** v6 workspaces retain their prior indefinite lifetime unless explicitly armed. */
-export const migrateV6ToV7State = (
-  record: Record<string, unknown>,
-): Record<string, unknown> => ({
+/** v7 notifications may carry stable, contentless agent-input deep links. */
+export const migrateV6ToV7State = (record: Record<string, unknown>): Record<string, unknown> => ({
   ...record,
   schemaVersion: 7,
 });

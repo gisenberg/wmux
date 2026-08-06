@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 4,
+  "handshakeSchema": 4,
+  "openCodeRelease": "1.18.9",
+  "sdkPackage": "@opencode-ai/sdk",
+  "sdkVersion": "1.18.9",
+  "sdkImport": "@opencode-ai/sdk/v2/client",
+  "officialTagCommit": "4da7bb44c84e013fa53e9c5d02ac753d1435c81a",
+  "healthSource": "plugin.injectedTransport:/global/health",
+  "healthCall": "structuredClient.global.health({ signal })",
+  "healthResult": "RequestResult with HTTP 200 data { healthy: true, version: \"1.18.9\" }",
+  "eventEnvelope": "legacy-properties",
+  "structuredClientSource": "new OpencodeClient({ client: plugin.client own _client }) from @opencode-ai/sdk/v2/client",
+  "transportContract": "pinned 1.18.9 generated root own _client with own get/post functions; no mutation or fallback",
+  "questionListCall": "structuredClient.question.list({ directory }, { signal })",
+  "questionReplyCall": "structuredClient.question.reply({ requestID, answers }, { signal })",
+  "sessionGetCall": "structuredClient.session.get({ sessionID, directory }, { signal })",
+  "questionReplyResult": "RequestResult<QuestionReplyResponses, QuestionReplyErrors, false, fields>",
+  "questionIdentityOwner": "broker-occurrence-stream",
+  "questionSnapshotAuthority": "complete-validated-top-level-members",
+  "questionResolutionBinding": "exact-occurrence-public-id-generation",
+  "requiredClientMethods": [
+    "global.health",
+    "question.list",
+    "question.reply",
+    "session.get"
+  ],
+  "compatibilityFingerprint": "opencode-question-occurrence-stream-v9-bounded-snapshot-injected-transport-global-health-server-challenge-1.18.9",
+  "canonicalContractDigest": "b37166e892fe20db37c2c501ab58c093da1db95a19ef6951393e67f38766f5b8"
+}

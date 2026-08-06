@@ -4,8 +4,11 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { resolveExternalE2eToken } from "./config-auth.js";
+import { createExternalApiRequestContext } from "./external-api-request.js";
 
 export { expect };
+export type { APIRequestContext, Locator, Page, WebSocketRoute } from "@playwright/test";
 
 // The app shell mounts beneath the retro boot overlay as soon as bootstrap
 // resolves and stays covered until the sequence completes; interaction,
@@ -61,8 +64,11 @@ const waitForPaneMessage = async (
     ({ paneId: targetPaneId, predicate: targetPredicate }) =>
       new Promise<void>((resolve, reject) => {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const token = window.localStorage.getItem("wmux.token");
+        const query = new URLSearchParams({ cols: "100", rows: "32" });
+        if (token) query.set("token", token);
         const socket = new WebSocket(
-          `${protocol}//${window.location.host}/ws/panes/${encodeURIComponent(targetPaneId)}/output?cols=100&rows=32`,
+          `${protocol}//${window.location.host}/ws/panes/${encodeURIComponent(targetPaneId)}/output?${query}`,
         );
         let output = "";
         const timeout = window.setTimeout(() => {
@@ -101,6 +107,19 @@ const waitForPaneMessage = async (
 };
 
 export const test = base.extend<WmuxFixtures>({
+  request: async ({ playwright, baseURL }, use) => {
+    if (!baseURL) throw new Error("E2E request fixture requires a configured baseURL");
+    const externalBaseURL = process.env.WMUX_E2E_BASE_URL?.trim().replace(/\/+$/, "");
+    const externalToken = resolveExternalE2eToken(externalBaseURL);
+    const api = externalToken
+      ? createExternalApiRequestContext(baseURL, externalToken)
+      : await playwright.request.newContext({ baseURL });
+    try {
+      await use(api);
+    } finally {
+      await api.dispose();
+    }
+  },
   bootPage: [async ({ authenticatedPage }, use) => {
     void authenticatedPage;
     await use();
