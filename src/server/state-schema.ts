@@ -7,7 +7,7 @@ import type {
   PersistedState,
 } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 7;
+export const CURRENT_STATE_SCHEMA_VERSION = 8;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -440,10 +440,16 @@ export const migrateV5ToV6State = (
     : record.delegations,
 });
 
-/** v7 notifications may carry stable, contentless agent-input deep links. */
+/** v7 workspaces gain explicit cleanup policy and expiry metadata. */
 export const migrateV6ToV7State = (record: Record<string, unknown>): Record<string, unknown> => ({
   ...record,
   schemaVersion: 7,
+});
+
+/** v8 notifications may carry stable, contentless agent-input deep links. */
+export const migrateV7ToV8State = (record: Record<string, unknown>): Record<string, unknown> => ({
+  ...record,
+  schemaVersion: 8,
 });
 
 export const parsePersistedState = (input: unknown): ParsedPersistedState => {
@@ -464,6 +470,7 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
     && rawVersion !== 4
     && rawVersion !== 5
     && rawVersion !== 6
+    && rawVersion !== 7
     && rawVersion !== CURRENT_STATE_SCHEMA_VERSION
   ) {
     throw new Error("state schemaVersion must be a supported integer");
@@ -484,9 +491,12 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   const v6Candidate = rawVersion !== undefined && rawVersion >= 6
     ? record
     : migrateV5ToV6State(v5Candidate);
-  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+  const v7Candidate = rawVersion !== undefined && rawVersion >= 7
     ? record
     : migrateV6ToV7State(v6Candidate);
+  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+    ? record
+    : migrateV7ToV8State(v7Candidate);
   const normalized = normalizeNotificationBodies(candidate);
   return {
     state: persistedStateSchema.parse(normalized.record),

@@ -574,12 +574,11 @@ export class SessionManager {
     if (machine.source === "registered" && machine.online === false) {
       throw new Error(`machine ${pane.machineId} is offline`);
     }
-    const backend = createSessionBackend(machine, this.pasteImages);
+    const backend = createSessionBackend(machine, this.pasteImages, { windowsAgentBasePort });
     const agentInputBinding = createAgentInputSessionBinding(
       pane.id,
       backend,
       machine,
-      this.agentInputSessionBindings.get(pane.id),
     );
     if (previousSessionMachine && !sameMachineEndpoint(previousSessionMachine, machine)) {
       const previousBackend = this.backends.get(pane.id)
@@ -605,6 +604,21 @@ export class SessionManager {
     } else if (machine.kind === "local") {
       removeLocalAgentInputCapability(pane.id);
     }
+    const processReplacementRuntimeFiles = (): BackendRuntimeFile[] => {
+      const previousBinding = this.agentInputSessionBindings.get(pane.id);
+      if (previousBinding) this.agentInputSourceRetirer?.(pane.id, previousBinding);
+      const replacementBinding = createAgentInputSessionBinding(pane.id, backend, machine);
+      this.agentInputSessionBindings.set(pane.id, replacementBinding);
+      if (!this.agentInputCapabilityIssuer || (machine.kind !== "local" && machine.kind !== "ssh")) {
+        return [];
+      }
+      try {
+        const issued = this.agentInputCapabilityIssuer(pane.id, replacementBinding);
+        return [{ purpose: "agent-input-capability", data: Buffer.from(`${issued.capability}\n`, "utf8") }];
+      } catch {
+        return [];
+      }
+    };
     const streamHost = process.env.WMUX_STREAM_HOST ?? process.env.WMUX_HOST ?? "127.0.0.1";
     const streamPath = streamPathForMachine(machine.id);
     const sessionEnv = {
@@ -646,6 +660,7 @@ export class SessionManager {
       rows,
       env: sessionEnv,
       ...(runtimeFiles ? { runtimeFiles } : {}),
+      processReplacementRuntimeFiles,
       ...(restoredCheckpoint ? { restoredCheckpoint } : {}),
     });
     const startedAt = Date.now();
@@ -887,6 +902,8 @@ export class SessionManager {
     }
     for (const timer of this.durableRefreshTimers) clearTimeout(timer);
     this.durableRefreshTimers.clear();
+    for (const pending of this.pendingWorkspaceCloses.values()) clearTimeout(pending.timer);
+    this.pendingWorkspaceCloses.clear();
     this.durableCwdRefreshTimers.clear();
     this.durableCwdRefreshInFlight.clear();
     this.durableCwdLastReadAt.clear();
@@ -957,6 +974,9 @@ export class SessionManager {
     this.resizeOwners.delete(pane.id);
     this.paneSizes.delete(pane.id);
     const backend = this.backends.get(pane.id);
+    const binding = this.agentInputSessionBindings.get(pane.id);
+    if (binding) this.agentInputSourceRetirer?.(pane.id, binding);
+    this.agentInputSessionBindings.delete(pane.id);
     if (backend) {
       backend.detach(existing);
     } else {
@@ -1276,7 +1296,6 @@ export const createAgentInputSessionBinding = (
   paneId: string,
   backend: Pick<SessionBackend, "id">,
   machine: MachineConfig,
-  existing?: AgentInputSessionBinding,
 ): AgentInputSessionBinding => {
   const endpointFingerprint = crypto.createHash("sha256").update(JSON.stringify({
     id: machine.id,
@@ -1288,16 +1307,9 @@ export const createAgentInputSessionBinding = (
     agentUrl: machine.agentUrl,
     agentPort: machine.agentPort,
   })).digest("hex");
-  if (existing?.backendId === backend.id && existing.endpointFingerprint === endpointFingerprint) {
-    // Replacing only an idle durable client preserves the same server-owned
-    // backend authority. Exit and disposal paths remove this binding first;
-    // endpoint/backend replacement fails the comparison; restart has no map.
-    return structuredClone(existing);
-  }
-  // This is an authority epoch for the live wmux-to-backend attachment, not a
-  // prediction based only on pane metadata. It changes after exit, endpoint or
-  // backend replacement, and wmux restart, so pane-id reuse cannot revive an
-  // old source credential.
+  // This authority epoch is created for one live wmux-to-backend attachment.
+  // Client recycling, process replacement, exit, and restart all rotate it so
+  // pane-id or endpoint reuse cannot revive an old source credential.
   void paneId;
   const sessionIncarnation = crypto.randomBytes(32).toString("hex");
   return { backendId: backend.id, sessionIncarnation, endpointFingerprint };

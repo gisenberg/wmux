@@ -119,6 +119,14 @@ const currentAgentInputDeepLink = (): { id: string; generation?: number } | null
   return { id, ...(generation && Number.isSafeInteger(generation) ? { generation } : {}) };
 };
 
+const removeCurrentAgentInputDeepLink = (): void => {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("agentInput") && !url.searchParams.has("generation")) return;
+  url.searchParams.delete("agentInput");
+  url.searchParams.delete("generation");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+};
+
 interface MountedTabView {
   key: string;
   tabId: string;
@@ -676,6 +684,11 @@ export function AppShell() {
     };
   }, []);
 
+  const clearAgentInputDeepLink = useCallback(() => {
+    removeCurrentAgentInputDeepLink();
+    setAgentInputDeepLink(null);
+  }, []);
+
   useEffect(() => {
     const requestId = agentInputDeepLink?.id;
     if (!requestId || !state) return;
@@ -689,11 +702,11 @@ export function AppShell() {
     }
     if (activePane?.id !== request.paneId) {
       activatePane(request.tabId, request.paneId);
-      if (!requestVisible) setAgentInputDeepLink(null);
+      if (!requestVisible) clearAgentInputDeepLink();
       return;
     }
     if (!requestVisible) {
-      setAgentInputDeepLink(null);
+      clearAgentInputDeepLink();
       return;
     }
     let settleTimer: number | undefined;
@@ -703,7 +716,7 @@ export function AppShell() {
       const focusTarget = card?.querySelector<HTMLElement>("input:not(:disabled), button:not(:disabled)") ?? card;
       focusTarget?.focus({ preventScroll: false });
       card?.scrollIntoView({ block: "nearest" });
-      if (card && settled) setAgentInputDeepLink(null);
+      if (card && settled) clearAgentInputDeepLink();
     };
     const frame = window.requestAnimationFrame(() => {
       focusCard(false);
@@ -721,7 +734,7 @@ export function AppShell() {
       if (focusInterval) window.clearInterval(focusInterval);
       if (settleTimer) window.clearTimeout(settleTimer);
     };
-  }, [activatePane, activateWorkspaceTab, activePane?.id, activeTab?.id, activeWorkspace?.id, agentInputDeepLink, state]);
+  }, [activatePane, activateWorkspaceTab, activePane?.id, activeTab?.id, activeWorkspace?.id, agentInputDeepLink, clearAgentInputDeepLink, state]);
 
   const persistCollapsedWorkspaceIds = useCallback((collapsedWorkspaceIds: string[]): Promise<void> => {
     const version = ++collapseWriteVersion.current;

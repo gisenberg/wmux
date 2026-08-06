@@ -202,6 +202,7 @@ const INPUT_DELAY_MS = 100
 const REQUEST_TIMEOUT_MS = 10_000
 const QUESTION_EVENT_TIMEOUT_MS = 10_000
 const MAX_QUESTION_EVENT_TASKS = 256
+const MAX_BROKER_LINE_BYTES = 128 * 1024
 const MIN_WAIT_TIMEOUT_SECONDS = 0.1
 const MAX_WAIT_TIMEOUT_SECONDS = 14_400
 const DEFAULT_WAIT_TIMEOUT_SECONDS = { review: 1_800, change: 7_200, deploy: 7_200 } as const
@@ -1207,18 +1208,21 @@ const createQuestionBroker = (injectedClient: unknown) => {
   const deliveryControllers = new Set<AbortController>()
   let closed = false
   const writeControl = (message: Record<string, unknown>) => {
-    if (!child?.stdin.writable || child.stdin.destroyed) return
+    if (!child?.stdin.writable || child.stdin.destroyed) return false
     const line = JSON.stringify(message)
-    if (Buffer.byteLength(line) > 128 * 1024) return
+    if (Buffer.byteLength(line) > MAX_BROKER_LINE_BYTES) return false
     child.stdin.write(line + "\n")
+    return true
   }
   const write = (message: Record<string, unknown>) => {
-    if (closed) return
+    if (closed || Buffer.byteLength(JSON.stringify(message)) > MAX_BROKER_LINE_BYTES) return false
     if (structuredReady) {
-      writeControl(message)
+      return writeControl(message)
     } else if (restartInProgress && pendingRestartMessages.length < 256) {
       pendingRestartMessages.push(message)
+      return true
     }
+    return false
   }
   const sendTerminalAck = (invocationKey: string, message: Record<string, unknown>) => {
     if (pendingTerminalAcks.size >= 256 && !pendingTerminalAcks.has(invocationKey)) {
@@ -1591,7 +1595,7 @@ export default (async ({ client, directory }) => {
       || !Number.isSafeInteger(eventSequence) || eventSequence <= 0
       || !Array.isArray(request.questions) || request.questions.length < 1
       || request.questions.length > 32 || !request.questions.every(validQuestion)) return false
-    questionBroker?.send({
+    return questionBroker?.send({
       type: "asked",
       eventId,
       eventSequence,
@@ -1599,8 +1603,7 @@ export default (async ({ client, directory }) => {
       sessionID: request.sessionID,
       questions: request.questions.map(normalizeQuestion),
       nativePending,
-    })
-    return true
+    }) === true
   }
   let snapshotInFlight = false
   let snapshotPending = false
@@ -1644,12 +1647,11 @@ export default (async ({ client, directory }) => {
     members: Array<{ id: string; sessionID: string; questions: any[] }>,
   ) => {
     const message = { type: "snapshot", complete, cutSequence, members }
-    if (Buffer.byteLength(JSON.stringify(message)) > 128 * 1024) {
+    if (Buffer.byteLength(JSON.stringify(message)) > MAX_BROKER_LINE_BYTES) {
       questionBroker?.send({ type: "snapshot", complete: false, cutSequence, members: [] })
       return false
     }
-    questionBroker?.send(message)
-    return complete
+    return questionBroker?.send(message) === true && complete
   }
   const scheduleSnapshotRetry = () => {
     if (snapshotRetryTimer || !questionBroker?.isReady()) return
@@ -1847,13 +1849,13 @@ export default (async ({ client, directory }) => {
               if (typeof requestID !== "string") {
                 questionBroker?.disable()
               } else {
-                questionBroker?.send({
+                if (!questionBroker.send({
                   type: "resolved",
                   eventSequence,
                   requestID,
                   sessionID,
                   result: event.type === "question.replied" ? "replied" : "rejected",
-                })
+                })) questionBroker.disable()
               }
             }
           })

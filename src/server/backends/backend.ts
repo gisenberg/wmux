@@ -43,6 +43,7 @@ export interface BackendSpawnSpec {
   rows: number;
   env: Record<string, string>;
   runtimeFiles?: BackendRuntimeFile[];
+  processReplacementRuntimeFiles?: () => BackendRuntimeFile[];
   restoredCheckpoint?: AttachReplay;
 }
 

@@ -294,8 +294,10 @@ public `failed` state for deterministic non-retryable SDK errors while retaining
   is quarantined; neither server nor plugin retries or redelivers it.
 - A source credential and its constructor capability are accepted only while
   `SessionManager` still owns the exact running backend/session incarnation and
-  endpoint. Browser reconnects preserve that binding; abnormal process exit,
-  same-pane backend replacement, or host retarget retires it.
+  endpoint. Additional viewers preserve that binding, while replacement of an
+  idle durable client rotates it and stages fresh authority for the surviving
+  broker. Abnormal process exit, same-pane backend replacement, agent-owned
+  process recreation, or host retarget also retires it.
 - Plugin/broker restart while the same wmux backend attachment remains live
   retains the occurrence stream and replays metadata-only outbox operations.
   A wmux server shutdown is a different authority boundary: graceful shutdown
@@ -355,10 +357,10 @@ plugin, and require `wmux-hooks status` to report `opencodeParity: true` (or
 compare `wmux-hooks hash opencode` with the reported expected hash). Rollout must
 update wmux, install the generated plugin, and restart each OpenCode process so
 it loads handshake schema 4; old processes fail structured handling closed while
-generic lifecycle events continue. State schema 7, server credential schema 8,
+generic lifecycle events continue. State schema 8, server credential schema 8,
 request schema 8, and pane-local broker schema 10 are downgrade-refused. A binary
 rollback must target a specific older release and restore owner-only, pre-upgrade
-backups of every store that release cannot read: normally schema-6 `state.json`,
+backups of every store that release cannot read: normally schema-7 `state.json`,
 schema-7 `agent-input-credentials.json`, schema-7 `agent-input-requests.json`, and
 schema-9 files under `~/.wmux/agent-input/`. Stop wmux and every affected OpenCode
 process/broker before restoring the complete matching backup set. Without that

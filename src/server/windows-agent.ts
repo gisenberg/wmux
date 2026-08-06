@@ -346,6 +346,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     private readonly restoredCheckpoint?: AttachReplay,
     private readonly configuredBaseAgentPort?: number,
     private readonly runtimeFiles: BackendRuntimeFile[] = [],
+    private readonly processReplacementRuntimeFiles?: () => BackendRuntimeFile[],
   ) {
     super();
     this.checkpoint = new TerminalCheckpoint(cols, rows, extraEnv);
@@ -574,6 +575,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     cols: number,
     rows: number,
     helperBundle?: WindowsHelperBundle,
+    runtimeFiles: Array<{ purpose: string; dataBase64: string; sha256: string }> = [],
   ): Record<string, unknown> {
     return {
       cols,
@@ -586,6 +588,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         bundleVersion: helperBundle?.bundleVersion ?? "",
         files: helperBundle?.files ?? [],
       },
+      runtimeFiles,
       env: {
         WMUX_MACHINE_ID: this.machine.id,
         WMUX_MACHINE_NAME: this.machine.name,
@@ -730,9 +733,16 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const helperBundle = shouldUseWindowsAgent(this.machine)
       ? buildWindowsHelperBundle(this.machine)
       : undefined;
+    const runtimeFiles = this.processReplacementRuntimeFiles?.() ?? [];
+    const wireRuntimeFiles = runtimeFiles.map((file) => ({
+      purpose: file.purpose,
+      dataBase64: file.data.toString("base64"),
+      sha256: crypto.createHash("sha256").update(file.data).digest("hex"),
+    }));
+    for (const file of runtimeFiles) file.data.fill(0);
     const response = await this.post<AgentSessionResponse>(
       WINDOWS_AGENT_PATHS.session(this.pane.id),
-      this.sessionCreatePayload(dimensions.cols, dimensions.rows, helperBundle),
+      this.sessionCreatePayload(dimensions.cols, dimensions.rows, helperBundle, wireRuntimeFiles),
       SESSION_CREATE_TIMEOUT_MS,
     );
     if (this.stopped || this.exited) return;

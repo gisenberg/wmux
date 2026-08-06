@@ -55,8 +55,10 @@ test("OpenCode installer writes an idempotent global plugin without touching con
       "an unstarted delivery remains eligible after broker refresh or start-response loss");
     assert.match(plugin, /result\.data\.length > 256/,
       "the v9 compatibility contract bounds snapshot validation before per-session SDK calls");
-    assert.match(plugin, /Buffer\.byteLength\(JSON\.stringify\(message\)\) > 128 \* 1024/,
+    assert.match(plugin, /Buffer\.byteLength\(JSON\.stringify\(message\)\) > MAX_BROKER_LINE_BYTES/,
       "complete snapshots cannot be silently dropped at the broker-control line bound");
+    assert.match(plugin, /return questionBroker\?\.send\(\{[\s\S]*type: "asked"[\s\S]*\}\) === true/,
+      "direct asks report broker-line admission instead of silently succeeding");
     assert.match(plugin, /Math\.min\(8, validated\.length\)/,
       "snapshot session validation uses bounded concurrency under one deadline");
     assert.match(plugin, /Symbol\.for\("wmux\.opencode\.question-broker-owner"\)/,

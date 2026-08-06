@@ -192,7 +192,7 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await expect(mainCard.locator("fieldset").nth(0).getByRole("radio")).toBeFocused();
     await page.waitForTimeout(700);
     await expect(mainCard.locator("fieldset").nth(0).getByRole("radio")).toBeFocused();
-    await expect(page).toHaveURL(new RegExp(`agentInput=${main.id}.*generation=7`));
+    await expect(page).not.toHaveURL(/agentInput=/);
     await expect(mainCard.locator("fieldset")).toHaveCount(3);
     await expect(mainCard.locator("legend")).toHaveText(["Mode", "Checks", "Note"]);
     await expect(mainCard.getByRole("radio", { name: /Safe/ })).toHaveCount(1);
@@ -273,6 +273,12 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     await expect(page).toHaveURL(new RegExp(target.id));
     await expect(page.locator(`a[href="/workspaces/${target.id}/tabs/${targetTab.id}"]`)).toHaveAttribute("aria-current", "page");
     await expect(mainCard).toHaveCount(0);
+    await expect(page).not.toHaveURL(/agentInput=/);
+    await page.evaluate((tag) => (
+      (window as any).__wmuxNotifications.find((item: any) => item.options?.tag === tag).onclick()
+    ), notification.id);
+    await expect(page.locator(`a[href="/workspaces/${target.id}/tabs/${targetTab.id}"]`)).toHaveAttribute("aria-current", "page");
+    await expect(page).not.toHaveURL(/agentInput=/);
 
     const callsBeforeGap = bootstrapCalls;
     bootstrapPayload = {
