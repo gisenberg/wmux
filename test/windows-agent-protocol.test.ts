@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -201,6 +202,28 @@ print(json.dumps({
   const outcomes = JSON.parse(result.stdout);
   assert.equal(outcomes.hardCreateWins + outcomes.hardFenceWins, 100);
   assert.equal(outcomes.pendingCreateWins + outcomes.pendingFenceWins, 100);
+});
+
+test("rollout slot activation is owner-serialized and reuses an already-current generation", () => {
+  const service = fs.readFileSync(
+    path.join(repoRoot, "scripts/windows/wmux-windows-agent-service.ps1"),
+    "utf8",
+  );
+  const mutex = service.indexOf("[System.Threading.Mutex]::new");
+  const wait = service.indexOf("$GenerationMutex.WaitOne", mutex);
+  const currentCheck = service.indexOf("$ExistingRelease -eq $ExpectedRelease", wait);
+  const reuse = service.indexOf("reused = $true", currentCheck);
+  const stop = service.indexOf("Stop-ScheduledTask -TaskName $GenerationTaskName", reuse);
+  const release = service.indexOf("$GenerationMutex.ReleaseMutex()", stop);
+  assert.ok(mutex > 0);
+  assert.ok(wait > mutex);
+  assert.ok(currentCheck > wait);
+  assert.ok(reuse > currentCheck);
+  assert.ok(stop > reuse);
+  assert.ok(release > stop);
+  assert.match(service, /--expected-release/);
+  assert.match(service, /--expected-protocol/);
+  assert.match(service, /--expected-helpers/);
 });
 
 test("Windows agent heartbeat advertises its live callback credentials", () => {

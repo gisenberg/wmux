@@ -17,6 +17,9 @@ $LegacyStreamTaskName = if ($env:WMUX_STREAM_AGENT_TASK) { $env:WMUX_STREAM_AGEN
 $Force = @($args) -contains '--force'
 $GenerationPort = 0
 $RequestedLogonType = ''
+$ExpectedRelease = ''
+$ExpectedProtocol = 0
+$ExpectedHelpers = ''
 if (@($args | Where-Object { [string]$_ -like '--password*' }).Count -gt 0) {
   Write-Error 'Passwords must be entered at the private interactive prompt; --password is not supported.'
   exit 2
@@ -24,6 +27,9 @@ if (@($args | Where-Object { [string]$_ -like '--password*' }).Count -gt 0) {
 for ($Index = 0; $Index -lt $args.Count - 1; $Index += 1) {
   if ([string]$args[$Index] -eq '--port') { $GenerationPort = [int]$args[$Index + 1] }
   if ([string]$args[$Index] -eq '--logon-type') { $RequestedLogonType = [string]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--expected-release') { $ExpectedRelease = [string]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--expected-protocol') { $ExpectedProtocol = [int]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--expected-helpers') { $ExpectedHelpers = [string]$args[$Index + 1] }
 }
 
 function ConvertTo-PowerShellLiteral {
@@ -430,6 +436,16 @@ function Start-AgentGeneration {
   $GenerationTaskName = "$TaskName-$Port"
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+  $OwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $GenerationMutex = [System.Threading.Mutex]::new($false, "Local\wmux-agent-generation-$OwnerSid-$Port")
+  $GenerationMutexHeld = $false
+  try {
+    try {
+      $GenerationMutexHeld = $GenerationMutex.WaitOne([TimeSpan]::FromSeconds(30))
+    } catch [System.Threading.AbandonedMutexException] {
+      $GenerationMutexHeld = $true
+    }
+    if (-not $GenerationMutexHeld) { throw "timed out waiting to reserve Windows agent generation $Port" }
   $PasswordPool = Test-PasswordTaskPool
   $ExistingTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   if ($PasswordPool -and -not $ExistingTask) {
@@ -452,6 +468,19 @@ function Start-AgentGeneration {
       $ExistingHealth = $null
     }
     if ($ExistingHealth) {
+      $ExistingRelease = if ($ExistingHealth.releaseVersion) { [string]$ExistingHealth.releaseVersion } else { [string]$ExistingHealth.version }
+      $ExistingProtocol = if ($ExistingHealth.protocolVersion) { [int]$ExistingHealth.protocolVersion } else { 0 }
+      $ExistingHelpers = [string]$ExistingHealth.helperBundleVersion
+      if (
+        $ExpectedRelease -and $ExpectedProtocol -gt 0 -and $ExpectedHelpers -and
+        $ExistingHealth.ok -and
+        $ExistingRelease -eq $ExpectedRelease -and
+        $ExistingProtocol -ge $ExpectedProtocol -and
+        $ExistingHelpers -eq $ExpectedHelpers
+      ) {
+        [pscustomobject]@{ port = $Port; releaseVersion = $ExistingRelease; protocolVersion = $ExistingProtocol; reused = $true } | ConvertTo-Json -Compress
+        return
+      }
       # Fence session creation under the same agent lock used by create. If a
       # create won after wmux observed idle, keep that generation intact.
       $Fence = Invoke-RestMethod `
@@ -533,6 +562,10 @@ function Start-AgentGeneration {
     Start-Sleep -Milliseconds 250
   } while ([DateTime]::UtcNow -lt $Deadline)
   throw "Windows agent generation on port $Port did not become healthy"
+  } finally {
+    if ($GenerationMutexHeld) { $GenerationMutex.ReleaseMutex() }
+    $GenerationMutex.Dispose()
+  }
 }
 
 function Remove-AgentGeneration {

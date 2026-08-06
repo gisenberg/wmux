@@ -78,6 +78,9 @@ test("Windows agent updates use a bounded encoded SSH command with an explicit a
   const script = Buffer.from(invocation.args[encodedIndex + 1], "base64").toString("utf16le");
   assert.match(script, /wmux-windows-agent-service\.ps1/);
   assert.match(script, /rollout-update --port 3482/);
+  assert.match(script, /--expected-release 'v[^']+-win'/);
+  assert.match(script, /--expected-protocol \d+/);
+  assert.match(script, /--expected-helpers '[a-f0-9]+'/);
   assert.match(script, /wmuxUpdateActivation = \$true/);
   assert.equal(invocation.acknowledgementAction, "rollout-update");
 
@@ -648,6 +651,146 @@ test("a concurrent create makes same-port refresh defer to a side-by-side genera
   } finally {
     session.detach();
     await Promise.all([closeServer(currentServer), closeServer(sideServer)]);
+  }
+});
+
+test("concurrent first use of a rollout slot starts one generation and reuses it", async () => {
+  const expectedRelease = expectedWindowsAgentReleaseVersion();
+  const expectedProtocol = expectedWindowsAgentProtocolVersion();
+  const expectedHelpers = windowsHelperBundleVersion();
+  let generationActive = false;
+  let activationCalls = 0;
+  let generationStarts = 0;
+  let generationReuses = 0;
+  const created = new Set<string>();
+  const baseServer = http.createServer((request, response) => {
+    const requestPath = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && requestPath === "/health") {
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedRelease,
+        protocolVersion: expectedProtocol,
+        helperBundleVersion: "stale",
+        activeSessions: 1,
+        draining: false,
+      }));
+      return;
+    }
+    if (request.method === "GET" && requestPath === "/sessions") {
+      response.end(JSON.stringify({ sessions: [{ id: "existing", status: "running", pid: 41 }] }));
+      return;
+    }
+    if (request.method === "POST" && requestPath.startsWith("/sessions/__wmux_update_")) {
+      response.end(JSON.stringify({ id: requestPath.split("/")[2], status: "running" }));
+      return;
+    }
+    if (request.method === "DELETE" && requestPath.startsWith("/sessions/__wmux_update_")) {
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  const generationServer = http.createServer((request, response) => {
+    const requestPath = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && requestPath === "/health") {
+      if (!generationActive) {
+        response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedRelease,
+        protocolVersion: expectedProtocol,
+        helperBundleVersion: expectedHelpers,
+        activeSessions: created.size,
+      }));
+      return;
+    }
+    const sessionMatch = /^\/sessions\/(pane_first_[ab])$/.exec(requestPath);
+    if (request.method === "POST" && sessionMatch) {
+      created.add(sessionMatch[1]);
+      response.end(JSON.stringify({ id: sessionMatch[1], pid: 50 + created.size, base: 0, cursor: 0 }));
+      return;
+    }
+    const outputMatch = /^\/sessions\/(pane_first_[ab])\/output/.exec(requestPath);
+    if (request.method === "GET" && outputMatch) {
+      response.end(JSON.stringify({ base: 0, cursor: 0, dataBase64: "", exited: false }));
+      return;
+    }
+    const resizeMatch = /^\/sessions\/(pane_first_[ab])\/resize$/.exec(requestPath);
+    if (request.method === "POST" && resizeMatch) {
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  const { currentPort, sidePort } = await listenOnAdjacentPorts(baseServer, generationServer);
+  let releaseBarrier!: () => void;
+  const barrier = new Promise<void>((resolve) => { releaseBarrier = resolve; });
+  let lock = Promise.resolve();
+  const activate = async (_machine: MachineConfig, rolloutPort?: number) => {
+    assert.equal(rolloutPort, sidePort);
+    activationCalls += 1;
+    if (activationCalls === 2) releaseBarrier();
+    await barrier;
+    const previous = lock;
+    let release!: () => void;
+    lock = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      if (generationActive) generationReuses += 1;
+      else {
+        generationStarts += 1;
+        generationActive = true;
+      }
+      return sidePort;
+    } finally {
+      release();
+    }
+  };
+  const machine: MachineConfig = {
+    id: "windows",
+    name: "Windows",
+    kind: "powershell-ssh",
+    host: "changed-dns.internal",
+    sessionBackend: "agent",
+    agentUrl: `http://127.0.0.1:${currentPort}`,
+    agentPort: currentPort,
+    agentToken: "pinned-token",
+  };
+  const createSession = (id: string) => new WindowsAgentSession(
+    {
+      id,
+      machineId: "windows",
+      title: "PowerShell",
+      status: "idle",
+      createdAt: new Date(0).toISOString(),
+    },
+    machine,
+    80,
+    24,
+    {},
+    activate,
+    1_000,
+    undefined,
+    currentPort,
+  );
+  const first = createSession("pane_first_a");
+  const second = createSession("pane_first_b");
+  try {
+    await Promise.all([first.attachReady, second.attachReady]);
+    assert.equal(first.isExited, false, first.replayOutput);
+    assert.equal(second.isExited, false, second.replayOutput);
+    assert.equal(activationCalls, 2);
+    assert.equal(generationStarts, 1);
+    assert.equal(generationReuses, 1);
+    assert.deepEqual([...created].sort(), ["pane_first_a", "pane_first_b"]);
+  } finally {
+    first.detach();
+    second.detach();
+    await Promise.all([closeServer(baseServer), closeServer(generationServer)]);
   }
 });
 

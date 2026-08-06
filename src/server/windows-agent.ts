@@ -1203,13 +1203,20 @@ export const buildWindowsAgentUpdateSshInvocation = (
   const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
   if (machine.port) args.push("-p", String(machine.port));
   const acknowledgementAction = port ? "rollout-update" : "activate-update";
+  const expectedRelease = expectedWindowsAgentReleaseVersion();
+  const expectedProtocol = expectedWindowsAgentProtocolVersion();
+  const expectedHelpers = buildWindowsHelperBundle(machine).bundleVersion;
+  const powerShellLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+  const rolloutArguments = port
+    ? `rollout-update --port ${port} --expected-release ${powerShellLiteral(expectedRelease)} --expected-protocol ${expectedProtocol} --expected-helpers ${powerShellLiteral(expectedHelpers)}`
+    : acknowledgementAction;
   const script = `
 $Service = Join-Path $env:LOCALAPPDATA 'wmux\\bin\\wmux-windows-agent-service.ps1'
 if (-not (Test-Path -LiteralPath $Service -PathType Leaf)) {
   Write-Error "wmux Windows agent service helper is not staged at $Service"
   exit 127
 }
-& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Service ${port ? `rollout-update --port ${port}` : acknowledgementAction}
+& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Service ${rolloutArguments}
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 [pscustomobject]@{
   wmuxUpdateActivation = $true
