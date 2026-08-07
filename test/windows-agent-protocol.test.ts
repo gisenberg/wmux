@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -12,6 +14,9 @@ import {
 } from "../src/shared/windows-agent-protocol.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const pwshAvailable = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
+  encoding: "utf8",
+}).status === 0;
 
 test("Windows agent protocol exports stable paths and bounded polling semantics", () => {
   assert.equal(WINDOWS_AGENT_PROTOCOL_VERSION, 6);
@@ -70,15 +75,229 @@ print(json.dumps({
   assert.match(commands.configuredCwd.at(-1), /Set-Location -LiteralPath 'D:\/configured'/);
 });
 
-test("Windows agent URLs bracket IPv6 callback addresses", () => {
+test("session-agent URLs reject unsupported IPv6 callback addresses", () => {
   const machine: MachineConfig = {
     id: "dynamic-v6",
     name: "Dynamic IPv6",
     kind: "powershell-ssh",
     host: "fd7a:115c:a1e0::8",
+    sessionBackend: "agent",
     agentPort: 3481,
   };
-  assert.equal(windowsAgentUrl(machine), "http://[fd7a:115c:a1e0::8]:3481");
+  assert.equal(windowsAgentUrl(machine), undefined);
+});
+
+test("session-agent URL construction rejects public and DNS fallbacks", () => {
+  assert.equal(windowsAgentUrl({
+    id: "public",
+    name: "Public",
+    kind: "ssh",
+    host: "203.0.113.8",
+    sessionBackend: "agent",
+    agentPort: 3481,
+  }), undefined);
+  assert.equal(windowsAgentUrl({
+    id: "dns",
+    name: "DNS",
+    kind: "ssh",
+    host: "changed.internal",
+    sessionBackend: "agent",
+    agentPort: 3481,
+  }), undefined);
+  assert.equal(windowsAgentUrl({
+    id: "pinned",
+    name: "Pinned",
+    kind: "ssh",
+    host: "changed.internal",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.8:3481",
+    agentPort: 3481,
+  }), "http://100.64.0.8:3481");
+});
+
+test("agent hard-drain and pending-update fences are atomic against concurrent creates", () => {
+  const source = String.raw`
+import json
+import runpy
+import threading
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+
+class FakeSession:
+    def __init__(self, session_id, config, payload, on_exit):
+        self.id = session_id
+        self.exited = False
+        self.on_exit = on_exit
+    def snapshot(self):
+        return {"id": self.id, "status": "exited" if self.exited else "running"}
+    def terminate(self):
+        self.exited = True
+
+module["AgentState"].get_or_create.__globals__["Session"] = FakeSession
+hard_create_wins = 0
+hard_fence_wins = 0
+pending_create_wins = 0
+pending_fence_wins = 0
+
+for index in range(100):
+    state = module["AgentState"]({"backend": "stdio"})
+    barrier = threading.Barrier(2)
+    result = {}
+    def create():
+        barrier.wait()
+        try:
+            state.get_or_create("pane", {})
+            result["created"] = True
+        except module["AgentDrainingError"]:
+            result["created"] = False
+    def fence():
+        barrier.wait()
+        result["health"] = state.begin_drain(False, False)
+    threads = [threading.Thread(target=create), threading.Thread(target=fence)]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join()
+    health = state.health()
+    if result["created"]:
+        hard_create_wins += 1
+        assert health["activeSessions"] == 1
+    else:
+        hard_fence_wins += 1
+        assert health["activeSessions"] == 0 and health["draining"] is True
+
+for index in range(100):
+    state = module["AgentState"]({"backend": "stdio"})
+    old = state.get_or_create("old", {})
+    old.exited = True
+    with state.lock:
+        state.update_pending = True
+        state.restart_when_idle = True
+    barrier = threading.Barrier(2)
+    result = {}
+    def create_pending():
+        barrier.wait()
+        try:
+            state.get_or_create("new", {})
+            result["created"] = True
+        except module["AgentDrainingError"]:
+            result["created"] = False
+    def transition_pending():
+        barrier.wait()
+        state._restart_if_still_idle()
+    threads = [threading.Thread(target=create_pending), threading.Thread(target=transition_pending)]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join()
+    health = state.health()
+    if result["created"]:
+        pending_create_wins += 1
+        assert health["activeSessions"] == 1 and state.restart_requested is False
+    else:
+        pending_fence_wins += 1
+        assert health["activeSessions"] == 0 and health["draining"] is True and state.restart_requested is True
+
+print(json.dumps({
+    "hardCreateWins": hard_create_wins,
+    "hardFenceWins": hard_fence_wins,
+    "pendingCreateWins": pending_create_wins,
+    "pendingFenceWins": pending_fence_wins,
+}))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const outcomes = JSON.parse(result.stdout);
+  assert.equal(outcomes.hardCreateWins + outcomes.hardFenceWins, 100);
+  assert.equal(outcomes.pendingCreateWins + outcomes.pendingFenceWins, 100);
+});
+
+test("rollout slot activation is owner-serialized and reuses an already-current generation", () => {
+  const service = fs.readFileSync(
+    path.join(repoRoot, "scripts/windows/wmux-windows-agent-service.ps1"),
+    "utf8",
+  );
+  const lockFunction = service.indexOf("function Open-GenerationLock");
+  const exclusive = service.indexOf("[System.IO.FileShare]::None", lockFunction);
+  const acquire = service.indexOf("$GenerationLock = Open-GenerationLock -Port $Port", exclusive);
+  const currentCheck = service.indexOf("$ExistingRelease -eq $ExpectedRelease", acquire);
+  const reuse = service.indexOf("reused = $true", currentCheck);
+  const stop = service.indexOf("Stop-ScheduledTask -TaskName $GenerationTaskName", reuse);
+  const release = service.indexOf("$GenerationLock.Dispose()", stop);
+  const retire = service.indexOf("function Remove-AgentGeneration", release);
+  const retireLock = service.indexOf("$GenerationLock = Open-GenerationLock -Port $Port", retire);
+  const retireDrain = service.indexOf("$Drain = Invoke-RestMethod", retireLock);
+  const retireFence = service.indexOf("$FencedHealth = Invoke-RestMethod", retireLock);
+  const retireIdentity = service.indexOf("$FencedPid -ne $OriginalPid", retireFence);
+  const retireRelease = service.indexOf("$GenerationLock.Dispose()", retireIdentity);
+  assert.ok(lockFunction > 0);
+  assert.ok(exclusive > lockFunction);
+  assert.ok(acquire > exclusive);
+  assert.ok(currentCheck > acquire);
+  assert.ok(reuse > currentCheck);
+  assert.ok(stop > reuse);
+  assert.ok(release > stop);
+  assert.ok(retire > release);
+  assert.ok(retireLock > retire);
+  assert.ok(retireDrain > retireLock);
+  assert.ok(retireFence > retireDrain);
+  assert.ok(retireIdentity > retireFence);
+  assert.ok(retireRelease > retireIdentity);
+  assert.match(service.slice(acquire, reuse), /ExistingHealth\.draining/);
+  assert.match(service, /DrainEstablished -and -not \$GenerationActivated/);
+  assert.match(service, /RetirementDrainEstablished -and -not \$RetirementCompleted/);
+  assert.match(service, /--expected-release/);
+  assert.match(service, /--expected-protocol/);
+  assert.match(service, /--expected-helpers/);
+});
+
+test("real PowerShell helper processes serialize one rollout slot", { skip: !pwshAvailable }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-generation-lock-"));
+  const tracePath = path.join(directory, "trace.log");
+  const servicePath = path.join(repoRoot, "scripts/windows/wmux-windows-agent-service.ps1");
+  const run = () => new Promise<void>((resolve, reject) => {
+    const child = spawn("pwsh", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      servicePath,
+      "generation-lock-test",
+      "--port",
+      "3482",
+      "--hold-ms",
+      "300",
+      "--trace",
+      tracePath,
+    ], {
+      env: {
+        ...process.env,
+        LOCALAPPDATA: directory,
+        WMUX_WINDOWS_AGENT_STATE_DIR: directory,
+        WMUX_WINDOWS_AGENT_LOCK_TEST: "1",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`PowerShell lock helper exited ${code}: ${stderr}`));
+    });
+  });
+  try {
+    const first = run();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const second = run();
+    await Promise.all([first, second]);
+    const entries = fs.readFileSync(tracePath, "utf8").trim().split("\n").map((line) => {
+      const [event, pid, ticks] = line.split("|");
+      return { event, pid, ticks: BigInt(ticks) };
+    });
+    assert.deepEqual(entries.map(({ event }) => event), ["start", "end", "start", "end"]);
+    assert.notEqual(entries[0].pid, entries[2].pid);
+    assert.ok(entries[2].ticks >= entries[1].ticks);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("Windows agent heartbeat advertises its live callback credentials", () => {

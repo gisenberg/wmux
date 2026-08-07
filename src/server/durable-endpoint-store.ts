@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { SessionBackend } from "./backends/index.js";
+import { sessionAgentOriginForEndpoint } from "./session-agent-origin.js";
 import type { MachineConfig } from "./types.js";
 
 export const CURRENT_DURABLE_ENDPOINT_SCHEMA_VERSION = 2;
@@ -185,13 +186,15 @@ export class DurableEndpointStore {
   reconcile(
     paneIds: ReadonlySet<string>,
     currentMachines: readonly MachineConfig[],
+    persistedPaneMachines: ReadonlyMap<string, MachineConfig> = new Map(),
   ): void {
     const machines = new Map(currentMachines.map((machine) => [machine.id, machine]));
     let changed = false;
     const now = new Date().toISOString();
     for (const record of this.records.values()) {
       if (record.status !== "active") continue;
-      const current = machines.get(record.machine.id);
+      const current = persistedPaneMachines.get(record.paneId)
+        ?? machines.get(record.machine.id);
       if (
         paneIds.has(record.paneId)
         && current
@@ -378,16 +381,32 @@ export const sameDisposalEndpoint = (
 export const durableEndpointKey = (machine: MachineConfig): string =>
   JSON.stringify(disposalIdentity(machine));
 
-const disposalIdentity = (machine: MachineConfig) => ({
-  id: machine.id,
-  kind: machine.kind,
-  host: machine.host,
-  user: machine.user,
-  port: machine.port,
-  sessionBackend: machine.sessionBackend,
-  agentUrl: machine.agentUrl,
-  agentPort: machine.agentPort,
-});
+const disposalIdentity = (machine: MachineConfig) => {
+  if (machine.sessionBackend === "agent") {
+    const agentOrigin = sessionAgentOriginForEndpoint(machine);
+    return agentOrigin
+      ? {
+          id: machine.id,
+          sessionBackend: machine.sessionBackend,
+          agentOrigin,
+        }
+      : {
+          id: machine.id,
+          sessionBackend: machine.sessionBackend,
+          invalidAgentUrl: machine.agentUrl,
+          host: machine.host,
+          agentPort: machine.agentPort,
+        };
+  }
+  return {
+    id: machine.id,
+    kind: machine.kind,
+    host: machine.host,
+    user: machine.user,
+    port: machine.port,
+    sessionBackend: machine.sessionBackend,
+  };
+};
 
 const storedMachine = (
   machine: MachineConfig,

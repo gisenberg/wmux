@@ -42,7 +42,7 @@ test("Windows agent ports reserve the bounded rollout range", () => {
   assert.equal(configSchema.safeParse(windowsAgent(65528)).success, false);
 });
 
-test("Windows agents with DNS SSH hosts require an explicit private agent endpoint", () => {
+test("session agents with DNS SSH hosts require an explicit private agent endpoint", () => {
   const dnsAgent = machine({
     kind: "powershell-ssh",
     host: "box.ts.net",
@@ -107,10 +107,16 @@ test("Windows agents with DNS SSH hosts require an explicit private agent endpoi
 });
 
 test("native session agents are limited to supported machine transports", () => {
-  assert.ok(configSchema.safeParse(machine({
+  assert.equal(configSchema.safeParse(machine({
     kind: "ssh",
     sessionBackend: "agent",
     agentPort: 3481,
+    agentToken: "secret",
+  })).success, false);
+  assert.ok(configSchema.safeParse(machine({
+    kind: "ssh",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.8:3481",
     agentToken: "secret",
   })).success);
   assert.ok(configSchema.safeParse({
@@ -128,6 +134,15 @@ test("native session agents are limited to supported machine transports", () => 
       kind,
       sessionBackend: "agent",
     })).success, false);
+  }
+});
+
+test("every session-agent transport rejects public callback origins", () => {
+  for (const kind of ["local", "ssh", "powershell-ssh"] as const) {
+    const candidate = kind === "local"
+      ? { machines: [{ id: "agent", name: "Agent", kind, sessionBackend: "agent", agentUrl: "http://203.0.113.9:3481" }] }
+      : machine({ kind, sessionBackend: "agent", agentUrl: "http://203.0.113.9:3481" });
+    assert.equal(configSchema.safeParse(candidate).success, false, kind);
   }
 });
 

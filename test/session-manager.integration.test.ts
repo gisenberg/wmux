@@ -9,6 +9,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { WebSocket } from "ws";
 import { createHttpServer } from "../src/server/http.js";
+import { DurableEndpointStore } from "../src/server/durable-endpoint-store.js";
 import { durableSessionName } from "../src/server/machines.js";
 import {
   isAgentInterruptInput,
@@ -16,6 +17,7 @@ import {
   paneAuthEnvironmentForMachine,
   parseClientMessage,
   resolveDisposalMachine,
+  resolvePersistedPaneMachine,
   sessionAccessTokenForMachine,
   createAgentInputSessionBinding,
   SessionManager,
@@ -23,6 +25,11 @@ import {
 import { StateStore } from "../src/server/state.js";
 import { SettingsStore } from "../src/server/settings.js";
 import type { MachineConfig } from "../src/server/types.js";
+import {
+  expectedWindowsAgentProtocolVersion,
+  expectedWindowsAgentReleaseVersion,
+  windowsHelperBundleVersion,
+} from "../src/server/windows-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const canonicalTempRoot = fs.realpathSync(os.tmpdir());
@@ -68,6 +75,44 @@ test("pane disposal prefers the live session's pre-heartbeat machine snapshot", 
   const movedMachine = { ...oldMachine, host: "100.70.0.9" };
   assert.equal(resolveDisposalMachine(oldMachine, [movedMachine], oldMachine.id)?.host, "100.70.0.8");
   assert.equal(resolveDisposalMachine(undefined, [movedMachine], oldMachine.id)?.host, "100.70.0.9");
+});
+
+test("persisted panes recover base and generation origins without using changed SSH DNS", () => {
+  const configured: MachineConfig = {
+    id: "windows",
+    name: "Windows",
+    kind: "powershell-ssh",
+    host: "changed.internal",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.30:3481",
+    agentPort: 3481,
+    agentToken: "replacement-token",
+  };
+  const pane = {
+    id: "pane-generation",
+    machineId: configured.id,
+    agentPort: 3482,
+    title: "PowerShell",
+    status: "idle" as const,
+    createdAt: "2026-08-05T00:00:00.000Z",
+  };
+  const recovered = {
+    ...configured,
+    host: "100.64.0.20",
+    agentUrl: undefined,
+    agentPort: 3482,
+    agentToken: "recovered-token",
+  };
+  const resolvedLegacy = resolvePersistedPaneMachine(pane, configured, recovered);
+  assert.equal(resolvedLegacy.agentUrl, "http://100.64.0.20:3482");
+  assert.equal(resolvedLegacy.host, "100.64.0.20");
+  assert.equal(resolvedLegacy.agentToken, "recovered-token");
+
+  const recoveredBase = { ...recovered, agentUrl: "http://100.64.0.25:3490", agentPort: 3490 };
+  const resolvedBase = resolvePersistedPaneMachine({ ...pane, agentPort: undefined }, configured, recoveredBase);
+  assert.equal(resolvedBase.agentUrl, "http://100.64.0.25:3490");
+  assert.equal(resolvedBase.agentPort, 3490);
+  assert.equal(resolvedBase.agentToken, "recovered-token");
 });
 
 test("every backend attachment receives a fresh agent-input authority epoch", () => {
@@ -553,6 +598,148 @@ test("failed agent exit retains its old endpoint snapshot for close after a hear
     oldAgent.closeAllConnections();
     newAgent.closeAllConnections();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("restart reattaches a referenced rollout generation on its pinned private origin", async () => {
+  let generationRequests = 0;
+  let generationDeletes = 0;
+  let baseRequests = 0;
+  let createAuthorization = "";
+  let createEnvironment: Record<string, string> | undefined;
+  let expectedPaneId = "";
+  const generationAgent = http.createServer(async (request, response) => {
+    generationRequests += 1;
+    const requestPath = request.url ?? "";
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && requestPath === "/health") {
+      response.end(JSON.stringify({
+        ok: true,
+        releaseVersion: expectedWindowsAgentReleaseVersion(),
+        protocolVersion: expectedWindowsAgentProtocolVersion(),
+        helperBundleVersion: windowsHelperBundleVersion(),
+        activeSessions: 0,
+        draining: false,
+      }));
+      return;
+    }
+    if (request.method === "GET" && requestPath === "/sessions") {
+      response.end(JSON.stringify({ sessions: [] }));
+      return;
+    }
+    if (request.method === "POST" && requestPath === `/sessions/${expectedPaneId}`) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      createAuthorization = String(request.headers.authorization ?? "");
+      createEnvironment = (JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        env?: Record<string, string>;
+      }).env;
+      response.end(JSON.stringify({
+        id: expectedPaneId,
+        pid: 61,
+        base: 0,
+        cursor: 0,
+      }));
+      return;
+    }
+    if (request.method === "GET" && requestPath.startsWith(`/sessions/${expectedPaneId}/output`)) {
+      response.end(JSON.stringify({ base: 0, cursor: 0, dataBase64: "", exited: false }));
+      return;
+    }
+    if (request.method === "POST" && requestPath === `/sessions/${expectedPaneId}/resize`) {
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (request.method === "DELETE") {
+      generationDeletes += 1;
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
+  });
+  const baseAgent = http.createServer((_request, response) => {
+    baseRequests += 1;
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "wrong_origin" }));
+  });
+  generationAgent.listen(0, "127.0.0.1");
+  baseAgent.listen(0, "127.0.0.1");
+  await Promise.all([once(generationAgent, "listening"), once(baseAgent, "listening")]);
+  const generationAddress = generationAgent.address();
+  const baseAddress = baseAgent.address();
+  assert.ok(generationAddress && typeof generationAddress === "object");
+  assert.ok(baseAddress && typeof baseAddress === "object");
+  const directory = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-generation-restart-"));
+  const statePath = path.join(directory, "state.json");
+  const endpointPath = path.join(directory, "session-endpoints.json");
+  const configuredMachine: MachineConfig = {
+    id: "windows-generation",
+    name: "Windows generation",
+    kind: "powershell-ssh",
+    host: "changed-ssh-name.internal",
+    sessionBackend: "agent",
+    agentUrl: `http://127.0.0.1:${baseAddress.port}`,
+    agentPort: baseAddress.port,
+    agentToken: "generation-secret",
+    source: "config",
+  };
+  let manager: SessionManager | undefined;
+  try {
+    const initialState = new StateStore([configuredMachine], statePath);
+    const initialPane = initialState.snapshot().workspaces[0].tabs[0].panes[0];
+    expectedPaneId = initialPane.id;
+    initialState.updatePane(initialPane.id, { agentPort: generationAddress.port });
+    const pane = initialState.snapshot().workspaces[0].tabs[0].panes[0];
+    initialState.flush();
+    const generationMachine = {
+      ...configuredMachine,
+      agentUrl: `http://127.0.0.1:${generationAddress.port}`,
+      agentPort: generationAddress.port,
+      agentToken: "recovered-generation-secret",
+    };
+    const endpoints = new DurableEndpointStore(endpointPath);
+    const record = endpoints.bind(pane.id, generationMachine, "windows-agent");
+    assert.ok(record);
+
+    const restartedState = new StateStore([configuredMachine], statePath);
+    manager = new SessionManager(
+      restartedState,
+      [configuredMachine],
+      "",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "helper-scope",
+      "login-only",
+      undefined,
+      undefined,
+      new DurableEndpointStore(endpointPath),
+    );
+    const restoredRecord = new DurableEndpointStore(endpointPath).find(record.id);
+    assert.equal(restoredRecord?.status, "active");
+    assert.equal(restoredRecord?.machine.agentUrl, `http://127.0.0.1:${generationAddress.port}`);
+
+    const client = socket();
+    manager.attach(pane.id, client, 80, 24);
+    await waitForMessage(client, (message) => message.type === "ready");
+    assert.ok(generationRequests >= 3);
+    assert.equal(baseRequests, 0);
+    assert.equal(generationDeletes, 0, "restart reconciliation never cleanup-deletes the referenced generation");
+    assert.equal(createAuthorization, "Bearer recovered-generation-secret");
+    assert.equal(createEnvironment?.WMUX_PANE_ID, pane.id);
+    assert.equal(restartedState.findPane(pane.id)?.agentPort, generationAddress.port);
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
+      workspaces: Array<{ tabs: Array<{ panes: Array<Record<string, unknown>> }> }>;
+    };
+    assert.equal("agentUrl" in persisted.workspaces[0].tabs[0].panes[0], false);
+  } finally {
+    manager?.disposeAll();
+    generationAgent.closeAllConnections();
+    baseAgent.closeAllConnections();
+    generationAgent.close();
+    baseAgent.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 

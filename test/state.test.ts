@@ -616,7 +616,7 @@ test("workspace reordering persists and ignores no-op moves", () => {
   });
 });
 
-test("Windows agent generation ports persist across restart", () => {
+test("Windows agent generation ports remain schema-8 compatible across restart", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const pane = store.snapshot().workspaces[0].tabs[0].panes[0];
@@ -625,6 +625,37 @@ test("Windows agent generation ports persist across restart", () => {
 
     const reloadedPane = new StateStore(machines, filePath).findPane(pane.id);
     assert.equal(reloadedPane?.agentPort, 3482);
+    const persisted = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+      workspaces: Array<{ tabs: Array<{ panes: Array<Record<string, unknown>> }> }>;
+    };
+    assert.deepEqual(
+      Object.keys(persisted.workspaces[0].tabs[0].panes[0]).sort(),
+      ["agentPort", "createdAt", "id", "machineId", "status", "title"],
+    );
+  });
+});
+
+test("current schema accepts and removes the prior release's pane agentUrl", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    store.flush();
+    const persisted = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+      workspaces: Array<{ tabs: Array<{ panes: Array<Record<string, unknown>> }> }>;
+    };
+    persisted.workspaces[0].tabs[0].panes[0].agentUrl = "http://100.64.0.25:3481";
+    fs.writeFileSync(filePath, JSON.stringify(persisted));
+
+    const reloaded = new StateStore(machines, filePath);
+    assert.equal("agentUrl" in (reloaded.findPane(
+      persisted.workspaces[0].tabs[0].panes[0].id as string,
+    ) as unknown as Record<string, unknown>), false);
+    reloaded.updatePane(
+      persisted.workspaces[0].tabs[0].panes[0].id as string,
+      { title: "compatible" },
+    );
+    reloaded.flush();
+    const rewritten = JSON.parse(fs.readFileSync(filePath, "utf8")) as typeof persisted;
+    assert.equal("agentUrl" in rewritten.workspaces[0].tabs[0].panes[0], false);
   });
 });
 

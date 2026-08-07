@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $ActionName = if ($args.Count -gt 0) { [string]$args[0] } else { 'install' }
 $TaskName = if ($env:WMUX_WINDOWS_AGENT_TASK) { $env:WMUX_WINDOWS_AGENT_TASK } else { 'wmux-windows-agent' }
-$StateDir = Join-Path $HOME '.wmux'
+$StateDir = if ($env:WMUX_WINDOWS_AGENT_STATE_DIR) { $env:WMUX_WINDOWS_AGENT_STATE_DIR } else { Join-Path $HOME '.wmux' }
 $LogDir = Join-Path $StateDir 'logs'
 $Config = if ($env:WMUX_WINDOWS_AGENT_CONFIG) { $env:WMUX_WINDOWS_AGENT_CONFIG } else { Join-Path $StateDir 'windows-agent.json' }
 $HelperDir = if ($env:WMUX_HELPER_DIR) { $env:WMUX_HELPER_DIR } else { Join-Path $env:LOCALAPPDATA 'wmux\bin' }
@@ -17,6 +17,11 @@ $LegacyStreamTaskName = if ($env:WMUX_STREAM_AGENT_TASK) { $env:WMUX_STREAM_AGEN
 $Force = @($args) -contains '--force'
 $GenerationPort = 0
 $RequestedLogonType = ''
+$ExpectedRelease = ''
+$ExpectedProtocol = 0
+$ExpectedHelpers = ''
+$LockHoldMs = 0
+$LockTracePath = ''
 if (@($args | Where-Object { [string]$_ -like '--password*' }).Count -gt 0) {
   Write-Error 'Passwords must be entered at the private interactive prompt; --password is not supported.'
   exit 2
@@ -24,6 +29,11 @@ if (@($args | Where-Object { [string]$_ -like '--password*' }).Count -gt 0) {
 for ($Index = 0; $Index -lt $args.Count - 1; $Index += 1) {
   if ([string]$args[$Index] -eq '--port') { $GenerationPort = [int]$args[$Index + 1] }
   if ([string]$args[$Index] -eq '--logon-type') { $RequestedLogonType = [string]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--expected-release') { $ExpectedRelease = [string]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--expected-protocol') { $ExpectedProtocol = [int]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--expected-helpers') { $ExpectedHelpers = [string]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--hold-ms') { $LockHoldMs = [int]$args[$Index + 1] }
+  if ([string]$args[$Index] -eq '--trace') { $LockTracePath = [string]$args[$Index + 1] }
 }
 
 function ConvertTo-PowerShellLiteral {
@@ -424,16 +434,101 @@ function Show-Usage {
   Write-Error 'usage: wmux-windows-agent-service [install [--logon-type Interactive|S4U|Password]|refresh-credentials|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
 }
 
+function Open-GenerationLock {
+  param([int]$Port)
+  [System.IO.Directory]::CreateDirectory($StateDir) | Out-Null
+  $LockPath = Join-Path $StateDir "windows-agent-$Port.lock"
+  $Deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    try {
+      return [System.IO.File]::Open(
+        $LockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+    } catch [System.IO.IOException] {
+      Start-Sleep -Milliseconds 50
+    }
+  } while ([DateTime]::UtcNow -lt $Deadline)
+  throw "timed out waiting to reserve Windows agent generation $Port"
+}
+
 function Start-AgentGeneration {
   param([int]$Port)
   if ($Port -lt 1 -or $Port -gt 65535) { throw 'rollout-update requires a valid --port' }
   $GenerationTaskName = "$TaskName-$Port"
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+  $GenerationLock = Open-GenerationLock -Port $Port
+  $DrainEstablished = $false
+  $DrainCancellationUrl = $null
+  $DrainCancellationHeaders = @{}
+  $GenerationActivated = $false
+  try {
   $PasswordPool = Test-PasswordTaskPool
   $ExistingTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   if ($PasswordPool -and -not $ExistingTask) {
     throw "Password-backed rollout slot $GenerationTaskName is missing. Run wmux-windows-setup refresh-agent-credentials from an interactive shell."
+  }
+  if (Test-Path -LiteralPath $GenerationConfig -PathType Leaf) {
+    $ExistingDocument = Get-Content -LiteralPath $GenerationConfig -Raw | ConvertFrom-Json
+    $ExistingHost = if ($ExistingDocument.host) { [string]$ExistingDocument.host } else { '127.0.0.1' }
+    if ($ExistingHost -in @('0.0.0.0', '::')) { $ExistingHost = '127.0.0.1' }
+    $ExistingHeaders = @{}
+    if ($ExistingDocument.token) { $ExistingHeaders.Authorization = "Bearer $($ExistingDocument.token)" }
+    $ExistingHealthUrl = "http://${ExistingHost}:$Port/health"
+    $ExistingDrainUrl = "http://${ExistingHost}:$Port/drain"
+    try {
+      $ExistingHealth = Invoke-RestMethod -Method GET -Uri $ExistingHealthUrl -Headers $ExistingHeaders -TimeoutSec 3
+    } catch {
+      if ($ExistingTask -and [string]$ExistingTask.State -eq 'Running') {
+        throw "refusing to refresh generation $Port because its active sessions cannot be verified"
+      }
+      $ExistingHealth = $null
+    }
+    if ($ExistingHealth) {
+      $ExistingRelease = if ($ExistingHealth.releaseVersion) { [string]$ExistingHealth.releaseVersion } else { [string]$ExistingHealth.version }
+      $ExistingProtocol = if ($ExistingHealth.protocolVersion) { [int]$ExistingHealth.protocolVersion } else { 0 }
+      $ExistingHelpers = [string]$ExistingHealth.helperBundleVersion
+      if (
+        $ExpectedRelease -and $ExpectedProtocol -gt 0 -and $ExpectedHelpers -and
+        $ExistingHealth.ok -and
+        -not [bool]$ExistingHealth.draining -and
+        $ExistingRelease -eq $ExpectedRelease -and
+        $ExistingProtocol -ge $ExpectedProtocol -and
+        $ExistingHelpers -eq $ExpectedHelpers
+      ) {
+        [pscustomobject]@{ port = $Port; releaseVersion = $ExistingRelease; protocolVersion = $ExistingProtocol; reused = $true } | ConvertTo-Json -Compress
+        return
+      }
+      # Fence session creation under the same agent lock used by create. If a
+      # create won after wmux observed idle, keep that generation intact.
+      $Fence = Invoke-RestMethod `
+        -Method POST `
+        -Uri $ExistingDrainUrl `
+        -Headers $ExistingHeaders `
+        -ContentType 'application/json' `
+        -Body (@{ restartWhenIdle = $false; allowNewSessions = $false } | ConvertTo-Json -Compress) `
+        -TimeoutSec 3
+      $DrainEstablished = $true
+      $DrainCancellationUrl = $ExistingDrainUrl
+      $DrainCancellationHeaders = $ExistingHeaders
+      $ActiveSessions = Get-ActiveSessionCount $Fence
+      if ($ActiveSessions -gt 0) {
+        Invoke-RestMethod -Method DELETE -Uri $ExistingDrainUrl -Headers $ExistingHeaders -TimeoutSec 3 | Out-Null
+        $DrainEstablished = $false
+        throw "generation_refresh_busy: generation $Port gained $ActiveSessions active pane session(s)"
+      }
+      # Creates cannot pass the hard fence, so a non-zero recheck always aborts.
+      $FencedHealth = Invoke-RestMethod -Method GET -Uri $ExistingHealthUrl -Headers $ExistingHeaders -TimeoutSec 3
+      $ActiveSessions = Get-ActiveSessionCount $FencedHealth
+      if ($ActiveSessions -gt 0) {
+        Invoke-RestMethod -Method DELETE -Uri $ExistingDrainUrl -Headers $ExistingHeaders -TimeoutSec 3 | Out-Null
+        $DrainEstablished = $false
+        throw "generation_refresh_busy: generation $Port owns $ActiveSessions active pane session(s) after fencing"
+      }
+    }
   }
   $Document = if (Test-Path -LiteralPath $Config -PathType Leaf) {
     Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
@@ -486,6 +581,7 @@ function Start-AgentGeneration {
     try {
       $Health = Invoke-RestMethod -Method GET -Uri $HealthUrl -Headers $Headers -TimeoutSec 2
       if ($Health.ok) {
+        $GenerationActivated = $true
         [pscustomobject]@{ port = $Port; releaseVersion = $Health.releaseVersion; protocolVersion = $Health.protocolVersion } | ConvertTo-Json -Compress
         return
       }
@@ -493,6 +589,14 @@ function Start-AgentGeneration {
     Start-Sleep -Milliseconds 250
   } while ([DateTime]::UtcNow -lt $Deadline)
   throw "Windows agent generation on port $Port did not become healthy"
+  } finally {
+    if ($DrainEstablished -and -not $GenerationActivated -and $DrainCancellationUrl) {
+      try {
+        Invoke-RestMethod -Method DELETE -Uri $DrainCancellationUrl -Headers $DrainCancellationHeaders -TimeoutSec 3 | Out-Null
+      } catch {}
+    }
+    $GenerationLock.Dispose()
+  }
 }
 
 function Remove-AgentGeneration {
@@ -510,6 +614,12 @@ function Remove-AgentGeneration {
   $GenerationTaskName = "$TaskName-$Port"
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+  $GenerationLock = Open-GenerationLock -Port $Port
+  $RetirementDrainEstablished = $false
+  $RetirementCompleted = $false
+  $RetirementDrainUrl = $null
+  $RetirementHeaders = @{}
+  try {
   $GenerationTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   $PasswordPool = Test-PasswordTaskPool
   if (-not (Test-Path -LiteralPath $GenerationConfig -PathType Leaf)) {
@@ -539,10 +649,24 @@ function Remove-AgentGeneration {
     -ContentType 'application/json' `
     -Body (@{ restartWhenIdle = $false; allowNewSessions = $false } | ConvertTo-Json -Compress) `
     -TimeoutSec 3
+  $RetirementDrainEstablished = $true
+  $RetirementDrainUrl = $DrainUrl
+  $RetirementHeaders = $Headers
   $ActiveSessions = Get-ActiveSessionCount $Drain
   if ($ActiveSessions -gt 0) {
     Invoke-RestMethod -Method DELETE -Uri $DrainUrl -Headers $Headers -TimeoutSec 3 | Out-Null
+    $RetirementDrainEstablished = $false
     throw "refusing to retire generation $Port after $ActiveSessions pane session(s) became active"
+  }
+
+  $FencedHealth = Invoke-RestMethod -Method GET -Uri $HealthUrl -Headers $Headers -TimeoutSec 3
+  $FencedSessions = Get-ActiveSessionCount $FencedHealth
+  $OriginalPid = if ($Health.pid) { [int]$Health.pid } else { 0 }
+  $FencedPid = if ($FencedHealth.pid) { [int]$FencedHealth.pid } else { 0 }
+  if ($FencedSessions -gt 0 -or -not [bool]$FencedHealth.draining -or ($OriginalPid -gt 0 -and $FencedPid -ne $OriginalPid)) {
+    Invoke-RestMethod -Method DELETE -Uri $DrainUrl -Headers $Headers -TimeoutSec 3 | Out-Null
+    $RetirementDrainEstablished = $false
+    throw "refusing to retire generation $Port because its fenced identity or session count changed"
   }
 
   if ($GenerationTask) {
@@ -560,7 +684,16 @@ function Remove-AgentGeneration {
   if (-not $PasswordPool) {
     Remove-Item -LiteralPath $GenerationWrapper -Force -ErrorAction SilentlyContinue
   }
+  $RetirementCompleted = $true
   [pscustomobject]@{ port = $Port; retired = $true; activeSessions = 0 } | ConvertTo-Json -Compress
+  } finally {
+    if ($RetirementDrainEstablished -and -not $RetirementCompleted -and $RetirementDrainUrl) {
+      try {
+        Invoke-RestMethod -Method DELETE -Uri $RetirementDrainUrl -Headers $RetirementHeaders -TimeoutSec 3 | Out-Null
+      } catch {}
+    }
+    $GenerationLock.Dispose()
+  }
 }
 
 function Start-UpdateRestartWatcher {
@@ -664,6 +797,20 @@ while ($true) {
 }
 
 switch ($ActionName) {
+  'generation-lock-test' {
+    if ($env:WMUX_WINDOWS_AGENT_LOCK_TEST -ne '1') { throw 'generation-lock-test is disabled' }
+    if ($GenerationPort -lt 1 -or $GenerationPort -gt 65535) { throw 'generation-lock-test requires --port' }
+    if ($LockHoldMs -lt 1 -or $LockHoldMs -gt 5000) { throw 'generation-lock-test requires --hold-ms between 1 and 5000' }
+    if (-not $LockTracePath) { throw 'generation-lock-test requires --trace' }
+    $GenerationLock = Open-GenerationLock -Port $GenerationPort
+    try {
+      [System.IO.File]::AppendAllText($LockTracePath, "start|$PID|$([DateTime]::UtcNow.Ticks)`n")
+      Start-Sleep -Milliseconds $LockHoldMs
+      [System.IO.File]::AppendAllText($LockTracePath, "end|$PID|$([DateTime]::UtcNow.Ticks)`n")
+    } finally {
+      $GenerationLock.Dispose()
+    }
+  }
   'install' {
     if (-not (Test-Path -LiteralPath $Agent -PathType Leaf)) {
       Write-Error "wmux-windows-agent was not found at $Agent"

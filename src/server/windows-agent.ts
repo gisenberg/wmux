@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
-import net from "node:net";
 import {
   WINDOWS_AGENT_LONG_POLL,
   WINDOWS_AGENT_PATHS,
@@ -24,13 +23,17 @@ import {
 } from "./windows-helpers.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
 import { captureOsc7 } from "./osc7.js";
+import {
+  sessionAgentOriginAtPort,
+  sessionAgentOriginForEndpoint,
+} from "./session-agent-origin.js";
 import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./terminal-checkpoint.js";
 
 interface AgentEvents {
   output: [string];
   title: [string];
   cwd: [string];
-  agentPort: [number];
+  agentPort: [number, string];
   phase: [PaneStartupPhase, string];
   exit: [number | null];
 }
@@ -51,13 +54,7 @@ const RESIZE_REPAINT_QUIET_MS = 120;
 const RESIZE_REPAINT_MAX_WAIT_MS = 1000;
 
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
-  if (machine.agentUrl) return machine.agentUrl.replace(/\/+$/, "");
-  if (machine.kind === "local" && machine.sessionBackend === "agent") {
-    return `http://127.0.0.1:${machine.agentPort ?? 3481}`;
-  }
-  if (!machine.host) return undefined;
-  const host = net.isIP(machine.host) === 6 ? `[${machine.host}]` : machine.host;
-  return `http://${host}:${machine.agentPort ?? 3481}`;
+  return sessionAgentOriginForEndpoint(machine);
 };
 
 const agentPortFromUrl = (url: string): number => {
@@ -247,6 +244,7 @@ export const probeWindowsAgent = async (
   const expectedHelpers = buildWindowsHelperBundle(machine).bundleVersion;
   const isCurrent = (result: Awaited<ReturnType<typeof probe>>) =>
     result.reachable
+    && result.health?.draining !== true
     && (result.health?.releaseVersion ?? result.health?.version) === expectedRelease
     && (result.health?.protocolVersion ?? 0) >= expectedProtocol
     && result.health?.helperBundleVersion === expectedHelpers;
@@ -777,6 +775,15 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const activeSessions = health.activeSessions ?? sessions.filter((session) => session.status !== "exited").length;
     if (!actualRelease) return !this.stopped;
     if (releaseCurrent && protocolCurrent && helpersCurrent) {
+      if (health.draining && !existing) {
+        const currentGeneration = await this.findCurrentGeneration(helperBundle);
+        if (currentGeneration === undefined) {
+          throw new Error(`Windows agent ${this.machine.id} is draining and cannot accept a new pane`);
+        }
+        this.reportPhase("starting-generation", `Routing to Windows agent generation ${currentGeneration}…`);
+        this.routeToAgentPort(currentGeneration);
+        return !this.stopped;
+      }
       // A staged helper bundle used to make an old base process look current.
       // If a current side-by-side generation already exists, keep established
       // panes pinned to the base but send new panes to the rollout generation.
@@ -838,10 +845,21 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       // generation instead of arming an unrelated base-agent restart.
       this.reportPhase("starting-generation", "Updating the Windows agent…");
       const currentPort = this.currentAgentPort();
-      await this.activateUpdate(
-        this.machine,
-        currentPort === this.baseAgentPort() ? undefined : currentPort,
-      );
+      try {
+        await this.activateUpdate(
+          this.machine,
+          currentPort === this.baseAgentPort() ? undefined : currentPort,
+        );
+      } catch (error) {
+        // The service helper fences an observed-idle generation atomically and
+        // refuses replacement if a concurrent create won first. Re-probe and
+        // use another rollout slot instead of terminating that new session.
+        const rolloutPort = await this.selectRolloutPort();
+        if (rolloutPort === currentPort) throw error;
+        this.reportPhase("starting-generation", `Starting Windows agent generation ${rolloutPort}…`);
+        await this.activateAndRouteGeneration(rolloutPort, helperBundle);
+        return !this.stopped;
+      }
     } else {
       const currentGeneration = await this.findCurrentGeneration(helperBundle);
       if (currentGeneration !== undefined) {
@@ -853,40 +871,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
       const rolloutPort = await this.selectRolloutPort();
       this.reportPhase("starting-generation", `Starting Windows agent generation ${rolloutPort}…`);
-      const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
-      if (typeof activatedPort === "number") {
-        const basePort = this.baseAgentPort();
-        const activatedUrl = this.urlForAgentPort(activatedPort);
-        let current: WindowsAgentHealth;
-        try {
-          current = await requestJson<WindowsAgentHealth>(
-            "GET",
-            `${activatedUrl}${WINDOWS_AGENT_PATHS.health}`,
-            undefined,
-            3000,
-            authHeaders(this.machine),
-          );
-        } catch (error) {
-          throw new Error(
-            `new Windows agent generation on port ${activatedPort} is not reachable from wmux; `
-            + `allow inbound TCP ${basePort}-${basePort + 8} from the wmux server `
-            + `(wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>): ${formatError(error)}`,
-          );
-        }
-        const currentRelease = current.releaseVersion ?? current.version;
-        if (
-          current.ok !== true
-          || currentRelease !== expectedRelease
-          || (current.protocolVersion ?? 0) < expectedProtocol
-          || current.helperBundleVersion !== helperBundle.bundleVersion
-        ) {
-          throw new Error(`new Windows agent generation on port ${activatedPort} did not report the staged version`);
-        }
-        // Persist the selected generation only after it is reachable and reports
-        // the staged version. Otherwise a failed rollout would strand retries on
-        // an unavailable adjacent port instead of the still-running base agent.
-        this.routeToAgentPort(activatedPort);
-        this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${activatedPort}; opening pane.\r\n`);
+      const activatedPort = await this.activateAndRouteGeneration(rolloutPort, helperBundle);
+      if (activatedPort !== undefined) {
         return !this.stopped;
       }
 
@@ -903,7 +889,13 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         const currentRelease = current.releaseVersion ?? current.version;
         const currentProtocol = current.protocolVersion ?? 0;
         const currentHelpers = current.helperBundleVersion === helperBundle.bundleVersion;
-        if (current.ok === true && currentRelease === expectedRelease && currentProtocol >= expectedProtocol && currentHelpers) {
+        if (
+          current.ok === true
+          && current.draining !== true
+          && currentRelease === expectedRelease
+          && currentProtocol >= expectedProtocol
+          && currentHelpers
+        ) {
           this.appendAndEmit(`\r\n[wmux] Windows agent updated to ${expectedDisplay}; opening pane.\r\n`);
           return true;
         }
@@ -932,12 +924,9 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   private urlForAgentPort(port: number): string {
     if (!this.agentUrl) throw new Error(`machine ${this.machine.id} is missing Windows agent URL`);
-    const parsed = new URL(this.agentUrl);
-    parsed.port = String(port);
-    parsed.pathname = "";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString().replace(/\/+$/, "");
+    const candidate = sessionAgentOriginAtPort(this.agentUrl, port);
+    if (!candidate) throw new Error(`machine ${this.machine.id} has an invalid Windows agent origin`);
+    return candidate;
   }
 
   private async generationHealth(port: number, timeoutMs = 750): Promise<WindowsAgentHealth | undefined> {
@@ -964,6 +953,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     );
     return candidates.find(({ health }) =>
       health?.ok === true
+      && health.draining !== true
       && (health.releaseVersion ?? health.version) === expectedRelease
       && (health.protocolVersion ?? 0) >= expectedProtocol
       && health.helperBundleVersion === helperBundle.bundleVersion
@@ -984,9 +974,48 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     throw new Error("all Windows agent rollout ports are occupied by active generations");
   }
 
+  private async activateAndRouteGeneration(
+    rolloutPort: number,
+    helperBundle: WindowsHelperBundle,
+  ): Promise<number | undefined> {
+    const activatedPort = await this.activateUpdate(this.machine, rolloutPort);
+    if (typeof activatedPort !== "number") return undefined;
+    const basePort = this.baseAgentPort();
+    const activatedUrl = this.urlForAgentPort(activatedPort);
+    let current: WindowsAgentHealth;
+    try {
+      current = await requestJson<WindowsAgentHealth>(
+        "GET",
+        `${activatedUrl}${WINDOWS_AGENT_PATHS.health}`,
+        undefined,
+        3000,
+        authHeaders(this.machine),
+      );
+    } catch (error) {
+      throw new Error(
+        `new Windows agent generation on port ${activatedPort} is not reachable from wmux; `
+        + `allow inbound TCP ${basePort}-${basePort + 8} from the wmux server `
+        + `(wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>): ${formatError(error)}`,
+      );
+    }
+    const currentRelease = current.releaseVersion ?? current.version;
+    if (
+      current.ok !== true
+      || current.draining === true
+      || currentRelease !== expectedWindowsAgentReleaseVersion()
+      || (current.protocolVersion ?? 0) < expectedWindowsAgentProtocolVersion()
+      || current.helperBundleVersion !== helperBundle.bundleVersion
+    ) {
+      throw new Error(`new Windows agent generation on port ${activatedPort} did not report the staged version`);
+    }
+    this.routeToAgentPort(activatedPort);
+    this.appendAndEmit(`\r\n[wmux] Updated Windows agent generation is ready on port ${activatedPort}; opening pane.\r\n`);
+    return activatedPort;
+  }
+
   private routeToAgentPort(port: number): void {
     this.agentUrl = this.urlForAgentPort(port);
-    this.emit("agentPort", port);
+    this.emit("agentPort", port, this.agentUrl);
   }
 
   private reportPendingUpdate(actual: string, expected: string, activeSessions: number): void {
@@ -1192,13 +1221,20 @@ export const buildWindowsAgentUpdateSshInvocation = (
   const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
   if (machine.port) args.push("-p", String(machine.port));
   const acknowledgementAction = port ? "rollout-update" : "activate-update";
+  const expectedRelease = expectedWindowsAgentReleaseVersion();
+  const expectedProtocol = expectedWindowsAgentProtocolVersion();
+  const expectedHelpers = buildWindowsHelperBundle(machine).bundleVersion;
+  const powerShellLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+  const rolloutArguments = port
+    ? `rollout-update --port ${port} --expected-release ${powerShellLiteral(expectedRelease)} --expected-protocol ${expectedProtocol} --expected-helpers ${powerShellLiteral(expectedHelpers)}`
+    : acknowledgementAction;
   const script = `
 $Service = Join-Path $env:LOCALAPPDATA 'wmux\\bin\\wmux-windows-agent-service.ps1'
 if (-not (Test-Path -LiteralPath $Service -PathType Leaf)) {
   Write-Error "wmux Windows agent service helper is not staged at $Service"
   exit 127
 }
-& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Service ${port ? `rollout-update --port ${port}` : acknowledgementAction}
+& pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Service ${rolloutArguments}
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 [pscustomobject]@{
   wmuxUpdateActivation = $true

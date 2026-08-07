@@ -81,3 +81,46 @@ test("static machine CRUD is validated, atomic, owner-only, and secret-preservin
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("browser updates cannot retarget a hidden session-agent token", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-static-agent-origin-"));
+  const configPath = path.join(directory, ".wmux", "config.json");
+  const store = new StaticMachineStore([{
+    id: "agent",
+    name: "Agent",
+    kind: "ssh",
+    host: "agent.internal",
+    sessionBackend: "agent",
+    agentUrl: "http://100.64.0.8:3481",
+    agentPort: 3481,
+    agentToken: "hidden-agent-token",
+  }], configPath);
+  try {
+    assert.throws(
+      () => store.update("agent", {
+        id: "agent",
+        name: "Retargeted agent",
+        kind: "ssh",
+        host: "agent.internal",
+        sessionBackend: "agent",
+        agentUrl: "http://100.64.0.9:3481",
+        agentPort: 3481,
+      }),
+      (error) => error instanceof StaticMachineStoreError
+        && error.code === "agent_endpoint_immutable_with_token",
+    );
+    const updated = store.update("agent", {
+      id: "agent",
+      name: "Renamed agent",
+      kind: "ssh",
+      host: "agent.internal",
+      sessionBackend: "agent",
+      agentUrl: "http://100.64.0.8:3481",
+      agentPort: 3481,
+    });
+    assert.equal(updated.agentToken, "hidden-agent-token");
+    assert.equal(updated.agentUrl, "http://100.64.0.8:3481");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

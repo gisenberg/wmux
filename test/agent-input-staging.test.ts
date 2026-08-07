@@ -432,13 +432,21 @@ test("feature-disabled, legacy POSIX, and Windows agent sessions start without a
     const captured: any[] = [];
     const agent = http.createServer(async (request, response) => {
       response.setHeader("content-type", "application/json");
-      if (request.method === "GET") {
+      if (request.method === "GET" && request.url === "/health") {
         response.end(JSON.stringify(machineKind !== "powershell-ssh"
           ? { ok: true, protocolVersion: 6, capabilities: [] }
           : { ok: true, protocolVersion: 6, releaseVersion: "", capabilities: [] }));
         return;
       }
-      if (request.method === "POST") {
+      if (request.method === "GET" && request.url === "/sessions") {
+        response.end(JSON.stringify({ sessions: [] }));
+        return;
+      }
+      if (request.method === "GET" && request.url?.includes("/output?")) {
+        response.end(JSON.stringify({ base: 0, cursor: 0, dataBase64: "" }));
+        return;
+      }
+      if (request.method === "POST" && /^\/sessions\/[^/]+$/.test(request.url ?? "")) {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
         captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));

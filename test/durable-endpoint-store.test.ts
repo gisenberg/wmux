@@ -167,6 +167,43 @@ test("reassignment strands the old endpoint and binds the replacement separately
   }
 });
 
+test("reconciliation retains a pane-pinned agent generation across SSH hostname drift", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-generation-"));
+  try {
+    const store = new DurableEndpointStore(path.join(directory, "session-endpoints.json"));
+    const generation: MachineConfig = {
+      id: "windows",
+      name: "Windows",
+      kind: "powershell-ssh",
+      host: "windows-new.internal",
+      sessionBackend: "agent",
+      agentUrl: "http://100.64.0.20:3482",
+      agentPort: 3482,
+      agentToken: "agent-secret",
+      source: "config",
+    };
+    const record = store.bind("pane-generation", generation, "windows-agent");
+    assert.ok(record);
+    store.reconcile(
+      new Set(["pane-generation"]),
+      [{ ...generation, agentUrl: "http://100.64.0.30:3481", agentPort: 3481 }],
+      new Map([["pane-generation", { ...generation, host: "windows-changed.internal" }]]),
+    );
+    assert.equal(store.find(record.id)?.status, "active");
+    assert.equal(store.activeForPane("pane-generation")?.machine.agentUrl, "http://100.64.0.20:3482");
+    assert.equal(
+      store.bind(
+        "pane-generation",
+        { ...generation, host: "windows-changed.internal" },
+        "windows-agent",
+      )?.id,
+      record.id,
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("invalid primary recovers from the last validated backup", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-backup-"));
   const filePath = path.join(directory, "session-endpoints.json");
