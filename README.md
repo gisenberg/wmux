@@ -524,7 +524,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-shell-run-event` | Internal staged reporter used by opt-in managed-shell hooks |
 | `wmux-media` | Render images, audio, or video through the browser |
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
-| `wmux-hooks` | Install Claude, Codex, or OpenCode lifecycle hooks |
+| `wmux-hooks` | Install Claude, Codex, OpenCode, or Prime Agent lifecycle hooks |
 | `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
 | `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, or Claude TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
@@ -553,6 +553,7 @@ account where that agent runs:
 wmux-hooks install claude
 wmux-hooks install codex
 wmux-hooks install opencode
+wmux-hooks install prime-agent
 wmux-hooks status
 ```
 
@@ -597,7 +598,11 @@ pane capability; a surviving OpenCode broker waits with capped backoff,
 re-registers without restarting OpenCode, and reconciles a complete native
 question snapshot before structured answering resumes. Its owner-only durable
 registration intent also converges repeated response loss or broker termination
-after server commit without replaying relay plaintext from the server.
+after server commit without replaying relay plaintext from the server.`wmux-hooks install prime-agent` writes an auto-loaded managed extension to
+`~/.prime/agent/extensions/wmux.ts`. It reports prompt start and completion
+through the same wmux lifecycle feed, while preserving an unmanaged extension
+already present at that path. Prime Agent is also recognized by the mobile Chat
+surface and can be started there; it is not yet a `wmuxctl delegate` runtime.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.

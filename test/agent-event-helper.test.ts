@@ -445,10 +445,50 @@ test("OpenCode hooks report running, waiting, failed, and completed lifecycles",
   }
 });
 
+
+test("Prime Agent hooks report running and completed lifecycles", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-event-"));
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    for (const input of [
+      { hook_event_name: "UserPromptSubmit", prompt: "add Prime Agent support" },
+      { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
+    ]) {
+      await runAgentEvent([
+        "--url", `http://127.0.0.1:${address.port}`, "--agent", "prime-agent", "--prime-agent-hook", "--pane", "pane-1",
+      ], agentEventEnv(dir, {
+        WMUX_TOKEN: "",
+        WMUX_TOKEN_PATH: path.join(dir, "missing-token"),
+        HOOK_INPUT: JSON.stringify(input),
+      }));
+    }
+    assert.deepEqual(captured.map(({ agent, status, summary, message }) => ({ agent, status, summary, message })), [
+      { agent: "prime-agent", status: "running", summary: "prime-agent running", message: undefined },
+      { agent: "prime-agent", status: "completed", summary: "Prime Agent done.", message: "Prime Agent done." },
+    ]);
+    assert.equal(captured[0]?.title, "add Prime Agent support");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("agent harness hooks silently return without wmux pane context", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-hook-context-"));
   try {
-    for (const agent of ["claude", "codex", "opencode"]) {
+    for (const agent of ["claude", "codex", "opencode", "prime-agent"]) {
       const { stdout, stderr } = await runAgentEvent(
         ["--agent", agent, `--${agent}-hook`],
         agentEventEnv(dir, {

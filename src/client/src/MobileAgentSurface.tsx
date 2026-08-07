@@ -352,7 +352,7 @@ export function MobileAgentSurface({
     const imagesToSend = pendingImages;
     if (!pane || (!text.trim() && imagesToSend.length === 0) || sending) return;
     if (!agentSession.canSend) {
-      setSendError("Start Codex or Claude before sending chat messages to this pane.");
+      setSendError("Start Codex, Claude, or Prime Agent before sending chat messages to this pane.");
       setSendNotice("");
       return;
     }
@@ -722,7 +722,7 @@ function MobileAgentLaunchPanel({
         </span>
       </div>
       <div className="mobile-agent-launch-actions">
-        {(["codex", "claude"] as const).map((agent) => (
+        {(["codex", "claude", "prime-agent"] as const).map((agent) => (
           <button
             key={agent}
             type="button"
@@ -730,7 +730,7 @@ function MobileAgentLaunchPanel({
             onClick={() => void onStart(agent)}
           >
             <Play size={14} />
-            <span>{launchingAgent === agent ? `Starting ${agent === "codex" ? "Codex" : "Claude"}` : `Start ${agent === "codex" ? "Codex" : "Claude"}`}</span>
+            <span>{launchingAgent === agent ? `Starting ${agentLabel(agent)}` : `Start ${agentLabel(agent)}`}</span>
           </button>
         ))}
       </div>
@@ -1174,7 +1174,7 @@ const detectAgentSession = (
   }
   return {
     canSend: false,
-    reason: "Start Codex or Claude to avoid sending chat text to a normal shell prompt.",
+    reason: "Start Codex, Claude, or Prime Agent to avoid sending chat text to a normal shell prompt.",
   };
 };
 
@@ -1182,8 +1182,15 @@ const agentNameFromText = (value: string | undefined): AgentLauncher | undefined
   const normalized = value?.toLowerCase() ?? "";
   if (/\bcodex\b/.test(normalized)) return "codex";
   if (/\bclaude\b/.test(normalized)) return "claude";
+  if (/\bprime[ -]agent\b/.test(normalized)) return "prime-agent";
   return undefined;
 };
+
+const agentLabel = (agent: AgentLauncher): string => ({
+  codex: "Codex",
+  claude: "Claude",
+  "prime-agent": "Prime Agent",
+}[agent]);
 
 const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[] = []): string => {
   const messageParts: string[] = [];
