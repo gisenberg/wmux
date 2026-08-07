@@ -615,6 +615,10 @@ function Remove-AgentGeneration {
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
   $GenerationLock = Open-GenerationLock -Port $Port
+  $RetirementDrainEstablished = $false
+  $RetirementCompleted = $false
+  $RetirementDrainUrl = $null
+  $RetirementHeaders = @{}
   try {
   $GenerationTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   $PasswordPool = Test-PasswordTaskPool
@@ -645,9 +649,13 @@ function Remove-AgentGeneration {
     -ContentType 'application/json' `
     -Body (@{ restartWhenIdle = $false; allowNewSessions = $false } | ConvertTo-Json -Compress) `
     -TimeoutSec 3
+  $RetirementDrainEstablished = $true
+  $RetirementDrainUrl = $DrainUrl
+  $RetirementHeaders = $Headers
   $ActiveSessions = Get-ActiveSessionCount $Drain
   if ($ActiveSessions -gt 0) {
     Invoke-RestMethod -Method DELETE -Uri $DrainUrl -Headers $Headers -TimeoutSec 3 | Out-Null
+    $RetirementDrainEstablished = $false
     throw "refusing to retire generation $Port after $ActiveSessions pane session(s) became active"
   }
 
@@ -657,6 +665,7 @@ function Remove-AgentGeneration {
   $FencedPid = if ($FencedHealth.pid) { [int]$FencedHealth.pid } else { 0 }
   if ($FencedSessions -gt 0 -or -not [bool]$FencedHealth.draining -or ($OriginalPid -gt 0 -and $FencedPid -ne $OriginalPid)) {
     Invoke-RestMethod -Method DELETE -Uri $DrainUrl -Headers $Headers -TimeoutSec 3 | Out-Null
+    $RetirementDrainEstablished = $false
     throw "refusing to retire generation $Port because its fenced identity or session count changed"
   }
 
@@ -675,8 +684,14 @@ function Remove-AgentGeneration {
   if (-not $PasswordPool) {
     Remove-Item -LiteralPath $GenerationWrapper -Force -ErrorAction SilentlyContinue
   }
+  $RetirementCompleted = $true
   [pscustomobject]@{ port = $Port; retired = $true; activeSessions = 0 } | ConvertTo-Json -Compress
   } finally {
+    if ($RetirementDrainEstablished -and -not $RetirementCompleted -and $RetirementDrainUrl) {
+      try {
+        Invoke-RestMethod -Method DELETE -Uri $RetirementDrainUrl -Headers $RetirementHeaders -TimeoutSec 3 | Out-Null
+      } catch {}
+    }
     $GenerationLock.Dispose()
   }
 }

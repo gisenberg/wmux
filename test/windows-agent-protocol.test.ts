@@ -241,6 +241,7 @@ test("rollout slot activation is owner-serialized and reuses an already-current 
   assert.ok(retireRelease > retireIdentity);
   assert.match(service.slice(acquire, reuse), /ExistingHealth\.draining/);
   assert.match(service, /DrainEstablished -and -not \$GenerationActivated/);
+  assert.match(service, /RetirementDrainEstablished -and -not \$RetirementCompleted/);
   assert.match(service, /--expected-release/);
   assert.match(service, /--expected-protocol/);
   assert.match(service, /--expected-helpers/);
