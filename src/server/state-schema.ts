@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { machineSchema } from "./config.js";
-import { normalizeSessionAgentOrigin } from "./session-agent-origin.js";
 import type {
   DelegationAttentionReason,
   DelegationRecord,
@@ -25,10 +24,6 @@ const timestampSchema = z.string().min(1).max(80);
 const paneSchema = z.object({
   id: idSchema,
   machineId: idSchema,
-  agentUrl: z.string().max(2048).refine(
-    (value) => normalizeSessionAgentOrigin(value) !== undefined,
-    "agentUrl must be a private/internal HTTP IPv4 origin",
-  ).optional(),
   agentPort: z.number().int().min(1).max(65535).optional(),
   title: z.string().max(500),
   cwd: z.string().max(8192).optional(),

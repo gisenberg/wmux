@@ -43,7 +43,6 @@ import {
 import { terminalThemeFromEnvironment } from "./terminal-theme.js";
 import { windowsAgentPort } from "./windows-agent.js";
 import {
-  normalizeSessionAgentOrigin,
   sessionAgentOriginAtPort,
   sessionAgentOriginForEndpoint,
 } from "./session-agent-origin.js";
@@ -120,25 +119,36 @@ export const resolvePersistedPaneMachine = (
   recoveredEndpoint?: MachineConfig,
 ): MachineConfig => {
   if (configuredMachine.sessionBackend !== "agent") return configuredMachine;
-  if (pane.agentUrl) {
-    const pinnedOrigin = normalizeSessionAgentOrigin(pane.agentUrl);
-    if (!pinnedOrigin) throw new Error(`pane ${pane.id} has an invalid persisted session-agent origin`);
-    const pinnedPort = Number(new URL(pinnedOrigin).port);
-    if (pane.agentPort !== undefined && pane.agentPort !== pinnedPort) {
-      throw new Error(`pane ${pane.id} has inconsistent persisted session-agent endpoint fields`);
-    }
-    return { ...configuredMachine, agentUrl: pinnedOrigin, agentPort: pinnedPort };
-  }
-  if (pane.agentPort === undefined) return configuredMachine;
-  const recoveredOrigin = recoveredEndpoint?.agentPort === pane.agentPort
+  const recoveredOrigin = recoveredEndpoint
     ? sessionAgentOriginForEndpoint(recoveredEndpoint)
     : undefined;
-  const baseOrigin = recoveredOrigin ?? sessionAgentOriginForEndpoint(configuredMachine);
-  const pinnedOrigin = baseOrigin
-    ? sessionAgentOriginAtPort(baseOrigin, pane.agentPort)
-    : undefined;
-  if (!pinnedOrigin) throw new Error(`pane ${pane.id} is missing its persisted session-agent origin`);
-  return { ...configuredMachine, agentUrl: pinnedOrigin, agentPort: pane.agentPort };
+  if (recoveredEndpoint && !recoveredOrigin) {
+    throw new Error(`pane ${pane.id} has an invalid durable session-agent origin`);
+  }
+  if (recoveredEndpoint && recoveredEndpoint.id !== configuredMachine.id) {
+    throw new Error(`pane ${pane.id} has a durable endpoint for the wrong machine`);
+  }
+  if (
+    recoveredEndpoint
+    && pane.agentPort !== undefined
+    && Number(new URL(recoveredOrigin!).port) !== pane.agentPort
+  ) {
+    throw new Error(`pane ${pane.id} has inconsistent durable session-agent endpoint fields`);
+  }
+  if (recoveredOrigin) {
+    const recoveredPort = Number(new URL(recoveredOrigin).port);
+    return { ...configuredMachine, agentUrl: recoveredOrigin, agentPort: recoveredPort };
+  }
+  const configuredOrigin = sessionAgentOriginForEndpoint(configuredMachine);
+  const pinnedOrigin = configuredOrigin && pane.agentPort !== undefined
+    ? sessionAgentOriginAtPort(configuredOrigin, pane.agentPort)
+    : configuredOrigin;
+  if (!pinnedOrigin) throw new Error(`pane ${pane.id} is missing its session-agent origin`);
+  return {
+    ...configuredMachine,
+    agentUrl: pinnedOrigin,
+    agentPort: Number(new URL(pinnedOrigin).port),
+  };
 };
 
 const sameMachineEndpoint = (left: MachineConfig, right: MachineConfig): boolean =>
@@ -749,7 +759,7 @@ export class SessionManager {
       machine.agentUrl = pinnedOrigin;
       this.sessionMachines.set(pane.id, structuredClone(machine));
       this.durableEndpoints.updateActive(pane.id, machine);
-      this.state.updatePane(pane.id, { agentPort, agentUrl: pinnedOrigin });
+      this.state.updatePane(pane.id, { agentPort });
     });
     session.on("phase", (phase, label) => {
       this.broadcast(pane.id, { type: "starting", paneId: pane.id, phase, label });

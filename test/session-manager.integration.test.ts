@@ -77,7 +77,7 @@ test("pane disposal prefers the live session's pre-heartbeat machine snapshot", 
   assert.equal(resolveDisposalMachine(undefined, [movedMachine], oldMachine.id)?.host, "100.70.0.9");
 });
 
-test("persisted panes recover legacy generation origins without using changed SSH DNS", () => {
+test("persisted panes recover base and generation origins without using changed SSH DNS", () => {
   const configured: MachineConfig = {
     id: "windows",
     name: "Windows",
@@ -105,11 +105,10 @@ test("persisted panes recover legacy generation origins without using changed SS
   assert.equal(resolvedLegacy.agentUrl, "http://100.64.0.20:3482");
   assert.equal(resolvedLegacy.host, "changed.internal", "SSH identity remains separate from agent origin");
 
-  const resolvedV8 = resolvePersistedPaneMachine({
-    ...pane,
-    agentUrl: "http://100.64.0.25:3482",
-  }, configured, recovered);
-  assert.equal(resolvedV8.agentUrl, "http://100.64.0.25:3482");
+  const recoveredBase = { ...recovered, agentUrl: "http://100.64.0.25:3490", agentPort: 3490 };
+  const resolvedBase = resolvePersistedPaneMachine({ ...pane, agentPort: undefined }, configured, recoveredBase);
+  assert.equal(resolvedBase.agentUrl, "http://100.64.0.25:3490");
+  assert.equal(resolvedBase.agentPort, 3490);
 });
 
 test("every backend attachment receives a fresh agent-input authority epoch", () => {
@@ -685,10 +684,7 @@ test("restart reattaches a referenced rollout generation on its pinned private o
     const initialState = new StateStore([configuredMachine], statePath);
     const initialPane = initialState.snapshot().workspaces[0].tabs[0].panes[0];
     expectedPaneId = initialPane.id;
-    initialState.updatePane(initialPane.id, {
-      agentUrl: `http://127.0.0.1:${generationAddress.port}`,
-      agentPort: generationAddress.port,
-    });
+    initialState.updatePane(initialPane.id, { agentPort: generationAddress.port });
     const pane = initialState.snapshot().workspaces[0].tabs[0].panes[0];
     initialState.flush();
     const generationMachine = {
@@ -727,7 +723,11 @@ test("restart reattaches a referenced rollout generation on its pinned private o
     assert.equal(generationDeletes, 0, "restart reconciliation never cleanup-deletes the referenced generation");
     assert.equal(createAuthorization, "Bearer generation-secret");
     assert.equal(createEnvironment?.WMUX_PANE_ID, pane.id);
-    assert.equal(restartedState.findPane(pane.id)?.agentUrl, `http://127.0.0.1:${generationAddress.port}`);
+    assert.equal(restartedState.findPane(pane.id)?.agentPort, generationAddress.port);
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
+      workspaces: Array<{ tabs: Array<{ panes: Array<Record<string, unknown>> }> }>;
+    };
+    assert.equal("agentUrl" in persisted.workspaces[0].tabs[0].panes[0], false);
   } finally {
     manager?.disposeAll();
     generationAgent.closeAllConnections();

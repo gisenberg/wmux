@@ -167,7 +167,7 @@ test("reassignment strands the old endpoint and binds the replacement separately
   }
 });
 
-test("reconciliation retains a pane-pinned adjacent Windows agent generation", () => {
+test("reconciliation retains a pane-pinned agent generation across SSH hostname drift", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-generation-"));
   try {
     const store = new DurableEndpointStore(path.join(directory, "session-endpoints.json"));
@@ -187,10 +187,18 @@ test("reconciliation retains a pane-pinned adjacent Windows agent generation", (
     store.reconcile(
       new Set(["pane-generation"]),
       [{ ...generation, agentUrl: "http://100.64.0.30:3481", agentPort: 3481 }],
-      new Map([["pane-generation", generation]]),
+      new Map([["pane-generation", { ...generation, host: "windows-changed.internal" }]]),
     );
     assert.equal(store.find(record.id)?.status, "active");
     assert.equal(store.activeForPane("pane-generation")?.machine.agentUrl, "http://100.64.0.20:3482");
+    assert.equal(
+      store.bind(
+        "pane-generation",
+        { ...generation, host: "windows-changed.internal" },
+        "windows-agent",
+      )?.id,
+      record.id,
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
