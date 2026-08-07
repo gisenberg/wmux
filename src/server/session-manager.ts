@@ -137,7 +137,19 @@ export const resolvePersistedPaneMachine = (
   }
   if (recoveredOrigin) {
     const recoveredPort = Number(new URL(recoveredOrigin).port);
-    return { ...configuredMachine, agentUrl: recoveredOrigin, agentPort: recoveredPort };
+    const configuredOrigin = sessionAgentOriginForEndpoint(configuredMachine);
+    const endpointChanged = configuredOrigin !== recoveredOrigin;
+    return {
+      ...configuredMachine,
+      host: endpointChanged ? recoveredEndpoint?.host : configuredMachine.host,
+      user: endpointChanged ? recoveredEndpoint?.user : configuredMachine.user,
+      port: endpointChanged ? recoveredEndpoint?.port : configuredMachine.port,
+      agentUrl: recoveredOrigin,
+      agentPort: recoveredPort,
+      agentToken: endpointChanged
+        ? recoveredEndpoint?.agentToken
+        : configuredMachine.agentToken ?? recoveredEndpoint?.agentToken,
+    };
   }
   const configuredOrigin = sessionAgentOriginForEndpoint(configuredMachine);
   const pinnedOrigin = configuredOrigin && pane.agentPort !== undefined

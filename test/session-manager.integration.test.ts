@@ -86,6 +86,7 @@ test("persisted panes recover base and generation origins without using changed 
     sessionBackend: "agent",
     agentUrl: "http://100.64.0.30:3481",
     agentPort: 3481,
+    agentToken: "replacement-token",
   };
   const pane = {
     id: "pane-generation",
@@ -100,15 +101,18 @@ test("persisted panes recover base and generation origins without using changed 
     host: "100.64.0.20",
     agentUrl: undefined,
     agentPort: 3482,
+    agentToken: "recovered-token",
   };
   const resolvedLegacy = resolvePersistedPaneMachine(pane, configured, recovered);
   assert.equal(resolvedLegacy.agentUrl, "http://100.64.0.20:3482");
-  assert.equal(resolvedLegacy.host, "changed.internal", "SSH identity remains separate from agent origin");
+  assert.equal(resolvedLegacy.host, "100.64.0.20");
+  assert.equal(resolvedLegacy.agentToken, "recovered-token");
 
   const recoveredBase = { ...recovered, agentUrl: "http://100.64.0.25:3490", agentPort: 3490 };
   const resolvedBase = resolvePersistedPaneMachine({ ...pane, agentPort: undefined }, configured, recoveredBase);
   assert.equal(resolvedBase.agentUrl, "http://100.64.0.25:3490");
   assert.equal(resolvedBase.agentPort, 3490);
+  assert.equal(resolvedBase.agentToken, "recovered-token");
 });
 
 test("every backend attachment receives a fresh agent-input authority epoch", () => {
@@ -691,6 +695,7 @@ test("restart reattaches a referenced rollout generation on its pinned private o
       ...configuredMachine,
       agentUrl: `http://127.0.0.1:${generationAddress.port}`,
       agentPort: generationAddress.port,
+      agentToken: "recovered-generation-secret",
     };
     const endpoints = new DurableEndpointStore(endpointPath);
     const record = endpoints.bind(pane.id, generationMachine, "windows-agent");
@@ -721,7 +726,7 @@ test("restart reattaches a referenced rollout generation on its pinned private o
     assert.ok(generationRequests >= 3);
     assert.equal(baseRequests, 0);
     assert.equal(generationDeletes, 0, "restart reconciliation never cleanup-deletes the referenced generation");
-    assert.equal(createAuthorization, "Bearer generation-secret");
+    assert.equal(createAuthorization, "Bearer recovered-generation-secret");
     assert.equal(createEnvironment?.WMUX_PANE_ID, pane.id);
     assert.equal(restartedState.findPane(pane.id)?.agentPort, generationAddress.port);
     const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
