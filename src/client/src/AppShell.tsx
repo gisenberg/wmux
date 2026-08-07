@@ -2153,7 +2153,7 @@ const settleMobileViewportAfterNavigation = (): void => {
 };
 
 const paneHasAgentContext = (pane: { title?: string } | undefined, event: AgentActivity | undefined): boolean => {
-  if (/\b(codex|claude)\b/i.test(pane?.title ?? "")) return true;
+  if (/\b(codex|claude|prime[ -]agent)\b/i.test(pane?.title ?? "")) return true;
   if (!event) return false;
   const ageMs = Date.now() - Date.parse(event.createdAt);
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 12 * 60 * 60 * 1000;

@@ -340,6 +340,7 @@ def main():
     parser.add_argument("--codex-hook", action="store_true")
     parser.add_argument("--codex-reconcile", action="store_true")
     parser.add_argument("--opencode-hook", action="store_true")
+    parser.add_argument("--prime-agent-hook", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -353,7 +354,7 @@ def main():
     if not args.force and not args.pane and not args.workspace:
         return 0
 
-    hook_input = read_hook_input() if args.claude_hook or args.codex_hook or args.opencode_hook else {}
+    hook_input = read_hook_input() if args.claude_hook or args.codex_hook or args.opencode_hook or args.prime_agent_hook else {}
     hook_event = str(hook_input.get("hook_event_name") or "")
     transcript = args.transcript or hook_input.get("transcript_path") or hook_input.get("agent_transcript_path") or ""
     turn_id = str(hook_input.get("turn_id") or "")
@@ -412,6 +413,14 @@ def main():
         elif hook_event:
             status = "completed"
             summary = summary or "opencode completed"
+    if args.prime_agent_hook:
+        if hook_event == "UserPromptSubmit":
+            status = "running"
+            summary = "prime-agent running"
+            message = ""
+        elif hook_event:
+            status = "completed"
+            summary = summary or "prime-agent completed"
 
     payload = {
         "agent": clean_text(args.agent, 50),

@@ -11,6 +11,7 @@ test("mobile agent launchers disable permission prompts on POSIX machines", () =
     mobileAgentLaunchCommand("claude", "local"),
     "claude --dangerously-skip-permissions",
   );
+  assert.equal(mobileAgentLaunchCommand("prime-agent", "local"), "prime-agent");
 });
 
 test("mobile agent launchers avoid PowerShell execution-policy-blocked ps1 shims", () => {
@@ -21,5 +22,9 @@ test("mobile agent launchers avoid PowerShell execution-policy-blocked ps1 shims
   assert.equal(
     mobileAgentLaunchCommand("claude", "powershell"),
     "if (Get-Command claude.cmd -ErrorAction SilentlyContinue) { claude.cmd --dangerously-skip-permissions } else { claude --dangerously-skip-permissions }",
+  );
+  assert.equal(
+    mobileAgentLaunchCommand("prime-agent", "powershell-ssh"),
+    "if (Get-Command prime-agent.cmd -ErrorAction SilentlyContinue) { prime-agent.cmd } else { prime-agent }",
   );
 });
