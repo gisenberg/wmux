@@ -461,6 +461,10 @@ function Start-AgentGeneration {
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
   $GenerationLock = Open-GenerationLock -Port $Port
+  $DrainEstablished = $false
+  $DrainCancellationUrl = $null
+  $DrainCancellationHeaders = @{}
+  $GenerationActivated = $false
   try {
   $PasswordPool = Test-PasswordTaskPool
   $ExistingTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
@@ -490,6 +494,7 @@ function Start-AgentGeneration {
       if (
         $ExpectedRelease -and $ExpectedProtocol -gt 0 -and $ExpectedHelpers -and
         $ExistingHealth.ok -and
+        -not [bool]$ExistingHealth.draining -and
         $ExistingRelease -eq $ExpectedRelease -and
         $ExistingProtocol -ge $ExpectedProtocol -and
         $ExistingHelpers -eq $ExpectedHelpers
@@ -506,9 +511,13 @@ function Start-AgentGeneration {
         -ContentType 'application/json' `
         -Body (@{ restartWhenIdle = $false; allowNewSessions = $false } | ConvertTo-Json -Compress) `
         -TimeoutSec 3
+      $DrainEstablished = $true
+      $DrainCancellationUrl = $ExistingDrainUrl
+      $DrainCancellationHeaders = $ExistingHeaders
       $ActiveSessions = Get-ActiveSessionCount $Fence
       if ($ActiveSessions -gt 0) {
         Invoke-RestMethod -Method DELETE -Uri $ExistingDrainUrl -Headers $ExistingHeaders -TimeoutSec 3 | Out-Null
+        $DrainEstablished = $false
         throw "generation_refresh_busy: generation $Port gained $ActiveSessions active pane session(s)"
       }
       # Creates cannot pass the hard fence, so a non-zero recheck always aborts.
@@ -516,6 +525,7 @@ function Start-AgentGeneration {
       $ActiveSessions = Get-ActiveSessionCount $FencedHealth
       if ($ActiveSessions -gt 0) {
         Invoke-RestMethod -Method DELETE -Uri $ExistingDrainUrl -Headers $ExistingHeaders -TimeoutSec 3 | Out-Null
+        $DrainEstablished = $false
         throw "generation_refresh_busy: generation $Port owns $ActiveSessions active pane session(s) after fencing"
       }
     }
@@ -571,6 +581,7 @@ function Start-AgentGeneration {
     try {
       $Health = Invoke-RestMethod -Method GET -Uri $HealthUrl -Headers $Headers -TimeoutSec 2
       if ($Health.ok) {
+        $GenerationActivated = $true
         [pscustomobject]@{ port = $Port; releaseVersion = $Health.releaseVersion; protocolVersion = $Health.protocolVersion } | ConvertTo-Json -Compress
         return
       }
@@ -579,6 +590,11 @@ function Start-AgentGeneration {
   } while ([DateTime]::UtcNow -lt $Deadline)
   throw "Windows agent generation on port $Port did not become healthy"
   } finally {
+    if ($DrainEstablished -and -not $GenerationActivated -and $DrainCancellationUrl) {
+      try {
+        Invoke-RestMethod -Method DELETE -Uri $DrainCancellationUrl -Headers $DrainCancellationHeaders -TimeoutSec 3 | Out-Null
+      } catch {}
+    }
     $GenerationLock.Dispose()
   }
 }
@@ -598,6 +614,8 @@ function Remove-AgentGeneration {
   $GenerationTaskName = "$TaskName-$Port"
   $GenerationConfig = Join-Path $StateDir "windows-agent-$Port.json"
   $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$Port.ps1"
+  $GenerationLock = Open-GenerationLock -Port $Port
+  try {
   $GenerationTask = Get-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
   $PasswordPool = Test-PasswordTaskPool
   if (-not (Test-Path -LiteralPath $GenerationConfig -PathType Leaf)) {
@@ -633,6 +651,15 @@ function Remove-AgentGeneration {
     throw "refusing to retire generation $Port after $ActiveSessions pane session(s) became active"
   }
 
+  $FencedHealth = Invoke-RestMethod -Method GET -Uri $HealthUrl -Headers $Headers -TimeoutSec 3
+  $FencedSessions = Get-ActiveSessionCount $FencedHealth
+  $OriginalPid = if ($Health.pid) { [int]$Health.pid } else { 0 }
+  $FencedPid = if ($FencedHealth.pid) { [int]$FencedHealth.pid } else { 0 }
+  if ($FencedSessions -gt 0 -or -not [bool]$FencedHealth.draining -or ($OriginalPid -gt 0 -and $FencedPid -ne $OriginalPid)) {
+    Invoke-RestMethod -Method DELETE -Uri $DrainUrl -Headers $Headers -TimeoutSec 3 | Out-Null
+    throw "refusing to retire generation $Port because its fenced identity or session count changed"
+  }
+
   if ($GenerationTask) {
     Disable-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue | Out-Null
     Stop-ScheduledTask -TaskName $GenerationTaskName -ErrorAction SilentlyContinue
@@ -649,6 +676,9 @@ function Remove-AgentGeneration {
     Remove-Item -LiteralPath $GenerationWrapper -Force -ErrorAction SilentlyContinue
   }
   [pscustomobject]@{ port = $Port; retired = $true; activeSessions = 0 } | ConvertTo-Json -Compress
+  } finally {
+    $GenerationLock.Dispose()
+  }
 }
 
 function Start-UpdateRestartWatcher {

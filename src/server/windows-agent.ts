@@ -774,6 +774,15 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const activeSessions = health.activeSessions ?? sessions.filter((session) => session.status !== "exited").length;
     if (!actualRelease) return !this.stopped;
     if (releaseCurrent && protocolCurrent && helpersCurrent) {
+      if (health.draining && !existing) {
+        const currentGeneration = await this.findCurrentGeneration(helperBundle);
+        if (currentGeneration === undefined) {
+          throw new Error(`Windows agent ${this.machine.id} is draining and cannot accept a new pane`);
+        }
+        this.reportPhase("starting-generation", `Routing to Windows agent generation ${currentGeneration}…`);
+        this.routeToAgentPort(currentGeneration);
+        return !this.stopped;
+      }
       // A staged helper bundle used to make an old base process look current.
       // If a current side-by-side generation already exists, keep established
       // panes pinned to the base but send new panes to the rollout generation.
@@ -879,7 +888,13 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
         const currentRelease = current.releaseVersion ?? current.version;
         const currentProtocol = current.protocolVersion ?? 0;
         const currentHelpers = current.helperBundleVersion === helperBundle.bundleVersion;
-        if (current.ok === true && currentRelease === expectedRelease && currentProtocol >= expectedProtocol && currentHelpers) {
+        if (
+          current.ok === true
+          && current.draining !== true
+          && currentRelease === expectedRelease
+          && currentProtocol >= expectedProtocol
+          && currentHelpers
+        ) {
           this.appendAndEmit(`\r\n[wmux] Windows agent updated to ${expectedDisplay}; opening pane.\r\n`);
           return true;
         }
@@ -937,6 +952,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     );
     return candidates.find(({ health }) =>
       health?.ok === true
+      && health.draining !== true
       && (health.releaseVersion ?? health.version) === expectedRelease
       && (health.protocolVersion ?? 0) >= expectedProtocol
       && health.helperBundleVersion === helperBundle.bundleVersion
@@ -984,6 +1000,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const currentRelease = current.releaseVersion ?? current.version;
     if (
       current.ok !== true
+      || current.draining === true
       || currentRelease !== expectedWindowsAgentReleaseVersion()
       || (current.protocolVersion ?? 0) < expectedWindowsAgentProtocolVersion()
       || current.helperBundleVersion !== helperBundle.bundleVersion

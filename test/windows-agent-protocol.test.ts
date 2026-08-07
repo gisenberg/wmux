@@ -220,6 +220,12 @@ test("rollout slot activation is owner-serialized and reuses an already-current 
   const reuse = service.indexOf("reused = $true", currentCheck);
   const stop = service.indexOf("Stop-ScheduledTask -TaskName $GenerationTaskName", reuse);
   const release = service.indexOf("$GenerationLock.Dispose()", stop);
+  const retire = service.indexOf("function Remove-AgentGeneration", release);
+  const retireLock = service.indexOf("$GenerationLock = Open-GenerationLock -Port $Port", retire);
+  const retireDrain = service.indexOf("$Drain = Invoke-RestMethod", retireLock);
+  const retireFence = service.indexOf("$FencedHealth = Invoke-RestMethod", retireLock);
+  const retireIdentity = service.indexOf("$FencedPid -ne $OriginalPid", retireFence);
+  const retireRelease = service.indexOf("$GenerationLock.Dispose()", retireIdentity);
   assert.ok(lockFunction > 0);
   assert.ok(exclusive > lockFunction);
   assert.ok(acquire > exclusive);
@@ -227,6 +233,14 @@ test("rollout slot activation is owner-serialized and reuses an already-current 
   assert.ok(reuse > currentCheck);
   assert.ok(stop > reuse);
   assert.ok(release > stop);
+  assert.ok(retire > release);
+  assert.ok(retireLock > retire);
+  assert.ok(retireDrain > retireLock);
+  assert.ok(retireFence > retireDrain);
+  assert.ok(retireIdentity > retireFence);
+  assert.ok(retireRelease > retireIdentity);
+  assert.match(service.slice(acquire, reuse), /ExistingHealth\.draining/);
+  assert.match(service, /DrainEstablished -and -not \$GenerationActivated/);
   assert.match(service, /--expected-release/);
   assert.match(service, /--expected-protocol/);
   assert.match(service, /--expected-helpers/);
