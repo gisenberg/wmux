@@ -244,6 +244,7 @@ export const probeWindowsAgent = async (
   const expectedHelpers = buildWindowsHelperBundle(machine).bundleVersion;
   const isCurrent = (result: Awaited<ReturnType<typeof probe>>) =>
     result.reachable
+    && result.health?.draining !== true
     && (result.health?.releaseVersion ?? result.health?.version) === expectedRelease
     && (result.health?.protocolVersion ?? 0) >= expectedProtocol
     && result.health?.helperBundleVersion === expectedHelpers;

@@ -153,6 +153,39 @@ test("Windows agent health probes fail within their timeout budget", async () =>
   await once(server, "close");
 });
 
+test("Windows agent health probes skip draining current generations", async () => {
+  const expected = {
+    ok: true,
+    releaseVersion: expectedWindowsAgentReleaseVersion(),
+    protocolVersion: expectedWindowsAgentProtocolVersion(),
+    helperBundleVersion: windowsHelperBundleVersion(),
+  };
+  const draining = http.createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ ...expected, draining: true }));
+  });
+  const available = http.createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ ...expected, draining: false }));
+  });
+  const { currentPort, sidePort } = await listenOnAdjacentPorts(draining, available);
+  try {
+    const result = await probeWindowsAgent({
+      id: "windows-draining-probe",
+      name: "Windows draining probe",
+      kind: "powershell-ssh",
+      host: "127.0.0.1",
+      sessionBackend: "agent",
+      agentUrl: `http://127.0.0.1:${currentPort}`,
+    });
+    assert.equal(result.reachable, true);
+    assert.equal(result.health?.draining, false);
+    assert.equal(result.url, `http://127.0.0.1:${sidePort}`);
+  } finally {
+    await Promise.all([closeServer(draining), closeServer(available)]);
+  }
+});
+
 test("session agent audit lists bounded valid pane identities only", async () => {
   let authorization = "";
   const server = http.createServer((request, response) => {
