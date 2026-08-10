@@ -2017,12 +2017,16 @@ const toolEnvironment = boundIdentity ? {
   HERDR_PANE_ID: boundIdentity.paneId,
 } : undefined
 const futureImportInsertionIndex = (code: string): number => {
-  const header = code.match(/^(?:(?:[ \t]*#.*)?\n)*(?:(?:[rRuU]{0,2})?(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')[ \t]*(?:#.*)?(?:\n|$))?/)
-  let cursor = header?.[0].length ?? 0
-  let lastFutureEnd = 0
+  const pythonStringLiteral = "(?:[rRuU]{0,2}(?:\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'))"
+  const leading = code.match(/^(?:[ \t]*(?:#.*)?\n)*/)?.[0] ?? ""
+  let cursor = leading.length
+  const docstring = code.slice(cursor).match(new RegExp("^(?:[ \\t]*\\([ \\t]*)*" + pythonStringLiteral + "(?:[ \\t]*" + pythonStringLiteral + ")*(?:[ \\t]*\\))*[ \\t]*(?:#.*)?(?:\\n|$)"))?.[0] ?? ""
+  cursor += docstring.length
+  let insertion = cursor
   while (cursor < code.length) {
-    const trivia = code.slice(cursor).match(/^(?:(?:[ \t]*#.*)?\n)*/)?.[0] ?? ""
+    const trivia = code.slice(cursor).match(/^(?:[ \t]*(?:#.*)?\n)*/)?.[0] ?? ""
     cursor += trivia.length
+    insertion = cursor
     if (!/^from[ \t]+__future__[ \t]+import\b/.test(code.slice(cursor))) break
     let depth = 0
     while (cursor < code.length) {
@@ -2033,9 +2037,9 @@ const futureImportInsertionIndex = (code: string): number => {
       cursor = end
       if (depth <= 0 && !/\\[ \t]*$/.test(syntax)) break
     }
-    lastFutureEnd = cursor
+    insertion = cursor
   }
-  return lastFutureEnd
+  return insertion
 }
 const bindIpythonEnvironment = (code: string): string => {
   if (!toolEnvironment) return code
