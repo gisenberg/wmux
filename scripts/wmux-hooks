@@ -2073,9 +2073,12 @@ export default function (pi: any) {
     const messages = Array.isArray(event.messages) ? event.messages : []
     const assistant = messages.findLast((message: any) => message?.role === "assistant")
     const stopReason = typeof assistant?.stopReason === "string" ? assistant.stopReason : ""
+    const errorMessage = typeof assistant?.errorMessage === "string" ? assistant.errorMessage.trim() : ""
     await send({
       hook_event_name: stopReason === "error" ? "Error" : stopReason === "aborted" ? "Interrupted" : "Stop",
-      last_assistant_message: messageText(assistant),
+      last_assistant_message: (stopReason === "error" || stopReason === "aborted") && errorMessage
+        ? errorMessage
+        : messageText(assistant),
     }, completed)
     if (activeTurn === completed) activeTurn = undefined
   })

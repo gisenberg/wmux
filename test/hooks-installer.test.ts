@@ -297,7 +297,7 @@ test("Prime Agent extension routes concurrent and reattached turns from client c
 
     await one.get("before_agent_start")?.({ prompt: "Fail visibly" }, context("error"));
     await one.get("agent_end")?.({ messages: [{
-      role: "assistant", content: [], stopReason: "error", errorMessage: "Provider failed.",
+      role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "error", errorMessage: "Provider failed.",
     }] }, context("error"));
     const errorEvents = captured.slice(-2);
     assert.deepEqual(errorEvents.map((event) => [event.paneId, event.status, event.message]), [
@@ -308,7 +308,7 @@ test("Prime Agent extension routes concurrent and reattached turns from client c
 
     await one.get("before_agent_start")?.({ prompt: "Abort visibly" }, context("aborted"));
     await one.get("agent_end")?.({ messages: [{
-      role: "assistant", content: [], stopReason: "aborted", errorMessage: "Cancelled by user.",
+      role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "aborted", errorMessage: "Cancelled by user.",
     }] }, context("aborted"));
     const abortedEvents = captured.slice(-2);
     assert.deepEqual(abortedEvents.map((event) => [event.paneId, event.status, event.message]), [
