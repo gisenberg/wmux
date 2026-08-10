@@ -266,6 +266,23 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     });
     assert.deepEqual(JSON.parse(pythonResult.stdout.trim()), ["ws_11111111", "tab_11111111", "pane_11111111"]);
 
+    const futureTool = { toolName: "ipython", input: { code: [
+      '"""module documentation"""',
+      "# Future imports must remain ahead of executable environment repair.",
+      "from __future__ import annotations",
+      "from __future__ import (",
+      "    generator_stop,",
+      ")",
+      "import json, os",
+      "print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID'), os.environ.get('WMUX_PANE_ID')]))",
+    ].join("\n") } };
+    await one.get("tool_call")?.(futureTool, context());
+    assert.ok(futureTool.input.code.indexOf("from __future__ import (") < futureTool.input.code.indexOf("__wmux_os.environ.update"));
+    const futureResult = await execFileAsync("python3", ["-c", futureTool.input.code], {
+      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
+    });
+    assert.deepEqual(JSON.parse(futureResult.stdout.trim()), ["ws_11111111", "tab_11111111", "pane_11111111"]);
+
     const bashTool = { toolName: "ipython", input: {
       code: `%%bash\nprintf '%s|%s|%s\n' "$WMUX_WORKSPACE_ID" "$WMUX_TAB_ID" "$WMUX_PANE_ID"`,
     } };
