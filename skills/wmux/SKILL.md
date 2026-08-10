@@ -47,6 +47,31 @@ The helper reads `WMUX_URL`/`~/.wmux/url` and prefers `WMUX_AUTOMATION_TOKEN`/`W
 Scoped credentials are header-only, never printed or placed in query parameters, and are never retried with the legacy token after rejection.
 If the saved URL still points at the old HTTP service, update `~/.wmux/url` or pass the current HTTPS URL explicitly.
 
+## Naming the Current Session
+
+Inside an existing wmux pane, use its bound environment as the source of truth. Do not inspect `/api/bootstrap`, search the API, or infer a "current" browser pane just to name the session.
+
+Automatic first-prompt naming needs no tool call. Let the lifecycle hook name a default workspace and tab once; use the commands below only when the user asks for a manual name or the task requires an explicit label.
+
+Name the current workspace:
+
+```bash
+wmux-title --manual \
+  --workspace "$WMUX_WORKSPACE_ID" \
+  --title "Descriptive workspace name"
+```
+
+Name the current tab separately:
+
+```bash
+wmuxctl tab-title \
+  --workspace "$WMUX_WORKSPACE_ID" \
+  --tab "$WMUX_TAB_ID" \
+  --tab-title "Descriptive tab name"
+```
+
+To name both, run both commands. `wmux-title --manual` changes the workspace only; passing `--tab` to it does not rename the tab. Never copy IDs from another pane. If the required `WMUX_WORKSPACE_ID`, `WMUX_TAB_ID`, and `WMUX_PANE_ID` identity is missing or malformed, fail closed and ask for a newly created wmux pane rather than guessing from global state. A successful manual title becomes user-owned and is not replaced by later automatic prompt naming.
+
 ## Operating Rules
 
 - Treat wmux as live infrastructure. Creating workspaces is usually safe; closing panes, tabs, or workspaces kills the matching session and must be intentional.
