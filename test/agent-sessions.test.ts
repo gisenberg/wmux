@@ -114,7 +114,15 @@ test("Prime Agent identity triples route status and naming to only their bound p
     });
     const snapshot = state.snapshot();
     assert.equal(snapshot.workspaces.find((workspace) => workspace.id === first.id)?.name, "First attached session");
+    assert.equal(
+      snapshot.workspaces.find((workspace) => workspace.id === first.id)?.tabs[0]?.title,
+      "First attached session",
+    );
     assert.equal(snapshot.workspaces.find((workspace) => workspace.id === second.id)?.name, "Second attached session");
+    assert.equal(
+      snapshot.workspaces.find((workspace) => workspace.id === second.id)?.tabs[0]?.title,
+      "Second attached session",
+    );
     assert.throws(() => agents.recordAgentEvent({
       workspaceId: second.id,
       tabId: secondTab.id,
@@ -131,7 +139,15 @@ test("Prime Agent identity triples route status and naming to only their bound p
       status: "running",
       title: "Mismatched tab identity",
     }), /pane does not belong to tab/);
-    assert.equal(state.snapshot().workspaces.find((workspace) => workspace.id === first.id)?.name, "First attached session");
+    const afterRejectedIdentity = state.snapshot();
+    assert.equal(
+      afterRejectedIdentity.workspaces.find((workspace) => workspace.id === first.id)?.name,
+      "First attached session",
+    );
+    assert.equal(
+      afterRejectedIdentity.workspaces.find((workspace) => workspace.id === first.id)?.tabs[0]?.title,
+      "First attached session",
+    );
   });
 });
 

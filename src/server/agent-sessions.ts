@@ -225,14 +225,17 @@ export class AgentSessionService {
       }
 
       let workspaceChanged = false;
-      if (
-        delegationDisposition.accepted
-        && title
-        && target.workspace.nameSource !== "user"
-      ) {
-        target.workspace.name = title;
-        target.workspace.nameSource = "auto";
-        workspaceChanged = true;
+      if (delegationDisposition.accepted && title) {
+        if (target.workspace.nameSource !== "user") {
+          target.workspace.name = title;
+          target.workspace.nameSource = "auto";
+          workspaceChanged = true;
+        }
+        if (target.tab.titleSource !== "user") {
+          target.tab.title = title;
+          target.tab.titleSource = "auto";
+          workspaceChanged = true;
+        }
       }
 
       const descriptor = summary || `${agent} ${status}`;
