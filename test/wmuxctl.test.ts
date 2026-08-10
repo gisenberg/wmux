@@ -86,6 +86,41 @@ test("wmuxctl rejects Codex-only delegation options for other runtimes", async (
   }
 });
 
+test("wmuxctl exposes Prime Agent as a first-class runtime with explicit safety semantics", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-prime-runtime-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "inspect Prime Agent integration");
+  try {
+    await assert.rejects(
+      cli("http://127.0.0.1:1", [
+        "delegate", "prime-agent", "local", "--directory", root,
+        "--prompt-file", promptPath,
+      ]),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /Prime Agent delegation cannot enforce read-only mode/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      cli("http://127.0.0.1:1", [
+        "delegate", "prime-agent", "local", "--directory", root,
+        "--prompt-file", promptPath, "--write-access", "--unattended",
+      ]),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.match(error.stderr ?? "", /Prime Agent does not expose a configurable approval mode/);
+        return true;
+      },
+    );
+    const help = await execFileAsync("python3", [wmuxctl, "tui", "--help"], {
+      cwd: repoRoot,
+      env: cliEnvironment(),
+    });
+    assert.match(help.stdout, /prime-agent/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("wmuxctl validates delegation wait overrides before dispatch", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-timeout-bounds-"));
   const promptPath = path.join(root, "prompt.md");
@@ -1900,7 +1935,7 @@ test("generic scripts/wmuxctl wrapper routes tui help to the canonical CLI", asy
   const wrapper = path.join(repoRoot, "scripts", "wmuxctl");
   const result = await execFileAsync(wrapper, ["tui", "--help"], { cwd: repoRoot });
   assert.match(result.stdout, /--accept-trust/);
-  assert.match(result.stdout, /\{opencode,codex,claude\}/);
+  assert.match(result.stdout, /\{opencode,codex,claude,prime-agent\}/);
 });
 
 const fastTuiGate = ["--gate-timeout", "0.05"];

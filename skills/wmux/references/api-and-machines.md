@@ -156,6 +156,7 @@ printf '%s' 'Review the change.' | wmuxctl tui claude linux-box --directory /srv
 cat /tmp/task.md | wmuxctl tui codex linux-box --directory /srv/project --prompt-file -
 wmuxctl tui opencode linux-box --directory /srv/project --no-prompt --accept-trust
 wmuxctl tui codex linux-box --directory /srv/project --no-prompt --gate-timeout 8
+wmuxctl tui prime-agent linux-box --directory /srv/project --no-prompt
 ```
 
 It creates a fresh workspace, revalidates the reachable machine immediately before launch, and never closes an interactive workspace.
@@ -169,6 +170,7 @@ On child exit, the supervisor emits `WMUX_AGENT_TUI_EXIT <runId> <code>` and qua
 
 Delegation controller waits use the mode defaults published by `/api/bootstrap`: 1,800 seconds for review and 7,200 seconds for change or deploy.
 `wmuxctl delegate` infers review without `--write-access` and change with it, or accepts an explicit `--mode review|change|deploy`.
+Prime Agent delegation uses `--print --mode json` with prompt stdin, requires explicit `--write-access` because it has no enforceable read-only sandbox, rejects `--unattended` because approval mode is not configurable, and does not support durable `--session` mode.
 Use `--timeout SECONDS` only for a bounded 0.1 through 14,400 second per-dispatch override.
 The generated OpenCode tool uses change mode by default and accepts deploy mode plus the same `timeout_seconds` bounds.
 A wait expiry or pane-output read failure after submission records a nonterminal waiting delegation and leaves the pane and workspace alive.

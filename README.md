@@ -526,7 +526,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
 | `wmux-hooks` | Install Claude, Codex, OpenCode, or Prime Agent lifecycle hooks |
 | `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
-| `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, or Claude TUI |
+| `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, Claude, or Prime Agent TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
 | `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
@@ -598,13 +598,15 @@ pane capability; a surviving OpenCode broker waits with capped backoff,
 re-registers without restarting OpenCode, and reconciles a complete native
 question snapshot before structured answering resumes. Its owner-only durable
 registration intent also converges repeated response loss or broker termination
-after server commit without replaying relay plaintext from the server.`wmux-hooks install prime-agent` writes an auto-loaded managed extension to
+after server commit without replaying relay plaintext from the server.
+
+`wmux-hooks install prime-agent` writes an auto-loaded managed extension to
 `~/.prime/agent/extensions/wmux.ts`. It reports prompt start and completion
 through the same wmux lifecycle feed, while preserving an unmanaged extension
 already present at that path. Prime Agent is also recognized by the mobile Chat
-surface and can be started there; it is not yet a `wmuxctl delegate` runtime.
+surface and by the `wmuxctl delegate` and `tui` runtime selectors.
 
-`wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
+`wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, Claude, and Prime Agent on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
 Adding `--session` selects a persistent Codex TUI on either POSIX or Windows instead of the one-shot JSON runner.
 The first session turn returns its `workspaceId`; pass that value back with `--session-workspace` so later turns reuse the exact agent process without depending on a title.
@@ -612,6 +614,7 @@ Every turn receives a new lifecycle run ID and returns the native assistant resp
 Session mode deliberately rejects `--structured-outcome` and `--close-on-success` because the conversation, not a JSON envelope or disposable process, is the durable abstraction.
 It accepts the prompt from a file or stdin, records lifecycle events, and returns a bounded result plus the direct workspace URL.
 POSIX delegation creates a fresh durable workspace and starts the staged `wmux-agent-run` transport.
+Prime Agent one-shot delegation uses its documented `--print --mode json` event stream, with the prompt on stdin and `--cwd` selecting the repository; interactive launches use the real terminal-attached TUI. The JSON protocol supplies results without scraping terminal prose. Prime Agent does not expose a sandbox or configurable approval mode, so one-shot delegation requires explicit `--write-access`, rejects `--unattended`, and does not support durable `--session` turns.
 When a non-empty `WMUX_PANE_ID` is available, a newly created agent workspace is nested beneath the invoking wmux workspace; this uses the explicit pane context rather than title heuristics. This applies to `delegate`, `tui`, and the shared `open`, `run`, and `ps` workspace commands. Reused workspaces retain their existing parent, while `--new` creates a nested child. Calls outside wmux, or with an empty variable, remain root workspaces. Parent validation errors are returned without falling back to a root workspace.
 Windows delegation starts a normal Codex TUI and submits the prompt through bracketed paste after the TUI is ready.
 A later Windows delegation with the same machine and exact title reuses that idle Codex session while assigning the new turn its own run ID.

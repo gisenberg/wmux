@@ -28,6 +28,7 @@ export const AGENT_RUNTIMES = [
   "opencode",
   "codex",
   "claude",
+  "prime-agent",
 ] as const;
 
 export type AgentRuntime = typeof AGENT_RUNTIMES[number];

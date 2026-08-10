@@ -37,7 +37,10 @@ export const parseJsonLines = (
 
 export const nestedText = (value: unknown): string => {
   if (typeof value === "string") return value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  if (Array.isArray(value)) {
+    return value.map(nestedText).filter(Boolean).join("\n");
+  }
+  if (!value || typeof value !== "object") return "";
   const record = value as Record<string, unknown>;
   for (const key of ["text", "message", "error", "data", "part"]) {
     const text = nestedText(record[key]);

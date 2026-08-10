@@ -19,6 +19,10 @@ import {
   opencodeTuiAdapter,
 } from "../src/server/agent-runtimes/opencode.js";
 import {
+  primeAgentHeadlessAdapter,
+  primeAgentTuiAdapter,
+} from "../src/server/agent-runtimes/prime-agent.js";
+import {
   createAdapterScanState,
 } from "../src/server/agent-runtimes/adapter.js";
 
@@ -47,6 +51,7 @@ test("runtime adapters keep prompts out of process arguments", () => {
     claudeHeadlessAdapter,
     codexHeadlessAdapter,
     opencodeHeadlessAdapter,
+    primeAgentHeadlessAdapter,
   ]) {
     const launch = adapter.buildLaunch({
       ...request,
@@ -100,6 +105,12 @@ test("headless adapters parse recorded structured output", () => {
     createAdapterScanState(),
   );
   assert.deepEqual(opencode, [{ type: "text", text: "OpenCode done" }]);
+
+  const prime = primeAgentHeadlessAdapter.classifyOutput(
+    '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Prime"},{"type":"text","text":"Agent done"}],"stopReason":"stop"}}\n',
+    createAdapterScanState(),
+  );
+  assert.deepEqual(prime, [{ type: "text", text: "Prime\nAgent done" }]);
 });
 
 test("Codex and OpenCode TUI quirks are adapter-owned", () => {
@@ -121,6 +132,34 @@ test("Codex and OpenCode TUI quirks are adapter-owned", () => {
     codexTuiAdapter
       .buildLaunch(request)
       .args.includes("check_for_update_on_startup=false"),
+  );
+});
+
+test("Prime Agent adapters use the documented native JSON and TUI interfaces", () => {
+  assert.deepEqual(
+    primeAgentHeadlessAdapter.buildLaunch({
+      ...request,
+      runtime: "prime-agent",
+      model: "openai-codex/gpt-5.4",
+    }),
+    {
+      file: "prime-agent",
+      args: [
+        "--print", "--mode", "json", "--cwd", request.directory,
+        "--model", "openai-codex/gpt-5.4",
+      ],
+      stdin: "prompt",
+    },
+  );
+  assert.deepEqual(
+    primeAgentTuiAdapter.buildLaunch({ ...request, runtime: "prime-agent" }),
+    {
+      file: "prime-agent",
+      args: [],
+      cwd: request.directory,
+      env: { WMUX_INTERACTIVE_TUI: "1" },
+      stdin: "none",
+    },
   );
 });
 

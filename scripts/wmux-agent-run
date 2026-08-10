@@ -138,7 +138,7 @@ def validate(request, tui=False):
     if not valid_id:
         raise ValueError("invalid runId")
     if runtime not in RUNTIMES:
-        raise ValueError("runtime must be opencode, codex, or claude")
+        raise ValueError("runtime must be opencode, codex, claude, or prime-agent")
     if not tui and (not isinstance(prompt, str) or not prompt or len(prompt.encode()) > MAX_PROMPT):
         raise ValueError("invalid prompt")
     if not isinstance(directory, str) or len(directory) > MAX_DIRECTORY or "\x00" in directory:
@@ -500,6 +500,17 @@ def command_for(request, runtime, directory, env, schema_path=None):
             argv.extend(["--output-schema", schema_path])
         argv.append("-")
         return argv, None
+    if runtime == "prime-agent":
+        if not write_access:
+            raise ValueError(
+                "Prime Agent delegation cannot enforce read-only mode; explicitly enable writeAccess"
+            )
+        if unattended:
+            raise ValueError("Prime Agent does not expose a configurable approval mode")
+        argv = [executable, "--print", "--mode", "json", "--cwd", directory]
+        if model:
+            argv.extend(["--model", model])
+        return argv, None
     argv = [executable, "-p", "--verbose", "--input-format", "text", "--output-format", "stream-json"]
     argv.extend(["--permission-mode", "acceptEdits" if write_access else "plan"])
     if unattended:
@@ -534,6 +545,8 @@ def prepare_windows_command(argv, platform=None, exists=None, which=None):
 def nested_text(value):
     if isinstance(value, str):
         return value
+    if isinstance(value, list):
+        return "\n".join(filter(None, (nested_text(item) for item in value)))
     if not isinstance(value, dict):
         return ""
     for key in ("text", "message", "error", "data", "part"):
@@ -557,6 +570,18 @@ def parse_event(runtime, parsed):
         if kind == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message":
             return nested_text(item), ""
         if kind in {"error", "turn.failed"}:
+            return "", nested_text(parsed)
+    elif runtime == "prime-agent":
+        message = parsed.get("message")
+        if kind == "message_end" and isinstance(message, dict) and message.get("role") == "assistant":
+            if message.get("stopReason") == "error":
+                return "", (
+                    nested_text(message.get("errorMessage"))
+                    or nested_text(message.get("content"))
+                    or "Prime Agent reported an error"
+                )
+            return nested_text(message.get("content")), ""
+        if kind in {"error", "extension_error"}:
             return "", nested_text(parsed)
     elif kind == "result":
         text = nested_text(parsed.get("result"))
