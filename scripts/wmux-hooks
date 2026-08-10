@@ -2064,7 +2064,10 @@ const scanPythonDocstring = (code: string, start: number): number | undefined =>
     sawString = true
     cursor = end
     if (parentheses > 0) cursor = skipPythonParenthesizedTrivia(code, cursor)
-    else cursor += code.slice(cursor).match(/^[ \t]*/)?.[0].length ?? 0
+    else {
+      const lineJoin = code.slice(cursor).match(/^[ \t]*\\\r?\n[ \t]*/)?.[0]
+      cursor += lineJoin?.length ?? (code.slice(cursor).match(/^[ \t]*/)?.[0].length ?? 0)
+    }
     if (scanPythonString(code, cursor) !== undefined) continue
     while (parentheses > 0 && code[cursor] === ")") {
       parentheses -= 1
@@ -2091,7 +2094,7 @@ const futureImportInsertionIndex = (code: string): number => {
       const syntax = code.slice(cursor, newline < 0 ? code.length : newline).split("#", 1)[0]
       depth += (syntax.match(/\(/g) ?? []).length - (syntax.match(/\)/g) ?? []).length
       cursor = end
-      if (depth <= 0 && !/\\[ \t]*$/.test(syntax)) break
+      if (depth <= 0 && !/\\[ \t\r]*$/.test(syntax)) break
     }
     cursor = skipPythonHeaderLines(code, cursor)
     insertion = cursor

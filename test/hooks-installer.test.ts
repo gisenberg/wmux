@@ -314,6 +314,31 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     });
     assert.deepEqual(JSON.parse(docstringResult.stdout.trim()), ["module documentation", "ws_11111111"]);
 
+    const joinedDocstringTool = { toolName: "ipython", input: { code: [
+      '"module " \\',
+      '"documentation"',
+      "from __future__ import annotations",
+      "import json, os",
+      "print(json.dumps([__doc__, os.environ.get('WMUX_WORKSPACE_ID')]))",
+    ].join("\n") } };
+    await one.get("tool_call")?.(joinedDocstringTool, context());
+    const joinedDocstringResult = await execFileAsync("python3", ["-c", joinedDocstringTool.input.code], {
+      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa" },
+    });
+    assert.deepEqual(JSON.parse(joinedDocstringResult.stdout.trim()), ["module documentation", "ws_11111111"]);
+
+    const crlfFutureTool = { toolName: "ipython", input: { code: [
+      "from __future__ import annotations, \\",
+      "    generator_stop",
+      "import json, os",
+      "print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID')]))",
+    ].join("\r\n") } };
+    await one.get("tool_call")?.(crlfFutureTool, context());
+    const crlfFutureResult = await execFileAsync("python3", ["-c", crlfFutureTool.input.code], {
+      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa" },
+    });
+    assert.deepEqual(JSON.parse(crlfFutureResult.stdout.trim()), ["ws_11111111", "tab_11111111"]);
+
     const bashTool = { toolName: "ipython", input: {
       code: `%%bash\nprintf '%s|%s|%s\n' "$WMUX_WORKSPACE_ID" "$WMUX_TAB_ID" "$WMUX_PANE_ID"`,
     } };
