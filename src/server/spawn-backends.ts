@@ -244,6 +244,14 @@ const SERVER_SCOPED_ENV_KEYS = new Set([
   "WMUX_AGENT_INPUT_CAPABILITY_PATH",
   "WMUX_AGENT_INPUT_CREDENTIAL_PATH",
   "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY",
+  // Prime Agent daemon compatibility identity is pane-scoped. Never inherit
+  // a server's Herdr integration or stale pane identity into new sessions;
+  // SessionManager adds only the exact W/T/P aliases for the target pane.
+  "HERDR_ENV",
+  "HERDR_SOCKET_PATH",
+  "HERDR_WORKSPACE_ID",
+  "HERDR_TAB_ID",
+  "HERDR_PANE_ID",
 ]);
 
 const buildSpawnEnv = (machine: MachineConfig, extraEnv: Record<string, string>): Record<string, string> => {

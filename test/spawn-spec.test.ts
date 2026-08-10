@@ -151,13 +151,34 @@ test("pane spawn environments do not inherit server-scoped credentials", () => {
     "WMUX_REGISTRATION_TOKEN",
     "WMUX_REGISTRATION_TOKEN_PATH",
     "WMUX_E2E_TOKEN",
+    "HERDR_ENV",
+    "HERDR_SOCKET_PATH",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_PANE_ID",
   ];
   const saved = new Map(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) process.env[key] = `server-only-${key}`;
-    const spec = buildSpawnSpec(machines[1].machine, 120, 40, { WMUX_HELPER_TOKEN: "pane-helper" });
+    const spec = buildSpawnSpec(machines[1].machine, 120, 40, {
+      WMUX_HELPER_TOKEN: "pane-helper",
+      HERDR_WORKSPACE_ID: "ws_11111111",
+      HERDR_TAB_ID: "tab_22222222",
+      HERDR_PANE_ID: "pane_33333333",
+    });
     assert.equal(spec.env.WMUX_HELPER_TOKEN, "pane-helper");
-    for (const key of keys.filter((key) => key !== "WMUX_HELPER_TOKEN")) {
+    assert.deepEqual({
+      workspaceId: spec.env.HERDR_WORKSPACE_ID,
+      tabId: spec.env.HERDR_TAB_ID,
+      paneId: spec.env.HERDR_PANE_ID,
+    }, {
+      workspaceId: "ws_11111111",
+      tabId: "tab_22222222",
+      paneId: "pane_33333333",
+    });
+    for (const key of keys.filter((key) => ![
+      "WMUX_HELPER_TOKEN", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID",
+    ].includes(key))) {
       assert.equal(spec.env[key], undefined, key);
     }
   } finally {
