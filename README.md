@@ -602,10 +602,11 @@ after server commit without replaying relay plaintext from the server.
 
 `wmux-hooks install prime-agent` writes an auto-loaded managed extension to
 `~/.prime/agent/extensions/wmux.ts`. While a top-level prompt is running, its
-sidebar row uses the animated working indicator; after the turn ends and Prime
-Agent is ready for another prompt, the row changes to the `?` input-attention
-indicator and uses the same lifecycle/notification feed as other agents. The
-extension requires Prime Agent's capability-gated current-turn client attachment
+sidebar row uses the animated working indicator; normal `agent_end` completion
+changes the row to Done. The gold `?` indicator is reserved for a positively
+identified explicit input request; the managed Prime Agent extension does not
+guess that ordinary idle completion requires input. The extension requires Prime
+Agent's capability-gated current-turn client attachment
 metadata and fails closed when the workspace/tab/pane identity is missing or
 ambiguous; it never falls back to a persistent daemon or worker environment.
 Roll out the compatible Prime Agent build before reinstalling the hook. The

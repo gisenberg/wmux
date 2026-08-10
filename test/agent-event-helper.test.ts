@@ -446,7 +446,7 @@ test("OpenCode hooks report running, waiting, failed, and completed lifecycles",
 });
 
 
-test("Prime Agent hooks report working and input-required lifecycles", async () => {
+test("Prime Agent hooks distinguish normal completion from explicit input attention", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-event-"));
   const captured: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {
@@ -464,7 +464,8 @@ test("Prime Agent hooks report working and input-required lifecycles", async () 
     assert.ok(address && typeof address === "object");
     for (const input of [
       { hook_event_name: "UserPromptSubmit", prompt: "add Prime Agent support" },
-      { hook_event_name: "InputRequired", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
+      { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
+      { hook_event_name: "InputRequired", prompt: "approve deployment", last_assistant_message: "Approval required." },
     ]) {
       await runAgentEvent([
         "--url", `http://127.0.0.1:${address.port}`, "--agent", "prime-agent", "--prime-agent-hook", "--pane", "pane-1",
@@ -486,9 +487,16 @@ test("Prime Agent hooks report working and input-required lifecycles", async () 
       },
       {
         agent: "prime-agent",
-        status: "waiting",
+        status: "completed",
         summary: "Prime Agent done.",
         message: "Prime Agent done.",
+        attentionReason: undefined,
+      },
+      {
+        agent: "prime-agent",
+        status: "waiting",
+        summary: "Approval required.",
+        message: "Approval required.",
         attentionReason: "input",
       },
     ]);

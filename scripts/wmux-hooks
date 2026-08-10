@@ -2047,9 +2047,10 @@ export default function (pi: any) {
     const messages = Array.isArray(event.messages) ? event.messages : []
     const assistant = messages.findLast((message: any) => message?.role === "assistant")
     await send({
-      hook_event_name: "InputRequired",
+      hook_event_name: "Stop",
       last_assistant_message: messageText(assistant),
     }, identity)
+    turnIdentity = undefined
   })
 }
 `;
