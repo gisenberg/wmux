@@ -33,10 +33,12 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py output pane_abc123 --tail-chars 
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py wait pane_abc123 --pattern "ready|task_complete" --timeout 30
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py run windows-box --title "Windows smoke" --line "wmux-run -- pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion'"
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py delegate codex linux-box --directory /srv/project --prompt-file /tmp/task.md --title "Review auth"
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py delegate prime-agent linux-box --directory /srv/project --prompt-file /tmp/task.md --write-access --unattended
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui codex linux-box --directory /srv/project --prompt-file /tmp/task.md
 printf '%s' 'Review auth.' | python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui claude linux-box --directory /srv/project
 cat /tmp/task.md | python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui codex linux-box --directory /srv/project --prompt-file -
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui opencode linux-box --directory /srv/project --no-prompt --accept-trust
+python3 ~/.codex/skills/wmux/scripts/wmuxctl.py tui prime-agent linux-box --directory /srv/project --prompt-file /tmp/task.md
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py ps windows-box --title "Runner repair" --script "Get-ScheduledTask -TaskName build-runner" --wait
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py finish --machine windows-box --title "Runner repair" --status completed --summary "Runner repaired" --close
 python3 ~/.codex/skills/wmux/scripts/wmuxctl.py cleanup --workspace ws_failed --workspace ws_superseded
@@ -64,7 +66,7 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
   Use `--retain-workspace` only for deliberately long-lived `open`, `run`, or `ps` workspaces.
   Interactive `tui` and durable `delegate --session` workspaces send an explicit retain policy.
 - Treat visibility as a contract. If the user asked for visible work, start substantive and long-lived processes in the wmux pane, not through direct SSH. Direct SSH remains appropriate for quick diagnostics only.
-- Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, or Claude task, or add `--session` for a durable Codex conversation on POSIX or Windows.
+- Prefer `wmuxctl delegate` for a visible one-shot OpenCode, Codex, Claude, or Prime Agent task, or add `--session` for a durable Codex conversation on POSIX or Windows.
   Pass the prompt through `--prompt-file` or stdin, never as a shell argument.
   One-shot POSIX delegation creates a fresh agent-owned workspace and waits for the staged runner.
   Session mode starts a normal Codex TUI and returns its workspace ID; pass that ID with `--session-workspace` for every later turn.
@@ -77,8 +79,8 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
   A watcher timeout or post-submit pane-read failure returns `state: waiting` with `failureKind: observer`, retains the workspace and run ID, and does not send Ctrl-C.
   Inspect the retained workspace or `GET /api/delegations/:runId` before retrying destructive work.
   Use Ctrl-C only for explicit cancellation.
-- Use `wmuxctl tui` for an interactive POSIX OpenCode, Codex, or Claude session. It starts the real terminal-attached TUI through the staged foreground supervisor, keeps the workspace open, and does not create manual lifecycle events. A TUI invoked inside wmux nests under the invoking pane; outside wmux it creates a root workspace. Use `--prompt-file PATH`, `--prompt-file -`, piped stdin, or deliberate `--no-prompt`; prompts are bracketed-pasted only after the launch ACK, fresh child output, and the bounded `--gate-timeout` observation (five seconds by default). Repository trust fails closed unless the reviewed invocation adds `--accept-trust`, which answers only a recognized numbered `1` yes/trust/continue choice using separate text and Enter requests, then repeats the observation. Login, credentials, generic onboarding, and unknown first-run screens are never automated. If the runtime exits early, input is quarantined; manual Ctrl-C returns to the shell. `localUrl` uses the caller's API base; `url` prefers the configured `publicUrl`, which otherwise falls back to local.
-- Keep write access and unattended approval separate. Omit `--write-access` for Codex read-only or Claude plan mode; add it only when repository edits are intended. OpenCode has no enforceable read-only adapter and therefore requires explicit `--write-access`. Add `--unattended` only when the user authorized bypassing approval prompts.
+- Use `wmuxctl tui` for an interactive POSIX OpenCode, Codex, Claude, or Prime Agent session. It starts the real terminal-attached TUI through the staged foreground supervisor, keeps the workspace open, and does not create manual lifecycle events. A TUI invoked inside wmux nests under the invoking pane; outside wmux it creates a root workspace. Use `--prompt-file PATH`, `--prompt-file -`, piped stdin, or deliberate `--no-prompt`; prompts are bracketed-pasted only after the launch ACK, fresh child output, and the bounded `--gate-timeout` observation (five seconds by default). Repository trust fails closed unless the reviewed invocation adds `--accept-trust`, which answers only a recognized numbered `1` yes/trust/continue choice using separate text and Enter requests, then repeats the observation. Login, credentials, generic onboarding, and unknown first-run screens are never automated. If the runtime exits early, input is quarantined; manual Ctrl-C returns to the shell. `localUrl` uses the caller's API base; `url` prefers the configured `publicUrl`, which otherwise falls back to local.
+- Keep write access and unattended execution separate. Omit `--write-access` for Codex read-only or Claude plan mode; add it only when repository edits are intended. OpenCode and Prime Agent have no enforceable read-only adapter and therefore require explicit `--write-access`. Prime Agent also requires explicit `--unattended` because it has no approval prompts; this acknowledgement does not enable its unrelated `--autonomous` continuation mode.
 - One-shot delegations close after a successful result by default.
   Use `--retain-workspace` only when the user needs the successful terminal to remain available.
   Durable `--session` workspaces always remain open.
@@ -129,13 +131,13 @@ python3 ~/.codex/skills/wmux/scripts/wmuxctl.py delegate codex MACHINE \
 
 On Windows, use a drive-absolute or home-relative directory and the Codex runtime.
 Record the returned `workspaceId` and pass it as `--session-workspace` for every follow-up in the same workstream.
-Replace `codex` with `claude` as requested on POSIX targets.
-Add `--write-access` for edits and `--unattended` only with explicit authorization.
+Replace `codex` with `claude`, `opencode`, or `prime-agent` as requested on POSIX targets.
+Add `--write-access` for edits and `--unattended` only with explicit authorization; Prime Agent one-shots require both flags.
 Use `--sandbox danger-full-access` only when the operator explicitly requests no Codex sandboxing; it does not enable unattended approval.
 Omit `--session` and add `--structured-outcome` only for an atomic Codex task whose caller requires a machine-shaped blocked/completed result.
-OpenCode additionally requires `--write-access` because its adapter cannot enforce read-only execution.
+OpenCode additionally requires `--write-access` because its adapter cannot enforce read-only execution. Prime Agent requires both full-access acknowledgements, runs JSON mode with `--no-session`, and never maps `--unattended` to `--autonomous`.
 
-For an interactive Codex or Claude TUI:
+For an interactive OpenCode, Codex, Claude, or Prime Agent TUI:
 
 1. Create or reuse one clearly named agent tab and record its exact pane id.
 2. Preflight authentication and every required MCP server by actually starting or calling it. A config/listing command only proves registration, not readiness; missing environment variables can still make startup fail.

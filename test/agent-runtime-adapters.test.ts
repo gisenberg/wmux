@@ -19,6 +19,10 @@ import {
   opencodeTuiAdapter,
 } from "../src/server/agent-runtimes/opencode.js";
 import {
+  primeAgentHeadlessAdapter,
+  primeAgentTuiAdapter,
+} from "../src/server/agent-runtimes/prime-agent.js";
+import {
   createAdapterScanState,
 } from "../src/server/agent-runtimes/adapter.js";
 
@@ -47,10 +51,12 @@ test("runtime adapters keep prompts out of process arguments", () => {
     claudeHeadlessAdapter,
     codexHeadlessAdapter,
     opencodeHeadlessAdapter,
+    primeAgentHeadlessAdapter,
   ]) {
     const launch = adapter.buildLaunch({
       ...request,
       runtime: adapter.runtime,
+      ...(adapter.runtime === "prime-agent" ? { unattended: true } : {}),
     });
     assert.equal(launch.stdin, "prompt");
     assert.equal(launch.args.some((arg) => arg.includes(request.prompt)), false);
@@ -100,6 +106,24 @@ test("headless adapters parse recorded structured output", () => {
     createAdapterScanState(),
   );
   assert.deepEqual(opencode, [{ type: "text", text: "OpenCode done" }]);
+
+  const primeAgent = primeAgentHeadlessAdapter.classifyOutput(
+    '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Prime Agent done"}],"stopReason":"stop"}}\n',
+    createAdapterScanState(),
+  );
+  assert.deepEqual(primeAgent, [{ type: "text", text: "Prime Agent done" }]);
+
+  const primeAgentError = primeAgentHeadlessAdapter.classifyOutput(
+    '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"provider failed"}}\n',
+    createAdapterScanState(),
+  );
+  assert.deepEqual(primeAgentError, [{ type: "error", message: "provider failed" }]);
+
+  const primeAgentAborted = primeAgentHeadlessAdapter.classifyOutput(
+    '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"aborted"}}\n',
+    createAdapterScanState(),
+  );
+  assert.deepEqual(primeAgentAborted, [{ type: "error", message: "Prime Agent failed" }]);
 });
 
 test("Codex and OpenCode TUI quirks are adapter-owned", () => {
@@ -121,6 +145,52 @@ test("Codex and OpenCode TUI quirks are adapter-owned", () => {
     codexTuiAdapter
       .buildLaunch(request)
       .args.includes("check_for_update_on_startup=false"),
+  );
+  assert.deepEqual(
+    primeAgentTuiAdapter.buildLaunch({
+      ...request,
+      runtime: "prime-agent",
+      model: "openai/gpt-5",
+    }).args,
+    ["--no-session", "--model", "openai/gpt-5"],
+  );
+});
+
+test("Prime Agent headless delegation requires explicit full-access acknowledgements", () => {
+  assert.throws(
+    () => primeAgentHeadlessAdapter.buildLaunch({
+      ...request,
+      runtime: "prime-agent",
+      writeAccess: false,
+      unattended: true,
+    }),
+    /cannot enforce read-only mode/,
+  );
+  assert.throws(
+    () => primeAgentHeadlessAdapter.buildLaunch({
+      ...request,
+      runtime: "prime-agent",
+      writeAccess: true,
+      unattended: false,
+    }),
+    /has no approval prompts/,
+  );
+  assert.deepEqual(
+    primeAgentHeadlessAdapter.buildLaunch({
+      ...request,
+      runtime: "prime-agent",
+      writeAccess: true,
+      unattended: true,
+      model: "provider/model",
+    }),
+    {
+      file: "prime-agent",
+      args: [
+        "--print", "--mode", "json", "--no-session", "--cwd", "/work/repository",
+        "--model", "provider/model",
+      ],
+      stdin: "prompt",
+    },
   );
 });
 

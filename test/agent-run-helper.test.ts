@@ -122,7 +122,7 @@ const waitFor = async (predicate: () => boolean, message: string, timeout = 3000
   }
 };
 
-posixTest("wmux-agent-run adapts OpenCode, Codex, and Claude without putting prompts in argv", () => {
+posixTest("wmux-agent-run adapts OpenCode, Codex, Claude, and Prime Agent without putting prompts in argv", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-run-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
@@ -140,10 +140,12 @@ if runtime == 'opencode':
 elif runtime == 'codex':
     print(json.dumps({'type':'debug','echo':prompt}))
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'Codex done'}}))
+elif runtime == 'prime-agent':
+    print(json.dumps({'type':'message_end','message':{'role':'assistant','content':[{'type':'text','text':'Prime Agent done'}],'stopReason':'stop'}}))
 else:
     print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':'Claude done'}))
 `;
-  for (const runtime of ["opencode", "codex", "claude"]) {
+  for (const runtime of ["opencode", "codex", "claude", "prime-agent"]) {
     const executable = path.join(bin, runtime);
     fs.writeFileSync(executable, fakeSource);
     fs.chmodSync(executable, 0o755);
@@ -167,6 +169,12 @@ else:
       request: { writeAccess: true, unattended: true, model: "claude-model" },
       argv: ["-p", "--verbose", "--input-format", "text", "--output-format", "stream-json", "--permission-mode", "acceptEdits", "--dangerously-skip-permissions", "--model", "claude-model"],
       result: "Claude done",
+    },
+    {
+      runtime: "prime-agent",
+      request: { writeAccess: true, unattended: true, model: "prime-model" },
+      argv: ["--print", "--mode", "json", "--no-session", "--cwd", dir, "--model", "prime-model"],
+      result: "Prime Agent done",
     },
   ];
   try {
@@ -221,6 +229,65 @@ posixTest("wmux-agent-run requires explicit write access for OpenCode delegation
       ok: false,
       error: "OpenCode delegation cannot enforce read-only mode; explicitly enable writeAccess",
     });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+posixTest("wmux-agent-run treats an aborted Prime Agent message as failure", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-run-prime-aborted-"));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const executable = path.join(bin, "prime-agent");
+  fs.writeFileSync(executable, `#!/usr/bin/env python3
+import json
+print(json.dumps({'type':'message_end','message':{'role':'assistant','content':[],'stopReason':'aborted','errorMessage':'cancelled upstream'}}))
+`);
+  fs.chmodSync(executable, 0o755);
+  try {
+    const request = {
+      runId: "run-prime-aborted", runtime: "prime-agent", prompt: "inspect", directory: dir,
+      writeAccess: true, unattended: true,
+    };
+    const completed = spawnSync(helper, [], {
+      input: `${Buffer.from(JSON.stringify(request)).toString("base64")}\n`,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    assert.equal(completed.status, 0, completed.stderr);
+    assert.deepEqual(decodeResult(completed.stdout), {
+      runId: "run-prime-aborted",
+      runtime: "prime-agent",
+      ok: false,
+      result: "",
+      error: "cancelled upstream",
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+posixTest("wmux-agent-run requires both Prime Agent full-access acknowledgements", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-run-prime-safety-"));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const executable = path.join(bin, "prime-agent");
+  fs.writeFileSync(executable, "#!/bin/sh\nexit 99\n");
+  fs.chmodSync(executable, 0o755);
+  try {
+    const base = { runId: "run-prime-safety", runtime: "prime-agent", prompt: "inspect", directory: dir };
+    for (const [extra, message] of [
+      [{ unattended: true }, "cannot enforce read-only mode"],
+      [{ writeAccess: true }, "has no approval prompts"],
+    ] as const) {
+      const completed = spawnSync(helper, [], {
+        input: `${Buffer.from(JSON.stringify({ ...base, ...extra })).toString("base64")}\n`,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+      assert.equal(completed.status, 2);
+      assert.match(String(decodeResult(completed.stdout).error), new RegExp(message));
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -369,7 +436,7 @@ posixTest("wmux-agent-run tui preserves runtime-specific argv and exact cwd", ()
 import json,os,sys
 json.dump({'argv':sys.argv[1:],'cwd':os.getcwd()},open(os.environ['CAPTURE_PATH'],'w'))
 `;
-  for (const runtime of ["opencode", "codex", "claude"]) {
+  for (const runtime of ["opencode", "codex", "claude", "prime-agent"]) {
     const executable = path.join(bin, runtime);
     fs.writeFileSync(executable, fake);
     fs.chmodSync(executable, 0o755);
@@ -378,6 +445,7 @@ json.dump({'argv':sys.argv[1:],'cwd':os.getcwd()},open(os.environ['CAPTURE_PATH'
     ["opencode", { agent: "review", model: "model-o" }, ["--agent", "review", "--model", "model-o"]],
     ["codex", { model: "model-c" }, ["--model", "model-c"]],
     ["claude", {}, []],
+    ["prime-agent", { model: "model-p" }, ["--no-session", "--model", "model-p"]],
   ] as const;
   try {
     for (const [runtime, extra, argv] of cases) {

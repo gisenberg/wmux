@@ -526,7 +526,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-copy` / `wclip` | Hand text to the browser clipboard |
 | `wmux-hooks` | Install Claude, Codex, OpenCode, or Prime Agent lifecycle hooks |
 | `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
-| `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, or Claude TUI |
+| `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, Claude, or Prime Agent TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
 | `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
@@ -598,13 +598,15 @@ pane capability; a surviving OpenCode broker waits with capped backoff,
 re-registers without restarting OpenCode, and reconciles a complete native
 question snapshot before structured answering resumes. Its owner-only durable
 registration intent also converges repeated response loss or broker termination
-after server commit without replaying relay plaintext from the server.`wmux-hooks install prime-agent` writes an auto-loaded managed extension to
+after server commit without replaying relay plaintext from the server.
+
+`wmux-hooks install prime-agent` writes an auto-loaded managed extension to
 `~/.prime/agent/extensions/wmux.ts`. It reports prompt start and completion
 through the same wmux lifecycle feed, while preserving an unmanaged extension
 already present at that path. Prime Agent is also recognized by the mobile Chat
-surface and can be started there; it is not yet a `wmuxctl delegate` runtime.
+surface and can be started there.
 
-`wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, and Claude on POSIX local/SSH targets.
+`wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, Claude, and Prime Agent on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
 Adding `--session` selects a persistent Codex TUI on either POSIX or Windows instead of the one-shot JSON runner.
 The first session turn returns its `workspaceId`; pass that value back with `--session-workspace` so later turns reuse the exact agent process without depending on a title.
@@ -648,6 +650,9 @@ wmuxctl delegate codex linux-box --directory /srv/project \
 wmuxctl delegate claude linux-box --directory /srv/project \
   --prompt-file /tmp/fix.md --title "Fix authentication" --write-access \
   --mode change
+wmuxctl delegate prime-agent linux-box --directory /srv/project \
+  --prompt-file /tmp/prime-task.md --title "Implement authentication" \
+  --write-access --unattended --mode change
 wmuxctl delegate codex windows-box --directory 'T:\git\example\project' \
   --prompt-file /tmp/import.md --title "Import catalog" --write-access \
   --sandbox danger-full-access --structured-outcome --mode deploy
@@ -655,8 +660,9 @@ wmuxctl delegate codex windows-box --directory 'T:\git\example\project' \
 
 Codex defaults to its read-only sandbox and Claude defaults to plan permission mode.
 `--write-access` opts into Codex workspace writes or Claude accepted edits; it does not bypass approval prompts.
-OpenCode cannot enforce a comparable read-only mode, so its delegation requires explicit `--write-access`.
-`--unattended` separately opts into the runtime's non-interactive approval bypass and should only be used for work explicitly authorized on a trusted target.
+OpenCode and Prime Agent cannot enforce a comparable read-only mode, so their delegation requires explicit `--write-access`.
+`--unattended` separately opts into non-interactive execution and should only be used for work explicitly authorized on a trusted target.
+Prime Agent has no approval prompt or approval-bypass CLI setting, so its one-shot runtime requires both acknowledgements, does not map `--unattended` to `--autonomous`, and runs `--mode json --no-session` with its prompt on stdin.
 For OpenCode, the staged runner probes the installed CLI and uses its advertised `--auto` or `--dangerously-skip-permissions` option, failing closed if neither is available.
 Prompts are sent through pane stdin rather than shell arguments and are redacted from returned terminal output.
 `--sandbox danger-full-access` disables Codex filesystem and network sandboxing without enabling the separate unattended approval option.
@@ -678,7 +684,7 @@ The generated plugin defaults both `wmux_delegate` and `wmux_close` permissions 
 Explicit cancellation sends Ctrl-C, but a disconnected or wedged remote pane may require manual recovery.
 Restart OpenCode after installing or updating the plugin so it loads the generated tools.
 
-`wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane, with its working directory set by the staged helper. When invoked inside a wmux pane, the new workspace nests beneath that pane; outside wmux it remains a root workspace.
+`wmuxctl tui` starts the real interactive CLI in a fresh POSIX local/SSH pane, with its working directory set by the staged helper. When invoked inside a wmux pane, the new workspace nests beneath that pane; outside wmux it remains a root workspace. Prime Agent launches with `--no-session` so the supervised pane, rather than its background daemon, owns the visible process.
 It leaves every workspace open and intentionally creates no manual lifecycle event (installed hooks own interactive turns).
 Prompts are read only from a UTF-8 file or stdin; they never appear in argv or the launch JSON.
 Prompt text may contain ordinary Unicode, tabs, and LF newlines; CRLF is normalized to LF, while other C0/C1 controls, including ESC, bare CR, and DEL, are rejected before workspace creation.
@@ -690,6 +696,7 @@ Copy-paste examples:
 wmuxctl tui opencode linux-box --directory /srv/project --no-prompt
 wmuxctl tui codex linux-box --directory /srv/project --prompt-file /tmp/task.md
 printf '%s' 'Review the current change.' | wmuxctl tui claude linux-box --directory /srv/project
+wmuxctl tui prime-agent linux-box --directory /srv/project --prompt-file /tmp/task.md
 cat /tmp/task.md | wmuxctl tui codex linux-box --directory /srv/project --prompt-file -
 wmuxctl tui opencode linux-box --directory /srv/project --no-prompt --accept-trust
 wmuxctl tui codex linux-box --directory /srv/project --no-prompt --gate-timeout 8
