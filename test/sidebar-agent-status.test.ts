@@ -14,4 +14,8 @@ test("sidebar agent indicators distinguish active work from user attention", () 
     sidebarAgentStatusPresentation("waiting", true, 3),
     { label: "waiting", marker: "?" },
   );
+  assert.deepEqual(
+    sidebarAgentStatusPresentation("completed", true, 3),
+    { label: "done", marker: "✓" },
+  );
 });
