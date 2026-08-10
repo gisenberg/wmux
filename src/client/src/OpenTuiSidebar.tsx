@@ -16,6 +16,10 @@ import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { compactMiddlePath } from "./path-display";
 import { workspaceTabPath } from "./route-state";
 import { formatSessionReference } from "./session-reference";
+import {
+  SIDEBAR_AGENT_RUNNING_FRAMES,
+  sidebarAgentStatusPresentation,
+} from "./sidebar-agent-status";
 import type { MachineVersionStatus, Workspace, WorkspaceReorderPosition } from "./types";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 import { WorkspaceMoveDialog } from "./WorkspaceMoveDialog";
@@ -115,7 +119,6 @@ interface HitZone {
   title: string;
 }
 
-const runningFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const statusBullet = "●";
 
 interface SidebarRenderModel {
@@ -234,7 +237,9 @@ export function OpenTuiSidebar({
 
   useEffect(() => {
     if (!hasRunningWorkspace) return;
-    const timer = window.setInterval(() => setAnimationTick((value) => (value + 1) % runningFrames.length), 280);
+    const timer = window.setInterval(() => setAnimationTick(
+      (value) => (value + 1) % SIDEBAR_AGENT_RUNNING_FRAMES.length,
+    ), 280);
     return () => window.clearInterval(timer);
   }, [hasRunningWorkspace]);
 
@@ -610,9 +615,18 @@ export function OpenTuiSidebar({
                 aria-level={workspace.depth + 1}
                 aria-current={workspace.active ? "page" : undefined}
                 aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
-                aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
+                aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentName && workspace.agentStatus ? `, ${workspace.agentName} ${sidebarAgentStatusPresentation(workspace.agentStatus, workspace.reachable, animationTick).label}` : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
                 data-agent-created={workspace.agentCreated ? "true" : undefined}
                 data-agent-machine={workspace.machineId}
+                data-agent-name={workspace.agentName}
+                data-agent-status={workspace.agentStatus}
+                data-agent-marker={workspace.agentStatus
+                  ? sidebarAgentStatusPresentation(
+                    workspace.agentStatus,
+                    workspace.reachable,
+                    animationTick,
+                  ).marker
+                  : undefined}
                 data-favorite={workspace.favorite ? "true" : "false"}
                 data-presentation-machine-id={workspace.machineId}
                 draggable={!pointerReorderDisabled && !movesDisabled}
@@ -1014,8 +1028,13 @@ const drawSidebarGrid = (
       }
 
       for (const workspace of machineWorkspaces) {
+        const statusPresentation = sidebarAgentStatusPresentation(
+          workspace.agentStatus,
+          workspace.reachable,
+          model.animationTick,
+        );
         const statusContext = [
-          workspace.agentStatus ? sidebarAgentStatusLabel[workspace.agentStatus] : "",
+          workspace.agentStatus ? statusPresentation.label : "",
           workspace.agentName,
         ].filter(Boolean);
         const statusContextLine = [
@@ -1029,17 +1048,7 @@ const drawSidebarGrid = (
         const statusColor = workspace.agentStatus
           ? agentStatusColors[workspace.agentStatus]
           : reachColor(workspace.reachable);
-        const statusMarker = workspace.agentStatus === "running"
-          ? runningFrames[model.animationTick]
-          : workspace.agentStatus === "waiting"
-            ? "?"
-            : workspace.agentStatus === "completed"
-              ? "✓"
-              : workspace.agentStatus === "failed"
-                ? "×"
-                : workspace.reachable
-                  ? statusBullet
-                  : "○";
+        const statusMarker = statusPresentation.marker;
         const inactiveBackground = workspace.agentStatus
           ? inactiveAgentBackgrounds[workspace.agentStatus]
           : rgba.black;
@@ -1156,14 +1165,6 @@ const agentStatusAbbreviation: Record<WorkspaceAgentStatus, string> = {
   completed: "C",
   failed: "F",
   updated: "U",
-};
-
-const sidebarAgentStatusLabel: Record<NonNullable<OpenTuiSidebarWorkspace["agentStatus"]>, string> = {
-  running: "working",
-  waiting: "waiting",
-  completed: "done",
-  failed: "failed",
-  updated: "updated",
 };
 
 const sameSemanticRows = (left: SemanticWorkspaceRow[], right: SemanticWorkspaceRow[]): boolean =>

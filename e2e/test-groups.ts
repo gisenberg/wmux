@@ -20,6 +20,7 @@ export const browserOnlyE2eSpecs = [
   "canvas-chrome.spec.ts",
   "direct-links.spec.ts",
   "machine-management.spec.ts",
+  "prime-agent-sidebar.spec.ts",
   "smoke.spec.ts",
   "terminal-graphics.spec.ts",
   "workspace-navigation.spec.ts",
