@@ -446,7 +446,7 @@ test("OpenCode hooks report running, waiting, failed, and completed lifecycles",
 });
 
 
-test("Prime Agent hooks report running and completed lifecycles", async () => {
+test("Prime Agent hooks report working and input-required lifecycles", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-event-"));
   const captured: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {
@@ -464,7 +464,7 @@ test("Prime Agent hooks report running and completed lifecycles", async () => {
     assert.ok(address && typeof address === "object");
     for (const input of [
       { hook_event_name: "UserPromptSubmit", prompt: "add Prime Agent support" },
-      { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
+      { hook_event_name: "InputRequired", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
     ]) {
       await runAgentEvent([
         "--url", `http://127.0.0.1:${address.port}`, "--agent", "prime-agent", "--prime-agent-hook", "--pane", "pane-1",
@@ -474,9 +474,23 @@ test("Prime Agent hooks report running and completed lifecycles", async () => {
         HOOK_INPUT: JSON.stringify(input),
       }));
     }
-    assert.deepEqual(captured.map(({ agent, status, summary, message }) => ({ agent, status, summary, message })), [
-      { agent: "prime-agent", status: "running", summary: "prime-agent running", message: undefined },
-      { agent: "prime-agent", status: "completed", summary: "Prime Agent done.", message: "Prime Agent done." },
+    assert.deepEqual(captured.map(({ agent, status, summary, message, attentionReason }) => ({
+      agent, status, summary, message, attentionReason,
+    })), [
+      {
+        agent: "prime-agent",
+        status: "running",
+        summary: "prime-agent running",
+        message: undefined,
+        attentionReason: undefined,
+      },
+      {
+        agent: "prime-agent",
+        status: "waiting",
+        summary: "Prime Agent done.",
+        message: "Prime Agent done.",
+        attentionReason: "input",
+      },
     ]);
     assert.equal(captured[0]?.title, "add Prime Agent support");
   } finally {

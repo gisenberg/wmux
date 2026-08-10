@@ -179,6 +179,51 @@ test("attention transitions are explicit, prioritized, and notified once", () =>
   });
 });
 
+test("Prime Agent sessions transition from active work to input attention and resume", () => {
+  withAgentSessions((state, agents) => {
+    const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
+    agents.recordAgentEvent({
+      paneId,
+      runId: "prime-visible-session",
+      agent: "prime-agent",
+      status: "running",
+      summary: "Prime Agent is working",
+    });
+
+    const waiting = agents.recordAgentEvent({
+      paneId,
+      runId: "prime-visible-session",
+      agent: "prime-agent",
+      status: "waiting",
+      summary: "Prime Agent is waiting for input",
+      attentionReason: "input",
+    });
+    assert.equal(waiting.notification?.subtitle, "input required");
+    assert.deepEqual(
+      agents.delegationForRun("prime-visible-session") && {
+        state: agents.delegationForRun("prime-visible-session")?.state,
+        attentionReason: agents.delegationForRun("prime-visible-session")?.attentionReason,
+      },
+      { state: "waiting", attentionReason: "input" },
+    );
+
+    agents.recordAgentEvent({
+      paneId,
+      runId: "prime-visible-session",
+      agent: "prime-agent",
+      status: "running",
+      summary: "Prime Agent resumed",
+    });
+    assert.deepEqual(
+      agents.delegationForRun("prime-visible-session") && {
+        state: agents.delegationForRun("prime-visible-session")?.state,
+        attentionReason: agents.delegationForRun("prime-visible-session")?.attentionReason,
+      },
+      { state: "running", attentionReason: undefined },
+    );
+  });
+});
+
 test("state-age budgets notify once with the transition timeline entry", () => {
   withAgentSessions((state, agents) => {
     const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;

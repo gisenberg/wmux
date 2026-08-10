@@ -2009,12 +2009,12 @@ export default function (pi: any) {
     prompt = typeof event.prompt === "string" ? event.prompt : ""
     await send({ hook_event_name: "UserPromptSubmit", prompt })
   })
-  pi.on("agent_end", async (event: any) => {
-    if (nested) return
+  pi.on("agent_end", async (event: any, ctx: any) => {
+    if (nested || ctx.hasPendingMessages?.()) return
     const messages = Array.isArray(event.messages) ? event.messages : []
     const assistant = messages.findLast((message: any) => message?.role === "assistant")
     await send({
-      hook_event_name: "Stop",
+      hook_event_name: "InputRequired",
       prompt,
       last_assistant_message: messageText(assistant),
     })
