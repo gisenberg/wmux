@@ -17,6 +17,7 @@ import {
 } from "../src/server/http.js";
 import type { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
+import { workspaceRoutes } from "../src/server/routes/workspace-routes.js";
 import { StateStore } from "../src/server/state.js";
 import type {
   BootstrapPayload,
@@ -122,6 +123,88 @@ test("workspace reorder API moves existing workspaces and validates targets", as
       body: JSON.stringify({ workspaceId: third.id, position: "out-of", workspaceTreeRevision: state.snapshot().workspaceTreeRevision }),
     });
     assert.equal(rootOutdent.status, 422);
+  } finally {
+    state.flush();
+    await close(server);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("agent workspace creation fails closed when its validated parent disappears during cwd lookup", async () => {
+  const pane = { id: `pane_${"1".repeat(16)}`, machineId: "local", cwd: "/tmp", status: "idle" };
+  const workspace = { id: `ws_${"1".repeat(16)}` };
+  const tab = { id: `tab_${"1".repeat(16)}` };
+  let parentAvailable = true;
+  let createCalls = 0;
+  let response: { status: number; payload: unknown } | undefined;
+  const route = workspaceRoutes.find((candidate) => candidate.id === "workspace-create");
+  assert.ok(route);
+  await route.handler({
+    deps: {
+      state: {
+        findPane: () => pane,
+        findPaneContext: () => parentAvailable ? { workspace, tab, pane } : undefined,
+        createWorkspace: () => { createCalls += 1; return {}; },
+      },
+      resolveMachineId: () => "local",
+      cwdForSourcePane: async () => { parentAvailable = false; return "/tmp"; },
+      currentPayload: () => ({}),
+    },
+    machines: [{ id: "local", name: "Local", kind: "local" }],
+    readJsonBody: async () => ({
+      machineId: "local",
+      createdBy: "agent",
+      parentContext: { workspaceId: workspace.id, tabId: tab.id, paneId: pane.id },
+    }),
+    sendJson: (status: number, payload: unknown) => { response = { status, payload }; },
+  } as never);
+  assert.deepEqual(response, { status: 422, payload: { error: "parent_pane_unavailable" } });
+  assert.equal(createCalls, 0);
+});
+
+test("agent workspace creation validates the complete parent context", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-parent-context-"));
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  const state = new StateStore(machines, path.join(dir, "state.json"));
+  const root = state.snapshot().workspaces[0];
+  const tab = root.tabs[0];
+  const pane = tab.panes[0];
+  const settings = new SettingsStore(path.join(dir, "settings.json"));
+  const server = await createHttpServer("127.0.0.1", state, machines, {} as SessionManager, settings, {
+    auth: { enabled: false, token: "", loginEnabled: false, sessionSecret: "test" },
+  });
+  const port = await listen(server);
+  const post = (body: Record<string, unknown>) => fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const parentContext = { workspaceId: root.id, tabId: tab.id, paneId: pane.id };
+  try {
+    const valid = await post({ machineId: "local", createdBy: "agent", parentContext });
+    assert.equal(valid.status, 201);
+    const validPayload = await valid.json() as { workspace: { parentWorkspaceId?: string } };
+    assert.equal(validPayload.workspace.parentWorkspaceId, root.id);
+
+    for (const [body, status, error] of [
+      [{ machineId: "local", createdBy: "agent", parentPaneId: pane.id, parentContext }, 400, "ambiguous_parent_context"],
+      [{ machineId: "local", createdBy: "user", parentContext }, 400, "parent_pane_requires_agent"],
+      [{ machineId: "local", createdBy: "agent", parentContext: { ...parentContext, workspaceId: `ws_${"0".repeat(16)}` } }, 422, "parent_context_mismatch"],
+      [{ machineId: "local", createdBy: "agent", parentContext: { ...parentContext, tabId: `tab_${"0".repeat(16)}` } }, 422, "parent_context_mismatch"],
+      [{ machineId: "local", createdBy: "agent", parentContext: { ...parentContext, paneId: `pane_${"0".repeat(16)}` } }, 422, "parent_pane_unavailable"],
+      [{ machineId: "local", createdBy: "agent", parentContext: { workspaceId: root.id, tabId: tab.id } }, 400, "invalid_client_ids"],
+      [{ machineId: "local", createdBy: "agent", parentContext: { ...parentContext, extra: pane.id } }, 400, "invalid_client_ids"],
+      [{ machineId: "local", createdBy: "agent", parentContext: { ...parentContext, paneId: "pane_invalid" } }, 400, "invalid_client_ids"],
+    ] as const) {
+      const response = await post(body);
+      assert.equal(response.status, status);
+      assert.deepEqual(await response.json(), { error });
+    }
+
+    state.updatePane(pane.id, { status: "exited" });
+    const exited = await post({ machineId: "local", createdBy: "agent", parentContext });
+    assert.equal(exited.status, 422);
+    assert.deepEqual(await exited.json(), { error: "parent_pane_unavailable" });
   } finally {
     state.flush();
     await close(server);
