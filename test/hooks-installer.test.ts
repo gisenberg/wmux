@@ -171,6 +171,8 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.match(extension, /stopReason === "error" \? "Error"/);
     assert.match(extension, /stopReason === "aborted" \? "Interrupted"/);
     assert.match(extension, /WMUX_DELEGATED_RUN/);
+    assert.match(extension, /HERDR_WORKSPACE_ID/);
+    assert.match(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER/);
     assert.match(extension, /hasPendingMessages/);
     assert.match(extension, /--prime-agent-hook/);
     assert.match(extension, /rlmDepth/);
@@ -193,7 +195,7 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
   }
 });
 
-test("Prime Agent extension routes concurrent and reattached turns from client context only", { skip: process.platform === "win32", concurrency: false }, async () => {
+test("Prime Agent extension binds each session to its forwarded pane environment", { skip: process.platform === "win32", concurrency: false }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-routing-"));
   const captured: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {
@@ -207,7 +209,8 @@ test("Prime Agent extension routes concurrent and reattached turns from client c
   });
   const saved = Object.fromEntries([
     "HOME", "WMUX_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH", "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
-    "WMUX_DELEGATED_RUN", "RLM_DEPTH",
+    "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN", "RLM_DEPTH",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER",
   ].map((key) => [key, process.env[key]]));
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -220,115 +223,104 @@ test("Prime Agent extension routes concurrent and reattached turns from client c
       WMUX_URL: `http://127.0.0.1:${address.port}`,
       WMUX_TOKEN: "",
       WMUX_TOKEN_PATH: path.join(home, "missing-token"),
-      WMUX_WORKSPACE_ID: "ws_stale",
-      WMUX_TAB_ID: "tab_stale",
-      WMUX_PANE_ID: "pane_stale",
+      WMUX_WORKSPACE_ID: "ws_aaaaaaaa",
+      WMUX_TAB_ID: "tab_aaaaaaaa",
+      WMUX_PANE_ID: "pane_aaaaaaaa",
+      PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
     });
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
     const extensionPath = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
-    const module = await import(`${pathToFileURL(extensionPath).href}?routing=${Date.now()}`);
-    const createHandlers = () => {
-      const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
-      module.default({ on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => handlers.set(name, handler) });
+    const context = (rlmDepth = 0, pending = false) => ({
+      hasPendingMessages: () => pending,
+      sessionManager: { getHeader: () => ({ rlmDepth }) },
+    });
+    const createHandlers = async (digit?: string) => {
+      if (digit) {
+        process.env.HERDR_WORKSPACE_ID = `ws_${digit.repeat(8)}`;
+        process.env.HERDR_TAB_ID = `tab_${digit.repeat(8)}`;
+        process.env.HERDR_PANE_ID = `pane_${digit.repeat(8)}`;
+      } else {
+        delete process.env.HERDR_WORKSPACE_ID;
+        delete process.env.HERDR_TAB_ID;
+        delete process.env.HERDR_PANE_ID;
+      }
+      const sessionExtensionPath = path.join(home, `.prime-session-${digit ?? "missing"}-${Date.now()}-${Math.random()}.ts`);
+      fs.copyFileSync(extensionPath, sessionExtensionPath);
+      const module = await import(pathToFileURL(sessionExtensionPath).href);
+      const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+      module.default({ on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(name, handler) });
       return handlers;
     };
-    const context = (suffix: string) => ({
-      clientAttachment: { env: {
-        WMUX_WORKSPACE_ID: `ws_${suffix}`,
-        WMUX_TAB_ID: `tab_${suffix}`,
-        WMUX_PANE_ID: `pane_${suffix}`,
-      } },
-      hasPendingMessages: () => false,
-      sessionManager: { getHeader: () => ({ rlmDepth: 0 }) },
-    });
-    const one = createHandlers();
-    const two = createHandlers();
-    await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context("one"));
-    await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context("two"));
-    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done one" }] }, context("one"));
-    await two.get("agent_end")?.({ messages: [{ role: "assistant", content: "done two" }] }, context("two"));
+    const one = await createHandlers("1");
+    const two = await createHandlers("2");
+    const missing = await createHandlers();
 
-    // A later turn reattached in pane three must not retain pane one's identity.
-    await one.get("before_agent_start")?.({ prompt: "Rename only workspace three" }, context("three"));
-    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done three" }] }, context("three"));
-
-    // A queued continuation keeps the pane running and avoids a false completion flicker.
-    const pendingContext = {
-      ...context("pending"),
-      hasPendingMessages: () => true,
-    };
-    await one.get("before_agent_start")?.({ prompt: "Continue pending work" }, pendingContext);
-    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "intermediate" }] }, pendingContext);
-    assert.equal(captured.at(-1)?.status, "running");
-
-    // Watchers emit nothing. A queued cross-client handoff interrupts the old
-    // bound run, and a delayed end remains pinned to the new run even when its
-    // callback observes another attachment.
-    const beforeCount = captured.length;
-    await one.get("before_agent_start")?.({ prompt: "watcher" }, { clientAttachment: { env: {} } });
-    await one.get("before_agent_start")?.({ prompt: "ambiguous" }, context("one"));
-    await one.get("agent_end")?.({ messages: [], }, context("two"));
-    assert.equal(captured.length, beforeCount + 3);
-    assert.deepEqual(captured.slice(beforeCount).map((event) => [event.paneId, event.status]), [
-      ["pane_pending", "interrupted"],
-      ["pane_one", "running"],
-      ["pane_one", "completed"],
+    await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context());
+    await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context());
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done one" }] }, context());
+    await two.get("agent_end")?.({ messages: [{ role: "assistant", content: "done two" }] }, context());
+    assert.deepEqual(captured.slice(0, 4).map((event) => [event.workspaceId, event.tabId, event.paneId, event.status, event.title]), [
+      ["ws_11111111", "tab_11111111", "pane_11111111", "running", "Name workspace one"],
+      ["ws_22222222", "tab_22222222", "pane_22222222", "running", "Name workspace two"],
+      ["ws_11111111", "tab_11111111", "pane_11111111", "completed", ""],
+      ["ws_22222222", "tab_22222222", "pane_22222222", "completed", ""],
     ]);
-
-    // Passive loading of a nested/subagent session is observational only.
-    const nestedContext = {
-      ...context("nested"),
-      sessionManager: { getHeader: () => ({ rlmDepth: 1 }) },
-    };
-    const nestedCount = captured.length;
-    await one.get("before_agent_start")?.({ prompt: "nested" }, nestedContext);
-    await one.get("agent_end")?.({ messages: [] }, nestedContext);
-    const malformedDepthContext = {
-      ...context("malformed"),
-      sessionManager: { getHeader: () => ({ rlmDepth: "invalid" }) },
-    };
-    await one.get("before_agent_start")?.({ prompt: "malformed depth" }, malformedDepthContext);
-    await one.get("agent_end")?.({ messages: [] }, malformedDepthContext);
-    process.env.WMUX_DELEGATED_RUN = "1";
-    await one.get("before_agent_start")?.({ prompt: "delegated" }, context("delegated"));
-    await one.get("agent_end")?.({ messages: [] }, context("delegated"));
-    delete process.env.WMUX_DELEGATED_RUN;
-    assert.equal(captured.length, nestedCount);
-
-    await one.get("before_agent_start")?.({ prompt: "Fail visibly" }, context("error"));
-    await one.get("agent_end")?.({ messages: [{
-      role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "error", errorMessage: "Provider failed.",
-    }] }, context("error"));
-    const errorEvents = captured.slice(-2);
-    assert.deepEqual(errorEvents.map((event) => [event.paneId, event.status, event.message]), [
-      ["pane_error", "running", undefined],
-      ["pane_error", "failed", "Provider failed."],
-    ]);
-    assert.equal(errorEvents[0]?.runId, errorEvents[1]?.runId);
-
-    await one.get("before_agent_start")?.({ prompt: "Abort visibly" }, context("aborted"));
-    await one.get("agent_end")?.({ messages: [{
-      role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "aborted", errorMessage: "Cancelled by user.",
-    }] }, context("aborted"));
-    const abortedEvents = captured.slice(-2);
-    assert.deepEqual(abortedEvents.map((event) => [event.paneId, event.status, event.message]), [
-      ["pane_aborted", "running", undefined],
-      ["pane_aborted", "interrupted", "Cancelled by user."],
-    ]);
-    assert.equal(abortedEvents[0]?.runId, abortedEvents[1]?.runId);
-
-    assert.deepEqual(captured.slice(0, 6).map((event) => [event.workspaceId, event.tabId, event.paneId, event.status, event.title]), [
-      ["ws_one", "tab_one", "pane_one", "running", "Name workspace one"],
-      ["ws_two", "tab_two", "pane_two", "running", "Name workspace two"],
-      ["ws_one", "tab_one", "pane_one", "completed", ""],
-      ["ws_two", "tab_two", "pane_two", "completed", ""],
-      ["ws_three", "tab_three", "pane_three", "running", "Rename only workspace three"],
-      ["ws_three", "tab_three", "pane_three", "completed", ""],
-    ]);
-    assert.ok(captured.every((event) => event.paneId !== "pane_stale"));
-    assert.ok(captured.every((event) => typeof event.runId === "string" && event.runId));
     assert.equal(captured[0]?.runId, captured[2]?.runId);
     assert.equal(captured[1]?.runId, captured[3]?.runId);
+
+    // A later turn in the same bound workspace must not rename it again.
+    await one.get("before_agent_start")?.({ prompt: "Do not rename workspace one" }, context());
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done again" }] }, context());
+    assert.deepEqual(captured.slice(4, 6).map((event) => [event.paneId, event.status, event.title]), [
+      ["pane_11111111", "running", ""],
+      ["pane_11111111", "completed", ""],
+    ]);
+
+    // A queued continuation remains on one run without a false completion flicker.
+    await one.get("before_agent_start")?.({ prompt: "Continue pending work" }, context());
+    const pendingRunId = captured.at(-1)?.runId;
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "intermediate" }] }, context(0, true));
+    assert.equal(captured.at(-1)?.status, "running");
+    await one.get("before_agent_start")?.({ prompt: "queued continuation" }, context());
+    assert.equal(captured.at(-1)?.runId, pendingRunId);
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "finished" }] }, context());
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.runId, pendingRunId);
+
+    // Missing forwarded identity fails closed even when daemon ambient WMUX_*
+    // variables contain another pane. Nested and delegated sessions are silent.
+    const quietCount = captured.length;
+    await missing.get("before_agent_start")?.({ prompt: "ambient must not route" }, context());
+    await missing.get("agent_end")?.({ messages: [] }, context());
+    await one.get("before_agent_start")?.({ prompt: "nested" }, context(1));
+    await one.get("agent_end")?.({ messages: [] }, context(1));
+    process.env.WMUX_DELEGATED_RUN = "1";
+    await one.get("before_agent_start")?.({ prompt: "delegated" }, context());
+    await one.get("agent_end")?.({ messages: [] }, context());
+    delete process.env.WMUX_DELEGATED_RUN;
+    assert.equal(captured.length, quietCount);
+
+    await one.get("before_agent_start")?.({ prompt: "Fail visibly" }, context());
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "error", errorMessage: "Provider failed.",
+    }] }, context());
+    const errorEvents = captured.slice(-2);
+    assert.deepEqual(errorEvents.map((event) => [event.paneId, event.status, event.message]), [
+      ["pane_11111111", "running", undefined],
+      ["pane_11111111", "failed", "Provider failed."],
+    ]);
+
+    await one.get("before_agent_start")?.({ prompt: "Abort visibly" }, context());
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "aborted", errorMessage: "Cancelled by user.",
+    }] }, context());
+    const abortedEvents = captured.slice(-2);
+    assert.deepEqual(abortedEvents.map((event) => [event.paneId, event.status, event.message]), [
+      ["pane_11111111", "running", undefined],
+      ["pane_11111111", "interrupted", "Cancelled by user."],
+    ]);
+    assert.ok(captured.every((event) => event.paneId !== "pane_aaaaaaaa"));
+    assert.ok(captured.every((event) => typeof event.runId === "string" && event.runId));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {

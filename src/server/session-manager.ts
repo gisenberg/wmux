@@ -705,6 +705,12 @@ export class SessionManager {
       WMUX_TAB_ID: context?.tab.id ?? "",
       WMUX_TAB_TITLE: context?.tab.title ?? "",
       WMUX_PANE_ID: pane.id,
+      // Prime Agent's daemon forwards only its HERDR_* compatibility identity
+      // allowlist to a session worker. Do not set HERDR_ENV or a Herdr socket:
+      // these aliases carry wmux routing identity without enabling Herdr hooks.
+      HERDR_WORKSPACE_ID: context?.workspace.id ?? "",
+      HERDR_TAB_ID: context?.tab.id ?? "",
+      HERDR_PANE_ID: pane.id,
       // A shared registration credential can update dynamic machine records.
       // Never forward the broader browser/API credential to those targets.
       WMUX_BOOTSTRAP_TOKEN:

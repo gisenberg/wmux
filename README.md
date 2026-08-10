@@ -605,11 +605,15 @@ after server commit without replaying relay plaintext from the server.
 sidebar row uses the animated working indicator; normal `agent_end` completion
 changes the row to Done. The gold `?` indicator is reserved for a positively
 identified explicit input request; the managed Prime Agent extension does not
-guess that ordinary idle completion requires input. The extension requires Prime
-Agent's capability-gated current-turn client attachment
-metadata and fails closed when the workspace/tab/pane identity is missing or
-ambiguous; it never falls back to a persistent daemon or worker environment.
-Roll out the compatible Prime Agent build before reinstalling the hook. The
+guess that ordinary idle completion requires input. New POSIX pane processes
+export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility
+aliases because Prime Agent 0.7.1 forwards only that allowlist into each daemon
+session's extension-load scope; wmux deliberately does not set `HERDR_ENV` or a
+Herdr socket. The extension captures the session-bound identity at load, falls
+back to `WMUX_*` only in non-daemon processes, and fails closed when identity is
+missing or malformed. A resident Prime session stays bound to its creator pane;
+reopening a nonresident saved session can bind it to the new pane. Existing pane
+shells must be recreated after rollout to receive the compatibility aliases. The
 installer preserves an unmanaged extension already present at that path. Prime
 Agent is also recognized by the mobile Chat surface and can be started there;
 it is not yet a `wmuxctl delegate` runtime.

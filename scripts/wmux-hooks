@@ -1991,25 +1991,23 @@ const isNested = (ctx: any): boolean => {
 type WmuxIdentity = { workspaceId: string; tabId: string; paneId: string }
 type TurnBinding = { identity: WmuxIdentity; runId: string; prompt: string }
 const identityPattern = {
-  workspaceId: /^ws_[A-Za-z0-9]+$/,
-  tabId: /^tab_[A-Za-z0-9]+$/,
-  paneId: /^pane_[A-Za-z0-9]+$/,
+  workspaceId: /^ws_[0-9a-f]{8,64}$/,
+  tabId: /^tab_[0-9a-f]{8,64}$/,
+  paneId: /^pane_[0-9a-f]{8,64}$/,
 } as const
-const identityFromContext = (ctx: any): WmuxIdentity | undefined => {
-  const env = ctx?.clientAttachment?.env
-  if (!env || typeof env !== "object") return undefined
+const identityFromEnvironment = (): WmuxIdentity | undefined => {
+  const daemonWorker = process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER === "1"
   const identity = {
-    workspaceId: env.WMUX_WORKSPACE_ID,
-    tabId: env.WMUX_TAB_ID,
-    paneId: env.WMUX_PANE_ID,
+    workspaceId: process.env.HERDR_WORKSPACE_ID || (daemonWorker ? undefined : process.env.WMUX_WORKSPACE_ID),
+    tabId: process.env.HERDR_TAB_ID || (daemonWorker ? undefined : process.env.WMUX_TAB_ID),
+    paneId: process.env.HERDR_PANE_ID || (daemonWorker ? undefined : process.env.WMUX_PANE_ID),
   }
   if (!Object.entries(identity).every(([key, value]) =>
     typeof value === "string" && identityPattern[key as keyof WmuxIdentity].test(value)
   )) return undefined
   return identity as WmuxIdentity
 }
-const sameIdentity = (left: WmuxIdentity, right: WmuxIdentity) =>
-  left.workspaceId === right.workspaceId && left.tabId === right.tabId && left.paneId === right.paneId
+const boundIdentity = identityFromEnvironment()
 
 const sendNow = (input: Record<string, unknown>, binding: TurnBinding) => new Promise<void>((resolve) => {
   const child = spawn(eventScript, [
@@ -2049,14 +2047,9 @@ export default function (pi: any) {
   const autoNamedWorkspaces = new Set<string>()
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     if (isNested(ctx)) return
-    const identity = identityFromContext(ctx)
+    const identity = boundIdentity
     if (!identity) return
     const prompt = typeof event.prompt === "string" ? event.prompt : ""
-    if (activeTurn && !sameIdentity(activeTurn.identity, identity)) {
-      const superseded = activeTurn
-      activeTurn = undefined
-      await send({ hook_event_name: "Interrupted", last_assistant_message: "Prime turn superseded by another attached client." }, superseded)
-    }
     if (!activeTurn) activeTurn = { identity, runId: randomUUID(), prompt }
     else activeTurn.prompt = prompt
     const shouldAutoName = Boolean(prompt.trim()) && !autoNamedWorkspaces.has(identity.workspaceId)
