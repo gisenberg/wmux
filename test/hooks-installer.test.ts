@@ -284,13 +284,31 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     });
     assert.deepEqual(JSON.parse(futureResult.stdout.trim()), ["ws_11111111", "tab_11111111", "pane_11111111"]);
 
+    const escapedTripleTool = { toolName: "ipython", input: { code: [
+      String.raw`"""line \"""`,
+      "continued",
+      '"""',
+      "from __future__ import annotations",
+      "import json, os",
+      "print(json.dumps([__doc__, os.environ.get('WMUX_WORKSPACE_ID')]))",
+    ].join("\n") } };
+    await one.get("tool_call")?.(escapedTripleTool, context());
+    const escapedTripleResult = await execFileAsync("python3", ["-c", escapedTripleTool.input.code], {
+      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa" },
+    });
+    assert.deepEqual(JSON.parse(escapedTripleResult.stdout.trim()), ['line """\ncontinued\n', "ws_11111111"]);
+
     const docstringTool = { toolName: "ipython", input: { code: [
-      '("module " "documentation")',
+      "(",
+      '  "module "',
+      '  "documentation"',
+      ")",
+      "from __future__ import annotations",
       "import json, os",
       "print(json.dumps([__doc__, os.environ.get('WMUX_WORKSPACE_ID')]))",
     ].join("\n") } };
     await one.get("tool_call")?.(docstringTool, context());
-    assert.ok(docstringTool.input.code.indexOf('("module " "documentation")') < docstringTool.input.code.indexOf("__wmux_os.environ.update"));
+    assert.ok(docstringTool.input.code.indexOf("from __future__ import annotations") < docstringTool.input.code.indexOf("__wmux_os.environ.update"));
     const docstringResult = await execFileAsync("python3", ["-c", docstringTool.input.code], {
       env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa" },
     });

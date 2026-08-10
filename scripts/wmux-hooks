@@ -2016,18 +2016,74 @@ const toolEnvironment = boundIdentity ? {
   HERDR_TAB_ID: boundIdentity.tabId,
   HERDR_PANE_ID: boundIdentity.paneId,
 } : undefined
-const futureImportInsertionIndex = (code: string): number => {
-  const pythonStringLiteral = "(?:[rRuU]{0,2}(?:\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'))"
-  const leading = code.match(/^(?:[ \t]*(?:#.*)?\n)*/)?.[0] ?? ""
-  let cursor = leading.length
-  const docstring = code.slice(cursor).match(new RegExp("^(?:[ \\t]*\\([ \\t]*)*" + pythonStringLiteral + "(?:[ \\t]*" + pythonStringLiteral + ")*(?:[ \\t]*\\))*[ \\t]*(?:#.*)?(?:\\n|$)"))?.[0] ?? ""
-  cursor += docstring.length
-  let insertion = cursor
+const skipPythonHeaderLines = (code: string, start: number): number => {
+  const trivia = code.slice(start).match(/^(?:[ \t]*(?:#.*)?\r?\n)*/)?.[0] ?? ""
+  return start + trivia.length
+}
+const skipPythonParenthesizedTrivia = (code: string, start: number): number => {
+  let cursor = start
   while (cursor < code.length) {
-    const trivia = code.slice(cursor).match(/^(?:[ \t]*(?:#.*)?\n)*/)?.[0] ?? ""
-    cursor += trivia.length
-    insertion = cursor
-    if (!/^from[ \t]+__future__[ \t]+import\b/.test(code.slice(cursor))) break
+    if (/\s/.test(code[cursor])) {
+      cursor += 1
+      continue
+    }
+    if (code[cursor] !== "#") break
+    const newline = code.indexOf("\n", cursor)
+    cursor = newline < 0 ? code.length : newline + 1
+  }
+  return cursor
+}
+const scanPythonString = (code: string, start: number): number | undefined => {
+  const opening = code.slice(start).match(/^(?:[rRuUbBfF]{0,2})(\"\"\"|'''|\"|')/)
+  if (!opening) return undefined
+  const quote = opening[1]
+  const triple = quote.length === 3
+  let cursor = start + opening[0].length
+  while (cursor < code.length) {
+    if (code.startsWith(quote, cursor)) return cursor + quote.length
+    if (code[cursor] === "\\") {
+      cursor += Math.min(2, code.length - cursor)
+      continue
+    }
+    if (!triple && (code[cursor] === "\n" || code[cursor] === "\r")) return undefined
+    cursor += 1
+  }
+  return undefined
+}
+const scanPythonDocstring = (code: string, start: number): number | undefined => {
+  let cursor = start
+  let parentheses = 0
+  while (code[cursor] === "(") {
+    parentheses += 1
+    cursor = skipPythonParenthesizedTrivia(code, cursor + 1)
+  }
+  let sawString = false
+  while (true) {
+    const end = scanPythonString(code, cursor)
+    if (end === undefined) break
+    sawString = true
+    cursor = end
+    if (parentheses > 0) cursor = skipPythonParenthesizedTrivia(code, cursor)
+    else cursor += code.slice(cursor).match(/^[ \t]*/)?.[0].length ?? 0
+    if (scanPythonString(code, cursor) !== undefined) continue
+    while (parentheses > 0 && code[cursor] === ")") {
+      parentheses -= 1
+      cursor += 1
+      if (parentheses > 0) cursor = skipPythonParenthesizedTrivia(code, cursor)
+    }
+    break
+  }
+  if (!sawString || parentheses !== 0) return undefined
+  const lineEnd = code.slice(cursor).match(/^[ \t]*(?:#.*)?(?:\r?\n|$)/)?.[0]
+  if (lineEnd === undefined) return undefined
+  return cursor + lineEnd.length
+}
+const futureImportInsertionIndex = (code: string): number => {
+  let cursor = skipPythonHeaderLines(code, 0)
+  const docstringEnd = scanPythonDocstring(code, cursor)
+  if (docstringEnd !== undefined) cursor = skipPythonHeaderLines(code, docstringEnd)
+  let insertion = cursor
+  while (/^from[ \t]+__future__[ \t]+import\b/.test(code.slice(cursor))) {
     let depth = 0
     while (cursor < code.length) {
       const newline = code.indexOf("\n", cursor)
@@ -2037,6 +2093,7 @@ const futureImportInsertionIndex = (code: string): number => {
       cursor = end
       if (depth <= 0 && !/\\[ \t]*$/.test(syntax)) break
     }
+    cursor = skipPythonHeaderLines(code, cursor)
     insertion = cursor
   }
   return insertion
