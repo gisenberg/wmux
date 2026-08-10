@@ -255,6 +255,31 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     const two = await createHandlers("2");
     const missing = await createHandlers();
 
+    // Prime creates its persistent IPython kernel before applying the session
+    // exec-env provider, so tool calls must repair stale daemon WMUX_* identity.
+    const pythonTool = { toolName: "ipython", input: {
+      code: "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID'), os.environ.get('WMUX_PANE_ID')]))",
+    } };
+    await one.get("tool_call")?.(pythonTool, context());
+    const pythonResult = await execFileAsync("python3", ["-c", pythonTool.input.code], {
+      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
+    });
+    assert.deepEqual(JSON.parse(pythonResult.stdout.trim()), ["ws_11111111", "tab_11111111", "pane_11111111"]);
+
+    const bashTool = { toolName: "ipython", input: {
+      code: `%%bash\nprintf '%s|%s|%s\n' "$WMUX_WORKSPACE_ID" "$WMUX_TAB_ID" "$WMUX_PANE_ID"`,
+    } };
+    await two.get("tool_call")?.(bashTool, context());
+    assert.match(bashTool.input.code, /^%%bash\nexport WMUX_WORKSPACE_ID='ws_22222222'/);
+    const bashResult = await execFileAsync("bash", ["-c", bashTool.input.code.replace(/^%%bash\n/, "")], {
+      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
+    });
+    assert.equal(bashResult.stdout.trim(), "ws_22222222|tab_22222222|pane_22222222");
+
+    const unboundTool = { toolName: "ipython", input: { code: "print('unchanged')" } };
+    await missing.get("tool_call")?.(unboundTool, context());
+    assert.equal(unboundTool.input.code, "print('unchanged')");
+
     await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context());
     await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context());
     await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done one" }] }, context());

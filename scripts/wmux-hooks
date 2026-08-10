@@ -2008,6 +2008,26 @@ const identityFromEnvironment = (): WmuxIdentity | undefined => {
   return identity as WmuxIdentity
 }
 const boundIdentity = identityFromEnvironment()
+const toolEnvironment = boundIdentity ? {
+  WMUX_WORKSPACE_ID: boundIdentity.workspaceId,
+  WMUX_TAB_ID: boundIdentity.tabId,
+  WMUX_PANE_ID: boundIdentity.paneId,
+  HERDR_WORKSPACE_ID: boundIdentity.workspaceId,
+  HERDR_TAB_ID: boundIdentity.tabId,
+  HERDR_PANE_ID: boundIdentity.paneId,
+} : undefined
+const bindIpythonEnvironment = (code: string): string => {
+  if (!toolEnvironment) return code
+  const shellCell = code.match(/^(\s*%%(?:bash|sh)[^\n]*\n)/)
+  if (shellCell) {
+    const exports = Object.entries(toolEnvironment)
+      .map(([key, value]) => "export " + key + "='" + value + "'")
+      .join("\n")
+    return shellCell[1] + exports + "\n" + code.slice(shellCell[1].length)
+  }
+  if (/^\s*%%/.test(code)) return code
+  return "import os as __wmux_os\n__wmux_os.environ.update(" + JSON.stringify(toolEnvironment) + ")\n" + code
+}
 
 const sendNow = (input: Record<string, unknown>, binding: TurnBinding) => new Promise<void>((resolve) => {
   const child = spawn(eventScript, [
@@ -2045,6 +2065,10 @@ const messageText = (value: unknown): string => {
 export default function (pi: any) {
   let activeTurn: TurnBinding | undefined
   const autoNamedWorkspaces = new Set<string>()
+  pi.on("tool_call", (event: any) => {
+    if (event?.toolName !== "ipython" || typeof event?.input?.code !== "string") return
+    event.input.code = bindIpythonEnvironment(event.input.code)
+  })
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     if (isNested(ctx)) return
     const identity = boundIdentity
