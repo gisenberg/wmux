@@ -191,6 +191,90 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
   }
 });
 
+test("Prime Agent extension routes concurrent and reattached turns from client context only", { skip: process.platform === "win32", concurrency: false }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-routing-"));
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  const saved = Object.fromEntries([
+    "HOME", "WMUX_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH", "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
+    "WMUX_DELEGATED_RUN", "RLM_DEPTH",
+  ].map((key) => [key, process.env[key]]));
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    delete process.env.WMUX_DELEGATED_RUN;
+    delete process.env.RLM_DEPTH;
+    Object.assign(process.env, {
+      HOME: home,
+      WMUX_URL: `http://127.0.0.1:${address.port}`,
+      WMUX_TOKEN: "",
+      WMUX_TOKEN_PATH: path.join(home, "missing-token"),
+      WMUX_WORKSPACE_ID: "ws_stale",
+      WMUX_TAB_ID: "tab_stale",
+      WMUX_PANE_ID: "pane_stale",
+    });
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
+    const extensionPath = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
+    const module = await import(`${pathToFileURL(extensionPath).href}?routing=${Date.now()}`);
+    const createHandlers = () => {
+      const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
+      module.default({ on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => handlers.set(name, handler) });
+      return handlers;
+    };
+    const context = (suffix: string) => ({
+      clientAttachment: { env: {
+        WMUX_WORKSPACE_ID: `ws_${suffix}`,
+        WMUX_TAB_ID: `tab_${suffix}`,
+        WMUX_PANE_ID: `pane_${suffix}`,
+      } },
+      hasPendingMessages: () => false,
+    });
+    const one = createHandlers();
+    const two = createHandlers();
+    await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context("one"));
+    await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context("two"));
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done one" }] }, context("one"));
+    await two.get("agent_end")?.({ messages: [{ role: "assistant", content: "done two" }] }, context("two"));
+
+    // A later turn reattached in pane three must not retain pane one's identity.
+    await one.get("before_agent_start")?.({ prompt: "Rename only workspace three" }, context("three"));
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done three" }] }, context("three"));
+
+    // Watchers, missing IDs, and an identity change within one turn all fail closed.
+    const beforeCount = captured.length;
+    await one.get("before_agent_start")?.({ prompt: "watcher" }, { clientAttachment: { env: {} } });
+    await one.get("before_agent_start")?.({ prompt: "ambiguous" }, context("one"));
+    await one.get("agent_end")?.({ messages: [], }, context("two"));
+    assert.equal(captured.length, beforeCount + 1, "only the valid start event was delivered");
+
+    assert.deepEqual(captured.slice(0, 6).map((event) => [event.workspaceId, event.tabId, event.paneId, event.status, event.title]), [
+      ["ws_one", "tab_one", "pane_one", "running", "Name workspace one"],
+      ["ws_two", "tab_two", "pane_two", "running", "Name workspace two"],
+      ["ws_one", "tab_one", "pane_one", "waiting", ""],
+      ["ws_two", "tab_two", "pane_two", "waiting", ""],
+      ["ws_three", "tab_three", "pane_three", "running", "Rename only workspace three"],
+      ["ws_three", "tab_three", "pane_three", "waiting", ""],
+    ]);
+    assert.ok(captured.every((event) => event.paneId !== "pane_stale"));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("Claude installer adds a managed delegation skill without overwriting an unmanaged skill", { skip: process.platform === "win32" }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-claude-hooks-"));
   const hooks = path.join(repoRoot, "scripts", "wmux-hooks");

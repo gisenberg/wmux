@@ -87,6 +87,54 @@ test("agent sessions own lifecycle, title, and notification updates", () => {
   });
 });
 
+test("Prime Agent identity triples route status and naming to only their bound pane", () => {
+  withAgentSessions((state, agents) => {
+    const first = state.snapshot().workspaces[0];
+    const second = state.createWorkspace("local");
+    const firstTab = first.tabs[0];
+    const secondTab = second.tabs[0];
+    const firstPane = firstTab.panes[0].id;
+    const secondPane = secondTab.panes[0].id;
+
+    agents.recordAgentEvent({
+      workspaceId: first.id,
+      tabId: firstTab.id,
+      paneId: firstPane,
+      agent: "prime-agent",
+      status: "running",
+      title: "First attached session",
+    });
+    agents.recordAgentEvent({
+      workspaceId: second.id,
+      tabId: secondTab.id,
+      paneId: secondPane,
+      agent: "prime-agent",
+      status: "running",
+      title: "Second attached session",
+    });
+    const snapshot = state.snapshot();
+    assert.equal(snapshot.workspaces.find((workspace) => workspace.id === first.id)?.name, "First attached session");
+    assert.equal(snapshot.workspaces.find((workspace) => workspace.id === second.id)?.name, "Second attached session");
+    assert.throws(() => agents.recordAgentEvent({
+      workspaceId: second.id,
+      tabId: secondTab.id,
+      paneId: firstPane,
+      agent: "prime-agent",
+      status: "running",
+      title: "Ambiguous stale identity",
+    }), /pane does not belong to workspace/);
+    assert.throws(() => agents.recordAgentEvent({
+      workspaceId: first.id,
+      tabId: secondTab.id,
+      paneId: firstPane,
+      agent: "prime-agent",
+      status: "running",
+      title: "Mismatched tab identity",
+    }), /pane does not belong to tab/);
+    assert.equal(state.snapshot().workspaces.find((workspace) => workspace.id === first.id)?.name, "First attached session");
+  });
+});
+
 test("a terminal delegation rejects late and duplicate outcomes", () => {
   withAgentSessions((state, agents) => {
     const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
