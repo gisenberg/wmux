@@ -601,9 +601,10 @@ registration intent also converges repeated response loss or broker termination
 after server commit without replaying relay plaintext from the server.
 
 `wmux-hooks install prime-agent` writes an auto-loaded managed extension to
-`~/.prime/agent/extensions/wmux.ts`. While a top-level prompt is running, its
-sidebar row uses the animated working indicator; normal `agent_end` completion
-changes the row to Done. The gold `?` indicator is reserved for a positively
+`~/.prime/agent/extensions/wmux.ts`. While a root turn or any nested RLM
+subagent is running, the pane's sidebar row uses the animated working indicator.
+Root completion is deferred until the last descendant becomes idle, then the row
+changes to Done without a false idle flicker. The gold `?` indicator is reserved for a positively
 identified explicit input request; the managed Prime Agent extension does not
 guess that ordinary idle completion requires input. New POSIX pane processes
 export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility

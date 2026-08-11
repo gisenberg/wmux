@@ -1976,20 +1976,38 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 
 const eventScript = ${JSON.stringify(eventScript)}
-const isNested = (ctx: any): boolean => {
-  if (process.env.WMUX_DELEGATED_RUN === "1") return true
+const sessionDepth = (ctx: any): number | undefined => {
   try {
     const rawDepth = ctx?.sessionManager?.getHeader?.()?.rlmDepth
-    if (rawDepth === undefined || rawDepth === null) return false
+    if (rawDepth === undefined || rawDepth === null) return 0
     const depth = Number(rawDepth)
-    return !Number.isSafeInteger(depth) || depth < 0 || depth > 0
+    return Number.isSafeInteger(depth) && depth >= 0 ? depth : undefined
   } catch {
-    return true
+    return undefined
+  }
+}
+const sessionKey = (ctx: any): string | undefined => {
+  try {
+    const value = ctx?.sessionManager?.getSessionId?.()
+      ?? ctx?.sessionManager?.getHeader?.()?.id
+    return typeof value === "string" && value.length > 0 && value.length <= 256
+      ? value
+      : undefined
+  } catch {
+    return undefined
   }
 }
 
 type WmuxIdentity = { workspaceId: string; tabId: string; paneId: string }
 type TurnBinding = { identity: WmuxIdentity; runId: string; prompt: string }
+type PendingTerminal = { input: Record<string, unknown>; binding: TurnBinding }
+type SharedPaneActivity = {
+  root?: { sessionKey: string; binding: TurnBinding }
+  descendants: Map<string, TurnBinding>
+  pendingRootTerminal?: PendingTerminal
+  syntheticDescendantTurn?: TurnBinding
+  sendQueue: Promise<void>
+}
 const identityPattern = {
   workspaceId: /^ws_[0-9a-f]{8,64}$/,
   tabId: /^tab_[0-9a-f]{8,64}$/,
@@ -2133,10 +2151,62 @@ const sendNow = (input: Record<string, unknown>, binding: TurnBinding) => new Pr
   child.stdin.end(JSON.stringify(input))
 })
 
-let sendQueue = Promise.resolve()
+const sharedActivitySymbol = Symbol.for("wmux.prime-agent.pane-activity.v1")
+const sharedActivities = (
+  (globalThis as any)[sharedActivitySymbol]
+  ?? ((globalThis as any)[sharedActivitySymbol] = new Map<string, SharedPaneActivity>())
+) as Map<string, SharedPaneActivity>
+const activityFor = (identity: WmuxIdentity): SharedPaneActivity => {
+  const existing = sharedActivities.get(identity.paneId)
+  if (existing) return existing
+  const created: SharedPaneActivity = {
+    descendants: new Map(),
+    sendQueue: Promise.resolve(),
+  }
+  sharedActivities.set(identity.paneId, created)
+  return created
+}
 const send = (input: Record<string, unknown>, binding: TurnBinding) => {
-  sendQueue = sendQueue.then(() => sendNow(input, binding)).catch(() => {})
-  return sendQueue
+  const activity = activityFor(binding.identity)
+  activity.sendQueue = activity.sendQueue
+    .then(() => sendNow(input, binding))
+    .catch(() => {})
+  return activity.sendQueue
+}
+const cleanupActivity = async (identity: WmuxIdentity, activity: SharedPaneActivity) => {
+  while (true) {
+    const queued = activity.sendQueue
+    await queued
+    if (activity.sendQueue !== queued) continue
+    if (
+      sharedActivities.get(identity.paneId) === activity
+      && !activity.root
+      && activity.descendants.size === 0
+      && !activity.pendingRootTerminal
+      && !activity.syntheticDescendantTurn
+    ) sharedActivities.delete(identity.paneId)
+    return
+  }
+}
+const finishDescendant = async (identity: WmuxIdentity, key: string) => {
+  const activity = sharedActivities.get(identity.paneId)
+  if (!activity || !activity.descendants.delete(key) || activity.descendants.size > 0) return
+  const pending = activity.pendingRootTerminal
+  if (pending) {
+    activity.pendingRootTerminal = undefined
+    activity.syntheticDescendantTurn = undefined
+    await send(pending.input, pending.binding)
+    await cleanupActivity(identity, activity)
+    return
+  }
+  const synthetic = activity.syntheticDescendantTurn
+  if (!synthetic || activity.root) {
+    await cleanupActivity(identity, activity)
+    return
+  }
+  activity.syntheticDescendantTurn = undefined
+  await send({ hook_event_name: "Stop" }, synthetic)
+  await cleanupActivity(identity, activity)
 }
 
 const messageText = (value: unknown): string => {
@@ -2151,41 +2221,110 @@ const messageText = (value: unknown): string => {
 }
 
 export default function (pi: any) {
-  let activeTurn: TurnBinding | undefined
   const autoNamedWorkspaces = new Set<string>()
   pi.on("tool_call", (event: any) => {
     if (event?.toolName !== "ipython" || typeof event?.input?.code !== "string") return
     event.input.code = bindIpythonEnvironment(event.input.code)
   })
   pi.on("before_agent_start", async (event: any, ctx: any) => {
-    if (isNested(ctx)) return
+    if (process.env.WMUX_DELEGATED_RUN === "1") return
     const identity = boundIdentity
-    if (!identity) return
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth === undefined || !key) return
+    const activity = activityFor(identity)
+    if (depth > 0) {
+      if (activity.descendants.has(key)) return
+      const descendant = { identity, runId: randomUUID(), prompt: "" }
+      activity.descendants.set(key, descendant)
+      if (activity.root || activity.pendingRootTerminal || activity.syntheticDescendantTurn) return
+      activity.syntheticDescendantTurn = descendant
+      await send({ hook_event_name: "UserPromptSubmit" }, descendant)
+      return
+    }
+
     const prompt = typeof event.prompt === "string" ? event.prompt : ""
-    if (!activeTurn) activeTurn = { identity, runId: randomUUID(), prompt }
-    else activeTurn.prompt = prompt
+    let root = activity.root?.sessionKey === key ? activity.root.binding : undefined
+    if (!root) {
+      root = { identity, runId: randomUUID(), prompt }
+      activity.root = { sessionKey: key, binding: root }
+      // A new root turn supersedes an older deferred/synthetic pane activity.
+      // Its running event makes the server interrupt that prior run.
+      activity.pendingRootTerminal = undefined
+      activity.syntheticDescendantTurn = undefined
+    } else {
+      root.prompt = prompt
+    }
     const shouldAutoName = Boolean(prompt.trim()) && !autoNamedWorkspaces.has(identity.workspaceId)
     if (shouldAutoName) autoNamedWorkspaces.add(identity.workspaceId)
     await send({
       hook_event_name: "UserPromptSubmit",
       ...(shouldAutoName ? { prompt } : {}),
-    }, activeTurn)
+    }, root)
   })
   pi.on("agent_end", async (event: any, ctx: any) => {
-    if (isNested(ctx) || ctx.hasPendingMessages?.()) return
-    const completed = activeTurn
-    if (!completed) return
+    if (process.env.WMUX_DELEGATED_RUN === "1" || ctx.hasPendingMessages?.()) return
+    const identity = boundIdentity
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth === undefined || !key) return
+    if (depth > 0) {
+      await finishDescendant(identity, key)
+      return
+    }
+
+    const activity = sharedActivities.get(identity.paneId)
+    const completed = activity?.root?.sessionKey === key ? activity.root.binding : undefined
+    if (!activity || !completed) return
     const messages = Array.isArray(event.messages) ? event.messages : []
     const assistant = messages.findLast((message: any) => message?.role === "assistant")
     const stopReason = typeof assistant?.stopReason === "string" ? assistant.stopReason : ""
     const errorMessage = typeof assistant?.errorMessage === "string" ? assistant.errorMessage.trim() : ""
-    await send({
-      hook_event_name: stopReason === "error" ? "Error" : stopReason === "aborted" ? "Interrupted" : "Stop",
-      last_assistant_message: (stopReason === "error" || stopReason === "aborted") && errorMessage
-        ? errorMessage
-        : messageText(assistant),
-    }, completed)
-    if (activeTurn === completed) activeTurn = undefined
+    const terminal: PendingTerminal = {
+      input: {
+        hook_event_name: stopReason === "error" ? "Error" : stopReason === "aborted" ? "Interrupted" : "Stop",
+        last_assistant_message: (stopReason === "error" || stopReason === "aborted") && errorMessage
+          ? errorMessage
+          : messageText(assistant),
+      },
+      binding: completed,
+    }
+    activity.root = undefined
+    if (activity.descendants.size > 0) {
+      activity.pendingRootTerminal = terminal
+      return
+    }
+    await send(terminal.input, terminal.binding)
+    await cleanupActivity(identity, activity)
+  })
+  pi.on("session_shutdown", async (event: any, ctx: any) => {
+    if (process.env.WMUX_DELEGATED_RUN === "1" || event?.reason === "reload") return
+    const identity = boundIdentity
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth === undefined || !key) return
+    if (depth > 0) {
+      await finishDescendant(identity, key)
+      return
+    }
+    const activity = sharedActivities.get(identity.paneId)
+    const interrupted = activity?.root?.sessionKey === key ? activity.root.binding : undefined
+    if (!activity || !interrupted) return
+    activity.root = undefined
+    const terminal: PendingTerminal = {
+      input: {
+        hook_event_name: "Interrupted",
+        last_assistant_message: "Prime Agent session "
+          + (typeof event?.reason === "string" ? event.reason : "shutdown"),
+      },
+      binding: interrupted,
+    }
+    if (activity.descendants.size > 0) {
+      activity.pendingRootTerminal = terminal
+      return
+    }
+    await send(terminal.input, terminal.binding)
+    await cleanupActivity(identity, activity)
   })
 }
 `;

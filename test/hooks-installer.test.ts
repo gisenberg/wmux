@@ -230,9 +230,12 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     });
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
     const extensionPath = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
-    const context = (rlmDepth = 0, pending = false) => ({
+    const context = (rlmDepth = 0, pending = false, sessionId = rlmDepth > 0 ? "child-default" : "root") => ({
       hasPendingMessages: () => pending,
-      sessionManager: { getHeader: () => ({ rlmDepth }) },
+      sessionManager: {
+        getSessionId: () => sessionId,
+        getHeader: () => ({ id: sessionId, rlmDepth }),
+      },
     });
     const createHandlers = async (digit?: string) => {
       if (digit) {
@@ -253,6 +256,9 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     };
     const one = await createHandlers("1");
     const two = await createHandlers("2");
+    const childOneA = await createHandlers("1");
+    const childOneB = await createHandlers("1");
+    const childOneReloaded = await createHandlers("1");
     const missing = await createHandlers();
 
     // Prime creates its persistent IPython kernel before applying the session
@@ -386,17 +392,86 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     assert.equal(captured.at(-1)?.runId, pendingRunId);
 
     // Missing forwarded identity fails closed even when daemon ambient WMUX_*
-    // variables contain another pane. Nested and delegated sessions are silent.
+    // variables contain another pane. Delegated worker sessions remain silent.
     const quietCount = captured.length;
     await missing.get("before_agent_start")?.({ prompt: "ambient must not route" }, context());
     await missing.get("agent_end")?.({ messages: [] }, context());
-    await one.get("before_agent_start")?.({ prompt: "nested" }, context(1));
-    await one.get("agent_end")?.({ messages: [] }, context(1));
     process.env.WMUX_DELEGATED_RUN = "1";
     await one.get("before_agent_start")?.({ prompt: "delegated" }, context());
     await one.get("agent_end")?.({ messages: [] }, context());
     delete process.env.WMUX_DELEGATED_RUN;
+    await one.get("before_agent_start")?.({ prompt: "invalid depth" }, {
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "invalid-depth", getHeader: () => ({ id: "invalid-depth", rlmDepth: -1 }) },
+    });
+    await one.get("before_agent_start")?.({ prompt: "missing session id" }, {
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "", getHeader: () => ({ rlmDepth: 1 }) },
+    });
     assert.equal(captured.length, quietCount);
+
+    // Root completion stays deferred across independently evaluated child
+    // extensions until every nested session is idle. A queued child continuation
+    // remains a member and never causes a false completion flicker.
+    await one.get("before_agent_start")?.({ prompt: "Coordinate children" }, context(0, false, "root-aggregate"));
+    const aggregateRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "child a" }, context(1, false, "child-a"));
+    await childOneB.get("before_agent_start")?.({ prompt: "child b" }, context(1, false, "child-b"));
+    const aggregateRunningCount = captured.length;
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "parent result" }] }, context(0, false, "root-aggregate"));
+    assert.equal(captured.length, aggregateRunningCount);
+    await childOneB.get("session_shutdown")?.({ reason: "reload" }, context(1, false, "child-b"));
+    assert.equal(captured.length, aggregateRunningCount);
+    await childOneA.get("agent_end")?.({ messages: [] }, context(1, true, "child-a"));
+    await childOneA.get("before_agent_start")?.({ prompt: "child a continuation" }, context(1, false, "child-a"));
+    await childOneA.get("agent_end")?.({ messages: [] }, context(1, false, "child-a"));
+    assert.equal(captured.length, aggregateRunningCount);
+    await childOneReloaded.get("agent_end")?.({ messages: [] }, context(1, false, "child-b"));
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.runId, aggregateRunId);
+    assert.equal(captured.at(-1)?.message, "parent result");
+
+    // A child that starts after the root already became idle gets a bounded
+    // synthetic lifecycle, and shutdown drains it rather than leaking a spinner.
+    const lateCount = captured.length;
+    await childOneA.get("before_agent_start")?.({ prompt: "late child" }, context(1, false, "child-late"));
+    assert.equal(captured.length, lateCount + 1);
+    assert.equal(captured.at(-1)?.status, "running");
+    const lateRunId = captured.at(-1)?.runId;
+    await childOneA.get("session_shutdown")?.({ reason: "quit" }, context(1, false, "child-late"));
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.runId, lateRunId);
+
+    // Non-reload root shutdown cannot poison the process-wide registry. It
+    // interrupts immediately when alone and waits for descendants otherwise.
+    await one.get("before_agent_start")?.({ prompt: "Root quits" }, context(0, false, "root-quits"));
+    const quittingRunId = captured.at(-1)?.runId;
+    await one.get("session_shutdown")?.({ reason: "quit" }, context(0, false, "root-quits"));
+    assert.equal(captured.at(-1)?.status, "interrupted");
+    assert.equal(captured.at(-1)?.runId, quittingRunId);
+
+    await one.get("before_agent_start")?.({ prompt: "Root replaced" }, context(0, false, "root-replaced"));
+    const replacedRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "replacement child" }, context(1, false, "replacement-child"));
+    const replacementCount = captured.length;
+    await one.get("session_shutdown")?.({ reason: "new" }, context(0, false, "root-replaced"));
+    assert.equal(captured.length, replacementCount);
+    await childOneA.get("session_shutdown")?.({ reason: "quit" }, context(1, false, "replacement-child"));
+    assert.equal(captured.at(-1)?.status, "interrupted");
+    assert.equal(captured.at(-1)?.runId, replacedRunId);
+
+    await one.get("before_agent_start")?.({ prompt: "Fail after child" }, context(0, false, "root-error-deferred"));
+    const deferredErrorRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "error child" }, context(1, false, "error-child"));
+    const deferredErrorCount = captured.length;
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", stopReason: "error", errorMessage: "Root provider failed.",
+    }] }, context(0, false, "root-error-deferred"));
+    assert.equal(captured.length, deferredErrorCount);
+    await childOneA.get("agent_end")?.({ messages: [] }, context(1, false, "error-child"));
+    assert.equal(captured.at(-1)?.status, "failed");
+    assert.equal(captured.at(-1)?.runId, deferredErrorRunId);
+    assert.equal(captured.at(-1)?.message, "Root provider failed.");
 
     await one.get("before_agent_start")?.({ prompt: "Fail visibly" }, context());
     await one.get("agent_end")?.({ messages: [{
@@ -419,6 +494,12 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     ]);
     assert.ok(captured.every((event) => event.paneId !== "pane_aaaaaaaa"));
     assert.ok(captured.every((event) => typeof event.runId === "string" && event.runId));
+    await childOneA.get("agent_end")?.({ messages: [] }, context(1, false, "already-finished"));
+    await childOneA.get("session_shutdown")?.({ reason: "quit" }, context(1, false, "already-finished"));
+    await one.get("agent_end")?.({ messages: [] }, context(0, false, "already-finished-root"));
+    const sharedActivity = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, unknown>;
+    assert.equal(sharedActivity.has("pane_11111111"), false);
+    assert.equal(sharedActivity.has("pane_22222222"), false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {
