@@ -464,6 +464,7 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
     assert.ok(address && typeof address === "object");
     for (const input of [
       { hook_event_name: "UserPromptSubmit", prompt: "add Prime Agent support" },
+      { hook_event_name: "Heartbeat" },
       { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
       { hook_event_name: "InputRequired", prompt: "approve deployment", last_assistant_message: "Approval required." },
       { hook_event_name: "Error", last_assistant_message: "Prime Agent failed." },
@@ -484,6 +485,13 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
         agent: "prime-agent",
         status: "running",
         summary: "prime-agent running",
+        message: undefined,
+        attentionReason: undefined,
+      },
+      {
+        agent: "prime-agent",
+        status: "heartbeat",
+        summary: "prime-agent heartbeat",
         message: undefined,
         attentionReason: undefined,
       },
@@ -517,6 +525,7 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
       },
     ]);
     assert.equal(captured[0]?.title, "add Prime Agent support");
+    assert.equal(captured[1]?.coalesce, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(dir, { recursive: true, force: true });

@@ -11,11 +11,12 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { SIDEBAR_AGENT_HEARTBEAT_FRAMES } from "./sidebar-agent-status";
 import type { MachineVersionStatus } from "./types";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 type MobileSurfaceMode = "agent" | "terminal";
-type MobileStatus = "running" | "waiting" | "completed" | "failed" | "updated";
+type MobileStatus = "running" | "heartbeat" | "waiting" | "completed" | "failed" | "updated";
 
 interface OpenTuiMobileChromeProps {
   workspaceName: string;
@@ -48,7 +49,10 @@ export function OpenTuiMobileChrome(props: OpenTuiMobileChromeProps) {
   const reducedMotion = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
 
   useEffect(() => {
-    if (reducedMotion || (props.status !== "running" && props.serviceConnection !== "connecting")) return;
+    if (
+      reducedMotion
+      || (!["running", "heartbeat"].includes(props.status) && props.serviceConnection !== "connecting")
+    ) return;
     const timer = window.setInterval(() => setAnimationTick((tick) => (tick + 1) % runningFrames.length), 280);
     return () => window.clearInterval(timer);
   }, [props.serviceConnection, props.status, reducedMotion]);
@@ -160,6 +164,7 @@ const drawMobileChrome = (
     completed: rgba.green,
     failed: rgba.red,
     running: rgba.blue,
+    heartbeat: rgba.gold,
     updated: rgba.muted,
     waiting: rgba.gold,
   };
@@ -182,7 +187,11 @@ const drawMobileChrome = (
   write(0, Math.max(1, cols - connection.length - 1), connection, connectionColor, true);
 
   const statusColor = statusColors[model.status];
-  const statusMark = model.status === "running" ? runningFrames[model.animationTick] : model.status === "waiting" ? "?" : "●";
+  const statusMark = model.status === "running"
+    ? runningFrames[model.animationTick]
+    : model.status === "heartbeat"
+      ? SIDEBAR_AGENT_HEARTBEAT_FRAMES[model.animationTick % SIDEBAR_AGENT_HEARTBEAT_FRAMES.length]
+      : model.status === "waiting" ? "?" : "●";
   const versionColor = model.versionStatus === "current"
     ? rgba.green
     : model.versionStatus === "outdated"
@@ -200,7 +209,7 @@ const drawMobileChrome = (
     write(2, 1, `${statusMark} ${detail}`, statusColor, true);
   } else if (actionRow >= 2) {
     const context = [model.workspaceName, versionText, `${statusMark} ${model.statusLabel}`, model.subtitle].filter(Boolean).join(" / ");
-    write(1, 1, `> ${context}`, ["running", "waiting"].includes(model.status) ? statusColor : rgba.gold, true);
+    write(1, 1, `> ${context}`, ["running", "heartbeat", "waiting"].includes(model.status) ? statusColor : rgba.gold, true);
   }
 
   const gap = 1;

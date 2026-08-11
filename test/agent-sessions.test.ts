@@ -87,6 +87,47 @@ test("agent sessions own lifecycle, title, and notification updates", () => {
   });
 });
 
+
+test("Prime heartbeat activity remains on one active delegation", () => {
+  withAgentSessions((state, agents) => {
+    const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
+    agents.recordAgentEvent({
+      paneId,
+      runId: "run-heartbeat",
+      agent: "prime-agent",
+      status: "running",
+      summary: "prime-agent running",
+    });
+    const runningStateChangedAt = agents.delegationForRun("run-heartbeat")?.stateChangedAt;
+    const heartbeat = agents.recordAgentEvent({
+      paneId,
+      runId: "run-heartbeat",
+      agent: "prime-agent",
+      status: "heartbeat",
+      summary: "prime-agent heartbeat",
+      coalesce: true,
+    });
+
+    assert.equal(heartbeat.notification, undefined);
+    assert.equal(heartbeat.agentEvent.status, "heartbeat");
+    assert.equal(agents.delegationForRun("run-heartbeat")?.state, "running");
+    assert.equal(agents.delegationForRun("run-heartbeat")?.stateChangedAt, runningStateChangedAt);
+    assert.equal(state.snapshot().agentEvents[0]?.runId, "run-heartbeat");
+    assert.equal(state.snapshot().agentEvents[0]?.status, "heartbeat");
+
+    const repeated = agents.recordAgentEvent({
+      paneId,
+      runId: "run-heartbeat",
+      agent: "prime-agent",
+      status: "heartbeat",
+      summary: "prime-agent heartbeat",
+      coalesce: true,
+    });
+    assert.equal(repeated.agentEvent.id, heartbeat.agentEvent.id);
+    assert.equal(state.snapshot().agentEvents.filter((event) => event.runId === "run-heartbeat").length, 2);
+  });
+});
+
 test("Prime Agent identity triples route status and naming to only their bound pane", () => {
   withAgentSessions((state, agents) => {
     const first = state.snapshot().workspaces[0];

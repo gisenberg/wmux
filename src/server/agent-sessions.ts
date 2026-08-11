@@ -24,6 +24,7 @@ const ACTIVE_AGENT_STATUSES = new Set([
   "running",
   "started",
   "working",
+  "heartbeat",
   "waiting",
 ]);
 

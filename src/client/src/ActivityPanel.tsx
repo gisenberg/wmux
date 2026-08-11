@@ -137,7 +137,7 @@ const compactWorkspaceDescription = (value: string | undefined, limit: number): 
 
 const agentStatusClass = (status: string): "running" | "waiting" | "completed" | "failed" | "stopped" | "updated" => {
   const normalized = status.toLowerCase();
-  if (["started", "running", "working", "in_progress", "active"].includes(normalized)) return "running";
+  if (["started", "running", "working", "heartbeat", "in_progress", "active"].includes(normalized)) return "running";
   if (["waiting", "needs_input", "input_required", "approval_required"].includes(normalized)) return "waiting";
   if (["completed", "complete", "succeeded", "success", "done"].includes(normalized)) return "completed";
   if (["failed", "error"].includes(normalized)) return "failed";

@@ -6,7 +6,7 @@ interface SidebarWorkspace {
   tabs: Array<{ id: string; activePaneId: string }>;
 }
 
-test("Prime Agent sidebar indicator transitions from working to awaiting input", async ({
+test("Prime Agent sidebar indicator transitions from working through heartbeat to input", async ({
   page,
   request,
 }, testInfo) => {
@@ -49,6 +49,20 @@ test("Prime Agent sidebar indicator transitions from working to awaiting input",
     await expect(sidebarRow).toHaveAttribute("data-agent-status", "running");
     await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     await expect(sidebarRow).toHaveAccessibleName(/prime-agent working/);
+
+    const heartbeat = await request.post("/api/agent-events", {
+      data: {
+        ...eventTarget,
+        status: "heartbeat",
+        summary: "prime-agent heartbeat",
+        coalesce: true,
+      },
+    });
+    expect(heartbeat.ok()).toBeTruthy();
+
+    await expect(sidebarRow).toHaveAttribute("data-agent-status", "heartbeat");
+    await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[▁▃█]/);
+    await expect(sidebarRow).toHaveAccessibleName(/prime-agent heartbeat/);
 
     const waiting = await request.post("/api/agent-events", {
       data: {

@@ -603,8 +603,12 @@ after server commit without replaying relay plaintext from the server.
 `wmux-hooks install prime-agent` writes an auto-loaded managed extension to
 `~/.prime/agent/extensions/wmux.ts`. While a root turn or any nested RLM
 subagent is running, the pane's sidebar row uses the animated working indicator.
-Root completion is deferred until the last descendant becomes idle, then the row
-changes to Done without a false idle flicker. The gold `?` indicator is reserved for a positively
+A scheduled Prime heartbeat switches that row to a distinct gold pulse animation
+while retaining the same active lifecycle. Root completion is deferred until the
+last descendant becomes idle, then the row changes to Done without a false idle
+flicker. Intermediate tool-loop ends that
+trigger auto-compaction retain the same running lifecycle through Prime's internal
+continuation. The gold `?` indicator is reserved for a positively
 identified explicit input request; the managed Prime Agent extension does not
 guess that ordinary idle completion requires input. New POSIX pane processes
 export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility

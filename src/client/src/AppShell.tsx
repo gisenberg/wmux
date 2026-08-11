@@ -80,6 +80,7 @@ import {
   rebaseFavoriteWorkspaceIds,
   sameWorkspaceIds,
   type WorkspaceActivityAggregate,
+  type WorkspaceAgentStatus,
 } from "./workspace-tree";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "./types";
 import {
@@ -468,7 +469,7 @@ export function AppShell() {
       activity.set(workspace.id, {
         unreadCount: unreadByWorkspaceId.get(workspace.id) ?? 0,
         bell: bellByWorkspaceId.has(workspace.id),
-        agentStatus: agent ? agentStatusClass(agent.status) : undefined,
+        agentStatus: agent ? workspaceAgentStatusClass(agent.status) : undefined,
       });
     }
     return activity;
@@ -526,7 +527,7 @@ export function AppShell() {
             unreadCount: treeRow.ownActivity.unreadCount,
             agentCreated: workspace.createdBy === "agent",
             agentName: latestAgentName,
-            agentStatus: latestAgent ? agentStatusClass(latestAgent.status) : undefined,
+            agentStatus: latestAgent ? workspaceAgentStatusClass(latestAgent.status) : undefined,
             sessionId: pane?.id,
             versionStatus: version?.status,
             versionLabel: version?.label,
@@ -925,7 +926,7 @@ export function AppShell() {
       : undefined;
   const mobileHeaderAgent = activePane ? latestAgentByPaneId.get(activePane.id) : undefined;
   const mobileHeaderStatus = mobileHeaderAgent
-    ? agentStatusClass(mobileHeaderAgent.status)
+    ? workspaceAgentStatusClass(mobileHeaderAgent.status)
     : activePane?.status === "running"
       ? "running"
       : activePane?.status === "exited"
@@ -2271,9 +2272,12 @@ const agentStatusClass = (status: string): "running" | "waiting" | "completed" |
   if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";
   if (normalized === "waiting") return "waiting";
-  if (["running", "started", "working"].includes(normalized)) return "running";
+  if (["running", "started", "working", "heartbeat"].includes(normalized)) return "running";
   return "updated";
 };
+
+const workspaceAgentStatusClass = (status: string): WorkspaceAgentStatus =>
+  status.toLowerCase() === "heartbeat" ? "heartbeat" : agentStatusClass(status);
 
 const openTuiActivityStatus = (status: string): OpenTuiActivityRow["status"] => {
   const normalized = status.toLowerCase();

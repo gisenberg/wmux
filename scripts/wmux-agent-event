@@ -418,6 +418,10 @@ def main():
             status = "running"
             summary = "prime-agent running"
             message = ""
+        elif hook_event == "Heartbeat":
+            status = "heartbeat"
+            summary = "prime-agent heartbeat"
+            message = ""
         elif hook_event == "InputRequired":
             status = "waiting"
             summary = summary or "prime-agent waiting for input"
@@ -444,7 +448,10 @@ def main():
         payload["runId"] = clean_text(args.run_id, 128)
     if message:
         payload["message"] = message
-    if args.codex_hook and hook_event == "PreToolUse":
+    if (
+        (args.codex_hook and hook_event == "PreToolUse")
+        or (args.prime_agent_hook and hook_event == "Heartbeat")
+    ):
         payload["coalesce"] = True
     if args.pane:
         payload["paneId"] = args.pane

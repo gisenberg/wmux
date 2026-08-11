@@ -97,6 +97,7 @@ export interface AgentEventPostBody {
   tabId?: string;
   paneId?: string;
   agent?: string;
+  /** "heartbeat" is an active presentation subtype and retains delegation state "running". */
   status?: string;
   title?: string;
   summary?: string;

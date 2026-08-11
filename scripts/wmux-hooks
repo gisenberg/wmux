@@ -2362,6 +2362,23 @@ export default function (pi: any) {
     if (event?.toolName !== "ipython" || typeof event?.input?.code !== "string") return
     event.input.code = bindIpythonEnvironment(event.input.code)
   })
+  pi.on("message_start", async (event: any, ctx: any) => {
+    if (
+      process.env.WMUX_DELEGATED_RUN === "1"
+      || event?.message?.role !== "custom"
+      || event.message.customType !== "heartbeat_prompt"
+    ) return
+    const identity = boundIdentity
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth === undefined || !key) return
+    const activity = sharedActivities.get(identity.paneId)
+    const descendant = depth > 0 ? activity?.descendants.get(key) : undefined
+    const binding = depth > 0
+      ? activity?.syntheticDescendantTurn === descendant ? descendant : undefined
+      : activity?.root?.sessionKey === key ? activity.root.binding : undefined
+    if (binding) await send({ hook_event_name: "Heartbeat" }, binding)
+  })
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     if (process.env.WMUX_DELEGATED_RUN === "1") return
     const identity = boundIdentity
@@ -2486,7 +2503,14 @@ export default function (pi: any) {
     await send({ hook_event_name: "UserPromptSubmit" }, root)
   })
   pi.on("agent_end", async (event: any, ctx: any) => {
-    if (process.env.WMUX_DELEGATED_RUN === "1" || ctx.hasPendingMessages?.()) return
+    if (process.env.WMUX_DELEGATED_RUN === "1") return
+    const messages = Array.isArray(event.messages) ? event.messages : []
+    const assistant = messages.findLast((message: any) => message?.role === "assistant")
+    const stopReason = typeof assistant?.stopReason === "string" ? assistant.stopReason : ""
+    // Prime emits an intermediate agent_end with toolUse before it decides to
+    // auto-compact and continue. That continuation is not pending yet and resumes
+    // without another before_agent_start, so retain both root and descendant state.
+    if (ctx.hasPendingMessages?.() || stopReason === "toolUse") return
     const identity = boundIdentity
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
@@ -2499,9 +2523,6 @@ export default function (pi: any) {
     const activity = sharedActivities.get(identity.paneId)
     const completed = activity?.root?.sessionKey === key ? activity.root.binding : undefined
     if (!activity || !completed) return
-    const messages = Array.isArray(event.messages) ? event.messages : []
-    const assistant = messages.findLast((message: any) => message?.role === "assistant")
-    const stopReason = typeof assistant?.stopReason === "string" ? assistant.stopReason : ""
     const errorMessage = typeof assistant?.errorMessage === "string" ? assistant.errorMessage.trim() : ""
     const terminal: PendingTerminal = {
       input: {

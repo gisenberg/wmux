@@ -4,6 +4,8 @@ export const SIDEBAR_AGENT_RUNNING_FRAMES = [
   "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 ] as const;
 
+export const SIDEBAR_AGENT_HEARTBEAT_FRAMES = ["▁", "▃", "█", "▃"] as const;
+
 export interface SidebarAgentStatusPresentation {
   label: string;
   marker: string;
@@ -11,6 +13,7 @@ export interface SidebarAgentStatusPresentation {
 
 const labels: Record<WorkspaceAgentStatus, string> = {
   running: "working",
+  heartbeat: "heartbeat",
   waiting: "waiting",
   completed: "done",
   failed: "failed",
@@ -27,6 +30,14 @@ export const sidebarAgentStatusPresentation = (
       label: labels.running,
       marker: SIDEBAR_AGENT_RUNNING_FRAMES[
         animationTick % SIDEBAR_AGENT_RUNNING_FRAMES.length
+      ],
+    };
+  }
+  if (status === "heartbeat") {
+    return {
+      label: labels.heartbeat,
+      marker: SIDEBAR_AGENT_HEARTBEAT_FRAMES[
+        animationTick % SIDEBAR_AGENT_HEARTBEAT_FRAMES.length
       ],
     };
   }
