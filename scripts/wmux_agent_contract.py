@@ -23,7 +23,7 @@ MAX_RUN_ID = 128
 MAX_DIRECTORY = 4096
 MAX_OPTION_TEXT = 512
 
-RUNTIMES = frozenset(("opencode", "codex", "claude"))
+RUNTIMES = frozenset(("opencode", "codex", "claude", "prime-agent"))
 SANDBOX_MODES = frozenset(("read-only", "workspace-write", "danger-full-access"))
 RESULT_FORMATS = frozenset(("outcome-v1",))
 OUTCOME_SCHEMA = _json.loads("{\"type\":\"object\",\"properties\":{\"outcome\":{\"type\":\"string\",\"enum\":[\"completed\",\"blocked\",\"failed\"]},\"summary\":{\"type\":\"string\"}},\"required\":[\"outcome\",\"summary\"],\"additionalProperties\":false}")

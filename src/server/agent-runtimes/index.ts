@@ -11,6 +11,10 @@ import {
   opencodeHeadlessAdapter,
   opencodeTuiAdapter,
 } from "./opencode.js";
+import {
+  primeAgentHeadlessAdapter,
+  primeAgentTuiAdapter,
+} from "./prime-agent.js";
 import type { AgentRuntimeAdapter } from "./adapter.js";
 
 const adapters: Record<
@@ -28,6 +32,10 @@ const adapters: Record<
   opencode: {
     tui: opencodeTuiAdapter,
     headless: opencodeHeadlessAdapter,
+  },
+  "prime-agent": {
+    tui: primeAgentTuiAdapter,
+    headless: primeAgentHeadlessAdapter,
   },
 };
 

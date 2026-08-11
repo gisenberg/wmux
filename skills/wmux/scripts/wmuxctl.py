@@ -47,6 +47,15 @@ CODEX_READY_PATTERN = r"(?s)OpenAI Codex.*?›(?:\s|$)"
 UNSAFE_TUI_PROMPT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
+def runtime_label(runtime: str) -> str:
+    return {
+        "opencode": "OpenCode",
+        "codex": "Codex",
+        "claude": "Claude",
+        "prime-agent": "Prime Agent",
+    }.get(runtime, runtime)
+
+
 class DelegationObservationError(RuntimeError):
     """The controller could not determine an agent's terminal outcome."""
 
@@ -972,7 +981,7 @@ def wait_for_prompt_acceptance(
         if remaining <= 0:
             detail = f": {last_status_error}" if last_status_error else ""
             raise DelegationObservationError(
-                f"wmuxctl: {runtime.capitalize()} did not acknowledge the submitted prompt within {timeout:g}s{detail}"
+                f"wmuxctl: {runtime_label(runtime)} did not acknowledge the submitted prompt within {timeout:g}s{detail}"
             )
         try:
             durable = client.delegation_status(run_id, timeout=remaining)
@@ -1600,7 +1609,7 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,
                  "promptSubmitted": False, "activityVerified": False})
     try:
-        client.set_workspace_title(info["workspaceId"], args.title or f"{args.runtime.capitalize()} TUI")
+        client.set_workspace_title(info["workspaceId"], args.title or f"{runtime_label(args.runtime)} TUI")
         wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows)
         # Recheck after pane creation so a dynamic registration cannot drift.
         current_machine = require_posix_machine(client, args.machine)
@@ -1777,7 +1786,7 @@ def record_detached_delegation(
         ),
         (
             "waiting",
-            f"{runtime.capitalize()} delegation detached; worker may still be running",
+            f"{runtime_label(runtime)} delegation detached; worker may still be running",
             "",
         ),
     )
@@ -1825,7 +1834,7 @@ def session_workspace(
         None,
     )
     if active:
-        raise SystemExit(f"wmuxctl: {runtime.capitalize()} session is already running turn {active.get('runId')}")
+        raise SystemExit(f"wmuxctl: {runtime_label(runtime)} session is already running turn {active.get('runId')}")
     return workspace
 
 
@@ -1864,6 +1873,10 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
                 raise SystemExit(f"wmuxctl: --{key.replace('_', '-')} must be positive and finite")
     if args.runtime == "opencode" and not args.write_access:
         raise SystemExit("wmuxctl: OpenCode delegation cannot enforce read-only mode; add --write-access explicitly")
+    if args.runtime == "prime-agent" and not args.write_access:
+        raise SystemExit("wmuxctl: Prime Agent delegation cannot enforce read-only mode; add --write-access explicitly")
+    if args.runtime == "prime-agent" and not args.unattended:
+        raise SystemExit("wmuxctl: Prime Agent delegation has no approval prompts; add --unattended explicitly")
     if args.sandbox and args.runtime != "codex":
         raise SystemExit("wmuxctl: explicit sandbox modes currently require the Codex runtime")
     if args.structured_outcome and args.runtime != "codex":
@@ -1886,7 +1899,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         raise SystemExit("wmuxctl: Windows delegation directory must be drive-absolute or home-relative")
     if is_windows and args.runtime != "codex":
         raise SystemExit("wmuxctl: Windows delegation currently supports the Codex runtime")
-    title = args.title or f"{args.runtime.capitalize()} delegation"
+    title = args.title or f"{runtime_label(args.runtime)} delegation"
     workspace = None
     reused = False
     if args.session_workspace:
@@ -1974,7 +1987,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             client.set_workspace_title(workspace["id"], title)
         client.record_agent_event(
             info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "running", title,
-            f"{args.runtime.capitalize()} delegation running",
+            f"{runtime_label(args.runtime)} delegation running",
             run_id=run_id,
             session_id=session_id,
             prompt=prompt,
@@ -2136,9 +2149,9 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             detail = "Delegated task completed without text output." if ok else f"Delegated task failed with exit code {exit_code}."
         status = "completed" if ok else "failed"
         lifecycle_summary = (
-            f"{args.runtime.capitalize()} delegation blocked"
+            f"{runtime_label(args.runtime)} delegation blocked"
             if outcome == "blocked"
-            else f"{args.runtime.capitalize()} delegation {status}"
+            else f"{runtime_label(args.runtime)} delegation {status}"
         )
         if not recovered:
             client.record_agent_event(
@@ -2175,7 +2188,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
             client.send_input(info["paneId"], "\x03", args.cols, args.rows)
             client.record_agent_event(
                 info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "stopped", title,
-                f"{args.runtime.capitalize()} delegation stopped",
+                f"{runtime_label(args.runtime)} delegation stopped",
                 run_id=run_id,
             )
         except SystemExit:
@@ -2222,7 +2235,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         try:
             client.record_agent_event(
                 info["workspaceId"], info["tabId"], info["paneId"], args.runtime, "failed", title,
-                f"{args.runtime.capitalize()} delegation failed", message=detail, run_id=run_id,
+                f"{runtime_label(args.runtime)} delegation failed", message=detail, run_id=run_id,
             )
         except SystemExit:
             pass
@@ -2506,8 +2519,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--rows", type=int, default=36)
     run.set_defaults(func=cmd_run, enter=True)
 
-    delegate = subparsers.add_parser("delegate", help="run a visible OpenCode, Codex, or Claude task")
-    delegate.add_argument("runtime", choices=("opencode", "codex", "claude"), help="agent CLI to run in the target pane")
+    delegate = subparsers.add_parser("delegate", help="run a visible OpenCode, Codex, Claude, or Prime Agent task")
+    delegate.add_argument("runtime", choices=("opencode", "codex", "claude", "prime-agent"), help="agent CLI to run in the target pane")
     delegate.add_argument("machine", help="reachable POSIX or Windows machine id")
     delegate.add_argument("--directory", required=True, help="absolute target working directory")
     delegate.add_argument("--prompt-file", default="", help="UTF-8 prompt file; use - or omit with piped stdin")
@@ -2555,8 +2568,8 @@ def build_parser() -> argparse.ArgumentParser:
     delegate.add_argument("--rows", type=int, default=36)
     delegate.set_defaults(func=cmd_delegate)
 
-    tui = subparsers.add_parser("tui", help="start a visible interactive OpenCode, Codex, or Claude TUI on a POSIX target")
-    tui.add_argument("runtime", choices=("opencode", "codex", "claude"), help="agent CLI to start")
+    tui = subparsers.add_parser("tui", help="start a visible interactive OpenCode, Codex, Claude, or Prime Agent TUI on a POSIX target")
+    tui.add_argument("runtime", choices=("opencode", "codex", "claude", "prime-agent"), help="agent CLI to start")
     tui.add_argument("machine", help="reachable POSIX machine id")
     tui.add_argument("--directory", required=True, help="absolute target working directory")
     tui.add_argument("--prompt-file", default="", help="UTF-8 prompt file; use - or pipe stdin")
