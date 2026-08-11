@@ -51,8 +51,8 @@ const emptyActivity = (): WorkspaceActivityAggregate => ({ unreadCount: 0, bell:
 const statusPriority: Record<WorkspaceAgentStatus, number> = {
   completed: 1,
   updated: 2,
-  running: 3,
-  heartbeat: 4,
+  heartbeat: 3,
+  running: 4,
   waiting: 5,
   failed: 6,
 };

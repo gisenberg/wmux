@@ -292,8 +292,9 @@ export interface AgentActivity {
   tabId: string;
   paneId: string;
   agent: string;
-  /** Well-known active presentation statuses include running, waiting, and heartbeat. */
   status: string;
+  /** True while this Prime session has at least one active scheduled heartbeat. */
+  heartbeatActive?: boolean;
   title: string;
   summary: string;
   message?: string;

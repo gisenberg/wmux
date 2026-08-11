@@ -88,43 +88,98 @@ test("agent sessions own lifecycle, title, and notification updates", () => {
 });
 
 
-test("Prime heartbeat activity remains on one active delegation", () => {
+test("scheduled heartbeat metadata is orthogonal to the agent lifecycle", () => {
   withAgentSessions((state, agents) => {
     const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
-    agents.recordAgentEvent({
+    const running = agents.recordAgentEvent({
       paneId,
       runId: "run-heartbeat",
       agent: "prime-agent",
       status: "running",
       summary: "prime-agent running",
     });
-    const runningStateChangedAt = agents.delegationForRun("run-heartbeat")?.stateChangedAt;
-    const heartbeat = agents.recordAgentEvent({
+    const delegationBefore = structuredClone(agents.delegationForRun("run-heartbeat"));
+    const timelineCount = agents.timelineForSession("run-heartbeat")?.entries.length;
+    const notificationCount = state.snapshot().notifications.length;
+
+    const scheduled = agents.recordHeartbeatState({
+      paneId,
+      agent: "prime-agent",
+      heartbeatActive: true,
+    });
+    assert.equal(scheduled.agentEvent?.id, running.agentEvent.id);
+    assert.equal(scheduled.agentEvent?.status, "running");
+    assert.equal(scheduled.agentEvent?.heartbeatActive, true);
+    assert.deepEqual(agents.delegationForRun("run-heartbeat"), delegationBefore);
+    assert.equal(agents.timelineForSession("run-heartbeat")?.entries.length, timelineCount);
+    assert.equal(state.snapshot().notifications.length, notificationCount);
+    assert.equal(state.snapshot().agentEvents.length, 1);
+
+    const repeated = agents.recordHeartbeatState({
+      paneId,
+      agent: "prime-agent",
+      heartbeatActive: true,
+    });
+    assert.equal(repeated.agentEvent?.id, running.agentEvent.id);
+    assert.equal(state.snapshot().agentEvents.length, 1);
+
+    const completed = agents.recordAgentEvent({
       paneId,
       runId: "run-heartbeat",
       agent: "prime-agent",
-      status: "heartbeat",
-      summary: "prime-agent heartbeat",
-      coalesce: true,
+      status: "completed",
+      summary: "prime-agent completed",
     });
+    assert.equal(completed.agentEvent.status, "completed");
+    assert.equal(completed.agentEvent.heartbeatActive, true);
 
-    assert.equal(heartbeat.notification, undefined);
-    assert.equal(heartbeat.agentEvent.status, "heartbeat");
-    assert.equal(agents.delegationForRun("run-heartbeat")?.state, "running");
-    assert.equal(agents.delegationForRun("run-heartbeat")?.stateChangedAt, runningStateChangedAt);
-    assert.equal(state.snapshot().agentEvents[0]?.runId, "run-heartbeat");
-    assert.equal(state.snapshot().agentEvents[0]?.status, "heartbeat");
-
-    const repeated = agents.recordAgentEvent({
+    const cleared = agents.recordHeartbeatState({
       paneId,
-      runId: "run-heartbeat",
       agent: "prime-agent",
-      status: "heartbeat",
-      summary: "prime-agent heartbeat",
-      coalesce: true,
+      heartbeatActive: false,
     });
-    assert.equal(repeated.agentEvent.id, heartbeat.agentEvent.id);
-    assert.equal(state.snapshot().agentEvents.filter((event) => event.runId === "run-heartbeat").length, 2);
+    assert.equal(cleared.agentEvent?.id, completed.agentEvent.id);
+    assert.equal(cleared.agentEvent?.status, "completed");
+    assert.equal(cleared.agentEvent?.heartbeatActive, undefined);
+    assert.equal(agents.delegationForRun("run-heartbeat")?.state, "completed");
+
+    const eventCount = state.snapshot().agentEvents.length;
+    const idleOnly = agents.recordHeartbeatState({
+      paneId,
+      agent: "prime-agent-idle",
+      heartbeatActive: true,
+    });
+    assert.equal(idleOnly.agentEvent, undefined);
+    assert.equal(state.snapshot().agentEvents.length, eventCount);
+    assert.equal(state.snapshot().delegations.length, 1);
+
+    const coalescedBefore = agents.recordAgentEvent({
+      paneId,
+      runId: "run-heartbeat-coalesce",
+      agent: "prime-agent-coalesce",
+      status: "running",
+      coalesce: true,
+      heartbeatActive: false,
+    });
+    const coalescedChanged = agents.recordAgentEvent({
+      paneId,
+      runId: "run-heartbeat-coalesce",
+      agent: "prime-agent-coalesce",
+      status: "running",
+      coalesce: true,
+      heartbeatActive: true,
+    });
+    assert.notEqual(coalescedChanged.agentEvent.id, coalescedBefore.agentEvent.id);
+    assert.equal(coalescedChanged.agentEvent.heartbeatActive, true);
+    const coalescedSame = agents.recordAgentEvent({
+      paneId,
+      runId: "run-heartbeat-coalesce",
+      agent: "prime-agent-coalesce",
+      status: "running",
+      coalesce: true,
+      heartbeatActive: true,
+    });
+    assert.equal(coalescedSame.agentEvent.id, coalescedChanged.agentEvent.id);
   });
 });
 

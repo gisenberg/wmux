@@ -1265,12 +1265,12 @@ const agentStatusClass = (status: string): MobileAgentStatus => {
   if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";
   if (normalized === "waiting") return "waiting";
-  if (["running", "started", "working", "heartbeat"].includes(normalized)) return "running";
+  if (["running", "started", "working"].includes(normalized)) return "running";
   return "updated";
 };
 
 const isActiveAgentStatus = (status: string): boolean =>
-  ["running", "started", "working", "heartbeat", "waiting"].includes(status.toLowerCase());
+  ["running", "started", "working", "waiting"].includes(status.toLowerCase());
 
 const isSettledAgentStatus = (status: string): boolean =>
   ["completed", "done", "success", "failed", "error", "cancelled", "stopped", "interrupted"].includes(

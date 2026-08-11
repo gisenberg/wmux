@@ -24,7 +24,6 @@ const ACTIVE_AGENT_STATUSES = new Set([
   "running",
   "started",
   "working",
-  "heartbeat",
   "waiting",
 ]);
 
@@ -92,6 +91,11 @@ export interface AgentEventResult {
   workspace: Workspace;
   notification?: TerminalNotification;
   agentEvent: AgentActivity;
+}
+
+export interface AgentHeartbeatStateResult {
+  workspace: Workspace;
+  agentEvent?: AgentActivity;
 }
 
 export const monotonicAgentTimestamp = (
@@ -202,6 +206,11 @@ export class AgentSessionService {
         paneId: target.paneId,
         agent,
         status,
+        ...((typeof input.heartbeatActive === "boolean"
+          ? input.heartbeatActive
+          : Boolean(latestAgentEvent?.heartbeatActive))
+          ? { heartbeatActive: true }
+          : {}),
         title,
         summary,
         ...(message ? { message } : {}),
@@ -324,6 +333,44 @@ export class AgentSessionService {
     return result;
   }
 
+  recordHeartbeatState(input: AgentEventPostBody): AgentHeartbeatStateResult {
+    const active = input.heartbeatActive === true;
+    return this.state.commitMutation<AgentHeartbeatStateResult>((persisted) => {
+      const target = resolveTarget(persisted, input);
+      const agent = cleanTitle(input.agent ?? "agent", "agent");
+      const latest = persisted.agentEvents.find(
+        (candidate) =>
+          candidate.paneId === target.paneId
+          && candidate.agent === agent,
+      );
+      if (!latest) {
+        return {
+          result: { workspace: target.workspace },
+          changed: false,
+        };
+      }
+      if (Boolean(latest.heartbeatActive) === active) {
+        return {
+          result: {
+            workspace: target.workspace,
+            agentEvent: structuredClone(latest),
+          },
+          changed: false,
+        };
+      }
+      const agentEvent = latest;
+      if (active) agentEvent.heartbeatActive = true;
+      else delete agentEvent.heartbeatActive;
+      return {
+        result: {
+          workspace: target.workspace,
+          agentEvent: structuredClone(agentEvent),
+        },
+        changed: true,
+      };
+    });
+  }
+
   private coalescedActiveEvent(
     input: AgentEventPostBody,
   ): AgentEventResult | undefined {
@@ -348,6 +395,10 @@ export class AgentSessionService {
       !latest
       || latest.status !== status
       || cleanDelegationRunId(latest.runId) !== runId
+      || (
+        typeof input.heartbeatActive === "boolean"
+        && Boolean(latest.heartbeatActive) !== input.heartbeatActive
+      )
     ) {
       return undefined;
     }

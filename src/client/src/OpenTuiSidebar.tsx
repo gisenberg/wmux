@@ -846,7 +846,7 @@ const drawSidebarGrid = (
     completed: rgba.green,
     failed: rgba.red,
     running: rgba.blue,
-    heartbeat: rgba.gold,
+    heartbeat: rgba.red,
     updated: rgba.gold,
     waiting: rgba.gold,
   };
@@ -979,7 +979,6 @@ const drawSidebarGrid = (
   section(row, model.groupSidebarSessionsByHost ? "agents" : "agent sessions");
   const activeAgentCount = model.workspaces.filter((workspace) =>
     workspace.agentStatus === "running"
-    || workspace.agentStatus === "heartbeat"
     || workspace.agentStatus === "waiting").length;
   const workspaceCountLabel = activeAgentCount > 0
     ? `${model.workspaces.length} / ${activeAgentCount} ACTIVE`
@@ -1021,7 +1020,6 @@ const drawSidebarGrid = (
       const groupWorkspaceCount = machine?.workspaceCount ?? machineWorkspaces.length;
       const groupActiveCount = machine?.activeAgentCount ?? machineWorkspaces.filter((workspace) =>
         workspace.agentStatus === "running"
-        || workspace.agentStatus === "heartbeat"
         || workspace.agentStatus === "waiting").length;
       const groupCountLabel = groupActiveCount > 0
         ? `${groupWorkspaceCount}/${groupActiveCount}`

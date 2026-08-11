@@ -337,6 +337,34 @@ test("version 7 state migrates before notification deep links are persisted", ()
   });
 });
 
+test("version 8 agent activity migrates without scheduled-heartbeat metadata", () => {
+  withTempState((filePath) => {
+    const previous = new StateStore(machines, filePath).snapshot();
+    const workspace = previous.workspaces[0];
+    const tab = workspace.tabs[0];
+    const pane = tab.panes[0];
+    previous.agentEvents = [{
+      id: "agent_v8",
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      paneId: pane.id,
+      agent: "prime-agent",
+      status: "completed",
+      title: "",
+      summary: "done",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    }];
+    const v8 = previous as unknown as Record<string, unknown>;
+    v8.schemaVersion = 8;
+    fs.writeFileSync(filePath, JSON.stringify(v8));
+
+    const migrated = new StateStore(machines, filePath).snapshot();
+    assert.equal(migrated.schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+    assert.equal(migrated.agentEvents[0]?.heartbeatActive, undefined);
+    assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion, CURRENT_STATE_SCHEMA_VERSION);
+  });
+});
+
 test("state recovers from the last validated backup", () => {
   withTempState((filePath, dir) => {
     const store = new StateStore(machines, filePath);
@@ -616,7 +644,7 @@ test("workspace reordering persists and ignores no-op moves", () => {
   });
 });
 
-test("Windows agent generation ports remain schema-8 compatible across restart", () => {
+test("Windows agent generation ports remain schema-compatible across restart", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);
     const pane = store.snapshot().workspaces[0].tabs[0].panes[0];

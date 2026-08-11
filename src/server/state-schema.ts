@@ -8,7 +8,7 @@ import type {
   PersistedState,
 } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 8;
+export const CURRENT_STATE_SCHEMA_VERSION = 9;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -97,6 +97,7 @@ const agentEventSchema = z.object({
   paneId: idSchema,
   agent: z.string().max(500),
   status: z.string().max(500),
+  heartbeatActive: z.boolean().optional(),
   title: z.string().max(500),
   summary: z.string().max(2000),
   message: z.string().max(12_000).optional(),
@@ -457,6 +458,12 @@ export const migrateV7ToV8State = (record: Record<string, unknown>): Record<stri
   schemaVersion: 8,
 });
 
+/** v9 agent activity may carry orthogonal scheduled-heartbeat presence. */
+export const migrateV8ToV9State = (record: Record<string, unknown>): Record<string, unknown> => ({
+  ...record,
+  schemaVersion: 9,
+});
+
 export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("state must be a JSON object");
@@ -476,6 +483,7 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
     && rawVersion !== 5
     && rawVersion !== 6
     && rawVersion !== 7
+    && rawVersion !== 8
     && rawVersion !== CURRENT_STATE_SCHEMA_VERSION
   ) {
     throw new Error("state schemaVersion must be a supported integer");
@@ -499,9 +507,12 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   const v7Candidate = rawVersion !== undefined && rawVersion >= 7
     ? record
     : migrateV6ToV7State(v6Candidate);
-  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+  const v8Candidate = rawVersion !== undefined && rawVersion >= 8
     ? record
     : migrateV7ToV8State(v7Candidate);
+  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+    ? record
+    : migrateV8ToV9State(v8Candidate);
   const normalized = normalizeNotificationBodies(candidate);
   return {
     state: persistedStateSchema.parse(normalized.record),

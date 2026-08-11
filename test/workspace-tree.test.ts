@@ -47,7 +47,7 @@ test("tree derivation preserves preorder, depth, collapse, and hidden activity",
   assert.deepEqual(root?.hiddenActivity, { unreadCount: 5, bell: true, agentStatus: "failed" });
 });
 
-test("heartbeat activity surfaces above ordinary running work but below attention", () => {
+test("idle heartbeat activity stays below working and attention states", () => {
   const heartbeat = deriveWorkspaceTree({
     workspaces,
     activityByWorkspaceId: new Map([
@@ -56,7 +56,7 @@ test("heartbeat activity surfaces above ordinary running work but below attentio
       ["grandchild", { unreadCount: 0, bell: false, agentStatus: "running" as const }],
     ]),
   });
-  assert.equal(heartbeat.byId.get("root")?.subtreeActivity.agentStatus, "heartbeat");
+  assert.equal(heartbeat.byId.get("root")?.subtreeActivity.agentStatus, "running");
 
   const attention = deriveWorkspaceTree({
     workspaces,

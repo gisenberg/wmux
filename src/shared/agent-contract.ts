@@ -97,8 +97,9 @@ export interface AgentEventPostBody {
   tabId?: string;
   paneId?: string;
   agent?: string;
-  /** "heartbeat" is an active presentation subtype and retains delegation state "running". */
   status?: string;
+  /** Scheduler-presence metadata; it never changes the agent lifecycle state. */
+  heartbeatActive?: boolean;
   title?: string;
   summary?: string;
   message?: string;

@@ -6,7 +6,7 @@ import {
   sidebarAgentStatusPresentation,
 } from "../src/client/src/sidebar-agent-status";
 
-test("sidebar agent indicators distinguish active work from user attention", () => {
+test("sidebar agent indicators distinguish work, idle heartbeat, and attention", () => {
   const active = sidebarAgentStatusPresentation("running", true, 3);
   assert.equal(active.label, "working");
   assert.equal(active.marker, SIDEBAR_AGENT_RUNNING_FRAMES[3]);

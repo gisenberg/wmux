@@ -4,7 +4,7 @@ export const SIDEBAR_AGENT_RUNNING_FRAMES = [
   "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 ] as const;
 
-export const SIDEBAR_AGENT_HEARTBEAT_FRAMES = ["▁", "▃", "█", "▃"] as const;
+export const SIDEBAR_AGENT_HEARTBEAT_FRAMES = ["·", "♡", "♥", "♡"] as const;
 
 export interface SidebarAgentStatusPresentation {
   label: string;

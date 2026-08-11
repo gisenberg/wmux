@@ -57,6 +57,17 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
     ),
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = (await readJsonBody()) as AgentEventPostBody;
+      if (typeof body.heartbeatActive === "boolean" && !body.status) {
+        const result = deps.agentSessions.recordHeartbeatState({
+          workspaceId: body.workspaceId,
+          tabId: body.tabId,
+          paneId: body.paneId,
+          agent: body.agent,
+          heartbeatActive: body.heartbeatActive,
+        });
+        sendJson(201, { ...result, state: deps.currentPayload() });
+        return;
+      }
       const result = deps.agentSessions.recordAgentEvent({
         runId: body.runId,
         sessionId: body.sessionId,
@@ -65,6 +76,7 @@ export const eventIngestRoutes: readonly ApiRoute[] = [
         paneId: body.paneId,
         agent: body.agent,
         status: body.status,
+        heartbeatActive: body.heartbeatActive,
         title: body.title,
         summary: body.summary,
         message: body.message,

@@ -164,7 +164,7 @@ const drawMobileChrome = (
     completed: rgba.green,
     failed: rgba.red,
     running: rgba.blue,
-    heartbeat: rgba.gold,
+    heartbeat: rgba.red,
     updated: rgba.muted,
     waiting: rgba.gold,
   };

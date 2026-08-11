@@ -603,8 +603,10 @@ after server commit without replaying relay plaintext from the server.
 `wmux-hooks install prime-agent` writes an auto-loaded managed extension to
 `~/.prime/agent/extensions/wmux.ts`. While a root turn or any nested RLM
 subagent is running, the pane's sidebar row uses the animated working indicator.
-A scheduled Prime heartbeat switches that row to a distinct gold pulse animation
-while retaining the same active lifecycle. Root completion is deferred until the
+When a Prime session is idle with an active scheduled heartbeat, that row uses a
+distinct red heart pulse. A delivered heartbeat turn switches back to the ordinary
+blue working spinner until its work finishes, then returns to the heart while the
+schedule remains active. Root completion is deferred until the
 last descendant becomes idle, then the row changes to Done without a false idle
 flicker. Intermediate tool-loop ends that
 trigger auto-compaction retain the same running lifecycle through Prime's internal

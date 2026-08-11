@@ -463,9 +463,10 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
     const address = server.address();
     assert.ok(address && typeof address === "object");
     for (const input of [
-      { hook_event_name: "UserPromptSubmit", prompt: "add Prime Agent support" },
-      { hook_event_name: "Heartbeat" },
-      { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done." },
+      { hook_event_name: "UserPromptSubmit", prompt: "add Prime Agent support", wmux_heartbeat_active: true },
+      { hook_event_name: "HeartbeatScheduled" },
+      { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done.", wmux_heartbeat_active: true },
+      { hook_event_name: "HeartbeatCleared" },
       { hook_event_name: "InputRequired", prompt: "approve deployment", last_assistant_message: "Approval required." },
       { hook_event_name: "Error", last_assistant_message: "Prime Agent failed." },
       { hook_event_name: "Interrupted", last_assistant_message: "Prime Agent was interrupted." },
@@ -478,33 +479,45 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
         HOOK_INPUT: JSON.stringify(input),
       }));
     }
-    assert.deepEqual(captured.map(({ agent, status, summary, message, attentionReason }) => ({
-      agent, status, summary, message, attentionReason,
+    assert.deepEqual(captured.map(({ agent, status, heartbeatActive, summary, message, attentionReason }) => ({
+      agent, status, heartbeatActive, summary, message, attentionReason,
     })), [
       {
         agent: "prime-agent",
         status: "running",
+        heartbeatActive: true,
         summary: "prime-agent running",
         message: undefined,
         attentionReason: undefined,
       },
       {
         agent: "prime-agent",
-        status: "heartbeat",
-        summary: "prime-agent heartbeat",
+        status: undefined,
+        heartbeatActive: true,
+        summary: "",
         message: undefined,
         attentionReason: undefined,
       },
       {
         agent: "prime-agent",
         status: "completed",
+        heartbeatActive: true,
         summary: "Prime Agent done.",
         message: "Prime Agent done.",
         attentionReason: undefined,
       },
       {
         agent: "prime-agent",
+        status: undefined,
+        heartbeatActive: false,
+        summary: "",
+        message: undefined,
+        attentionReason: undefined,
+      },
+      {
+        agent: "prime-agent",
         status: "waiting",
+        heartbeatActive: undefined,
         summary: "Approval required.",
         message: "Approval required.",
         attentionReason: "input",
@@ -512,6 +525,7 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
       {
         agent: "prime-agent",
         status: "failed",
+        heartbeatActive: undefined,
         summary: "Prime Agent failed.",
         message: "Prime Agent failed.",
         attentionReason: undefined,
@@ -519,13 +533,15 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
       {
         agent: "prime-agent",
         status: "interrupted",
+        heartbeatActive: undefined,
         summary: "Prime Agent was interrupted.",
         message: "Prime Agent was interrupted.",
         attentionReason: undefined,
       },
     ]);
     assert.equal(captured[0]?.title, "add Prime Agent support");
-    assert.equal(captured[1]?.coalesce, true);
+    assert.equal(captured[1]?.heartbeatActive, true);
+    assert.equal(captured[3]?.heartbeatActive, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
