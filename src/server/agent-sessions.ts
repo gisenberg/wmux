@@ -491,6 +491,13 @@ export class AgentSessionService {
     });
   }
 
+  activeAgentRuntimeForPane(paneId: string): string | undefined {
+    const latest = this.state.snapshot().agentEvents.find(
+      (candidate) => candidate.paneId === paneId,
+    );
+    return latest && ACTIVE_AGENT_STATUSES.has(latest.status) ? latest.agent : undefined;
+  }
+
   interruptAgentForPane(paneId: string): boolean {
     const snapshot = this.state.snapshot();
     const latest = snapshot.agentEvents.find(

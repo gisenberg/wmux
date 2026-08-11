@@ -743,13 +743,40 @@ test("restart reattaches a referenced rollout generation on its pinned private o
   }
 });
 
-test("agent interrupt input excludes terminal escape sequences", () => {
+test("agent interrupt input scopes bare escape fallback to Codex", () => {
   assert.equal(isAgentInterruptInput("\x03"), true);
-  assert.equal(isAgentInterruptInput("\x1b"), true);
-  assert.equal(isAgentInterruptInput("\x1b\x1b"), true);
-  assert.equal(isAgentInterruptInput("\x1b[A"), false);
-  assert.equal(isAgentInterruptInput("\x1bf"), false);
-  assert.equal(isAgentInterruptInput("text"), false);
+  assert.equal(isAgentInterruptInput("\x03", "prime-agent"), true);
+  assert.equal(isAgentInterruptInput("\x1b", "codex"), true);
+  assert.equal(isAgentInterruptInput("\x1b\x1b", "codex"), true);
+  assert.equal(isAgentInterruptInput("\x1b", "prime-agent"), false);
+  assert.equal(isAgentInterruptInput("\x1b"), false);
+  assert.equal(isAgentInterruptInput("\x1b[A", "codex"), false);
+  assert.equal(isAgentInterruptInput("\x1bf", "codex"), false);
+  assert.equal(isAgentInterruptInput("text", "codex"), false);
+});
+
+test("Prime Agent escape UI actions do not interrupt active pane lifecycle", async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    const client = socket();
+    manager.attach(pane.id, client, 80, 24);
+    await waitForMessage(client, (message) => message.type === "ready");
+    manager.agentSessions.recordAgentEvent({
+      paneId: pane.id,
+      agent: "prime-agent",
+      status: "running",
+      summary: "Main turn and subagents active",
+    });
+
+    fake(client).message({ type: "input", data: "\x1b" });
+    assert.equal(state.snapshot().agentEvents[0]?.status, "running");
+
+    fake(client).message({ type: "input", data: "\x03" });
+    assert.equal(state.snapshot().agentEvents[0]?.status, "interrupted");
+    manager.disposeAll();
+  });
 });
 
 test("terminal-generated response metadata survives client message parsing", () => {

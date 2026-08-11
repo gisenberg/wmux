@@ -81,10 +81,12 @@ const DURABLE_CWD_OUTPUT_THROTTLE_MS = 3000;
 export const isDeliberateExit = (code: number | null, uptimeMs: number): boolean =>
   code === 0 && uptimeMs >= MIN_DELIBERATE_EXIT_UPTIME_MS;
 
-// Codex may not emit its Stop hook when a user aborts a turn. Recognize only
-// bare interrupt keystrokes here so arrow keys and other escape sequences do
-// not clear an agent that is still working.
-export const isAgentInterruptInput = (data: string): boolean => data === "\x03" || /^\x1b{1,2}$/.test(data);
+// Codex may not emit its Stop hook when a user aborts a turn. Treat its bare
+// escape key as an interrupt fallback, but never infer that for other TUIs:
+// Prime Agent, for example, uses escape to close a completed /btw pane while
+// the main turn and its subagents can still be running. Ctrl-C is universal.
+export const isAgentInterruptInput = (data: string, runtime?: string): boolean =>
+  data === "\x03" || (runtime === "codex" && /^\x1b{1,2}$/.test(data));
 
 export const sessionAccessTokenForMachine = (
   machine: MachineConfig,
@@ -420,7 +422,7 @@ export class SessionManager {
         const socketState = this.socketState.get(socket);
         if (socketState && message.sequence !== undefined) socketState.inputSequence = message.sequence;
         this.promoteResizeOwner(paneId, socket, session);
-        if (isAgentInterruptInput(message.data)) {
+        if (isAgentInterruptInput(message.data, this.agentSessions.activeAgentRuntimeForPane(paneId))) {
           this.agentSessions.interruptAgentForPane(paneId);
         }
         this.advancePaneInputEpoch(paneId);
