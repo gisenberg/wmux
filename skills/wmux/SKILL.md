@@ -53,7 +53,7 @@ If the saved URL still points at the old HTTP service, update `~/.wmux/url` or p
 
 Inside an existing wmux pane, use its bound environment as the source of truth. Do not inspect `/api/bootstrap`, search the API, or infer a "current" browser pane just to name the session.
 
-Automatic first-prompt naming needs no tool call. Let the lifecycle hook name a default workspace and tab once; use the commands below only when the user asks for a manual name or the task requires an explicit label.
+Automatic Prime root-session naming needs no tool call. The lifecycle hook names the Prime session and mirrors it to the bound automatic workspace/tab title on the first prompt, re-publishes it on later root turns, and refreshes an extension-owned name from the latest context recap after every six additional root turns. In a multi-tab workspace, the first automatic workspace title stays stable while each bound tab can keep its own refreshed title. Manual Prime or wmux names remain user-owned; use the commands below only when the user asks for a manual name or the task requires an explicit label.
 
 Name the current workspace:
 

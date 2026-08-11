@@ -175,6 +175,12 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.match(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER/);
     assert.match(extension, /hasPendingMessages/);
     assert.match(extension, /--prime-agent-hook/);
+    assert.match(extension, /wmux-title/);
+    assert.match(extension, /setSessionName/);
+    assert.match(extension, /getSessionName/);
+    assert.match(extension, /appendEntry/);
+    assert.match(extension, /wmux\.prime-title-state\.v1/);
+    assert.match(extension, /TITLE_REFRESH_INTERVAL = 6/);
     assert.match(extension, /rlmDepth/);
     await execFileAsync(process.execPath, ["--experimental-strip-types", "--check", extensionPath]);
 
@@ -198,12 +204,15 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
 test("Prime Agent extension binds each session to its forwarded pane environment", { skip: process.platform === "win32", concurrency: false }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-routing-"));
   const captured: Record<string, unknown>[] = [];
+  const titleCaptured: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", () => {
-      captured.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
-      response.writeHead(201, { "content-type": "application/json" });
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const isTitle = request.url?.endsWith("/auto-title") === true;
+      (isTitle ? titleCaptured : captured).push(body);
+      response.writeHead(isTitle ? 200 : 201, { "content-type": "application/json" });
       response.end("{}");
     });
   });
@@ -371,10 +380,14 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done one" }] }, context());
     await two.get("agent_end")?.({ messages: [{ role: "assistant", content: "done two" }] }, context());
     assert.deepEqual(captured.slice(0, 4).map((event) => [event.workspaceId, event.tabId, event.paneId, event.status, event.title]), [
-      ["ws_11111111", "tab_11111111", "pane_11111111", "running", "Name workspace one"],
-      ["ws_22222222", "tab_22222222", "pane_22222222", "running", "Name workspace two"],
+      ["ws_11111111", "tab_11111111", "pane_11111111", "running", ""],
+      ["ws_22222222", "tab_22222222", "pane_22222222", "running", ""],
       ["ws_11111111", "tab_11111111", "pane_11111111", "completed", ""],
       ["ws_22222222", "tab_22222222", "pane_22222222", "completed", ""],
+    ]);
+    assert.deepEqual(titleCaptured, [
+      { title: "Name workspace one", tabOnlyIfMultiple: false, tabId: "tab_11111111" },
+      { title: "Name workspace two", tabOnlyIfMultiple: false, tabId: "tab_22222222" },
     ]);
     assert.equal(captured[0]?.runId, captured[2]?.runId);
     assert.equal(captured[1]?.runId, captured[3]?.runId);
@@ -507,6 +520,188 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     const sharedActivity = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, unknown>;
     assert.equal(sharedActivity.has("pane_11111111"), false);
     assert.equal(sharedActivity.has("pane_22222222"), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Prime Agent extension periodically refreshes contextual titles and preserves manual session names", { skip: process.platform === "win32", concurrency: false }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-titles-"));
+  const captured: Record<string, unknown>[] = [];
+  const titleCaptured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const isTitle = request.url?.endsWith("/auto-title") === true;
+      (isTitle ? titleCaptured : captured).push(body);
+      response.writeHead(isTitle ? 200 : 201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  const saved = Object.fromEntries([
+    "HOME", "WMUX_URL", "WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH",
+    "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
+    "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER",
+  ].map((key) => [key, process.env[key]]));
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    Object.assign(process.env, {
+      HOME: home,
+      WMUX_URL: `http://127.0.0.1:${address.port}`,
+      WMUX_TOKEN: "",
+      WMUX_TOKEN_PATH: path.join(home, "missing-token"),
+      WMUX_BROWSER_AUTH_MODE: "shared-or-login",
+      HERDR_WORKSPACE_ID: "ws_33333333",
+      HERDR_TAB_ID: "tab_33333333",
+      HERDR_PANE_ID: "pane_33333333",
+      PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
+    });
+    delete process.env.WMUX_HELPER_URL;
+    delete process.env.WMUX_PUBLIC_URL;
+    delete process.env.WMUX_HELPER_TOKEN;
+    delete process.env.WMUX_HELPER_TOKEN_PATH;
+    delete process.env.WMUX_DELEGATED_RUN;
+
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
+    const installed = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
+    const entries: any[] = [];
+    const mainBranchEntries: any[] = [];
+    let activeBranchEntries = mainBranchEntries;
+    const appendSessionEntry = (entry: any) => {
+      entries.push(entry);
+      activeBranchEntries.push(entry);
+    };
+    let sessionName: string | undefined;
+    const titleStates: unknown[] = [];
+    const context = {
+      hasPendingMessages: () => false,
+      sessionManager: {
+        getSessionId: () => "title-root",
+        getHeader: () => ({ id: "title-root", rlmDepth: 0 }),
+        getBranch: () => activeBranchEntries,
+        getEntries: () => entries,
+      },
+    };
+    const loadHandlers = async (suffix: string) => {
+      const extensionPath = path.join(home, `.prime-title-${suffix}-${Date.now()}-${Math.random()}.ts`);
+      fs.copyFileSync(installed, extensionPath);
+      const module = await import(pathToFileURL(extensionPath).href);
+      const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+      module.default({
+        on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(name, handler),
+        getSessionName: () => sessionName,
+        setSessionName: (name: string) => { sessionName = name; },
+        appendEntry: (customType: string, data: unknown) => {
+          appendSessionEntry({ type: "custom", customType, data });
+          titleStates.push(data);
+        },
+      });
+      return handlers;
+    };
+    let handlers = await loadHandlers("initial");
+    const runTurn = async (prompt: string, summary: string) => {
+      await handlers.get("before_agent_start")?.({ prompt }, context);
+      appendSessionEntry({ type: "message", message: { role: "user", content: prompt } });
+      await handlers.get("agent_end")?.({ messages: [{ role: "assistant", content: summary }] }, context);
+      appendSessionEntry({ type: "agent_status", status: { summary, basedOnMessageCount: entries.length } });
+    };
+
+    await runTurn("Please repair the wmux naming lifecycle now.", "Initial naming repair underway.");
+    assert.equal(sessionName, "repair the wmux naming lifecycle now");
+    const forkBranchEntries = [...mainBranchEntries];
+    for (let turn = 2; turn <= 6; turn += 1) {
+      await runTurn("Continue", `Progress checkpoint ${turn}.`);
+    }
+    await runTurn("Keep going", "Prime wmux title synchronization");
+    assert.equal(sessionName, "Progress checkpoint 6");
+    assert.equal(titleStates.length, 7);
+
+    const runningTitles = captured
+      .filter((event) => event.status === "running")
+      .map((event) => event.title);
+    assert.deepEqual(runningTitles, ["", "", "", "", "", "", ""]);
+    assert.deepEqual(titleCaptured.map((request) => request.title), [
+      "repair the wmux naming lifecycle now",
+      "repair the wmux naming lifecycle now",
+      "repair the wmux naming lifecycle now",
+      "repair the wmux naming lifecycle now",
+      "repair the wmux naming lifecycle now",
+      "repair the wmux naming lifecycle now",
+      "Progress checkpoint 6",
+    ]);
+    assert.ok(titleCaptured.every((request) => request.tabOnlyIfMultiple === false));
+    assert.ok(titleCaptured.every((request) => request.tabId === "tab_33333333"));
+
+    // A global automatic name from another branch must not be mistaken for a
+    // manual override when navigating the session tree in either direction.
+    activeBranchEntries = forkBranchEntries;
+    await runTurn("Resume the old branch", "Old branch naming context.");
+    assert.equal(sessionName, "Initial naming repair underway");
+    assert.equal((titleStates.at(-1) as any)?.ownership, "auto");
+    activeBranchEntries = mainBranchEntries;
+    await runTurn("Return to the main branch", "Main branch naming context.");
+    assert.equal(sessionName, "Prime wmux title synchronization");
+    assert.equal((titleStates.at(-1) as any)?.ownership, "auto");
+    assert.equal(titleStates.length, 9);
+
+    // A same-text manual name is session-global even if navigation happens
+    // before that branch gets another agent turn to write an external marker.
+    activeBranchEntries = forkBranchEntries;
+    appendSessionEntry({ type: "session_info", name: sessionName });
+    activeBranchEntries = mainBranchEntries;
+    await runTurn("Navigate immediately after naming", "Global manual ownership follows the session.");
+    assert.equal((titleStates.at(-1) as any)?.ownership, "external");
+    assert.equal(sessionName, "Prime wmux title synchronization");
+    assert.equal(titleStates.length, 10);
+    activeBranchEntries = forkBranchEntries;
+    await runTurn("Navigate again after ownership transfer", "External ownership remains session-global.");
+    assert.equal((titleStates.at(-1) as any)?.ownership, "external");
+    assert.equal(sessionName, "Prime wmux title synchronization");
+    assert.equal(titleStates.length, 11);
+    activeBranchEntries = mainBranchEntries;
+
+    // Simulate an extension reload with only the persisted custom entry left.
+    const shared = (globalThis as any)[Symbol.for("wmux.prime-agent.title-state.v1")] as Map<string, unknown>;
+    shared.delete("pane_33333333:title-root");
+    handlers = await loadHandlers("reloaded");
+    await runTurn("Continue after reload", "Reloaded title work continues.");
+    assert.equal(captured.filter((event) => event.status === "running").at(-1)?.title, "");
+    assert.equal(titleStates.length, 12);
+
+    // Reasserting the generated text through Prime /name still transfers
+    // ownership because the newer session_info entry follows the title marker.
+    appendSessionEntry({ type: "session_info", name: sessionName });
+    await runTurn("Keep this exact name", "The matching manual title is authoritative.");
+    assert.equal((titleStates.at(-1) as any)?.ownership, "external");
+    assert.equal(titleStates.length, 13);
+
+    sessionName = "User Chosen Session";
+    appendSessionEntry({ type: "session_info", name: sessionName });
+    await runTurn("Respect my title", "Manual title remains authoritative.");
+    assert.equal(captured.filter((event) => event.status === "running").at(-1)?.title, "");
+    assert.equal(titleCaptured.at(-1)?.title, "User Chosen Session");
+    assert.equal(sessionName, "User Chosen Session");
+    assert.equal(titleStates.length, 14);
+
+    const titleRequestCount = titleCaptured.length;
+    sessionName = undefined;
+    appendSessionEntry({ type: "session_info", name: "" });
+    await runTurn("Clear the title", "The cleared manual title remains authoritative.");
+    await runTurn("Continue unnamed", "Automatic naming stays disabled.");
+    assert.equal(sessionName, undefined);
+    assert.equal(titleCaptured.length, titleRequestCount);
+    assert.equal(titleStates.length, 16);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {

@@ -583,23 +583,35 @@ export class StateStore extends EventEmitter {
 
     let workspaceApplied = false;
     let tabApplied = false;
-    if (workspace.nameSource !== "user") {
+    const workspaceTitleCanAdvance = workspace.nameSource !== "user"
+      && (workspace.tabs.length === 1 || workspace.nameSource === "default");
+    if (
+      workspaceTitleCanAdvance
+      && (workspace.name !== title || workspace.nameSource !== "auto")
+    ) {
       workspace.name = title;
       workspace.nameSource = "auto";
       workspaceApplied = true;
     }
 
     if (typeof input.descriptor === "string" && workspace.descriptorSource !== "user") {
-      workspace.descriptor = cleanDescriptor(input.descriptor, "");
-      workspace.descriptorSource = workspace.descriptor ? "auto" : "default";
-      workspaceApplied = true;
+      const descriptor = cleanDescriptor(input.descriptor, "");
+      const descriptorSource = descriptor ? "auto" : "default";
+      if (workspace.descriptor !== descriptor || workspace.descriptorSource !== descriptorSource) {
+        workspace.descriptor = descriptor;
+        workspace.descriptorSource = descriptorSource;
+        workspaceApplied = true;
+      }
     }
 
     let tab: SurfaceTab | undefined;
     if (input.tabId && (!input.tabOnlyIfMultiple || workspace.tabs.length > 1)) {
       tab = workspace.tabs.find((candidate) => candidate.id === input.tabId);
       if (!tab) throw new Error("tab not found");
-      if (tab.titleSource !== "user") {
+      if (
+        tab.titleSource !== "user"
+        && (tab.title !== title || tab.titleSource !== "auto")
+      ) {
         tab.title = title;
         tab.titleSource = "auto";
         tabApplied = true;

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-wmux_url="${WMUX_URL:-http://127.0.0.1:3478}"
+wmux_url=""
+if [[ -r "${HOME}/.wmux/url" ]]; then
+  # Durable agent sessions survive service updates; prefer the refreshed URL.
+  wmux_url="$(tr -d '[:space:]' < "${HOME}/.wmux/url")"
+fi
+wmux_url="${wmux_url:-${WMUX_HELPER_URL:-${WMUX_PUBLIC_URL:-${WMUX_URL:-http://127.0.0.1:3478}}}}"
 workspace_id="${WMUX_WORKSPACE_ID:-}"
 tab_id="${WMUX_TAB_ID:-}"
 title=""
@@ -90,7 +95,7 @@ load_wmux_token() {
     return
   fi
   if [[ "${env_configured}" -eq 1 ]]; then printf '%s' "${env_token}"; return; fi
-  [[ "${WMUX_BROWSER_AUTH_MODE:-shared-or-login}" == "shared-or-login" ]] || return
+  [[ "${WMUX_BROWSER_AUTH_MODE:-shared-or-login}" == "shared-or-login" ]] || return 0
   token="${WMUX_TOKEN:-}"
   if [[ -z "${token}" ]]; then
     token_file="${WMUX_TOKEN_PATH:-${HOME}/.wmux/token}"

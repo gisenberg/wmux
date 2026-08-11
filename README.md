@@ -451,7 +451,7 @@ Automation, helper, registration, and registered-host credentials cannot access 
   notification read state remain server-owned.
 - New same-host workspaces, tabs, and splits preserve the source pane's current
   directory through `tmux` metadata or OSC 7 reports.
-- `wmux-title` updates generated titles without overwriting a manual title.
+- `wmux-title` updates generated titles without overwriting a manual title. Repeated identical updates are no-ops; while a workspace has multiple tabs, its first automatic workspace title stays stable and each eligible tab can keep its own automatic title.
 - Host labels show the wmux release and platform consistently. Update
   indicators stay hidden unless an underlying runtime or helper update is
   needed.

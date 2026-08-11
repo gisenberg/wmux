@@ -59,6 +59,39 @@ test("every POSIX helper refuses an explicit unreadable helper path without lega
   }
 });
 
+test("wmux-title prefers the refreshed persisted helper URL when the environment is absent", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-title-url-"));
+  const wmuxDirectory = path.join(home, ".wmux");
+  fs.mkdirSync(wmuxDirectory, { mode: 0o700 });
+  let requestUrl = "";
+  const server = http.createServer((request, response) => {
+    requestUrl = request.url ?? "";
+    request.resume();
+    request.on("end", () => response.writeHead(200, { "content-type": "application/json" }).end("{}"));
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    fs.writeFileSync(path.join(wmuxDirectory, "url"), `http://127.0.0.1:${address.port}\n`, { mode: 0o600 });
+    const env = {
+      ...process.env,
+      HOME: home,
+      WMUX_BROWSER_AUTH_MODE: "login-only",
+      WMUX_URL: "http://127.0.0.1:1",
+      WMUX_HELPER_URL: "http://127.0.0.1:2",
+      WMUX_PUBLIC_URL: "http://127.0.0.1:3",
+    };
+    delete env.WMUX_HELPER_TOKEN;
+    delete env.WMUX_HELPER_TOKEN_PATH;
+    await execFileAsync("bash", [script("wmux-title"), "--workspace", "ws_test", "--title", "Persisted URL"], { env });
+    assert.equal(requestUrl, "/api/workspaces/ws_test/auto-title");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("explicit malformed helper environments fail before compatibility fallback", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-helper-env-"));
   try {

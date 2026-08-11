@@ -860,6 +860,74 @@ test("agent titles update auto-owned workspaces but preserve user-owned titles",
   });
 });
 
+test("automatic titles are idempotent, pane-local in multi-tab workspaces, and preserve manual ownership", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspace = store.snapshot().workspaces[0];
+    const firstTab = workspace.tabs[0];
+
+    const initial = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      tabOnlyIfMultiple: false,
+      title: "Primary session",
+    });
+    assert.equal(initial.workspaceApplied, true);
+    assert.equal(initial.tabApplied, true);
+    const revision = store.snapshot().revision;
+    const repeated = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      tabOnlyIfMultiple: false,
+      title: "Primary session",
+    });
+    assert.equal(repeated.workspaceApplied, false);
+    assert.equal(repeated.tabApplied, false);
+    assert.equal(store.snapshot().revision, revision);
+
+    const secondTab = store.createTab(workspace.id);
+    const support = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: secondTab.id,
+      tabOnlyIfMultiple: false,
+      title: "Support session",
+    });
+    assert.equal(support.workspaceApplied, false);
+    assert.equal(support.tabApplied, true);
+    store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      tabOnlyIfMultiple: false,
+      title: "Primary session refreshed",
+    });
+
+    let current = store.snapshot().workspaces[0];
+    assert.equal(current.name, "Primary session");
+    assert.equal(current.tabs.find((tab) => tab.id === firstTab.id)?.title, "Primary session refreshed");
+    assert.equal(current.tabs.find((tab) => tab.id === secondTab.id)?.title, "Support session");
+
+    store.setWorkspaceTitle(workspace.id, "Manual workspace");
+    store.setTabTitle(workspace.id, firstTab.id, "Manual tab");
+    const blocked = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      tabOnlyIfMultiple: false,
+      title: "Automatic title ignored",
+    });
+    assert.equal(blocked.workspaceApplied, false);
+    assert.equal(blocked.tabApplied, false);
+    store.flush();
+
+    const reloaded = new StateStore(machines, filePath);
+    current = reloaded.snapshot().workspaces[0];
+    assert.equal(current.name, "Manual workspace");
+    assert.equal(current.nameSource, "user");
+    assert.equal(current.tabs.find((tab) => tab.id === firstTab.id)?.title, "Manual tab");
+    assert.equal(current.tabs.find((tab) => tab.id === firstTab.id)?.titleSource, "user");
+    assert.equal(current.tabs.find((tab) => tab.id === secondTab.id)?.titleSource, "auto");
+  });
+});
+
 test("delegation results retain more detail than browser activity", () => {
   withTempState((filePath) => {
     const store = new StateStore(machines, filePath);

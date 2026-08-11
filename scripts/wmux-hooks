@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const eventScript = path.join(scriptDir, "wmux-agent-event");
+const titleScript = path.join(scriptDir, "wmux-title");
 const questionContractPath = path.join(scriptDir, "opencode-question-contract.json");
 const questionContract = readQuestionContract();
 const claudeHookCommand = `${eventScript} --agent claude --claude-hook`;
@@ -1976,6 +1977,7 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 
 const eventScript = ${JSON.stringify(eventScript)}
+const titleScript = ${JSON.stringify(titleScript)}
 const sessionDepth = (ctx: any): number | undefined => {
   try {
     const rawDepth = ctx?.sessionManager?.getHeader?.()?.rlmDepth
@@ -2150,6 +2152,18 @@ const sendNow = (input: Record<string, unknown>, binding: TurnBinding) => new Pr
   child.stdin.once("error", () => resolve())
   child.stdin.end(JSON.stringify(input))
 })
+const publishAutoTitleNow = (title: string, binding: TurnBinding) => new Promise<void>((resolve) => {
+  const child = spawn(titleScript, [
+    "--workspace", binding.identity.workspaceId,
+    "--tab", binding.identity.tabId,
+    "--tab-always",
+    "--title", title,
+  ], {
+    stdio: ["ignore", "ignore", "ignore"],
+  })
+  child.once("error", () => resolve())
+  child.once("close", () => resolve())
+})
 
 const sharedActivitySymbol = Symbol.for("wmux.prime-agent.pane-activity.v1")
 const sharedActivities = (
@@ -2170,6 +2184,13 @@ const send = (input: Record<string, unknown>, binding: TurnBinding) => {
   const activity = activityFor(binding.identity)
   activity.sendQueue = activity.sendQueue
     .then(() => sendNow(input, binding))
+    .catch(() => {})
+  return activity.sendQueue
+}
+const publishAutoTitle = (title: string, binding: TurnBinding) => {
+  const activity = activityFor(binding.identity)
+  activity.sendQueue = activity.sendQueue
+    .then(() => publishAutoTitleNow(title, binding))
     .catch(() => {})
   return activity.sendQueue
 }
@@ -2220,8 +2241,123 @@ const messageText = (value: unknown): string => {
   return typeof record.errorMessage === "string" ? record.errorMessage : ""
 }
 
+type PrimeTitleState = {
+  version: 1
+  title: string
+  ownership: "auto" | "external"
+  lastRefreshTurn: number
+  observedRootTurns: number
+}
+const TITLE_STATE_CUSTOM_TYPE = "wmux.prime-title-state.v1"
+const TITLE_REFRESH_INTERVAL = 6
+const sharedTitleStateSymbol = Symbol.for("wmux.prime-agent.title-state.v1")
+const sharedTitleStates = (
+  (globalThis as any)[sharedTitleStateSymbol]
+  ?? ((globalThis as any)[sharedTitleStateSymbol] = new Map<string, PrimeTitleState>())
+) as Map<string, PrimeTitleState>
+const titleStateKey = (identity: WmuxIdentity, key: string) => identity.paneId + ":" + key
+const cleanDisplayTitle = (value: unknown, limit = 80): string =>
+  typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit).trim() : ""
+const titleFromText = (value: unknown): string => {
+  let text = cleanDisplayTitle(value, 300)
+    .replace(/^(?:please|can you|could you|let['’]?s|we need to|i want to)\s+/i, "")
+    .replace(/^[#>*~_\-]+\s*/, "")
+    .replace(/[.?!:;,\-–—\s]+$/, "")
+  if (!text) return ""
+  text = text.split(/(?<=[.!?])\s+|\n+/, 1)[0] ?? text
+  return cleanDisplayTitle(text.split(/\s+/).slice(0, 8).join(" "), 50)
+}
+const sessionEntries = (ctx: any): any[] | undefined => {
+  try {
+    const entries = ctx?.sessionManager?.getEntries?.()
+    return Array.isArray(entries) ? entries : undefined
+  } catch {
+    return undefined
+  }
+}
+const sessionBranch = (ctx: any): any[] | undefined => {
+  try {
+    const branch = ctx?.sessionManager?.getBranch?.()
+    if (Array.isArray(branch)) return branch
+    return sessionEntries(ctx)
+  } catch {
+    return undefined
+  }
+}
+const storedTitleState = (entries: any[] | undefined): PrimeTitleState | undefined => {
+  const entry = entries?.findLast?.((candidate: any) =>
+    candidate?.type === "custom" && candidate?.customType === TITLE_STATE_CUSTOM_TYPE
+  )
+  const data = entry?.data
+  if (
+    data?.version !== 1
+    || typeof data?.title !== "string"
+    || !Number.isSafeInteger(data?.lastRefreshTurn)
+    || data.lastRefreshTurn < 1
+  ) return undefined
+  return {
+    version: 1,
+    title: cleanDisplayTitle(data.title),
+    ownership: data.ownership === "external" ? "external" : "auto",
+    lastRefreshTurn: data.lastRefreshTurn,
+    observedRootTurns: Number.isSafeInteger(data.observedRootTurns)
+      ? Math.max(data.lastRefreshTurn, data.observedRootTurns)
+      : data.lastRefreshTurn,
+  }
+}
+const sessionNameWrittenAfterTitleState = (entries: any[] | undefined): boolean => {
+  if (!entries) return false
+  const stateIndex = entries.findLastIndex((entry: any) =>
+    entry?.type === "custom" && entry?.customType === TITLE_STATE_CUSTOM_TYPE
+  )
+  if (stateIndex < 0) return false
+  const nameIndex = entries.findLastIndex((entry: any) => entry?.type === "session_info")
+  return nameIndex > stateIndex
+}
+const latestContextSummary = (entries: any[] | undefined): string => {
+  const status = entries?.findLast?.((entry: any) =>
+    entry?.type === "agent_status" && typeof entry?.status?.summary === "string"
+  )
+  if (status) return cleanDisplayTitle(status.status.summary, 300)
+  const compaction = entries?.findLast?.((entry: any) =>
+    entry?.type === "compaction" && typeof entry?.summary === "string"
+  )
+  return compaction ? cleanDisplayTitle(compaction.summary, 300) : ""
+}
+const rememberSharedTitleState = (key: string, state: PrimeTitleState) => {
+  sharedTitleStates.delete(key)
+  sharedTitleStates.set(key, state)
+  if (sharedTitleStates.size > 256) {
+    const oldest = sharedTitleStates.keys().next().value
+    if (oldest) sharedTitleStates.delete(oldest)
+  }
+}
+const persistTitleState = (pi: any, state: PrimeTitleState) => {
+  try {
+    pi.appendEntry?.(TITLE_STATE_CUSTOM_TYPE, state)
+  } catch {
+    // Naming is best-effort and must never block a Prime turn.
+  }
+}
+const setPrimeSessionName = async (pi: any, title: string): Promise<boolean> => {
+  if (typeof pi.setSessionName !== "function") return false
+  try {
+    await Promise.resolve(pi.setSessionName(title))
+    return true
+  } catch {
+    return false
+  }
+}
+const primeSessionName = (pi: any): string | undefined => {
+  if (typeof pi.getSessionName !== "function") return undefined
+  try {
+    return cleanDisplayTitle(pi.getSessionName())
+  } catch {
+    return undefined
+  }
+}
+
 export default function (pi: any) {
-  const autoNamedWorkspaces = new Set<string>()
   pi.on("tool_call", (event: any) => {
     if (event?.toolName !== "ipython" || typeof event?.input?.code !== "string") return
     event.input.code = bindIpythonEnvironment(event.input.code)
@@ -2245,6 +2381,7 @@ export default function (pi: any) {
 
     const prompt = typeof event.prompt === "string" ? event.prompt : ""
     let root = activity.root?.sessionKey === key ? activity.root.binding : undefined
+    const newRootTurn = !root
     if (!root) {
       root = { identity, runId: randomUUID(), prompt }
       activity.root = { sessionKey: key, binding: root }
@@ -2255,12 +2392,98 @@ export default function (pi: any) {
     } else {
       root.prompt = prompt
     }
-    const shouldAutoName = Boolean(prompt.trim()) && !autoNamedWorkspaces.has(identity.workspaceId)
-    if (shouldAutoName) autoNamedWorkspaces.add(identity.workspaceId)
-    await send({
-      hook_event_name: "UserPromptSubmit",
-      ...(shouldAutoName ? { prompt } : {}),
-    }, root)
+
+    let title = ""
+    if (newRootTurn && prompt.trim()) {
+      const entries = sessionBranch(ctx)
+      const allEntries = sessionEntries(ctx)
+      const stateKey = titleStateKey(identity, key)
+      const persisted = storedTitleState(entries)
+      const globalPersisted = storedTitleState(allEntries)
+      const shared = sharedTitleStates.get(stateKey)
+      // A branch-local persisted marker is authoritative. Process memory is
+      // only a compatibility fallback when the host cannot expose entries.
+      const priorState = entries === undefined ? (shared ?? persisted) : persisted
+      const rootTurn = (priorState?.observedRootTurns ?? 0) + 1
+      const currentName = primeSessionName(pi)
+      const globalNameWrittenAfterTitleState = sessionNameWrittenAfterTitleState(allEntries)
+      const currentNameIsKnownAuto = currentName !== undefined
+        && !globalNameWrittenAfterTitleState
+        && globalPersisted?.ownership === "auto"
+        && currentName === globalPersisted.title
+      const branchAutoMismatch = priorState?.ownership === "auto"
+        && currentNameIsKnownAuto
+        && currentName !== priorState.title
+      const externalOwnership = priorState?.ownership === "external"
+        || globalPersisted?.ownership === "external"
+        || globalNameWrittenAfterTitleState
+        || sessionNameWrittenAfterTitleState(entries)
+        || (
+          currentName !== undefined
+          && !currentNameIsKnownAuto
+          && (
+            (!priorState && Boolean(currentName))
+            || (priorState?.ownership === "auto" && currentName !== priorState.title)
+          )
+        )
+
+      if (externalOwnership) {
+        // Prime is the canonical source when the user names or clears its
+        // session. Automatic generation stays disabled across later reloads.
+        title = currentName !== undefined ? currentName : (priorState?.title ?? "")
+        const nextState: PrimeTitleState = {
+          version: 1,
+          title,
+          ownership: "external",
+          lastRefreshTurn: priorState?.lastRefreshTurn ?? rootTurn,
+          observedRootTurns: Math.max(rootTurn, priorState?.observedRootTurns ?? 0),
+        }
+        rememberSharedTitleState(stateKey, nextState)
+        persistTitleState(pi, nextState)
+      } else {
+        const refreshDue = !priorState
+          || branchAutoMismatch
+          || rootTurn - priorState.lastRefreshTurn >= TITLE_REFRESH_INTERVAL
+        if (refreshDue) {
+          const contextualSource = rootTurn > 1 ? latestContextSummary(entries) : ""
+          let candidate = titleFromText(contextualSource || prompt) || priorState?.title || titleFromText(prompt)
+          if (candidate && currentName !== undefined && currentName !== candidate) {
+            let applied = await setPrimeSessionName(pi, candidate)
+            if (!applied) {
+              const suffix = key.replace(/[^A-Za-z0-9]+/g, "").slice(-6) || "wmux"
+              const retry = cleanDisplayTitle(candidate.slice(0, Math.max(1, 49 - suffix.length)) + " " + suffix, 50)
+              if (retry !== candidate) {
+                applied = await setPrimeSessionName(pi, retry)
+                if (applied) candidate = retry
+              }
+            }
+            if (!applied) candidate = priorState?.title ?? ""
+          }
+          const nextState: PrimeTitleState = {
+            version: 1,
+            title: candidate,
+            ownership: "auto",
+            lastRefreshTurn: rootTurn,
+            observedRootTurns: rootTurn,
+          }
+          rememberSharedTitleState(stateKey, nextState)
+          persistTitleState(pi, nextState)
+          if (candidate) title = candidate
+        } else {
+          const nextState: PrimeTitleState = {
+            ...priorState,
+            observedRootTurns: Math.max(rootTurn, priorState.observedRootTurns),
+          }
+          rememberSharedTitleState(stateKey, nextState)
+          persistTitleState(pi, nextState)
+          // Re-publish the canonical Prime name so a newly added tab receives
+          // it immediately. The server makes identical automatic titles a no-op.
+          if (currentName) title = currentName
+        }
+      }
+    }
+    if (title) await publishAutoTitle(title, root)
+    await send({ hook_event_name: "UserPromptSubmit" }, root)
   })
   pi.on("agent_end", async (event: any, ctx: any) => {
     if (process.env.WMUX_DELEGATED_RUN === "1" || ctx.hasPendingMessages?.()) return
