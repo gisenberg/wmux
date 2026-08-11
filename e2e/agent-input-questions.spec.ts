@@ -162,7 +162,10 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       paneInputCalls += 1;
       await route.continue();
     });
-    await page.routeWebSocket("**/ws/events", (socket) => { eventSocket = socket; });
+    await page.context().routeWebSocket(
+      (url) => url.pathname === "/ws/events",
+      (socket) => { eventSocket = socket; },
+    );
     await page.addInitScript(() => {
       const notifications: any[] = [];
       class CapturedNotification {

@@ -19,8 +19,10 @@ const openDelayedRetroBoot = async ({
   mobile: boolean;
   randomValue: number;
 }) => {
+  const storageState = await currentPage.context().storageState();
   const context = await browser.newContext({
     reducedMotion: "no-preference",
+    storageState,
     viewport: mobile ? { width: 412, height: 915 } : { width: 1440, height: 900 },
   });
   const page = await context.newPage();
@@ -35,7 +37,7 @@ const openDelayedRetroBoot = async ({
   await page.route("**/api/bootstrap", async (route) => {
     await bootstrapGate;
     await route.continue();
-  }, { times: 1 });
+  });
   await page.goto(new URL("/", currentPage.url()).href, { waitUntil: "domcontentloaded" });
   return {
     context,
