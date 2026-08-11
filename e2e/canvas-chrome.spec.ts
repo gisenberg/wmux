@@ -24,16 +24,27 @@ const openDelayedRetroBoot = async ({
     viewport: mobile ? { width: 412, height: 915 } : { width: 1440, height: 900 },
   });
   const page = await context.newPage();
+  let releaseBootstrap: () => void = () => undefined;
+  const bootstrapGate = new Promise<void>((resolve) => {
+    releaseBootstrap = resolve;
+  });
   await page.addInitScript((selectionRandom) => {
     Math.random = () => selectionRandom;
   }, randomValue);
   await page.routeWebSocket("**/ws/events", (webSocket) => webSocket.close());
   await page.route("**/api/bootstrap", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 8_000));
+    await bootstrapGate;
     await route.continue();
   }, { times: 1 });
   await page.goto(new URL("/", currentPage.url()).href, { waitUntil: "domcontentloaded" });
-  return { context, page };
+  return {
+    context,
+    page,
+    close: async () => {
+      releaseBootstrap();
+      await context.close();
+    },
+  };
 };
 
 test("legacy query parameters canonicalize to the canvas chrome", async ({ page }, testInfo) => {
@@ -231,7 +242,7 @@ test("Spectrum tape phases animate their native palettes and stop under reduced 
         && style.backgroundImage.includes("rgb(230, 219, 0)");
     }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
   } finally {
-    await boot.context.close();
+    await boot.close();
   }
 });
 
@@ -256,7 +267,7 @@ test("mobile tape borders stay inside browser safe-area chrome", async ({ browse
     }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
     await boot.page.screenshot({ path: testInfo.outputPath("zx-spectrum-mobile-header.png") });
   } finally {
-    await boot.context.close();
+    await boot.close();
   }
 });
 
@@ -294,6 +305,6 @@ test("TRS-80 Model 4 keeps all 80 columns inside the mobile framebuffer", async 
     expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth);
     await boot.page.screenshot({ path: testInfo.outputPath("trs-80-model-4-mobile.png") });
   } finally {
-    await boot.context.close();
+    await boot.close();
   }
 });
