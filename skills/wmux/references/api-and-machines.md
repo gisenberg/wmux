@@ -153,6 +153,7 @@ For terminal-attached POSIX agent sessions, use the staged interactive path:
 wmuxctl tui opencode linux-box --directory /srv/project --no-prompt
 wmuxctl tui codex linux-box --directory /srv/project --prompt-file /tmp/task.md
 printf '%s' 'Review the change.' | wmuxctl tui claude linux-box --directory /srv/project
+wmuxctl tui prime-agent linux-box --directory /srv/project --prompt-file /tmp/task.md
 cat /tmp/task.md | wmuxctl tui codex linux-box --directory /srv/project --prompt-file -
 wmuxctl tui opencode linux-box --directory /srv/project --no-prompt --accept-trust
 wmuxctl tui codex linux-box --directory /srv/project --no-prompt --gate-timeout 8
@@ -168,7 +169,8 @@ On child exit, the supervisor emits `WMUX_AGENT_TUI_EXIT <runId> <code>` and qua
 `localUrl` uses the API base (including an intentional path prefix), `publicUrl` falls back to it, and `url` prefers the public handoff.
 
 Delegation controller waits use the mode defaults published by `/api/bootstrap`: 1,800 seconds for review and 7,200 seconds for change or deploy.
-`wmuxctl delegate` infers review without `--write-access` and change with it, or accepts an explicit `--mode review|change|deploy`.
+`wmuxctl delegate` supports OpenCode, Codex, Claude, and Prime Agent on POSIX targets. It infers review without `--write-access` and change with it, or accepts an explicit `--mode review|change|deploy`.
+Prime Agent cannot enforce read-only operation and has no approval prompt, so its one-shot path requires both `--write-access` and `--unattended`; the latter is an acknowledgement and is not mapped to Prime Agent's `--autonomous` mode. Prime one-shots and TUIs use `--no-session` so the pane owns the supervised process.
 Use `--timeout SECONDS` only for a bounded 0.1 through 14,400 second per-dispatch override.
 The generated OpenCode tool uses change mode by default and accepts deploy mode plus the same `timeout_seconds` bounds.
 A wait expiry or pane-output read failure after submission records a nonterminal waiting delegation and leaves the pane and workspace alive.

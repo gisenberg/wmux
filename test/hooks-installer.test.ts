@@ -208,7 +208,9 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     });
   });
   const saved = Object.fromEntries([
-    "HOME", "WMUX_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH", "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
+    "HOME", "WMUX_URL", "WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH",
+    "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN", "RLM_DEPTH",
     "PRIME_AGENT_INTERNAL_DAEMON_WORKER",
   ].map((key) => [key, process.env[key]]));
@@ -218,11 +220,16 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     assert.ok(address && typeof address === "object");
     delete process.env.WMUX_DELEGATED_RUN;
     delete process.env.RLM_DEPTH;
+    delete process.env.WMUX_HELPER_URL;
+    delete process.env.WMUX_PUBLIC_URL;
+    delete process.env.WMUX_HELPER_TOKEN;
+    delete process.env.WMUX_HELPER_TOKEN_PATH;
     Object.assign(process.env, {
       HOME: home,
       WMUX_URL: `http://127.0.0.1:${address.port}`,
       WMUX_TOKEN: "",
       WMUX_TOKEN_PATH: path.join(home, "missing-token"),
+      WMUX_BROWSER_AUTH_MODE: "shared-or-login",
       WMUX_WORKSPACE_ID: "ws_aaaaaaaa",
       WMUX_TAB_ID: "tab_aaaaaaaa",
       WMUX_PANE_ID: "pane_aaaaaaaa",

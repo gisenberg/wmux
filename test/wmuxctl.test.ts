@@ -95,6 +95,31 @@ test("wmuxctl rejects Codex-only delegation options for other runtimes", async (
   }
 });
 
+test("wmuxctl requires explicit Prime Agent full-access acknowledgements", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-prime-safety-"));
+  const promptPath = path.join(root, "prompt.md");
+  fs.writeFileSync(promptPath, "perform a trusted change");
+  try {
+    for (const [flags, message] of [
+      [[], "cannot enforce read-only mode"],
+      [["--write-access"], "has no approval prompts"],
+    ] as const) {
+      await assert.rejects(
+        cli("http://127.0.0.1:1", [
+          "delegate", "prime-agent", "local", "--directory", root,
+          "--prompt-file", promptPath, ...flags,
+        ]),
+        (error: NodeJS.ErrnoException & { stderr?: string }) => {
+          assert.match(error.stderr ?? "", new RegExp(message));
+          return true;
+        },
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("wmuxctl validates delegation wait overrides before dispatch", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-timeout-bounds-"));
   const promptPath = path.join(root, "prompt.md");
@@ -1953,7 +1978,7 @@ test("generic scripts/wmuxctl wrapper routes tui help to the canonical CLI", asy
   const wrapper = path.join(repoRoot, "scripts", "wmuxctl");
   const result = await execFileAsync(wrapper, ["tui", "--help"], { cwd: repoRoot });
   assert.match(result.stdout, /--accept-trust/);
-  assert.match(result.stdout, /\{opencode,codex,claude\}/);
+  assert.match(result.stdout, /\{opencode,codex,claude,prime-agent\}/);
 });
 
 const fastTuiGate = ["--gate-timeout", "0.05"];
@@ -2411,6 +2436,27 @@ test("wmuxctl tui accepts piped and dash stdin prompts, and deliberate no-prompt
     assert.equal(fixture.methods.some((value) => value.startsWith("DELETE ")), false);
   } finally {
     await fixture.stop();
+  }
+
+  const primeFixture = await startTuiFixture();
+  try {
+    const completed = await cliProcess(primeFixture.url, [
+      "tui", "prime-agent", "linux-box", "--directory", "/srv/project", "--no-prompt", "--model", "provider/model",
+      ...fastTuiGate,
+    ]);
+    assert.equal(completed.code, 0, completed.stderr);
+    const result = JSON.parse(completed.stdout);
+    assertEstablishedResult(result);
+    assert.equal(result.state, "ready");
+    const launchRequest = JSON.parse(Buffer.from(String(primeFixture.inputs[2].data), "base64").toString("utf8"));
+    assert.deepEqual(launchRequest, {
+      runId: result.runId,
+      runtime: "prime-agent",
+      directory: "/srv/project",
+      model: "provider/model",
+    });
+  } finally {
+    await primeFixture.stop();
   }
 });
 
