@@ -263,12 +263,12 @@ class WmuxClient:
     def create_workspace(
         self,
         machine_id: str,
-        parent_pane_id: str = "",
+        parent_identity: dict[str, str] | None = None,
         automatic_cleanup: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         body = {"machineId": machine_id, "createdBy": "agent"}
-        if parent_pane_id:
-            body["parentPaneId"] = parent_pane_id
+        if parent_identity:
+            body["parentContext"] = parent_identity
         if automatic_cleanup:
             body["cleanupPolicy"] = "on-success"
             body["cleanupTtlSeconds"] = DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS
@@ -747,8 +747,25 @@ def find_workspace(client: WmuxClient, machine_id: str, title: str) -> dict[str,
     return sorted(matches, key=lambda workspace: workspace.get("updatedAt") or workspace.get("createdAt") or "")[-1]
 
 
-def invoking_parent_pane_id() -> str:
-    return os.environ.get("WMUX_PANE_ID", "")
+def invoking_parent_identity() -> dict[str, str] | None:
+    identity = {
+        "workspaceId": os.environ.get("WMUX_WORKSPACE_ID", "").strip(),
+        "tabId": os.environ.get("WMUX_TAB_ID", "").strip(),
+        "paneId": os.environ.get("WMUX_PANE_ID", "").strip(),
+    }
+    present = [bool(value) for value in identity.values()]
+    if not any(present):
+        return None
+    if not all(present):
+        raise SystemExit("wmuxctl: incomplete invoking wmux identity; refusing ambiguous parent selection")
+    patterns = {
+        "workspaceId": r"^ws_[0-9a-f]{8,64}$",
+        "tabId": r"^tab_[0-9a-f]{8,64}$",
+        "paneId": r"^pane_[0-9a-f]{8,64}$",
+    }
+    if any(not re.fullmatch(patterns[key], value) for key, value in identity.items()):
+        raise SystemExit("wmuxctl: malformed invoking wmux identity; refusing parent selection")
+    return identity
 
 
 def get_or_create_workspace(
@@ -767,7 +784,7 @@ def get_or_create_workspace(
             return workspace, True
     workspace, _state = client.create_workspace(
         machine_id,
-        invoking_parent_pane_id(),
+        invoking_parent_identity(),
         automatic_cleanup is True,
     )
     if title:
@@ -1603,7 +1620,7 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     public_base = safe_public_url(args.public_url, client.url)
     initial_machine = require_posix_machine(client, args.machine)
     initial_identity = machine_identity(initial_machine)
-    workspace, _state = client.create_workspace(args.machine, invoking_parent_pane_id(), False)
+    workspace, _state = client.create_workspace(args.machine, invoking_parent_identity(), False)
     info = describe_workspace(client.url, workspace)
     info.update(urls(client.url, public_base, info["workspaceId"], info["tabId"]))
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,
@@ -1947,7 +1964,7 @@ def cmd_delegate(client: WmuxClient, args: argparse.Namespace) -> int:
         # title matches retain their server-owned parent relationship.
         workspace, _state = client.create_workspace(
             args.machine,
-            invoking_parent_pane_id(),
+            invoking_parent_identity(),
             automatic_cleanup,
         )
     elif not args.session:

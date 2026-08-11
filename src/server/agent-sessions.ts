@@ -225,14 +225,17 @@ export class AgentSessionService {
       }
 
       let workspaceChanged = false;
-      if (
-        delegationDisposition.accepted
-        && title
-        && target.workspace.nameSource !== "user"
-      ) {
-        target.workspace.name = title;
-        target.workspace.nameSource = "auto";
-        workspaceChanged = true;
+      if (delegationDisposition.accepted && title) {
+        if (target.workspace.nameSource !== "user") {
+          target.workspace.name = title;
+          target.workspace.nameSource = "auto";
+          workspaceChanged = true;
+        }
+        if (target.tab.titleSource !== "user") {
+          target.tab.title = title;
+          target.tab.titleSource = "auto";
+          workspaceChanged = true;
+        }
       }
 
       const descriptor = summary || `${agent} ${status}`;
@@ -488,6 +491,13 @@ export class AgentSessionService {
     });
   }
 
+  activeAgentRuntimeForPane(paneId: string): string | undefined {
+    const latest = this.state.snapshot().agentEvents.find(
+      (candidate) => candidate.paneId === paneId,
+    );
+    return latest && ACTIVE_AGENT_STATUSES.has(latest.status) ? latest.agent : undefined;
+  }
+
   interruptAgentForPane(paneId: string): boolean {
     const snapshot = this.state.snapshot();
     const latest = snapshot.agentEvents.find(
@@ -639,9 +649,14 @@ const resolveTarget = (
   if (input.paneId) {
     for (const workspace of state.workspaces) {
       for (const tab of workspace.tabs) {
-        if (tab.panes.some((pane) => pane.id === input.paneId)) {
-          return { workspace, tab, paneId: input.paneId };
+        if (!tab.panes.some((pane) => pane.id === input.paneId)) continue;
+        if (input.workspaceId && input.workspaceId !== workspace.id) {
+          throw new Error("pane does not belong to workspace");
         }
+        if (input.tabId && input.tabId !== tab.id) {
+          throw new Error("pane does not belong to tab");
+        }
+        return { workspace, tab, paneId: input.paneId };
       }
     }
     throw new Error("pane not found");

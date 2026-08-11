@@ -12,8 +12,8 @@ import {
   routePolicy,
 } from "./route.js";
 
-const clientIdPattern = (prefix: string): RegExp =>
-  new RegExp(`^${prefix}_[0-9a-f]{16,64}$`);
+const clientIdPattern = (prefix: string, minLength = 16): RegExp =>
+  new RegExp(`^${prefix}_[0-9a-f]{${minLength},64}$`);
 
 const MIN_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS = 60;
 const MAX_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -58,6 +58,7 @@ const parseWorkspaceCreationCleanup = (
 const parseClientCreationIds = (
   value: unknown,
   fields: Record<string, string>,
+  minLength = 16,
 ): Record<string, string> | undefined => {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -71,7 +72,7 @@ const parseClientCreationIds = (
   const result: Record<string, string> = {};
   for (const key of expectedKeys) {
     const id = record[key];
-    if (typeof id !== "string" || !clientIdPattern(fields[key]).test(id)) {
+    if (typeof id !== "string" || !clientIdPattern(fields[key], minLength).test(id)) {
       throw new HttpError(400, "invalid_client_ids");
     }
     result[key] = id;
@@ -96,6 +97,7 @@ export const workspaceRoutes: readonly ApiRoute[] = [
         machineId?: string;
         sourcePaneId?: string;
         parentPaneId?: string;
+        parentContext?: unknown;
         createdBy?: "user" | "agent";
         cleanupPolicy?: unknown;
         cleanupTtlSeconds?: unknown;
@@ -106,8 +108,15 @@ export const workspaceRoutes: readonly ApiRoute[] = [
         sendJson(400, { error: "parent_workspace_id_not_accepted" });
         return;
       }
-      if (body.parentPaneId !== undefined && body.createdBy !== "agent") {
+      if (
+        (body.parentPaneId !== undefined || body.parentContext !== undefined)
+        && body.createdBy !== "agent"
+      ) {
         sendJson(400, { error: "parent_pane_requires_agent" });
+        return;
+      }
+      if (body.parentPaneId !== undefined && body.parentContext !== undefined) {
+        sendJson(400, { error: "ambiguous_parent_context" });
         return;
       }
       if (
@@ -123,12 +132,31 @@ export const workspaceRoutes: readonly ApiRoute[] = [
           body.cleanupTtlSeconds,
         )
         : undefined;
-      const parentPane = body.parentPaneId
-        ? deps.state.findPane(body.parentPaneId) ?? undefined
+      const parentContext = body.parentContext === undefined
+        ? undefined
+        : parseClientCreationIds(body.parentContext, {
+          workspaceId: "ws",
+          tabId: "tab",
+          paneId: "pane",
+        }, 8);
+      const parentPaneId = parentContext?.paneId ?? body.parentPaneId;
+      const parentPane = parentPaneId
+        ? deps.state.findPane(parentPaneId) ?? undefined
         : undefined;
-      if (body.parentPaneId && (!parentPane || parentPane.status === "exited")) {
+      if (parentPaneId && (!parentPane || parentPane.status === "exited")) {
         sendJson(422, { error: "parent_pane_unavailable" });
         return;
+      }
+      if (parentContext && parentPane) {
+        const actual = deps.state.findPaneContext(parentPane.id);
+        if (
+          !actual
+          || actual.workspace.id !== parentContext.workspaceId
+          || actual.tab.id !== parentContext.tabId
+        ) {
+          sendJson(422, { error: "parent_context_mismatch" });
+          return;
+        }
       }
       const machineId = deps.resolveMachineId(machines, body.machineId);
       const clientIds = parseClientCreationIds(body.clientIds, {
@@ -140,15 +168,33 @@ export const workspaceRoutes: readonly ApiRoute[] = [
         ? deps.state.findPane(body.sourcePaneId) ?? undefined
         : undefined;
       const cwdPane = sourcePane ?? parentPane;
+      const cwd = await deps.cwdForSourcePane(machines, cwdPane, machineId);
+      let parentWorkspaceId: string | undefined;
+      if (parentPaneId) {
+        const currentParent = deps.state.findPaneContext(parentPaneId);
+        if (!currentParent || currentParent.pane.status === "exited") {
+          sendJson(422, { error: "parent_pane_unavailable" });
+          return;
+        }
+        if (
+          parentContext
+          && (
+            currentParent.workspace.id !== parentContext.workspaceId
+            || currentParent.tab.id !== parentContext.tabId
+          )
+        ) {
+          sendJson(422, { error: "parent_context_mismatch" });
+          return;
+        }
+        parentWorkspaceId = currentParent.workspace.id;
+      }
       let workspace;
       try {
         workspace = deps.state.createWorkspace(
           machineId,
-          await deps.cwdForSourcePane(machines, cwdPane, machineId),
+          cwd,
           body.createdBy === "agent" ? "agent" : "user",
-          parentPane
-            ? deps.state.findPaneContext(parentPane.id)?.workspace.id
-            : undefined,
+          parentWorkspaceId,
           clientIds,
           cleanup,
         );

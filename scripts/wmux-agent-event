@@ -421,6 +421,12 @@ def main():
         elif hook_event == "InputRequired":
             status = "waiting"
             summary = summary or "prime-agent waiting for input"
+        elif hook_event == "Error":
+            status = "failed"
+            summary = summary or "prime-agent failed"
+        elif hook_event == "Interrupted":
+            status = "interrupted"
+            summary = summary or "prime-agent interrupted"
         elif hook_event:
             status = "completed"
             summary = summary or "prime-agent completed"

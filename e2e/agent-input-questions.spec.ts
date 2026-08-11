@@ -117,6 +117,7 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
     let paneInputCalls = 0;
     let releaseSubmitting: () => void = () => undefined;
     const submittingGate = new Promise<void>((resolve) => { releaseSubmitting = resolve; });
+    await page.goto("about:blank");
     await page.route("**/api/bootstrap", async (route) => {
       bootstrapCalls += 1;
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(bootstrapPayload) });
@@ -161,7 +162,10 @@ test("rendered OpenCode shelf submits exact answers, renders outcomes, routes no
       paneInputCalls += 1;
       await route.continue();
     });
-    await page.routeWebSocket("**/ws/events", (socket) => { eventSocket = socket; });
+    await page.context().routeWebSocket(
+      (url) => url.pathname === "/ws/events",
+      (socket) => { eventSocket = socket; },
+    );
     await page.addInitScript(() => {
       const notifications: any[] = [];
       class CapturedNotification {
