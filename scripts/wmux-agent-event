@@ -418,6 +418,9 @@ def main():
             status = "running"
             summary = "prime-agent running"
             message = ""
+        elif hook_event == "InputRequired":
+            status = "waiting"
+            summary = summary or "prime-agent waiting for input"
         elif hook_event:
             status = "completed"
             summary = summary or "prime-agent completed"
@@ -429,6 +432,8 @@ def main():
         "summary": clean_text(summary, 500),
         "body": clean_text(args.body, 500),
     }
+    if args.prime_agent_hook and hook_event == "InputRequired":
+        payload["attentionReason"] = "input"
     if args.run_id:
         payload["runId"] = clean_text(args.run_id, 128)
     if message:

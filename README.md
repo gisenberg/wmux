@@ -601,10 +601,13 @@ registration intent also converges repeated response loss or broker termination
 after server commit without replaying relay plaintext from the server.
 
 `wmux-hooks install prime-agent` writes an auto-loaded managed extension to
-`~/.prime/agent/extensions/wmux.ts`. It reports prompt start and completion
-through the same wmux lifecycle feed, while preserving an unmanaged extension
-already present at that path. Prime Agent is also recognized by the mobile Chat
-surface and can be started there.
+`~/.prime/agent/extensions/wmux.ts`. While a top-level prompt is running, its
+sidebar row uses the animated working indicator; after the turn ends and Prime
+Agent is ready for another prompt, the row changes to the `?` input-attention
+indicator and uses the same lifecycle/notification feed as other agents. The
+installer preserves an unmanaged extension already present at that path. Prime
+Agent is also recognized by the mobile Chat surface, can be started there, and
+is supported by `wmuxctl delegate` and `wmuxctl tui` on POSIX targets.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, Claude, and Prime Agent on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.
