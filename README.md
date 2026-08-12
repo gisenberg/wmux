@@ -607,6 +607,7 @@ When a Prime session is idle with an active scheduled heartbeat, that row uses a
 A delivered heartbeat turn switches back to the ordinary blue working spinner until its work finishes, then returns to the heart while the schedule remains active.
 Root completion is deferred until the last descendant becomes idle, then the row changes to Done without a false idle flicker.
 Intermediate tool-loop ends that trigger auto-compaction retain the same running lifecycle through Prime's internal continuation.
+Temporary provider failures likewise retain the active run while Prime backs off and retries; a recovered attempt returns to ordinary Working without leaving the sidebar stuck on a provisional failure.
 The gold `?` indicator is reserved for a positively identified explicit input request; the managed Prime Agent extension does not guess that ordinary idle completion requires input.
 New POSIX pane processes export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility aliases because Prime Agent 0.7.1 forwards only that allowlist into each daemon session's extension-load scope; wmux deliberately does not set `HERDR_ENV` or a Herdr socket.
 The extension captures the session-bound identity at load, falls back to `WMUX_*` only in non-daemon processes, and fails closed when identity is missing or malformed.

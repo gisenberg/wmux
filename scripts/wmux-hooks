@@ -2006,11 +2006,25 @@ const sessionKey = (ctx: any): string | undefined => {
 type WmuxIdentity = { workspaceId: string; tabId: string; paneId: string }
 type TurnBinding = { identity: WmuxIdentity; runId: string; prompt: string }
 type PendingTerminal = { input: Record<string, unknown>; binding: TurnBinding }
+type PendingRetryFailure = {
+  depth: number
+  binding: TurnBinding
+  terminal: PendingTerminal
+  timer?: ReturnType<typeof setTimeout>
+}
+type LateRetryFailure = {
+  depth: number
+  binding: TurnBinding
+  terminalSent: boolean
+  timer?: ReturnType<typeof setTimeout>
+}
 type SharedPaneActivity = {
   root?: { sessionKey: string; binding: TurnBinding }
   descendants: Map<string, TurnBinding>
   pendingRootTerminal?: PendingTerminal
   syntheticDescendantTurn?: TurnBinding
+  retryFailures: Map<string, PendingRetryFailure>
+  lateRetryFailures: Map<string, LateRetryFailure>
   heartbeatSessions: Map<string, { generation: string; active: boolean }>
   publishedHeartbeatActive?: boolean
   sendQueue: Promise<void>
@@ -2033,6 +2047,16 @@ const identityFromEnvironment = (): WmuxIdentity | undefined => {
   return identity as WmuxIdentity
 }
 const boundIdentity = identityFromEnvironment()
+// Prime classifies provider retries only after extension agent_end. Cover its
+// default 2/4/8s backoff; an agent_start after this grace gets a fresh run.
+const retryFailureGraceMs = (() => {
+  const parsed = Number.parseInt(process.env.WMUX_PRIME_RETRY_GRACE_MS ?? "", 10)
+  return Number.isFinite(parsed) && parsed >= 50 && parsed <= 120_000 ? parsed : 15_000
+})()
+const lateRetryRecoveryMs = (() => {
+  const parsed = Number.parseInt(process.env.WMUX_PRIME_LATE_RETRY_WINDOW_MS ?? "", 10)
+  return Number.isFinite(parsed) && parsed >= 50 && parsed <= 600_000 ? parsed : 120_000
+})()
 const toolEnvironment = boundIdentity ? {
   WMUX_WORKSPACE_ID: boundIdentity.workspaceId,
   WMUX_TAB_ID: boundIdentity.tabId,
@@ -2194,11 +2218,15 @@ const sharedActivities = (
 const activityFor = (identity: WmuxIdentity): SharedPaneActivity => {
   const existing = sharedActivities.get(identity.paneId)
   if (existing) {
+    existing.retryFailures ??= new Map()
+    existing.lateRetryFailures ??= new Map()
     existing.heartbeatSessions ??= new Map()
     return existing
   }
   const created: SharedPaneActivity = {
     descendants: new Map(),
+    retryFailures: new Map(),
+    lateRetryFailures: new Map(),
     heartbeatSessions: new Map(),
     sendQueue: Promise.resolve(),
   }
@@ -2249,16 +2277,31 @@ const cleanupActivity = async (identity: WmuxIdentity, activity: SharedPaneActiv
       && activity.descendants.size === 0
       && !activity.pendingRootTerminal
       && !activity.syntheticDescendantTurn
+      && activity.retryFailures.size === 0
+      && activity.lateRetryFailures.size === 0
       && activity.heartbeatSessions.size === 0
     ) sharedActivities.delete(identity.paneId)
     return
   }
 }
-const finishDescendant = async (identity: WmuxIdentity, key: string) => {
+const finishDescendant = async (
+  identity: WmuxIdentity,
+  key: string,
+  syntheticTerminal: Record<string, unknown> = { hook_event_name: "Stop" },
+) => {
   const activity = sharedActivities.get(identity.paneId)
-  if (!activity || !activity.descendants.delete(key) || activity.descendants.size > 0) return
+  if (!activity) return
+  if (!activity.descendants.delete(key)) {
+    await cleanupActivity(identity, activity)
+    return
+  }
+  if (activity.descendants.size > 0) return
   const pending = activity.pendingRootTerminal
   if (pending) {
+    const lateRoot = [...activity.lateRetryFailures.values()].find(
+      (candidate) => candidate.binding === pending.binding,
+    )
+    if (lateRoot) lateRoot.terminalSent = true
     activity.pendingRootTerminal = undefined
     activity.syntheticDescendantTurn = undefined
     await send(pending.input, pending.binding)
@@ -2271,8 +2314,167 @@ const finishDescendant = async (identity: WmuxIdentity, key: string) => {
     return
   }
   activity.syntheticDescendantTurn = undefined
-  await send({ hook_event_name: "Stop" }, synthetic)
+  await send(syntheticTerminal, synthetic)
   await cleanupActivity(identity, activity)
+}
+
+const clearLateRetryFailure = (activity: SharedPaneActivity, key: string) => {
+  const late = activity.lateRetryFailures.get(key)
+  if (late?.timer) clearTimeout(late.timer)
+  activity.lateRetryFailures.delete(key)
+}
+const rememberLateRetryFailure = (
+  identity: WmuxIdentity,
+  activity: SharedPaneActivity,
+  key: string,
+  depth: number,
+  binding: TurnBinding,
+  terminalSent: boolean,
+) => {
+  clearLateRetryFailure(activity, key)
+  const late: LateRetryFailure = { depth, binding, terminalSent }
+  activity.lateRetryFailures.set(key, late)
+  late.timer = setTimeout(() => {
+    if (activity.lateRetryFailures.get(key) !== late) return
+    activity.lateRetryFailures.delete(key)
+    void cleanupActivity(identity, activity).catch(() => {})
+  }, lateRetryRecoveryMs)
+  late.timer.unref?.()
+}
+const cancelRetryFailure = (activity: SharedPaneActivity, key: string) => {
+  const pending = activity.retryFailures.get(key)
+  if (pending?.timer) clearTimeout(pending.timer)
+  activity.retryFailures.delete(key)
+  clearLateRetryFailure(activity, key)
+}
+const finalizeRetryFailure = async (
+  identity: WmuxIdentity,
+  key: string,
+  pending: PendingRetryFailure,
+) => {
+  const activity = sharedActivities.get(identity.paneId)
+  if (!activity || activity.retryFailures.get(key) !== pending) return
+  activity.retryFailures.delete(key)
+  if (pending.depth > 0) {
+    if (activity.descendants.get(key) !== pending.binding) {
+      await cleanupActivity(identity, activity)
+      return
+    }
+    const terminalSent = activity.descendants.size === 1
+      && activity.syntheticDescendantTurn === pending.binding
+      && !activity.root
+      && !activity.pendingRootTerminal
+    rememberLateRetryFailure(
+      identity,
+      activity,
+      key,
+      pending.depth,
+      pending.binding,
+      terminalSent,
+    )
+    await finishDescendant(identity, key, pending.terminal.input)
+    return
+  }
+  if (activity.root?.sessionKey !== key || activity.root.binding !== pending.binding) {
+    await cleanupActivity(identity, activity)
+    return
+  }
+  activity.root = undefined
+  if (activity.descendants.size > 0) {
+    rememberLateRetryFailure(
+      identity,
+      activity,
+      key,
+      pending.depth,
+      pending.binding,
+      false,
+    )
+    activity.pendingRootTerminal = pending.terminal
+    return
+  }
+  rememberLateRetryFailure(
+    identity,
+    activity,
+    key,
+    pending.depth,
+    pending.binding,
+    true,
+  )
+  await send(pending.terminal.input, pending.terminal.binding)
+  await cleanupActivity(identity, activity)
+}
+const holdRetryFailure = (
+  identity: WmuxIdentity,
+  activity: SharedPaneActivity,
+  key: string,
+  depth: number,
+  binding: TurnBinding,
+  terminal: PendingTerminal,
+) => {
+  cancelRetryFailure(activity, key)
+  const pending: PendingRetryFailure = { depth, binding, terminal }
+  activity.retryFailures.set(key, pending)
+  pending.timer = setTimeout(() => {
+    void finalizeRetryFailure(identity, key, pending).catch(() => {})
+  }, retryFailureGraceMs)
+  pending.timer.unref?.()
+}
+const resumeRetryFailure = async (
+  identity: WmuxIdentity,
+  activity: SharedPaneActivity,
+  key: string,
+  depth: number,
+): Promise<boolean> => {
+  const pending = activity.retryFailures.get(key)
+  if (pending) {
+    const activeBinding = depth > 0
+      ? activity.descendants.get(key)
+      : activity.root?.sessionKey === key ? activity.root.binding : undefined
+    if (pending.depth !== depth || pending.binding !== activeBinding) {
+      cancelRetryFailure(activity, key)
+      return false
+    }
+    if (pending.timer) clearTimeout(pending.timer)
+    activity.retryFailures.delete(key)
+    clearLateRetryFailure(activity, key)
+    return true
+  }
+  // Custom retry delays can outlive the grace. Resume an unsent deferred
+  // terminal on its original binding; once sent, immutable runs require a new id.
+  const late = activity.lateRetryFailures.get(key)
+  if (!late || late.depth !== depth) return false
+  if (
+    (depth > 0 && activity.descendants.has(key))
+    || (depth === 0 && activity.root?.sessionKey === key)
+  ) {
+    clearLateRetryFailure(activity, key)
+    return false
+  }
+  if (
+    depth === 0
+    && !late.terminalSent
+    && activity.pendingRootTerminal?.binding === late.binding
+  ) {
+    clearLateRetryFailure(activity, key)
+    activity.pendingRootTerminal = undefined
+    activity.root = { sessionKey: key, binding: late.binding }
+    return true
+  }
+  clearLateRetryFailure(activity, key)
+  const binding: TurnBinding = late.terminalSent
+    ? { identity, runId: randomUUID(), prompt: "" }
+    : late.binding
+  if (depth > 0) {
+    activity.descendants.set(key, binding)
+    if (activity.root || activity.pendingRootTerminal || activity.syntheticDescendantTurn) return true
+    activity.syntheticDescendantTurn = binding
+  } else {
+    activity.root = { sessionKey: key, binding }
+    activity.pendingRootTerminal = undefined
+    activity.syntheticDescendantTurn = undefined
+  }
+  await send({ hook_event_name: "UserPromptSubmit" }, binding)
+  return true
 }
 
 const scheduledHeartbeatFile = (ctx: any, key: string): string | undefined => {
@@ -2516,6 +2718,7 @@ export default function (pi: any) {
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
     const activity = activityFor(identity)
+    cancelRetryFailure(activity, key)
     if (depth > 0) {
       if (activity.descendants.has(key)) return
       const descendant = { identity, runId: randomUUID(), prompt: "" }
@@ -2632,28 +2835,35 @@ export default function (pi: any) {
     if (title) await publishAutoTitle(title, root)
     await send({ hook_event_name: "UserPromptSubmit" }, root)
   })
+  pi.on("agent_start", async (_event: any, ctx: any) => {
+    if (process.env.WMUX_DELEGATED_RUN === "1") return
+    const identity = boundIdentity
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth === undefined || !key) return
+    const activity = sharedActivities.get(identity.paneId)
+    if (!activity) return
+    await resumeRetryFailure(identity, activity, key, depth)
+  })
   pi.on("agent_end", async (event: any, ctx: any) => {
     if (process.env.WMUX_DELEGATED_RUN === "1") return
     const messages = Array.isArray(event.messages) ? event.messages : []
     const assistant = messages.findLast((message: any) => message?.role === "assistant")
     const stopReason = typeof assistant?.stopReason === "string" ? assistant.stopReason : ""
-    // Prime emits an intermediate agent_end with toolUse before it decides to
-    // auto-compact and continue. That continuation is not pending yet and resumes
-    // without another before_agent_start, so retain both root and descendant state.
+    // Prime emits intermediate toolUse ends before auto-compaction and retryable
+    // provider errors before it decides to retry. Neither is a terminal run yet.
     if (ctx.hasPendingMessages?.() || stopReason === "toolUse") return
     const identity = boundIdentity
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
     await reconcileHeartbeatState(ctx)
-    if (depth > 0) {
-      await finishDescendant(identity, key)
-      return
-    }
-
     const activity = sharedActivities.get(identity.paneId)
-    const completed = activity?.root?.sessionKey === key ? activity.root.binding : undefined
-    if (!activity || !completed) return
+    if (!activity) return
+    const completed = depth > 0
+      ? activity.descendants.get(key)
+      : activity.root?.sessionKey === key ? activity.root.binding : undefined
+    if (!completed) return
     const errorMessage = typeof assistant?.errorMessage === "string" ? assistant.errorMessage.trim() : ""
     const terminal: PendingTerminal = {
       input: {
@@ -2663,6 +2873,15 @@ export default function (pi: any) {
           : messageText(assistant),
       },
       binding: completed,
+    }
+    if (stopReason === "error") {
+      holdRetryFailure(identity, activity, key, depth, completed, terminal)
+      return
+    }
+    cancelRetryFailure(activity, key)
+    if (depth > 0) {
+      await finishDescendant(identity, key)
+      return
     }
     activity.root = undefined
     if (activity.descendants.size > 0) {
@@ -2685,6 +2904,7 @@ export default function (pi: any) {
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
     const activity = sharedActivities.get(identity.paneId)
+    if (activity) cancelRetryFailure(activity, key)
     const heartbeatMember = activity?.heartbeatSessions.get(heartbeatSessionKey ?? key)
     if (activity && heartbeatMember?.generation === heartbeatGeneration) {
       activity.heartbeatSessions.delete(heartbeatSessionKey ?? key)
