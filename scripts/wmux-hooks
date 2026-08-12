@@ -2057,6 +2057,10 @@ const lateRetryRecoveryMs = (() => {
   const parsed = Number.parseInt(process.env.WMUX_PRIME_LATE_RETRY_WINDOW_MS ?? "", 10)
   return Number.isFinite(parsed) && parsed >= 50 && parsed <= 600_000 ? parsed : 120_000
 })()
+const titleReconcileIntervalMs = (() => {
+  const parsed = Number.parseInt(process.env.WMUX_PRIME_TITLE_SYNC_INTERVAL_MS ?? "", 10)
+  return Number.isFinite(parsed) && parsed >= 50 && parsed <= 60_000 ? parsed : 1_000
+})()
 const toolEnvironment = boundIdentity ? {
   WMUX_WORKSPACE_ID: boundIdentity.workspaceId,
   WMUX_TAB_ID: boundIdentity.tabId,
@@ -2538,7 +2542,7 @@ const sharedTitleStates = (
   ?? ((globalThis as any)[sharedTitleStateSymbol] = new Map<string, PrimeTitleState>())
 ) as Map<string, PrimeTitleState>
 const titleStateKey = (identity: WmuxIdentity, key: string) => identity.paneId + ":" + key
-const cleanDisplayTitle = (value: unknown, limit = 80): string =>
+const cleanDisplayTitle = (value: unknown, limit = 50): string =>
   typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit).trim() : ""
 const titleFromText = (value: unknown): string => {
   let text = cleanDisplayTitle(value, 300)
@@ -2598,11 +2602,11 @@ const sessionNameWrittenAfterTitleState = (entries: any[] | undefined): boolean 
 }
 const latestContextSummary = (entries: any[] | undefined): string => {
   const status = entries?.findLast?.((entry: any) =>
-    entry?.type === "agent_status" && typeof entry?.status?.summary === "string"
+    entry?.type === "agent_status" && cleanDisplayTitle(entry?.status?.summary, 300)
   )
   if (status) return cleanDisplayTitle(status.status.summary, 300)
   const compaction = entries?.findLast?.((entry: any) =>
-    entry?.type === "compaction" && typeof entry?.summary === "string"
+    entry?.type === "compaction" && cleanDisplayTitle(entry?.summary, 300)
   )
   return compaction ? cleanDisplayTitle(compaction.summary, 300) : ""
 }
@@ -2648,6 +2652,84 @@ export default function (pi: any) {
   let heartbeatPollBusy = false
   let heartbeatClosed = false
   let heartbeatSessionKey: string | undefined
+  let titleTimer: ReturnType<typeof setInterval> | undefined
+  let titleContext: any
+  let titlePollBusy = false
+  let titleClosed = false
+  let publishedCanonicalTitle: string | undefined
+  const canonicalTitleBinding = (identity: WmuxIdentity): TurnBinding => ({
+    identity,
+    runId: "prime-title-sync",
+    prompt: "",
+  })
+  const publishCanonicalTitle = async (
+    identity: WmuxIdentity,
+    title: string,
+    force = false,
+  ) => {
+    if (!title || (!force && publishedCanonicalTitle === title)) return
+    publishedCanonicalTitle = title
+    const activity = activityFor(identity)
+    await publishAutoTitle(title, canonicalTitleBinding(identity))
+    await cleanupActivity(identity, activity)
+  }
+  const reconcileCanonicalTitle = async (ctx: any, force = false) => {
+    if (titleClosed || process.env.WMUX_DELEGATED_RUN === "1") return
+    const identity = boundIdentity
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth !== 0 || !key) return
+    const currentName = primeSessionName(pi)
+    if (currentName === undefined) return
+    const entries = sessionBranch(ctx)
+    const allEntries = sessionEntries(ctx)
+    const stateKey = titleStateKey(identity, key)
+    const persisted = storedTitleState(entries)
+    const globalPersisted = storedTitleState(allEntries)
+    const shared = sharedTitleStates.get(stateKey)
+    const priorState = entries === undefined ? (shared ?? persisted) : persisted
+    const currentNameIsKnownAuto = !sessionNameWrittenAfterTitleState(allEntries)
+      && globalPersisted?.ownership === "auto"
+      && currentName === globalPersisted.title
+    const externalOwnership = priorState?.ownership === "external"
+      || globalPersisted?.ownership === "external"
+      || sessionNameWrittenAfterTitleState(allEntries)
+      || sessionNameWrittenAfterTitleState(entries)
+      || (
+        !currentNameIsKnownAuto
+        && (
+          (!priorState && Boolean(currentName))
+          || (priorState?.ownership === "auto" && currentName !== priorState.title)
+        )
+      )
+    if (externalOwnership) {
+      const nextState: PrimeTitleState = {
+        version: 1,
+        title: currentName,
+        ownership: "external",
+        lastRefreshTurn: priorState?.lastRefreshTurn ?? 1,
+        observedRootTurns: Math.max(1, priorState?.observedRootTurns ?? 0),
+      }
+      rememberSharedTitleState(stateKey, nextState)
+      if (
+        !priorState
+        || priorState.title !== nextState.title
+        || priorState.ownership !== "external"
+      ) persistTitleState(pi, nextState)
+    }
+    await publishCanonicalTitle(identity, currentName, force)
+  }
+  const pollCanonicalTitle = (ctx: any) => {
+    if (titlePollBusy) return
+    titlePollBusy = true
+    void reconcileCanonicalTitle(ctx).finally(() => { titlePollBusy = false })
+  }
+  const stopTitlePolling = () => {
+    titleClosed = true
+    titleContext = undefined
+    if (titleTimer) clearInterval(titleTimer)
+    titleTimer = undefined
+  }
   const stopHeartbeatWatcher = () => {
     if (heartbeatWatchDebounce) clearTimeout(heartbeatWatchDebounce)
     heartbeatWatchDebounce = undefined
@@ -2701,10 +2783,18 @@ export default function (pi: any) {
   pi.on("session_start", async (_event: any, ctx: any) => {
     if (process.env.WMUX_DELEGATED_RUN === "1" || sessionDepth(ctx) === undefined || !boundIdentity) return
     heartbeatClosed = false
+    titleClosed = false
+    titleContext = ctx
     if (heartbeatTimer) clearInterval(heartbeatTimer)
+    if (titleTimer) clearInterval(titleTimer)
     await reconcileHeartbeatState(ctx, true)
+    await reconcileCanonicalTitle(ctx, true)
     heartbeatTimer = setInterval(() => pollHeartbeatState(ctx), 1_000)
     heartbeatTimer.unref?.()
+    titleTimer = setInterval(() => {
+      if (titleContext) pollCanonicalTitle(titleContext)
+    }, titleReconcileIntervalMs)
+    titleTimer.unref?.()
   })
   pi.on("tool_call", (event: any) => {
     if (event?.toolName !== "ipython" || typeof event?.input?.code !== "string") return
@@ -2743,8 +2833,9 @@ export default function (pi: any) {
       root.prompt = prompt
     }
 
-    let title = ""
     if (newRootTurn && prompt.trim()) {
+      titleContext = ctx
+      await reconcileCanonicalTitle(ctx)
       const entries = sessionBranch(ctx)
       const allEntries = sessionEntries(ctx)
       const stateKey = titleStateKey(identity, key)
@@ -2778,12 +2869,11 @@ export default function (pi: any) {
         )
 
       if (externalOwnership) {
-        // Prime is the canonical source when the user names or clears its
-        // session. Automatic generation stays disabled across later reloads.
-        title = currentName !== undefined ? currentName : (priorState?.title ?? "")
+        // Prime is canonical once the user names or clears its session.
+        // Contextual generation stays disabled across later turns and reloads.
         const nextState: PrimeTitleState = {
           version: 1,
-          title,
+          title: currentName !== undefined ? currentName : (priorState?.title ?? ""),
           ownership: "external",
           lastRefreshTurn: priorState?.lastRefreshTurn ?? rootTurn,
           observedRootTurns: Math.max(rootTurn, priorState?.observedRootTurns ?? 0),
@@ -2797,28 +2887,49 @@ export default function (pi: any) {
         if (refreshDue) {
           const contextualSource = rootTurn > 1 ? latestContextSummary(entries) : ""
           let candidate = titleFromText(contextualSource || prompt) || priorState?.title || titleFromText(prompt)
-          if (candidate && currentName !== undefined && currentName !== candidate) {
+          let canonical = currentName
+          if (candidate && currentName === undefined) {
             let applied = await setPrimeSessionName(pi, candidate)
-            if (!applied) {
+            canonical = primeSessionName(pi)
+            if (!applied || canonical !== candidate) {
+              const suffix = key.replace(/[^A-Za-z0-9]+/g, "").slice(-6) || "wmux"
+              const retry = cleanDisplayTitle(candidate.slice(0, Math.max(1, 49 - suffix.length)) + " " + suffix, 50)
+              applied = retry !== candidate && await setPrimeSessionName(pi, retry)
+              canonical = primeSessionName(pi)
+              if (applied && canonical === retry) candidate = retry
+              else candidate = ""
+            }
+          } else if (candidate && currentName !== candidate) {
+            // Do not race an external /name that lands between reconciliation
+            // and wmux's deliberate generated-name update.
+            let applied = primeSessionName(pi) === currentName
+              && await setPrimeSessionName(pi, candidate)
+            canonical = primeSessionName(pi)
+            applied = applied && canonical === candidate
+            if (!applied && canonical === currentName) {
               const suffix = key.replace(/[^A-Za-z0-9]+/g, "").slice(-6) || "wmux"
               const retry = cleanDisplayTitle(candidate.slice(0, Math.max(1, 49 - suffix.length)) + " " + suffix, 50)
               if (retry !== candidate) {
                 applied = await setPrimeSessionName(pi, retry)
-                if (applied) candidate = retry
+                canonical = primeSessionName(pi)
+                if (applied && canonical === retry) candidate = retry
+                else applied = false
               }
             }
             if (!applied) candidate = priorState?.title ?? ""
           }
           const nextState: PrimeTitleState = {
             version: 1,
-            title: candidate,
+            title: canonical === candidate ? canonical : candidate,
             ownership: "auto",
             lastRefreshTurn: rootTurn,
             observedRootTurns: rootTurn,
           }
           rememberSharedTitleState(stateKey, nextState)
           persistTitleState(pi, nextState)
-          if (candidate) title = candidate
+          if (canonical && canonical === nextState.title) {
+            await publishCanonicalTitle(identity, canonical)
+          }
         } else {
           const nextState: PrimeTitleState = {
             ...priorState,
@@ -2826,13 +2937,9 @@ export default function (pi: any) {
           }
           rememberSharedTitleState(stateKey, nextState)
           persistTitleState(pi, nextState)
-          // Re-publish the canonical Prime name so a newly added tab receives
-          // it immediately. The server makes identical automatic titles a no-op.
-          if (currentName) title = currentName
         }
       }
     }
-    if (title) await publishAutoTitle(title, root)
     await send({ hook_event_name: "UserPromptSubmit" }, root)
   })
   pi.on("agent_start", async (_event: any, ctx: any) => {
@@ -2894,6 +3001,7 @@ export default function (pi: any) {
   pi.on("session_shutdown", async (event: any, ctx: any) => {
     heartbeatClosed = true
     stopHeartbeatWatcher()
+    stopTitlePolling()
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer)
       heartbeatTimer = undefined

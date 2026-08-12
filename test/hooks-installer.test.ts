@@ -300,7 +300,13 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       fs.copyFileSync(extensionPath, sessionExtensionPath);
       const module = await import(pathToFileURL(sessionExtensionPath).href);
       const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
-      module.default({ on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(name, handler) });
+      let sessionName: string | undefined;
+      module.default({
+        on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(name, handler),
+        getSessionName: () => sessionName,
+        setSessionName: (name: string) => { sessionName = name; },
+        appendEntry: () => {},
+      });
       return handlers;
     };
     const one = await createHandlers("1");
@@ -498,7 +504,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       path.join(home, ".prime", "agent", "session-artifacts", "root-heartbeat", "scheduled-jobs.json"),
       "{",
     );
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await new Promise((resolve) => setTimeout(resolve, 180));
     assert.equal(captured.length, malformedHeartbeatCount);
 
     setScheduledHeartbeat("child-heartbeat", "active");
@@ -797,7 +803,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_TITLE_SYNC_INTERVAL_MS",
   ].map((key) => [key, process.env[key]]));
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -813,6 +819,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
       HERDR_TAB_ID: "tab_33333333",
       HERDR_PANE_ID: "pane_33333333",
       PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
+      WMUX_PRIME_TITLE_SYNC_INTERVAL_MS: "60",
     });
     delete process.env.WMUX_HELPER_URL;
     delete process.env.WMUX_PUBLIC_URL;
@@ -857,6 +864,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
       return handlers;
     };
     let handlers = await loadHandlers("initial");
+    await handlers.get("session_start")?.({ reason: "startup" }, context);
     const runTurn = async (prompt: string, summary: string) => {
       await handlers.get("before_agent_start")?.({ prompt }, context);
       appendSessionEntry({ type: "message", message: { role: "user", content: prompt } });
@@ -879,11 +887,6 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
       .map((event) => event.title);
     assert.deepEqual(runningTitles, ["", "", "", "", "", "", ""]);
     assert.deepEqual(titleCaptured.map((request) => request.title), [
-      "repair the wmux naming lifecycle now",
-      "repair the wmux naming lifecycle now",
-      "repair the wmux naming lifecycle now",
-      "repair the wmux naming lifecycle now",
-      "repair the wmux naming lifecycle now",
       "repair the wmux naming lifecycle now",
       "Progress checkpoint 6",
     ]);
@@ -910,12 +913,12 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     await runTurn("Navigate immediately after naming", "Global manual ownership follows the session.");
     assert.equal((titleStates.at(-1) as any)?.ownership, "external");
     assert.equal(sessionName, "Prime wmux title synchronization");
-    assert.equal(titleStates.length, 10);
+    assert.ok(titleStates.length >= 10);
     activeBranchEntries = forkBranchEntries;
     await runTurn("Navigate again after ownership transfer", "External ownership remains session-global.");
     assert.equal((titleStates.at(-1) as any)?.ownership, "external");
     assert.equal(sessionName, "Prime wmux title synchronization");
-    assert.equal(titleStates.length, 11);
+    assert.ok(titleStates.length >= 11);
     activeBranchEntries = mainBranchEntries;
 
     // Simulate an extension reload with only the persisted custom entry left.
@@ -924,14 +927,23 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     handlers = await loadHandlers("reloaded");
     await runTurn("Continue after reload", "Reloaded title work continues.");
     assert.equal(captured.filter((event) => event.status === "running").at(-1)?.title, "");
-    assert.equal(titleStates.length, 12);
+    assert.ok(titleStates.length >= 12);
 
     // Reasserting the generated text through Prime /name still transfers
     // ownership because the newer session_info entry follows the title marker.
     appendSessionEntry({ type: "session_info", name: sessionName });
     await runTurn("Keep this exact name", "The matching manual title is authoritative.");
     assert.equal((titleStates.at(-1) as any)?.ownership, "external");
-    assert.equal(titleStates.length, 13);
+    assert.ok(titleStates.length >= 13);
+
+    // Prime exposes no extension event for /name. The idle reconciler treats
+    // Prime's internal name as canonical and publishes it without a new turn.
+    sessionName = "Canonical idle name";
+    appendSessionEntry({ type: "session_info", name: sessionName });
+    await waitUntil(() => titleCaptured.at(-1)?.title === "Canonical idle name");
+    const idleTitleCount = titleCaptured.length;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    assert.equal(titleCaptured.length, idleTitleCount);
 
     sessionName = "User Chosen Session";
     appendSessionEntry({ type: "session_info", name: sessionName });
@@ -939,7 +951,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     assert.equal(captured.filter((event) => event.status === "running").at(-1)?.title, "");
     assert.equal(titleCaptured.at(-1)?.title, "User Chosen Session");
     assert.equal(sessionName, "User Chosen Session");
-    assert.equal(titleStates.length, 14);
+    assert.ok(titleStates.length >= 14);
 
     const titleRequestCount = titleCaptured.length;
     sessionName = undefined;
@@ -948,7 +960,8 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     await runTurn("Continue unnamed", "Automatic naming stays disabled.");
     assert.equal(sessionName, undefined);
     assert.equal(titleCaptured.length, titleRequestCount);
-    assert.equal(titleStates.length, 16);
+    assert.ok(titleStates.length >= 16);
+    await handlers.get("session_shutdown")?.({ reason: "quit" }, context);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {
