@@ -1977,7 +1977,7 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { watch } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 
 const eventScript = ${JSON.stringify(eventScript)}
 const titleScript = ${JSON.stringify(titleScript)}
@@ -2276,6 +2276,7 @@ const finishDescendant = async (identity: WmuxIdentity, key: string) => {
 }
 
 const scheduledHeartbeatFile = (ctx: any, key: string): string | undefined => {
+  if (basename(key) !== key || key === "." || key === "..") return undefined
   try {
     const value = ctx?.sessionManager?.getSessionDir?.()
     return typeof value === "string" && value

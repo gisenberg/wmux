@@ -1516,7 +1516,19 @@ test("plugin-to-broker equal-cut orphan and terminal fences suppress stale membe
     if (firstPlugin) await firstPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     if (secondPlugin) await secondPlugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
     clearFixtureStructuredClient();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (process.platform === "linux") {
+      for (const childId of brokerChildIds()) {
+        try {
+          process.kill(childId, "SIGTERM");
+        } catch (error: any) {
+          if (error?.code !== "ESRCH") throw error;
+        }
+      }
+      await waitFor(
+        () => brokerChildIds().length === 0,
+        () => JSON.stringify(brokerChildIds()),
+      );
+    }
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

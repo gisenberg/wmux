@@ -295,6 +295,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     const childOneA = await createHandlers("1");
     const childOneB = await createHandlers("1");
     const childOneReloaded = await createHandlers("1");
+    const unsafe = await createHandlers("3");
     const missing = await createHandlers();
 
     // Prime creates its persistent IPython kernel before applying the session
@@ -499,6 +500,14 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     assert.equal(captured.at(-1)?.status, undefined);
     await childOneA.get("session_shutdown")?.({ reason: "quit" }, context(1, false, "child-heartbeat"));
     await one.get("session_shutdown")?.({ reason: "quit" }, context(0, false, "root-heartbeat"));
+
+    // Session identifiers select one scheduler-artifact directory and cannot
+    // traverse outside it even if a malformed runtime context supplies one.
+    setScheduledHeartbeat("../escape", "active");
+    const traversalCount = captured.length;
+    await unsafe.get("session_start")?.({ reason: "startup" }, context(0, false, "../escape"));
+    assert.equal(captured.length, traversalCount);
+    await unsafe.get("session_shutdown")?.({ reason: "quit" }, context(0, false, "../escape"));
 
     // Missing forwarded identity fails closed even when daemon ambient WMUX_*
     // variables contain another pane. Delegated worker sessions remain silent.
