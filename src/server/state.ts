@@ -583,8 +583,7 @@ export class StateStore extends EventEmitter {
 
     let workspaceApplied = false;
     let tabApplied = false;
-    const workspaceTitleCanAdvance = workspace.nameSource !== "user"
-      && (workspace.tabs.length === 1 || workspace.nameSource === "default");
+    const workspaceTitleCanAdvance = workspace.nameSource !== "user";
     if (
       workspaceTitleCanAdvance
       && (workspace.name !== title || workspace.nameSource !== "auto")

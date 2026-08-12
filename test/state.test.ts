@@ -920,7 +920,7 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
       tabOnlyIfMultiple: false,
       title: "Support session",
     });
-    assert.equal(support.workspaceApplied, false);
+    assert.equal(support.workspaceApplied, true);
     assert.equal(support.tabApplied, true);
     store.setAutoTitle({
       workspaceId: workspace.id,
@@ -930,7 +930,7 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
     });
 
     let current = store.snapshot().workspaces[0];
-    assert.equal(current.name, "Primary session");
+    assert.equal(current.name, "Primary session refreshed");
     assert.equal(current.tabs.find((tab) => tab.id === firstTab.id)?.title, "Primary session refreshed");
     assert.equal(current.tabs.find((tab) => tab.id === secondTab.id)?.title, "Support session");
 
