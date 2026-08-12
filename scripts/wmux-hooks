@@ -2201,7 +2201,7 @@ const sendHeartbeatStateNow = (identity: WmuxIdentity, active: boolean) => new P
     hook_event_name: active ? "HeartbeatScheduled" : "HeartbeatCleared",
   }))
 })
-const publishAutoTitleNow = (title: string, binding: TurnBinding) => new Promise<void>((resolve) => {
+const publishAutoTitleNow = (title: string, binding: TurnBinding) => new Promise<boolean>((resolve) => {
   const child = spawn(titleScript, [
     "--workspace", binding.identity.workspaceId,
     "--tab", binding.identity.tabId,
@@ -2210,8 +2210,14 @@ const publishAutoTitleNow = (title: string, binding: TurnBinding) => new Promise
   ], {
     stdio: ["ignore", "ignore", "ignore"],
   })
-  child.once("error", () => resolve())
-  child.once("close", () => resolve())
+  let settled = false
+  const finish = (published: boolean) => {
+    if (settled) return
+    settled = true
+    resolve(published)
+  }
+  child.once("error", () => finish(false))
+  child.once("close", (code) => finish(code === 0))
 })
 
 const sharedActivitySymbol = Symbol.for("wmux.prime-agent.pane-activity.v1")
@@ -2265,10 +2271,11 @@ const publishHeartbeatAggregate = (
 }
 const publishAutoTitle = (title: string, binding: TurnBinding) => {
   const activity = activityFor(binding.identity)
-  activity.sendQueue = activity.sendQueue
+  const result = activity.sendQueue
     .then(() => publishAutoTitleNow(title, binding))
-    .catch(() => {})
-  return activity.sendQueue
+    .catch(() => false)
+  activity.sendQueue = result.then(() => {})
+  return result
 }
 const cleanupActivity = async (identity: WmuxIdentity, activity: SharedPaneActivity) => {
   while (true) {
@@ -2657,6 +2664,7 @@ export default function (pi: any) {
   let titlePollBusy = false
   let titleClosed = false
   let publishedCanonicalTitle: string | undefined
+  let publishingCanonicalTitle: string | undefined
   const canonicalTitleBinding = (identity: WmuxIdentity): TurnBinding => ({
     identity,
     runId: "prime-title-sync",
@@ -2667,10 +2675,15 @@ export default function (pi: any) {
     title: string,
     force = false,
   ) => {
-    if (!title || (!force && publishedCanonicalTitle === title)) return
-    publishedCanonicalTitle = title
+    if (
+      !title
+      || (!force && (publishedCanonicalTitle === title || publishingCanonicalTitle === title))
+    ) return
+    publishingCanonicalTitle = title
     const activity = activityFor(identity)
-    await publishAutoTitle(title, canonicalTitleBinding(identity))
+    const published = await publishAutoTitle(title, canonicalTitleBinding(identity))
+    if (published) publishedCanonicalTitle = title
+    if (publishingCanonicalTitle === title) publishingCanonicalTitle = undefined
     await cleanupActivity(identity, activity)
   }
   const reconcileCanonicalTitle = async (ctx: any, force = false) => {

@@ -787,6 +787,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-titles-"));
   const captured: Record<string, unknown>[] = [];
   const titleCaptured: Record<string, unknown>[] = [];
+  let failNextTitle = false;
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -794,7 +795,9 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
       const isTitle = request.url?.endsWith("/auto-title") === true;
       (isTitle ? titleCaptured : captured).push(body);
-      response.writeHead(isTitle ? 200 : 201, { "content-type": "application/json" });
+      const rejectTitle = isTitle && failNextTitle;
+      failNextTitle = failNextTitle && !rejectTitle;
+      response.writeHead(rejectTitle ? 503 : (isTitle ? 200 : 201), { "content-type": "application/json" });
       response.end("{}");
     });
   });
@@ -922,9 +925,11 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     activeBranchEntries = mainBranchEntries;
 
     // Simulate an extension reload with only the persisted custom entry left.
+    await handlers.get("session_shutdown")?.({ reason: "reload" }, context);
     const shared = (globalThis as any)[Symbol.for("wmux.prime-agent.title-state.v1")] as Map<string, unknown>;
     shared.delete("pane_33333333:title-root");
     handlers = await loadHandlers("reloaded");
+    await handlers.get("session_start")?.({ reason: "reload" }, context);
     await runTurn("Continue after reload", "Reloaded title work continues.");
     assert.equal(captured.filter((event) => event.status === "running").at(-1)?.title, "");
     assert.ok(titleStates.length >= 12);
@@ -937,10 +942,12 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     assert.ok(titleStates.length >= 13);
 
     // Prime exposes no extension event for /name. The idle reconciler treats
-    // Prime's internal name as canonical and publishes it without a new turn.
+    // Prime's internal name as canonical, retries a transient helper failure,
+    // and publishes it without a new turn.
+    failNextTitle = true;
     sessionName = "Canonical idle name";
     appendSessionEntry({ type: "session_info", name: sessionName });
-    await waitUntil(() => titleCaptured.at(-1)?.title === "Canonical idle name");
+    await waitUntil(() => titleCaptured.filter((request) => request.title === sessionName).length === 2);
     const idleTitleCount = titleCaptured.length;
     await new Promise((resolve) => setTimeout(resolve, 1_100));
     assert.equal(titleCaptured.length, idleTitleCount);
