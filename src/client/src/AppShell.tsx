@@ -80,6 +80,7 @@ import {
   rebaseFavoriteWorkspaceIds,
   sameWorkspaceIds,
   type WorkspaceActivityAggregate,
+  type WorkspaceAgentStatus,
 } from "./workspace-tree";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "./types";
 import {
@@ -468,7 +469,7 @@ export function AppShell() {
       activity.set(workspace.id, {
         unreadCount: unreadByWorkspaceId.get(workspace.id) ?? 0,
         bell: bellByWorkspaceId.has(workspace.id),
-        agentStatus: agent ? agentStatusClass(agent.status) : undefined,
+        agentStatus: agent ? workspaceAgentStatusClass(agent.status, agent.heartbeatActive) : undefined,
       });
     }
     return activity;
@@ -526,7 +527,7 @@ export function AppShell() {
             unreadCount: treeRow.ownActivity.unreadCount,
             agentCreated: workspace.createdBy === "agent",
             agentName: latestAgentName,
-            agentStatus: latestAgent ? agentStatusClass(latestAgent.status) : undefined,
+            agentStatus: latestAgent ? workspaceAgentStatusClass(latestAgent.status, latestAgent.heartbeatActive) : undefined,
             sessionId: pane?.id,
             versionStatus: version?.status,
             versionLabel: version?.label,
@@ -925,13 +926,15 @@ export function AppShell() {
       : undefined;
   const mobileHeaderAgent = activePane ? latestAgentByPaneId.get(activePane.id) : undefined;
   const mobileHeaderStatus = mobileHeaderAgent
-    ? agentStatusClass(mobileHeaderAgent.status)
+    ? workspaceAgentStatusClass(mobileHeaderAgent.status, mobileHeaderAgent.heartbeatActive)
     : activePane?.status === "running"
       ? "running"
       : activePane?.status === "exited"
         ? "failed"
         : "updated";
-  const mobileHeaderStatusLabel = mobileHeaderAgent?.status ?? activePane?.status ?? "idle";
+  const mobileHeaderStatusLabel = mobileHeaderStatus === "heartbeat"
+    ? "prime-agent heartbeat"
+    : mobileHeaderAgent?.status ?? activePane?.status ?? "idle";
   const mobilePaneIndex = activeTab && activePane
     ? activeTab.panes.findIndex((candidate) => candidate.id === activePane.id)
     : -1;
@@ -2273,6 +2276,16 @@ const agentStatusClass = (status: string): "running" | "waiting" | "completed" |
   if (normalized === "waiting") return "waiting";
   if (["running", "started", "working"].includes(normalized)) return "running";
   return "updated";
+};
+
+const workspaceAgentStatusClass = (
+  status: string,
+  heartbeatActive = false,
+): WorkspaceAgentStatus => {
+  const lifecycle = agentStatusClass(status);
+  return heartbeatActive && ["completed", "updated"].includes(lifecycle)
+    ? "heartbeat"
+    : lifecycle;
 };
 
 const openTuiActivityStatus = (status: string): OpenTuiActivityRow["status"] => {

@@ -452,6 +452,7 @@ Automation, helper, registration, and registered-host credentials cannot access 
 - New same-host workspaces, tabs, and splits preserve the source pane's current
   directory through `tmux` metadata or OSC 7 reports.
 - `wmux-title` updates generated titles without overwriting a manual title.
+  Repeated identical updates are no-ops; while a workspace has multiple tabs, its first automatic workspace title stays stable and each eligible tab can keep its own automatic title.
 - Host labels show the wmux release and platform consistently. Update
   indicators stay hidden unless an underlying runtime or helper update is
   needed.
@@ -600,27 +601,20 @@ question snapshot before structured answering resumes. Its owner-only durable
 registration intent also converges repeated response loss or broker termination
 after server commit without replaying relay plaintext from the server.
 
-`wmux-hooks install prime-agent` writes an auto-loaded managed extension to
-`~/.prime/agent/extensions/wmux.ts`. While a root turn or any nested RLM
-subagent is running, the pane's sidebar row uses the animated working indicator.
-Root completion is deferred until the last descendant becomes idle, then the row
-changes to Done without a false idle flicker. The gold `?` indicator is reserved for a positively
-identified explicit input request; the managed Prime Agent extension does not
-guess that ordinary idle completion requires input. New POSIX pane processes
-export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility
-aliases because Prime Agent 0.7.1 forwards only that allowlist into each daemon
-session's extension-load scope; wmux deliberately does not set `HERDR_ENV` or a
-Herdr socket. The extension captures the session-bound identity at load, falls
-back to `WMUX_*` only in non-daemon processes, and fails closed when identity is
-missing or malformed. Prime creates its persistent IPython kernel before applying
-the daemon session exec environment, so the extension also pins the bound W/T/P
-IDs into Python and `%%bash` tool calls; wmux commands therefore cannot inherit
-the daemon's launch pane. A resident Prime session stays bound to its creator pane;
-reopening a nonresident saved session can bind it to the new pane. Existing pane
-shells must be recreated after rollout to receive the compatibility aliases. The
-installer preserves an unmanaged extension already present at that path. Prime
-Agent is also recognized by the mobile Chat surface, can be started there, and
-is supported by `wmuxctl delegate` and `wmuxctl tui` on POSIX targets.
+`wmux-hooks install prime-agent` writes an auto-loaded managed extension to `~/.prime/agent/extensions/wmux.ts`.
+While a root turn or any nested RLM subagent is running, the pane's sidebar row uses the animated working indicator.
+When a Prime session is idle with an active scheduled heartbeat, that row uses a distinct red heart pulse.
+A delivered heartbeat turn switches back to the ordinary blue working spinner until its work finishes, then returns to the heart while the schedule remains active.
+Root completion is deferred until the last descendant becomes idle, then the row changes to Done without a false idle flicker.
+Intermediate tool-loop ends that trigger auto-compaction retain the same running lifecycle through Prime's internal continuation.
+The gold `?` indicator is reserved for a positively identified explicit input request; the managed Prime Agent extension does not guess that ordinary idle completion requires input.
+New POSIX pane processes export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility aliases because Prime Agent 0.7.1 forwards only that allowlist into each daemon session's extension-load scope; wmux deliberately does not set `HERDR_ENV` or a Herdr socket.
+The extension captures the session-bound identity at load, falls back to `WMUX_*` only in non-daemon processes, and fails closed when identity is missing or malformed.
+Prime creates its persistent IPython kernel before applying the daemon session exec environment, so the extension also pins the bound W/T/P IDs into Python and `%%bash` tool calls; wmux commands therefore cannot inherit the daemon's launch pane.
+A resident Prime session stays bound to its creator pane; reopening a nonresident saved session can bind it to the new pane.
+Existing pane shells must be recreated after rollout to receive the compatibility aliases.
+The installer preserves an unmanaged extension already present at that path.
+Prime Agent is also recognized by the mobile Chat surface, can be started there, and is supported by `wmuxctl delegate` and `wmuxctl tui` on POSIX targets.
 
 `wmuxctl delegate` provides visible one-shot delegation for OpenCode, Codex, Claude, and Prime Agent on POSIX local/SSH targets.
 It also provides durable interactive Codex delegation on Windows PowerShell-over-SSH targets.

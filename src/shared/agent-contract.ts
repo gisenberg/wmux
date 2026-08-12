@@ -98,6 +98,8 @@ export interface AgentEventPostBody {
   paneId?: string;
   agent?: string;
   status?: string;
+  /** Scheduler-presence metadata; it never changes the agent lifecycle state. */
+  heartbeatActive?: boolean;
   title?: string;
   summary?: string;
   message?: string;

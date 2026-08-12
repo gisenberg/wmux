@@ -6,7 +6,7 @@ interface SidebarWorkspace {
   tabs: Array<{ id: string; activePaneId: string }>;
 }
 
-test("Prime Agent sidebar indicator transitions from working to awaiting input", async ({
+test("Prime heartbeat scheduling pulses only while the agent is idle", async ({
   page,
   request,
 }, testInfo) => {
@@ -50,19 +50,65 @@ test("Prime Agent sidebar indicator transitions from working to awaiting input",
     await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     await expect(sidebarRow).toHaveAccessibleName(/prime-agent working/);
 
-    const waiting = await request.post("/api/agent-events", {
+    const scheduled = await request.post("/api/agent-events", {
       data: {
-        ...eventTarget,
-        status: "waiting",
-        attentionReason: "input",
-        summary: "Prime Agent is waiting for input",
+        workspaceId: workspace.id,
+        tabId: tab.id,
+        paneId: tab.activePaneId,
+        agent: "prime-agent",
+        heartbeatActive: true,
       },
     });
-    expect(waiting.ok()).toBeTruthy();
+    expect(scheduled.ok()).toBeTruthy();
+    await expect(sidebarRow).toHaveAttribute("data-agent-status", "running");
 
-    await expect(sidebarRow).toHaveAttribute("data-agent-status", "waiting");
-    await expect(sidebarRow).toHaveAttribute("data-agent-marker", "?");
-    await expect(sidebarRow).toHaveAccessibleName(/prime-agent waiting/);
+    const setupCompleted = await request.post("/api/agent-events", {
+      data: {
+        ...eventTarget,
+        status: "completed",
+        summary: "Heartbeat scheduled",
+      },
+    });
+    expect(setupCompleted.ok()).toBeTruthy();
+    await expect(sidebarRow).toHaveAttribute("data-agent-status", "heartbeat");
+    await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[·♡♥]/);
+    await expect(sidebarRow).toHaveAccessibleName(/prime-agent heartbeat/);
+
+    const delivered = await request.post("/api/agent-events", {
+      data: {
+        ...eventTarget,
+        runId: `${eventTarget.runId}-delivery`,
+        status: "running",
+        summary: "Prime Agent is working",
+      },
+    });
+    expect(delivered.ok()).toBeTruthy();
+    await expect(sidebarRow).toHaveAttribute("data-agent-status", "running");
+    await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+
+    const deliveryCompleted = await request.post("/api/agent-events", {
+      data: {
+        ...eventTarget,
+        runId: `${eventTarget.runId}-delivery`,
+        status: "completed",
+        summary: "Heartbeat work completed",
+      },
+    });
+    expect(deliveryCompleted.ok()).toBeTruthy();
+    await expect(sidebarRow).toHaveAttribute("data-agent-status", "heartbeat");
+
+    const cleared = await request.post("/api/agent-events", {
+      data: {
+        workspaceId: workspace.id,
+        tabId: tab.id,
+        paneId: tab.activePaneId,
+        agent: "prime-agent",
+        heartbeatActive: false,
+      },
+    });
+    expect(cleared.ok()).toBeTruthy();
+    await expect(sidebarRow).toHaveAttribute("data-agent-status", "completed");
+    await expect(sidebarRow).toHaveAccessibleName(/prime-agent done/);
   } finally {
     if (workspaceId) {
       await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);

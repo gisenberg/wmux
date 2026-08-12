@@ -47,6 +47,27 @@ test("tree derivation preserves preorder, depth, collapse, and hidden activity",
   assert.deepEqual(root?.hiddenActivity, { unreadCount: 5, bell: true, agentStatus: "failed" });
 });
 
+test("idle heartbeat activity stays below working and attention states", () => {
+  const heartbeat = deriveWorkspaceTree({
+    workspaces,
+    activityByWorkspaceId: new Map([
+      ["root", { unreadCount: 0, bell: false, agentStatus: "running" as const }],
+      ["child", { unreadCount: 0, bell: false, agentStatus: "heartbeat" as const }],
+      ["grandchild", { unreadCount: 0, bell: false, agentStatus: "running" as const }],
+    ]),
+  });
+  assert.equal(heartbeat.byId.get("root")?.subtreeActivity.agentStatus, "running");
+
+  const attention = deriveWorkspaceTree({
+    workspaces,
+    activityByWorkspaceId: new Map([
+      ["child", { unreadCount: 0, bell: false, agentStatus: "heartbeat" as const }],
+      ["grandchild", { unreadCount: 0, bell: false, agentStatus: "waiting" as const }],
+    ]),
+  });
+  assert.equal(attention.byId.get("root")?.subtreeActivity.agentStatus, "waiting");
+});
+
 test("host filtering includes matches, ancestors, and the active path while forcing context open", () => {
   const model = deriveWorkspaceTree({
     workspaces,

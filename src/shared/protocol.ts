@@ -293,6 +293,8 @@ export interface AgentActivity {
   paneId: string;
   agent: string;
   status: string;
+  /** True while this Prime session has at least one active scheduled heartbeat. */
+  heartbeatActive?: boolean;
   title: string;
   summary: string;
   message?: string;

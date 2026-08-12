@@ -44,7 +44,7 @@ export interface OpenTuiSidebarWorkspace {
   unreadCount: number;
   agentCreated?: boolean;
   agentName?: string;
-  agentStatus?: "running" | "waiting" | "completed" | "failed" | "updated";
+  agentStatus?: WorkspaceAgentStatus;
   sessionId?: string;
   versionStatus?: MachineVersionStatus;
   versionLabel?: string;
@@ -224,7 +224,8 @@ export function OpenTuiSidebar({
     moved: boolean;
   } | null>(null);
   const suppressClickRef = useRef(false);
-  const hasRunningWorkspace = workspaces.some((workspace) => workspace.agentStatus === "running");
+  const hasRunningWorkspace = workspaces.some((workspace) =>
+    workspace.agentStatus === "running" || workspace.agentStatus === "heartbeat");
   const contextMenuEnabled = Boolean(
     onRequestCloseWorkspace
     && onRequestCloseWorkspaceGroup
@@ -845,6 +846,7 @@ const drawSidebarGrid = (
     completed: rgba.green,
     failed: rgba.red,
     running: rgba.blue,
+    heartbeat: rgba.red,
     updated: rgba.gold,
     waiting: rgba.gold,
   };
@@ -852,6 +854,7 @@ const drawSidebarGrid = (
     completed: rgba.black,
     failed: rgba.failedSoft,
     running: rgba.runningSoft,
+    heartbeat: rgba.activeSoft,
     updated: rgba.black,
     waiting: rgba.activeSoft,
   };
@@ -975,7 +978,8 @@ const drawSidebarGrid = (
   row++;
   section(row, model.groupSidebarSessionsByHost ? "agents" : "agent sessions");
   const activeAgentCount = model.workspaces.filter((workspace) =>
-    workspace.agentStatus === "running" || workspace.agentStatus === "waiting").length;
+    workspace.agentStatus === "running"
+    || workspace.agentStatus === "waiting").length;
   const workspaceCountLabel = activeAgentCount > 0
     ? `${model.workspaces.length} / ${activeAgentCount} ACTIVE`
     : `${model.workspaces.length}`;
@@ -1015,7 +1019,8 @@ const drawSidebarGrid = (
       const machine = model.machines.find((candidate) => candidate.id === machineId);
       const groupWorkspaceCount = machine?.workspaceCount ?? machineWorkspaces.length;
       const groupActiveCount = machine?.activeAgentCount ?? machineWorkspaces.filter((workspace) =>
-        workspace.agentStatus === "running" || workspace.agentStatus === "waiting").length;
+        workspace.agentStatus === "running"
+        || workspace.agentStatus === "waiting").length;
       const groupCountLabel = groupActiveCount > 0
         ? `${groupWorkspaceCount}/${groupActiveCount}`
         : String(groupWorkspaceCount);
@@ -1161,6 +1166,7 @@ const drawSidebarGrid = (
 
 const agentStatusAbbreviation: Record<WorkspaceAgentStatus, string> = {
   running: "R",
+  heartbeat: "H",
   waiting: "W",
   completed: "C",
   failed: "F",

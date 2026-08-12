@@ -371,6 +371,7 @@ def main():
     summary = args.summary or args.body or hook_summary or transcript_summary_text
     message = clean_message(args.message) or hook_message or transcript_message
     status = args.status
+    heartbeat_active = None
     if args.claude_hook:
         if hook_event == "UserPromptSubmit":
             status = "running"
@@ -414,9 +415,21 @@ def main():
             status = "completed"
             summary = summary or "opencode completed"
     if args.prime_agent_hook:
+        if isinstance(hook_input.get("wmux_heartbeat_active"), bool):
+            heartbeat_active = hook_input["wmux_heartbeat_active"]
         if hook_event == "UserPromptSubmit":
             status = "running"
             summary = "prime-agent running"
+            message = ""
+        elif hook_event == "HeartbeatScheduled":
+            status = ""
+            heartbeat_active = True
+            summary = ""
+            message = ""
+        elif hook_event == "HeartbeatCleared":
+            status = ""
+            heartbeat_active = False
+            summary = ""
             message = ""
         elif hook_event == "InputRequired":
             status = "waiting"
@@ -433,18 +446,23 @@ def main():
 
     payload = {
         "agent": clean_text(args.agent, 50),
-        "status": clean_text(status, 50),
         "title": clean_text(title, 80),
         "summary": clean_text(summary, 500),
         "body": clean_text(args.body, 500),
     }
+    if status:
+        payload["status"] = clean_text(status, 50)
+    if heartbeat_active is not None:
+        payload["heartbeatActive"] = heartbeat_active
     if args.prime_agent_hook and hook_event == "InputRequired":
         payload["attentionReason"] = "input"
     if args.run_id:
         payload["runId"] = clean_text(args.run_id, 128)
     if message:
         payload["message"] = message
-    if args.codex_hook and hook_event == "PreToolUse":
+    if (
+        args.codex_hook and hook_event == "PreToolUse"
+    ):
         payload["coalesce"] = True
     if args.pane:
         payload["paneId"] = args.pane
