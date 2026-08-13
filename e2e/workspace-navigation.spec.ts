@@ -366,6 +366,46 @@ test("mobile sidebar opens and activates workspaces by touch", async ({ page, re
   }
 });
 
+test("desktop workspace menu renames the sidebar entry", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "one desktop run covers the shared sidebar menu");
+  const renamedTitle = `Renamed workspace ${Date.now()}`;
+  let workspaceId: string | undefined;
+
+  try {
+    const response = await request.post("/api/workspaces", { data: { machineId: "local" } });
+    expect(response.ok()).toBeTruthy();
+    const workspace = (await response.json() as { workspace: E2eWorkspace }).workspace;
+    workspaceId = workspace.id;
+
+    await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+    await awaitAppShell(page);
+    const workspaceItem = page.locator(`a[role="treeitem"][href^="/workspaces/${workspace.id}/"]`);
+    await workspaceItem.click({ button: "right" });
+
+    const actions = page.getByRole("menu", { name: `Agent actions: ${workspace.name}` });
+    await actions.getByRole("menuitem", { name: "Rename workspace" }).click();
+    const renameDialog = page.getByRole("dialog", { name: `Rename workspace: ${workspace.name}` });
+    const nameInput = renameDialog.getByRole("textbox", { name: "Workspace name" });
+    await expect(nameInput).toBeFocused();
+    await expect(nameInput).toHaveValue(workspace.name);
+    await nameInput.fill(renamedTitle);
+    await renameDialog.getByRole("button", { name: "Save name" }).click();
+
+    await expect(workspaceItem).toHaveAccessibleName(new RegExp(`^${renamedTitle}`));
+    await expect(workspaceItem).toBeFocused();
+    await expect.poll(async () => {
+      const bootstrapResponse = await request.get("/api/bootstrap");
+      const payload = await bootstrapResponse.json() as {
+        workspaces: Array<{ id: string; name: string; nameSource: string }>;
+      };
+      const updated = payload.workspaces.find((candidate) => candidate.id === workspace.id);
+      return updated ? { name: updated.name, nameSource: updated.nameSource } : null;
+    }).toEqual({ name: renamedTitle, nameSource: "user" });
+  } finally {
+    if (workspaceId) await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);
+  }
+});
+
 test("desktop agent group menu closes every workspace on its host", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name.startsWith("mobile-"), "desktop-only context menu coverage");
   const suffix = testInfo.project.name.replaceAll(/[^a-z0-9]+/gi, "-").toLowerCase();

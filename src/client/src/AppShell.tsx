@@ -1264,6 +1264,15 @@ export function AppShell() {
     requestCloseWorkspace(activeWorkspace.id);
   };
 
+  const renameWorkspace = guard(
+    (workspaceId: string, _title: string) => `workspace:${workspaceId}:rename`,
+    "Renaming workspace...",
+    async (workspaceId: string, title: string) => {
+      const response = await api.setWorkspaceTitle(workspaceId, title);
+      await refresh(response.state);
+    },
+  );
+
   const reorderWorkspace = guard(
     (workspaceId: string, _targetWorkspaceId: string | undefined, _position: WorkspaceReorderPosition) => `workspace:${workspaceId}:reorder`,
     "Reordering workspace...",
@@ -1767,6 +1776,7 @@ export function AppShell() {
           onReorderWorkspace={reorderWorkspace}
           onToggleWorkspace={toggleWorkspaceCollapsed}
           onToggleFavoriteWorkspace={toggleFavoriteWorkspace}
+          onRenameWorkspace={renameWorkspace}
           onRequestCloseWorkspace={requestCloseWorkspace}
           onRequestCloseWorkspaceGroup={closeWorkspaceGroup}
           movesDisabled={openTuiWorkspaceTree.movesDisabled}

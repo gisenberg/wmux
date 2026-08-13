@@ -819,6 +819,71 @@ button.active-tool {
   line-height: 1.5;
 }
 
+.sidebar-context-menu-rename {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px 10px;
+}
+
+.sidebar-context-menu-rename > label {
+  color: var(--gold-dim);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-context-menu-rename > input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  padding: 0 7px;
+  color: var(--ivory);
+  font: 700 11px/1.2 var(--wmux-mono-font);
+}
+
+.sidebar-context-menu-rename > input:focus {
+  border-color: var(--gold);
+  outline: 1px solid var(--gold);
+  outline-offset: 0;
+}
+
+.sidebar-context-menu-rename-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.sidebar-context-menu-rename-actions > button {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--black);
+  padding: 0 7px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.sidebar-context-menu-rename-actions > button:hover,
+.sidebar-context-menu-rename-actions > button:focus-visible {
+  outline: 0;
+  background: var(--selection);
+  color: var(--selection-text);
+}
+
+.sidebar-context-menu-rename-actions > button:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
 .workspace-move-backdrop {
   position: fixed;
   z-index: 90;
