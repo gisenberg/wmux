@@ -17,6 +17,7 @@ import { AgentFleet, type AgentFleetRow } from "./AgentFleet";
 import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
 import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
+import { WorkspaceRenameDialog } from "./WorkspaceRenameDialog";
 import { SettingsModal, cleanAlias, defaultSettings } from "./SettingsModal";
 import { MachineManagerModal } from "./MachineManagerModal";
 import { ColorSchemeProvider } from "./color-scheme-context";
@@ -204,6 +205,7 @@ export function AppShell() {
   const [machineManagerOpen, setMachineManagerOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
+  const [renameWorkspaceDialog, setRenameWorkspaceDialog] = useState<{ id: string; title: string } | null>(null);
   const [previewSettings, setPreviewSettings] = useState<WmuxSettings | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
   const [agentFleetOpen, setAgentFleetOpen] = useState(false);
@@ -1264,6 +1266,15 @@ export function AppShell() {
     requestCloseWorkspace(activeWorkspace.id);
   };
 
+  const renameWorkspace = guard(
+    (workspaceId: string, _title: string) => `workspace:${workspaceId}:rename`,
+    "Renaming workspace...",
+    async (workspaceId: string, title: string) => {
+      const response = await api.setWorkspaceTitle(workspaceId, title);
+      await refresh(response.state);
+    },
+  );
+
   const reorderWorkspace = guard(
     (workspaceId: string, _targetWorkspaceId: string | undefined, _position: WorkspaceReorderPosition) => `workspace:${workspaceId}:reorder`,
     "Reordering workspace...",
@@ -1359,7 +1370,7 @@ export function AppShell() {
   useKeyboardShortcuts({
     keybindings,
     apple: appleKeybindings,
-    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || diagnosticsOpen || agentFleetOpen,
+    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || diagnosticsOpen || agentFleetOpen,
     openCommandPalette,
     openSettings,
     toggleSidebar,
@@ -1495,9 +1506,20 @@ export function AppShell() {
         keywords: ["screen", "display", "webrtc", "pixels", "moonlight", "sunshine"],
       },
       {
+        id: "rename-workspace",
+        title: "Rename current workspace",
+        subtitle: "Set a custom workspace name",
+        section: "Actions",
+        disabled: !activeWorkspace,
+        run: () => {
+          if (activeWorkspace) setRenameWorkspaceDialog({ id: activeWorkspace.id, title: activeWorkspace.name });
+        },
+        keywords: ["name", "title", "sidebar", "agent"],
+      },
+      {
         id: "copy-link",
         title: "Copy active session link",
-        subtitle: activeWorkspace && activeTab ? `${activeWorkspace.name} / ${activeTab.title}` : undefined,
+        subtitle: "Copy a direct link to this tab",
         section: "Actions",
         disabled: !activeWorkspace || !activeTab,
         run: copyActiveLink,
@@ -1543,7 +1565,7 @@ export function AppShell() {
       {
         id: "new-tab-selected",
         title: `New tab on ${selectedMachine?.name ?? targetMachineId}`,
-        subtitle: activeWorkspace?.name,
+        subtitle: "Add a tab to the current workspace",
         section: "Create",
         shortcut: shortcutFor("tab.new"),
         disabled: !selectedMachine?.reachable || !activeWorkspace,
@@ -1553,7 +1575,7 @@ export function AppShell() {
       {
         id: "split-right",
         title: `Split right on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
-        subtitle: activeTab?.title,
+        subtitle: "Create a pane to the right of the active pane",
         section: "Pane",
         shortcut: shortcutFor("pane.splitRight"),
         disabled: !activePane || !activePaneMachine?.reachable,
@@ -1563,7 +1585,7 @@ export function AppShell() {
       {
         id: "split-down",
         title: `Split down on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
-        subtitle: activeTab?.title,
+        subtitle: "Create a pane below the active pane",
         section: "Pane",
         shortcut: shortcutFor("pane.splitDown"),
         disabled: !activePane || !activePaneMachine?.reachable,
@@ -1602,7 +1624,7 @@ export function AppShell() {
       {
         id: "close-tab",
         title: "Close current tab",
-        subtitle: activeTab?.title,
+        subtitle: "Close every pane in the current tab",
         section: "Close",
         shortcut: shortcutFor("tab.close"),
         disabled: !activeWorkspace || !activeTab,
@@ -1611,7 +1633,7 @@ export function AppShell() {
       {
         id: "close-workspace",
         title: "Close current workspace",
-        subtitle: activeWorkspace?.name,
+        subtitle: "Close every tab and pane in the current workspace",
         section: "Close",
         shortcut: shortcutFor("workspace.close"),
         disabled: !state || !activeWorkspace,
@@ -1767,6 +1789,7 @@ export function AppShell() {
           onReorderWorkspace={reorderWorkspace}
           onToggleWorkspace={toggleWorkspaceCollapsed}
           onToggleFavoriteWorkspace={toggleFavoriteWorkspace}
+          onRenameWorkspace={renameWorkspace}
           onRequestCloseWorkspace={requestCloseWorkspace}
           onRequestCloseWorkspaceGroup={closeWorkspaceGroup}
           movesDisabled={openTuiWorkspaceTree.movesDisabled}
@@ -2109,6 +2132,14 @@ export function AppShell() {
         <MachineManagerModal
           onClose={() => setMachineManagerOpen(false)}
           onState={refresh}
+        />
+      ) : null}
+      {renameWorkspaceDialog ? (
+        <WorkspaceRenameDialog
+          workspaceId={renameWorkspaceDialog.id}
+          title={renameWorkspaceDialog.title}
+          onRename={renameWorkspace}
+          onClose={() => setRenameWorkspaceDialog(null)}
         />
       ) : null}
       {commandPaletteOpen ? (

@@ -2334,6 +2334,20 @@ const clearLateRetryFailure = (activity: SharedPaneActivity, key: string) => {
   if (late?.timer) clearTimeout(late.timer)
   activity.lateRetryFailures.delete(key)
 }
+const armLateRetryFailureExpiry = (
+  identity: WmuxIdentity,
+  activity: SharedPaneActivity,
+  key: string,
+  late: LateRetryFailure,
+) => {
+  if (activity.lateRetryFailures.get(key) !== late || late.timer) return
+  late.timer = setTimeout(() => {
+    if (activity.lateRetryFailures.get(key) !== late) return
+    activity.lateRetryFailures.delete(key)
+    void cleanupActivity(identity, activity).catch(() => {})
+  }, lateRetryRecoveryMs)
+  late.timer.unref?.()
+}
 const rememberLateRetryFailure = (
   identity: WmuxIdentity,
   activity: SharedPaneActivity,
@@ -2341,16 +2355,13 @@ const rememberLateRetryFailure = (
   depth: number,
   binding: TurnBinding,
   terminalSent: boolean,
-) => {
+  armExpiry = true,
+): LateRetryFailure => {
   clearLateRetryFailure(activity, key)
   const late: LateRetryFailure = { depth, binding, terminalSent }
   activity.lateRetryFailures.set(key, late)
-  late.timer = setTimeout(() => {
-    if (activity.lateRetryFailures.get(key) !== late) return
-    activity.lateRetryFailures.delete(key)
-    void cleanupActivity(identity, activity).catch(() => {})
-  }, lateRetryRecoveryMs)
-  late.timer.unref?.()
+  if (armExpiry) armLateRetryFailureExpiry(identity, activity, key, late)
+  return late
 }
 const cancelRetryFailure = (activity: SharedPaneActivity, key: string) => {
   const pending = activity.retryFailures.get(key)
@@ -2375,15 +2386,17 @@ const finalizeRetryFailure = async (
       && activity.syntheticDescendantTurn === pending.binding
       && !activity.root
       && !activity.pendingRootTerminal
-    rememberLateRetryFailure(
+    const late = rememberLateRetryFailure(
       identity,
       activity,
       key,
       pending.depth,
       pending.binding,
       terminalSent,
+      !terminalSent,
     )
     await finishDescendant(identity, key, pending.terminal.input)
+    if (terminalSent) armLateRetryFailureExpiry(identity, activity, key, late)
     return
   }
   if (activity.root?.sessionKey !== key || activity.root.binding !== pending.binding) {
@@ -2403,15 +2416,17 @@ const finalizeRetryFailure = async (
     activity.pendingRootTerminal = pending.terminal
     return
   }
-  rememberLateRetryFailure(
+  const late = rememberLateRetryFailure(
     identity,
     activity,
     key,
     pending.depth,
     pending.binding,
     true,
+    false,
   )
   await send(pending.terminal.input, pending.terminal.binding)
+  armLateRetryFailureExpiry(identity, activity, key, late)
   await cleanupActivity(identity, activity)
 }
 const holdRetryFailure = (

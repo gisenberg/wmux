@@ -12,6 +12,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { filterCommands } from "./command-filter";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 export interface OpenTuiCommand {
@@ -231,21 +232,6 @@ const drawPalette = (
     if (!command.disabled) hits.push({ index, row, col: 1, width: rowWidth, height: rowHeight });
   }
   return grid;
-};
-
-const filterCommands = (commands: OpenTuiCommand[], query: string): OpenTuiCommand[] => {
-  const tokens = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!tokens.length) return commands;
-  return commands.filter((command) => {
-    const haystack = [command.title, command.subtitle, command.section, command.shortcut, ...(command.keywords ?? [])]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return tokens.every((token) => haystack.includes(token));
-  });
 };
 
 const modulo = (value: number, divisor: number): number => ((value % divisor) + divisor) % divisor;

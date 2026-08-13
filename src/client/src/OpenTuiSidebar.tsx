@@ -99,6 +99,7 @@ interface OpenTuiSidebarProps {
   ) => void;
   onRequestCloseWorkspaceGroup?: (machineId: string) => void | Promise<void>;
   onToggleFavoriteWorkspace?: (workspaceId: string) => void | Promise<void>;
+  onRenameWorkspace?: (workspaceId: string, title: string) => void | Promise<void>;
   allWorkspaces: Workspace[];
   groupSidebarSessionsByHost: boolean;
 }
@@ -168,6 +169,7 @@ type SidebarContextMenuState =
     x: number;
     y: number;
     workspaceId: string;
+    renaming: boolean;
     returnFocus: HTMLElement | null;
   }
   | {
@@ -200,6 +202,7 @@ export function OpenTuiSidebar({
   onRequestCloseWorkspace,
   onRequestCloseWorkspaceGroup,
   onToggleFavoriteWorkspace,
+  onRenameWorkspace,
   allWorkspaces,
   groupSidebarSessionsByHost,
 }: OpenTuiSidebarProps) {
@@ -229,7 +232,8 @@ export function OpenTuiSidebar({
   const contextMenuEnabled = Boolean(
     onRequestCloseWorkspace
     && onRequestCloseWorkspaceGroup
-    && onToggleFavoriteWorkspace,
+    && onToggleFavoriteWorkspace
+    && onRenameWorkspace,
   );
 
   useEffect(() => {
@@ -300,7 +304,7 @@ export function OpenTuiSidebar({
     if (!contextMenu) return;
     const returnFocus = contextMenu.returnFocus;
     const focusFrame = window.requestAnimationFrame(() => {
-      contextMenuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+      contextMenuRef.current?.querySelector<HTMLElement>("input, button:not(:disabled)")?.focus({ preventScroll: true });
     });
     const closeOnPointerDown = (event: PointerEvent) => {
       if (contextMenuRef.current?.contains(event.target as Node)) return;
@@ -343,6 +347,14 @@ export function OpenTuiSidebar({
     y: Math.max(8, Math.min(clientY, window.innerHeight - 220)),
   });
 
+  const semanticWorkspaceElement = (workspaceId: string): HTMLElement | null => Array.from(
+    canvasRef.current?.parentElement?.querySelectorAll<HTMLElement>("a[data-workspace-id]") ?? [],
+  ).find((candidate) => candidate.dataset.workspaceId === workspaceId) ?? null;
+
+  const semanticMachineElement = (machineId: string): HTMLElement | null => Array.from(
+    canvasRef.current?.parentElement?.querySelectorAll<HTMLElement>("button[data-machine-id]") ?? [],
+  ).find((candidate) => candidate.dataset.machineId === machineId) ?? null;
+
   const openWorkspaceContextMenu = (
     workspaceId: string,
     clientX: number,
@@ -354,6 +366,7 @@ export function OpenTuiSidebar({
       kind: "workspace",
       ...contextMenuPosition(clientX, clientY),
       workspaceId,
+      renaming: false,
       returnFocus,
     });
   };
@@ -394,9 +407,19 @@ export function OpenTuiSidebar({
     event.preventDefault();
     event.stopPropagation();
     if (hit.action.type === "workspace") {
-      openWorkspaceContextMenu(hit.action.workspaceId, event.clientX, event.clientY, event.currentTarget);
+      openWorkspaceContextMenu(
+        hit.action.workspaceId,
+        event.clientX,
+        event.clientY,
+        semanticWorkspaceElement(hit.action.workspaceId),
+      );
     } else {
-      openGroupContextMenu(hit.action.machineId, event.clientX, event.clientY, event.currentTarget);
+      openGroupContextMenu(
+        hit.action.machineId,
+        event.clientX,
+        event.clientY,
+        semanticMachineElement(hit.action.machineId),
+      );
     }
   };
 
@@ -553,6 +576,7 @@ export function OpenTuiSidebar({
                 type="button"
                 className="open-tui-space-semantic"
                 style={{ top: row * metricsRef.current.height, height: rowCount * metricsRef.current.height }}
+                data-machine-id={machine.id}
                 aria-current={machine.id === targetMachineId ? "true" : undefined}
                 aria-label={`${machine.name}, ${machine.reachable ? "online" : "offline"}, ${machine.workspaceCount} ${machine.workspaceCount === 1 ? "agent session" : "agent sessions"}`}
                 onClick={() => onTargetMachineChange(machine.id)}
@@ -618,6 +642,7 @@ export function OpenTuiSidebar({
                 aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
                 aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentName && workspace.agentStatus ? `, ${workspace.agentName} ${sidebarAgentStatusPresentation(workspace.agentStatus, workspace.reachable, animationTick).label}` : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
                 data-agent-created={workspace.agentCreated ? "true" : undefined}
+                data-workspace-id={workspace.id}
                 data-agent-machine={workspace.machineId}
                 data-agent-name={workspace.agentName}
                 data-agent-status={workspace.agentStatus}
@@ -699,6 +724,14 @@ export function OpenTuiSidebar({
             setContextMenu(null);
             void onToggleFavoriteWorkspace?.(workspaceId);
           }}
+          onBeginRename={() => {
+            if (contextMenu.kind !== "workspace") return;
+            setContextMenu({ ...contextMenu, renaming: true });
+          }}
+          onRenameWorkspace={(workspaceId, title) => {
+            setContextMenu(null);
+            void onRenameWorkspace?.(workspaceId, title);
+          }}
           onCloseWorkspace={(workspaceId) => {
             const returnFocus = contextMenu.returnFocus;
             setContextMenu(null);
@@ -722,6 +755,8 @@ function SidebarContextMenu({
   onClose,
   onConfirmGroup,
   onToggleFavorite,
+  onBeginRename,
+  onRenameWorkspace,
   onCloseWorkspace,
   onCloseGroup,
 }: {
@@ -732,6 +767,8 @@ function SidebarContextMenu({
   onClose: () => void;
   onConfirmGroup: () => void;
   onToggleFavorite: (workspaceId: string) => void;
+  onBeginRename: () => void;
+  onRenameWorkspace: (workspaceId: string, title: string) => void;
   onCloseWorkspace: (workspaceId: string) => void;
   onCloseGroup: (machineId: string) => void;
 }) {
@@ -745,7 +782,9 @@ function SidebarContextMenu({
     ? machine?.workspaceCount ?? workspaces.filter((candidate) => candidate.machineId === state.machineId).length
     : 0;
   const label = state.kind === "workspace"
-    ? `Agent actions: ${workspace?.title ?? "removed agent"}`
+    ? state.renaming
+      ? `Rename workspace: ${workspace?.title ?? "removed workspace"}`
+      : `Agent actions: ${workspace?.title ?? "removed agent"}`
     : state.confirmCloseAll
       ? `Confirm closing ${groupCount} agents on ${machine?.name ?? state.machineId}`
       : `Agent group actions: ${machine?.name ?? state.machineId}`;
@@ -754,10 +793,12 @@ function SidebarContextMenu({
       ref={menuRef}
       className={`sidebar-context-menu${state.kind === "group" && state.confirmCloseAll ? " confirm" : ""}`}
       style={{ left: state.x, top: state.y }}
-      role="menu"
+      role={state.kind === "workspace" && state.renaming ? "dialog" : "menu"}
       aria-label={label}
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={(event) => {
+        if (state.kind === "workspace" && state.renaming) return;
+        if (event.target instanceof HTMLInputElement) return;
         if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
         const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
         if (items.length === 0) return;
@@ -774,11 +815,62 @@ function SidebarContextMenu({
       }}
     >
       <div className="sidebar-context-menu-heading">
-        <span>{state.kind === "workspace" ? "// AGENT" : "// AGENT GROUP"}</span>
+        <span>{state.kind === "workspace" ? state.renaming ? "// RENAME WORKSPACE" : "// AGENT" : "// AGENT GROUP"}</span>
         <strong>{workspace?.title ?? machine?.name ?? "Unavailable"}</strong>
       </div>
-      {state.kind === "workspace" ? (
+      {state.kind === "workspace" ? state.renaming ? (
+        <form
+          className="sidebar-context-menu-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!workspace) return;
+            const input = event.currentTarget.elements.namedItem("title");
+            if (!(input instanceof HTMLInputElement)) return;
+            const title = input.value.trim();
+            if (!title) {
+              input.setCustomValidity("Enter a workspace name.");
+              input.reportValidity();
+              return;
+            }
+            input.setCustomValidity("");
+            onRenameWorkspace(workspace.id, title);
+          }}
+        >
+          <label htmlFor={`workspace-rename-${state.workspaceId}`}>Workspace name</label>
+          <input
+            id={`workspace-rename-${state.workspaceId}`}
+            name="title"
+            type="text"
+            defaultValue={workspace?.title ?? ""}
+            maxLength={50}
+            required
+            onInput={(event) => event.currentTarget.setCustomValidity("")}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={!workspace}
+          />
+          <div className="sidebar-context-menu-rename-actions">
+            <button type="button" onClick={onClose}>
+              <span aria-hidden="true">[ESC]</span>
+              Cancel
+            </button>
+            <button type="submit" disabled={!workspace}>
+              <span aria-hidden="true">[OK]</span>
+              Save name
+            </button>
+          </div>
+        </form>
+      ) : (
         <>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!workspace}
+            onClick={onBeginRename}
+          >
+            <span aria-hidden="true">[R]</span>
+            Rename workspace
+          </button>
           <button
             type="button"
             role="menuitem"

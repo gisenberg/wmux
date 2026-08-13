@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
+import { filterCommands } from "./command-filter";
 
 export interface PaletteCommand {
   id: string;
@@ -164,20 +165,5 @@ export function CommandPalette({
     </div>
   );
 }
-
-const filterCommands = (commands: PaletteCommand[], query: string): PaletteCommand[] => {
-  const tokens = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!tokens.length) return commands;
-  return commands.filter((command) => {
-    const haystack = [command.title, command.subtitle, command.section, command.shortcut, ...(command.keywords ?? [])]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return tokens.every((token) => haystack.includes(token));
-  });
-};
 
 const modulo = (value: number, length: number): number => ((value % length) + length) % length;
