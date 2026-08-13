@@ -380,7 +380,14 @@ test("desktop workspace menu renames the sidebar entry", async ({ page, request 
     await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
     await awaitAppShell(page);
     const workspaceItem = page.locator(`a[role="treeitem"][href^="/workspaces/${workspace.id}/"]`);
-    await workspaceItem.click({ button: "right" });
+    const workspaceBox = await workspaceItem.boundingBox();
+    expect(workspaceBox).not.toBeNull();
+    if (!workspaceBox) throw new Error("workspace row has no rendered bounds");
+    await page.mouse.click(
+      workspaceBox.x + workspaceBox.width / 2,
+      workspaceBox.y + workspaceBox.height / 2,
+      { button: "right" },
+    );
 
     const actions = page.getByRole("menu", { name: `Agent actions: ${workspace.name}` });
     await actions.getByRole("menuitem", { name: "Rename workspace" }).click();

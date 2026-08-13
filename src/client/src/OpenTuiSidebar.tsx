@@ -347,6 +347,14 @@ export function OpenTuiSidebar({
     y: Math.max(8, Math.min(clientY, window.innerHeight - 220)),
   });
 
+  const semanticWorkspaceElement = (workspaceId: string): HTMLElement | null => Array.from(
+    canvasRef.current?.parentElement?.querySelectorAll<HTMLElement>("a[data-workspace-id]") ?? [],
+  ).find((candidate) => candidate.dataset.workspaceId === workspaceId) ?? null;
+
+  const semanticMachineElement = (machineId: string): HTMLElement | null => Array.from(
+    canvasRef.current?.parentElement?.querySelectorAll<HTMLElement>("button[data-machine-id]") ?? [],
+  ).find((candidate) => candidate.dataset.machineId === machineId) ?? null;
+
   const openWorkspaceContextMenu = (
     workspaceId: string,
     clientX: number,
@@ -399,9 +407,19 @@ export function OpenTuiSidebar({
     event.preventDefault();
     event.stopPropagation();
     if (hit.action.type === "workspace") {
-      openWorkspaceContextMenu(hit.action.workspaceId, event.clientX, event.clientY, event.currentTarget);
+      openWorkspaceContextMenu(
+        hit.action.workspaceId,
+        event.clientX,
+        event.clientY,
+        semanticWorkspaceElement(hit.action.workspaceId),
+      );
     } else {
-      openGroupContextMenu(hit.action.machineId, event.clientX, event.clientY, event.currentTarget);
+      openGroupContextMenu(
+        hit.action.machineId,
+        event.clientX,
+        event.clientY,
+        semanticMachineElement(hit.action.machineId),
+      );
     }
   };
 
@@ -558,6 +576,7 @@ export function OpenTuiSidebar({
                 type="button"
                 className="open-tui-space-semantic"
                 style={{ top: row * metricsRef.current.height, height: rowCount * metricsRef.current.height }}
+                data-machine-id={machine.id}
                 aria-current={machine.id === targetMachineId ? "true" : undefined}
                 aria-label={`${machine.name}, ${machine.reachable ? "online" : "offline"}, ${machine.workspaceCount} ${machine.workspaceCount === 1 ? "agent session" : "agent sessions"}`}
                 onClick={() => onTargetMachineChange(machine.id)}
@@ -623,6 +642,7 @@ export function OpenTuiSidebar({
                 aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
                 aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentName && workspace.agentStatus ? `, ${workspace.agentName} ${sidebarAgentStatusPresentation(workspace.agentStatus, workspace.reachable, animationTick).label}` : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
                 data-agent-created={workspace.agentCreated ? "true" : undefined}
+                data-workspace-id={workspace.id}
                 data-agent-machine={workspace.machineId}
                 data-agent-name={workspace.agentName}
                 data-agent-status={workspace.agentStatus}
