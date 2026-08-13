@@ -59,6 +59,73 @@ test("every POSIX helper refuses an explicit unreadable helper path without lega
   }
 });
 
+test("wmux-media uploads file bytes and pane metadata", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-media-upload-"));
+  const mediaFile = path.join(home, "render.mp4");
+  const mediaBytes = Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]);
+  fs.writeFileSync(mediaFile, mediaBytes);
+  let received: {
+    method: string | undefined;
+    url: string | undefined;
+    authorization: string | undefined;
+    payload: Record<string, unknown>;
+  } | undefined;
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      received = {
+        method: request.method,
+        url: request.url,
+        authorization: request.headers.authorization,
+        payload: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+      };
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const helperToken = "media-helper-token-0123456789abcdef";
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: home,
+      WMUX_URL: `http://127.0.0.1:${address.port}`,
+      WMUX_HELPER_TOKEN: helperToken,
+      WMUX_BROWSER_AUTH_MODE: "login-only",
+    };
+    delete env.WMUX_HELPER_TOKEN_PATH;
+    delete env.WMUX_TOKEN;
+    delete env.WMUX_TOKEN_PATH;
+
+    await execFileAsync("bash", [
+      script("wmux-media"),
+      "--mode", "http",
+      "--mime", "video/mp4",
+      "--name", "full-gpu-render.mp4",
+      "--pane", "pane-test",
+      "--workspace", "workspace-test",
+      "--tab", "tab-test",
+      mediaFile,
+    ], { cwd: repoRoot, env });
+
+    assert.ok(received);
+    assert.equal(received.method, "POST");
+    assert.equal(received.url, "/api/media");
+    assert.equal(received.authorization, `Bearer ${helperToken}`);
+    assert.equal(received.payload.name, "full-gpu-render.mp4");
+    assert.equal(received.payload.mimeType, "video/mp4");
+    assert.equal(received.payload.data, mediaBytes.toString("base64"));
+    assert.equal(received.payload.paneId, "pane-test");
+    assert.equal(received.payload.workspaceId, "workspace-test");
+    assert.equal(received.payload.tabId, "tab-test");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("wmux-title prefers the refreshed persisted helper URL when the environment is absent", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-title-url-"));
   const wmuxDirectory = path.join(home, ".wmux");
