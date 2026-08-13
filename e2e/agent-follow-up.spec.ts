@@ -15,9 +15,14 @@ test("delegate, review, and revise without attaching a terminal", async ({
   page,
   request,
 }, testInfo) => {
-  const suffix = testInfo.project.name
+  const projectSuffix = testInfo.project.name
     .replaceAll(/[^a-z0-9]+/gi, "-")
     .toLowerCase();
+  const suffix = [
+    projectSuffix,
+    testInfo.repeatEachIndex > 0 ? `repeat-${testInfo.repeatEachIndex}` : "",
+    testInfo.retry > 0 ? `retry-${testInfo.retry}` : "",
+  ].filter(Boolean).join("-");
   const marker = path.resolve(
     "test-results",
     "agent-follow-up-revision.txt",
@@ -117,26 +122,28 @@ test("delegate, review, and revise without attaching a terminal", async ({
     }
 
     expect(fs.readFileSync(marker, "utf8")).toBe("reviewed revision\n");
-    const timelineResponse = await request.get(
-      `/api/agent-sessions/${sessionId}`,
-    );
-    expect(timelineResponse.ok()).toBeTruthy();
-    const { timeline } = await timelineResponse.json() as {
-      timeline: {
-        entries: Array<{
-          kind: string;
-          state?: string;
-          snapshot?: { url: string };
-        }>;
+    await expect.poll(async () => {
+      const timelineResponse = await request.get(
+        `/api/agent-sessions/${sessionId}`,
+      );
+      expect(timelineResponse.ok()).toBeTruthy();
+      const { timeline } = await timelineResponse.json() as {
+        timeline: {
+          entries: Array<{
+            kind: string;
+            state?: string;
+            snapshot?: { url: string };
+          }>;
+        };
       };
-    };
-    expect(
-      timeline.entries.filter((entry) => entry.kind === "outcome"),
-    ).toHaveLength(3);
-    expect(
-      timeline.entries.find((entry) => entry.kind === "snapshot")
-        ?.snapshot?.url,
-    ).toMatch(/^\/api\/repository-snapshots\//);
+      return {
+        outcomeCount: timeline.entries.filter((entry) => entry.kind === "outcome").length,
+        snapshotUrl: timeline.entries.find((entry) => entry.kind === "snapshot")?.snapshot?.url,
+      };
+    }, { timeout: 10_000 }).toEqual({
+      outcomeCount: 3,
+      snapshotUrl: expect.stringMatching(/^\/api\/repository-snapshots\//),
+    });
   } finally {
     fs.rmSync(marker, { force: true });
     if (workspaceId) {
