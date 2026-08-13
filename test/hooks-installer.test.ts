@@ -219,16 +219,23 @@ test("Prime Agent extension binds each session to its forwarded pane environment
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-routing-"));
   const captured: Record<string, unknown>[] = [];
   const titleCaptured: Record<string, unknown>[] = [];
+  let delayNextAgentEventMs = 0;
   const server = http.createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on("end", () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-      const isTitle = request.url?.endsWith("/auto-title") === true;
-      (isTitle ? titleCaptured : captured).push(body);
-      response.writeHead(isTitle ? 200 : 201, { "content-type": "application/json" });
-      response.end("{}");
-    });
+    const receive = () => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        const isTitle = request.url?.endsWith("/auto-title") === true;
+        (isTitle ? titleCaptured : captured).push(body);
+        response.writeHead(isTitle ? 200 : 201, { "content-type": "application/json" });
+        response.end("{}");
+      });
+    };
+    const delayMs = request.url?.endsWith("/auto-title") ? 0 : delayNextAgentEventMs;
+    delayNextAgentEventMs = 0;
+    if (delayMs > 0) setTimeout(receive, delayMs);
+    else receive();
   });
   const saved = Object.fromEntries([
     "HOME", "WMUX_URL", "WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH",
@@ -724,6 +731,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     // later custom-backoff retry gets a fresh run rather than reopening it.
     await one.get("before_agent_start")?.({ prompt: "Fail visibly" }, context());
     const expiredRunId = captured.at(-1)?.runId;
+    delayNextAgentEventMs = 650;
     await one.get("agent_end")?.({ messages: [{
       role: "assistant", content: [{ type: "text", text: "Partial answer" }], stopReason: "error", errorMessage: "Provider failed.",
     }] }, context());
