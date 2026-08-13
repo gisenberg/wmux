@@ -1508,7 +1508,7 @@ export function AppShell() {
       {
         id: "rename-workspace",
         title: "Rename current workspace",
-        subtitle: activeWorkspace?.name,
+        subtitle: "Set a custom workspace name",
         section: "Actions",
         disabled: !activeWorkspace,
         run: () => {
@@ -1519,7 +1519,7 @@ export function AppShell() {
       {
         id: "copy-link",
         title: "Copy active session link",
-        subtitle: activeWorkspace && activeTab ? `${activeWorkspace.name} / ${activeTab.title}` : undefined,
+        subtitle: "Copy a direct link to this tab",
         section: "Actions",
         disabled: !activeWorkspace || !activeTab,
         run: copyActiveLink,
@@ -1565,7 +1565,7 @@ export function AppShell() {
       {
         id: "new-tab-selected",
         title: `New tab on ${selectedMachine?.name ?? targetMachineId}`,
-        subtitle: activeWorkspace?.name,
+        subtitle: "Add a tab to the current workspace",
         section: "Create",
         shortcut: shortcutFor("tab.new"),
         disabled: !selectedMachine?.reachable || !activeWorkspace,
@@ -1575,7 +1575,7 @@ export function AppShell() {
       {
         id: "split-right",
         title: `Split right on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
-        subtitle: activeTab?.title,
+        subtitle: "Create a pane to the right of the active pane",
         section: "Pane",
         shortcut: shortcutFor("pane.splitRight"),
         disabled: !activePane || !activePaneMachine?.reachable,
@@ -1585,7 +1585,7 @@ export function AppShell() {
       {
         id: "split-down",
         title: `Split down on ${activePaneMachine?.name ?? activePane?.machineId ?? "current host"}`,
-        subtitle: activeTab?.title,
+        subtitle: "Create a pane below the active pane",
         section: "Pane",
         shortcut: shortcutFor("pane.splitDown"),
         disabled: !activePane || !activePaneMachine?.reachable,
@@ -1624,7 +1624,7 @@ export function AppShell() {
       {
         id: "close-tab",
         title: "Close current tab",
-        subtitle: activeTab?.title,
+        subtitle: "Close every pane in the current tab",
         section: "Close",
         shortcut: shortcutFor("tab.close"),
         disabled: !activeWorkspace || !activeTab,
@@ -1633,7 +1633,7 @@ export function AppShell() {
       {
         id: "close-workspace",
         title: "Close current workspace",
-        subtitle: activeWorkspace?.name,
+        subtitle: "Close every tab and pane in the current workspace",
         section: "Close",
         shortcut: shortcutFor("workspace.close"),
         disabled: !state || !activeWorkspace,
