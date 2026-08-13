@@ -353,8 +353,7 @@ test("styled inverse prediction matches Ghostty ink and ANSI backgrounds", async
     await page.keyboard.press("Enter");
     await page.waitForTimeout(1_100);
     await armTerminalPrediction(page, prediction);
-    await page.keyboard.type("x");
-    await expect(prediction).toHaveAttribute("data-active", "true");
+    await typeActivePrediction(page, prediction, "x");
     expect(Number(await prediction.getAttribute("data-style-flags")) & 159).toBe(159);
     const cells = await predictionCells(prediction);
     const metrics = await readPredictionMetrics(prediction);
