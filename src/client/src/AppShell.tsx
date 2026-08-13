@@ -17,6 +17,7 @@ import { AgentFleet, type AgentFleetRow } from "./AgentFleet";
 import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
 import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
+import { WorkspaceRenameDialog } from "./WorkspaceRenameDialog";
 import { SettingsModal, cleanAlias, defaultSettings } from "./SettingsModal";
 import { MachineManagerModal } from "./MachineManagerModal";
 import { ColorSchemeProvider } from "./color-scheme-context";
@@ -204,6 +205,7 @@ export function AppShell() {
   const [machineManagerOpen, setMachineManagerOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
+  const [renameWorkspaceDialog, setRenameWorkspaceDialog] = useState<{ id: string; title: string } | null>(null);
   const [previewSettings, setPreviewSettings] = useState<WmuxSettings | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
   const [agentFleetOpen, setAgentFleetOpen] = useState(false);
@@ -1368,7 +1370,7 @@ export function AppShell() {
   useKeyboardShortcuts({
     keybindings,
     apple: appleKeybindings,
-    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || diagnosticsOpen || agentFleetOpen,
+    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || diagnosticsOpen || agentFleetOpen,
     openCommandPalette,
     openSettings,
     toggleSidebar,
@@ -1502,6 +1504,17 @@ export function AppShell() {
         disabled: !canOpenStream,
         run: () => setStreamOpen(true),
         keywords: ["screen", "display", "webrtc", "pixels", "moonlight", "sunshine"],
+      },
+      {
+        id: "rename-workspace",
+        title: "Rename current workspace",
+        subtitle: activeWorkspace?.name,
+        section: "Actions",
+        disabled: !activeWorkspace,
+        run: () => {
+          if (activeWorkspace) setRenameWorkspaceDialog({ id: activeWorkspace.id, title: activeWorkspace.name });
+        },
+        keywords: ["name", "title", "sidebar", "agent"],
       },
       {
         id: "copy-link",
@@ -2119,6 +2132,14 @@ export function AppShell() {
         <MachineManagerModal
           onClose={() => setMachineManagerOpen(false)}
           onState={refresh}
+        />
+      ) : null}
+      {renameWorkspaceDialog ? (
+        <WorkspaceRenameDialog
+          workspaceId={renameWorkspaceDialog.id}
+          title={renameWorkspaceDialog.title}
+          onRename={renameWorkspace}
+          onClose={() => setRenameWorkspaceDialog(null)}
         />
       ) : null}
       {commandPaletteOpen ? (
