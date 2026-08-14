@@ -49,3 +49,17 @@ export const sidebarAgentStatusPresentation = (
     marker: reachable ? "●" : "○",
   };
 };
+
+export const sidebarWorkspaceAgentContext = (
+  activePaneCount: number,
+  heartbeatPaneCount: number,
+  agentPaneCount: number,
+  paneCount: number,
+): string => {
+  const total = Math.max(paneCount, activePaneCount, heartbeatPaneCount, agentPaneCount);
+  const paneWord = total === 1 ? "pane" : "panes";
+  if (activePaneCount > 0) return `${activePaneCount}/${total} ${paneWord} active`;
+  if (heartbeatPaneCount > 0) return `${heartbeatPaneCount}/${total} ${paneWord} scheduled`;
+  if (agentPaneCount > 1) return `${agentPaneCount} pane results`;
+  return "";
+};

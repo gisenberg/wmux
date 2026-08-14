@@ -9,14 +9,45 @@ fi
 wmux_url="${wmux_url:-${WMUX_HELPER_URL:-${WMUX_PUBLIC_URL:-${WMUX_URL:-http://127.0.0.1:3478}}}}"
 workspace_id="${WMUX_WORKSPACE_ID:-}"
 tab_id="${WMUX_TAB_ID:-}"
+pane_id=""
+source_workspace_id=""
+source_tab_id=""
+source_pane_id=""
+source_identity_invalid=0
+
+# Treat pane identity as one atomic tuple. Prime daemon scopes must never mix a
+# partial HERDR tuple with inherited WMUX values from the daemon launch pane.
+if [[ -n "${HERDR_WORKSPACE_ID+x}${HERDR_TAB_ID+x}${HERDR_PANE_ID+x}" ]]; then
+  if [[ -z "${HERDR_WORKSPACE_ID:-}" || -z "${HERDR_TAB_ID:-}" || -z "${HERDR_PANE_ID:-}" ]]; then
+    source_identity_invalid=1
+  else
+    source_workspace_id="${HERDR_WORKSPACE_ID}"
+    source_tab_id="${HERDR_TAB_ID}"
+    source_pane_id="${HERDR_PANE_ID}"
+    workspace_id="${source_workspace_id}"
+    tab_id="${source_tab_id}"
+  fi
+elif [[ "${PRIME_AGENT_INTERNAL_DAEMON_WORKER:-}" == "1" ]]; then
+  # WMUX_* on daemon workers belongs to the supervisor launch pane, not the
+  # current session. Explicit complete command-line identity remains allowed.
+  source_identity_invalid=1
+elif [[ -n "${WMUX_WORKSPACE_ID:-}" && -n "${WMUX_TAB_ID:-}" && -n "${WMUX_PANE_ID:-}" ]]; then
+  source_workspace_id="${WMUX_WORKSPACE_ID}"
+  source_tab_id="${WMUX_TAB_ID}"
+  source_pane_id="${WMUX_PANE_ID}"
+fi
+
 title=""
 descriptor=""
 manual=0
 tab_only_if_multiple=1
+workspace_explicit=0
+tab_explicit=0
+pane_explicit=0
 
 usage() {
   cat >&2 <<'EOF'
-Usage: wmux-title [--manual] [--workspace <id>] [--tab <id>] [--descriptor <text>] [--tab-always] --title <text>
+Usage: wmux-title [--manual] [--workspace <id>] [--tab <id>] [--pane <id>] [--descriptor <text>] [--tab-always] --title <text>
 EOF
 }
 
@@ -28,10 +59,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workspace)
       workspace_id="${2:?--workspace requires a value}"
+      workspace_explicit=1
       shift 2
       ;;
     --tab)
       tab_id="${2:?--tab requires a value}"
+      tab_explicit=1
+      shift 2
+      ;;
+    --pane)
+      pane_id="${2:?--pane requires a value}"
+      pane_explicit=1
       shift 2
       ;;
     --title)
@@ -70,6 +108,20 @@ done
 if [[ -z "${workspace_id}" || -z "${title}" ]]; then
   usage
   exit 2
+fi
+
+if [[ "${manual}" -eq 0 ]]; then
+  if [[ "${pane_explicit}" -eq 1 ]]; then
+    if [[ "${workspace_explicit}" -ne 1 || "${tab_explicit}" -ne 1 ]]; then
+      echo "wmux-title: --pane requires explicit --workspace and --tab" >&2
+      exit 2
+    fi
+  elif [[ "${source_identity_invalid}" -eq 1 ]]; then
+    echo "wmux-title: incomplete HERDR identity tuple" >&2
+    exit 2
+  elif [[ "${workspace_id}" == "${source_workspace_id}" && "${tab_id}" == "${source_tab_id}" ]]; then
+    pane_id="${source_pane_id}"
+  fi
 fi
 
 json_escape() {
@@ -117,6 +169,9 @@ else
   payload="{\"title\":$(printf '%s' "$title" | json_escape),\"tabOnlyIfMultiple\":$([[ "${tab_only_if_multiple}" -eq 1 ]] && printf true || printf false)"
   if [[ -n "${tab_id}" ]]; then
     payload="${payload},\"tabId\":$(printf '%s' "$tab_id" | json_escape)"
+  fi
+  if [[ -n "${pane_id}" ]]; then
+    payload="${payload},\"paneId\":$(printf '%s' "$pane_id" | json_escape)"
   fi
   if [[ -n "${descriptor}" ]]; then
     payload="${payload},\"descriptor\":$(printf '%s' "$descriptor" | json_escape)"

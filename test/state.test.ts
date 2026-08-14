@@ -897,6 +897,7 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
     const initial = store.setAutoTitle({
       workspaceId: workspace.id,
       tabId: firstTab.id,
+      sourcePaneId: firstTab.panes[0].id,
       tabOnlyIfMultiple: false,
       title: "Primary session",
     });
@@ -906,6 +907,7 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
     const repeated = store.setAutoTitle({
       workspaceId: workspace.id,
       tabId: firstTab.id,
+      sourcePaneId: firstTab.panes[0].id,
       tabOnlyIfMultiple: false,
       title: "Primary session",
     });
@@ -917,14 +919,16 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
     const support = store.setAutoTitle({
       workspaceId: workspace.id,
       tabId: secondTab.id,
+      sourcePaneId: secondTab.panes[0].id,
       tabOnlyIfMultiple: false,
       title: "Support session",
     });
-    assert.equal(support.workspaceApplied, true);
+    assert.equal(support.workspaceApplied, false);
     assert.equal(support.tabApplied, true);
     store.setAutoTitle({
       workspaceId: workspace.id,
       tabId: firstTab.id,
+      sourcePaneId: firstTab.panes[0].id,
       tabOnlyIfMultiple: false,
       title: "Primary session refreshed",
     });
@@ -939,6 +943,7 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
     const blocked = store.setAutoTitle({
       workspaceId: workspace.id,
       tabId: firstTab.id,
+      sourcePaneId: firstTab.panes[0].id,
       tabOnlyIfMultiple: false,
       title: "Automatic title ignored",
     });
@@ -953,6 +958,111 @@ test("automatic titles are idempotent, pane-local in multi-tab workspaces, and p
     assert.equal(current.tabs.find((tab) => tab.id === firstTab.id)?.title, "Manual tab");
     assert.equal(current.tabs.find((tab) => tab.id === firstTab.id)?.titleSource, "user");
     assert.equal(current.tabs.find((tab) => tab.id === secondTab.id)?.titleSource, "auto");
+  });
+});
+
+test("legacy automatic titles remain compatible only for an unambiguous sole pane", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspace = store.snapshot().workspaces[0];
+    const tab = workspace.tabs[0];
+    const paneId = tab.panes[0].id;
+
+    const legacy = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      tabOnlyIfMultiple: false,
+      title: "Sole pane legacy",
+    });
+    assert.equal(legacy.workspaceApplied, true);
+    assert.equal(legacy.tabApplied, true);
+
+    store.splitPane(tab.id, paneId, "vertical");
+    assert.throws(() => store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      tabOnlyIfMultiple: false,
+      title: "Ambiguous legacy",
+    }), /source pane is ambiguous/);
+    assert.equal(store.snapshot().workspaces[0].name, "Sole pane legacy");
+  });
+});
+
+test("pane-scoped automatic title ownership is deterministic and transfers on closure", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspace = store.snapshot().workspaces[0];
+    const firstTab = workspace.tabs[0];
+    const ownerPaneId = firstTab.panes[0].id;
+    const split = store.splitPane(firstTab.id, ownerPaneId, "vertical");
+    const splitPaneId = split.panes.at(-1)?.id;
+    assert.ok(splitPaneId);
+
+    const owner = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      sourcePaneId: ownerPaneId,
+      tabOnlyIfMultiple: false,
+      title: "Owner title",
+      descriptor: "Owner descriptor",
+    });
+    assert.equal(owner.workspaceApplied, true);
+    assert.equal(owner.tabApplied, true);
+
+    const collision = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      sourcePaneId: splitPaneId,
+      tabOnlyIfMultiple: false,
+      title: "Split title",
+      descriptor: "Split descriptor",
+    });
+    assert.equal(collision.workspaceApplied, false);
+    assert.equal(collision.tabApplied, false);
+    assert.equal(store.snapshot().workspaces[0].name, "Owner title");
+    assert.equal(store.snapshot().workspaces[0].descriptor, "Owner descriptor");
+
+    assert.equal(store.removePane(ownerPaneId), true);
+    const transferred = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: firstTab.id,
+      sourcePaneId: splitPaneId,
+      tabOnlyIfMultiple: false,
+      title: "Transferred title",
+    });
+    assert.equal(transferred.workspaceApplied, true);
+    assert.equal(transferred.tabApplied, true);
+
+    const secondTab = store.createTab(workspace.id);
+    const secondOwnerPaneId = secondTab.panes[0].id;
+    const secondary = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: secondTab.id,
+      sourcePaneId: secondOwnerPaneId,
+      tabOnlyIfMultiple: false,
+      title: "Second tab title",
+    });
+    assert.equal(secondary.workspaceApplied, false);
+    assert.equal(secondary.tabApplied, true);
+    assert.equal(store.snapshot().workspaces[0].name, "Transferred title");
+
+    store.removeTab(workspace.id, firstTab.id);
+    const workspaceTransferred = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: secondTab.id,
+      sourcePaneId: secondOwnerPaneId,
+      tabOnlyIfMultiple: false,
+      title: "Second tab owns workspace",
+    });
+    assert.equal(workspaceTransferred.workspaceApplied, true);
+    assert.equal(workspaceTransferred.tabApplied, true);
+
+    assert.throws(() => store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: "tab_wrong",
+      sourcePaneId: secondOwnerPaneId,
+      title: "Mismatched target",
+    }), /does not match workspace and tab/);
   });
 });
 

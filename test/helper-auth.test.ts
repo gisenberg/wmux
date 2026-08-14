@@ -131,10 +131,15 @@ test("wmux-title prefers the refreshed persisted helper URL when the environment
   const wmuxDirectory = path.join(home, ".wmux");
   fs.mkdirSync(wmuxDirectory, { mode: 0o700 });
   let requestUrl = "";
+  let payload: Record<string, unknown> = {};
   const server = http.createServer((request, response) => {
     requestUrl = request.url ?? "";
-    request.resume();
-    request.on("end", () => response.writeHead(200, { "content-type": "application/json" }).end("{}"));
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
   });
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -148,11 +153,65 @@ test("wmux-title prefers the refreshed persisted helper URL when the environment
       WMUX_URL: "http://127.0.0.1:1",
       WMUX_HELPER_URL: "http://127.0.0.1:2",
       WMUX_PUBLIC_URL: "http://127.0.0.1:3",
+      WMUX_WORKSPACE_ID: "ws_source",
+      WMUX_TAB_ID: "tab_source",
+      WMUX_PANE_ID: "pane_source",
     };
+    delete env.HERDR_WORKSPACE_ID;
+    delete env.HERDR_TAB_ID;
+    delete env.HERDR_PANE_ID;
+    delete env.PRIME_AGENT_INTERNAL_DAEMON_WORKER;
     delete env.WMUX_HELPER_TOKEN;
     delete env.WMUX_HELPER_TOKEN_PATH;
     await execFileAsync("bash", [script("wmux-title"), "--workspace", "ws_test", "--title", "Persisted URL"], { env });
     assert.equal(requestUrl, "/api/workspaces/ws_test/auto-title");
+    assert.deepEqual(payload, { title: "Persisted URL", tabOnlyIfMultiple: true, tabId: "tab_source" });
+
+    await execFileAsync("bash", [script("wmux-title"), "--title", "Environment tuple"], { env });
+    assert.equal(requestUrl, "/api/workspaces/ws_source/auto-title");
+    assert.deepEqual(payload, {
+      title: "Environment tuple",
+      tabOnlyIfMultiple: true,
+      tabId: "tab_source",
+      paneId: "pane_source",
+    });
+
+    await assert.rejects(execFileAsync("bash", [script("wmux-title"), "--title", "Partial HERDR"], {
+      env: { ...env, HERDR_WORKSPACE_ID: "ws_partial" },
+    }), /incomplete HERDR identity tuple/);
+
+    await execFileAsync("bash", [script("wmux-title"),
+      "--workspace", "ws_explicit",
+      "--tab", "tab_explicit",
+      "--pane", "pane_explicit",
+      "--title", "Explicit tuple",
+    ], { env: { ...env, HERDR_WORKSPACE_ID: "ws_partial" } });
+    assert.deepEqual(payload, {
+      title: "Explicit tuple",
+      tabOnlyIfMultiple: true,
+      tabId: "tab_explicit",
+      paneId: "pane_explicit",
+    });
+
+    const staleDaemonEnv = { ...env, PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1" };
+    delete staleDaemonEnv.HERDR_WORKSPACE_ID;
+    delete staleDaemonEnv.HERDR_TAB_ID;
+    delete staleDaemonEnv.HERDR_PANE_ID;
+    await assert.rejects(execFileAsync("bash", [script("wmux-title"), "--title", "Stale daemon"], {
+      env: staleDaemonEnv,
+    }), /incomplete HERDR identity tuple/);
+    await execFileAsync("bash", [script("wmux-title"),
+      "--workspace", "ws_daemon",
+      "--tab", "tab_daemon",
+      "--pane", "pane_daemon",
+      "--title", "Explicit daemon tuple",
+    ], { env: staleDaemonEnv });
+    assert.deepEqual(payload, {
+      title: "Explicit daemon tuple",
+      tabOnlyIfMultiple: true,
+      tabId: "tab_daemon",
+      paneId: "pane_daemon",
+    });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(home, { recursive: true, force: true });

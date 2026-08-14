@@ -1933,6 +1933,9 @@ test("Windows wmux-title sends the bearer token used by authenticated APIs", () 
   assert.match(helper, /function Get-WmuxToken/);
   assert.match(helper, /\$Headers\['Authorization'\] = "Bearer \$WmuxToken"/);
   assert.match(helper, /Invoke-RestMethod[^\n]+-Headers \$Headers/);
+  assert.match(helper, /\$SourcePaneId = \$env:WMUX_PANE_ID/);
+  assert.match(helper, /'--pane'/);
+  assert.match(helper, /\$Payload\.paneId = \$PaneId/);
 });
 
 test("wmuxctl prefers automation auth and scoped preflight never falls back", async () => {

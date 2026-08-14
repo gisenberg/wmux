@@ -2034,17 +2034,26 @@ const identityPattern = {
   tabId: /^tab_[0-9a-f]{8,64}$/,
   paneId: /^pane_[0-9a-f]{8,64}$/,
 } as const
-const identityFromEnvironment = (): WmuxIdentity | undefined => {
-  const daemonWorker = process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER === "1"
+const identityTupleFromEnvironment = (prefix: "HERDR" | "WMUX") => {
   const identity = {
-    workspaceId: process.env.HERDR_WORKSPACE_ID || (daemonWorker ? undefined : process.env.WMUX_WORKSPACE_ID),
-    tabId: process.env.HERDR_TAB_ID || (daemonWorker ? undefined : process.env.WMUX_TAB_ID),
-    paneId: process.env.HERDR_PANE_ID || (daemonWorker ? undefined : process.env.WMUX_PANE_ID),
+    workspaceId: process.env[prefix + "_WORKSPACE_ID"],
+    tabId: process.env[prefix + "_TAB_ID"],
+    paneId: process.env[prefix + "_PANE_ID"],
   }
+  const present = Object.values(identity).some((value) => value !== undefined)
+  if (!present) return { present: false, identity: undefined } as const
   if (!Object.entries(identity).every(([key, value]) =>
     typeof value === "string" && identityPattern[key as keyof WmuxIdentity].test(value)
-  )) return undefined
-  return identity as WmuxIdentity
+  )) return { present: true, identity: undefined } as const
+  return { present: true, identity: identity as WmuxIdentity } as const
+}
+const identityFromEnvironment = (): WmuxIdentity | undefined => {
+  const herdr = identityTupleFromEnvironment("HERDR").identity
+  if (herdr) return herdr
+  // Daemon scopes fail closed when forwarding is absent, partial, or invalid;
+  // only non-daemon processes may fall back to one complete WMUX tuple.
+  if (process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER === "1") return undefined
+  return identityTupleFromEnvironment("WMUX").identity
 }
 const boundIdentity = identityFromEnvironment()
 // Prime classifies provider retries only after extension agent_end. Cover its
@@ -2205,6 +2214,7 @@ const publishAutoTitleNow = (title: string, binding: TurnBinding) => new Promise
   const child = spawn(titleScript, [
     "--workspace", binding.identity.workspaceId,
     "--tab", binding.identity.tabId,
+    "--pane", binding.identity.paneId,
     "--tab-always",
     "--title", title,
   ], {

@@ -293,11 +293,16 @@ test("Prime Agent extension binds each session to its forwarded pane environment
         dispatches: [],
       }));
     };
-    const createHandlers = async (digit?: string) => {
+    const createHandlers = async (digit?: string, partial = false) => {
       if (digit) {
         process.env.HERDR_WORKSPACE_ID = `ws_${digit.repeat(8)}`;
-        process.env.HERDR_TAB_ID = `tab_${digit.repeat(8)}`;
-        process.env.HERDR_PANE_ID = `pane_${digit.repeat(8)}`;
+        if (partial) {
+          delete process.env.HERDR_TAB_ID;
+          delete process.env.HERDR_PANE_ID;
+        } else {
+          process.env.HERDR_TAB_ID = `tab_${digit.repeat(8)}`;
+          process.env.HERDR_PANE_ID = `pane_${digit.repeat(8)}`;
+        }
       } else {
         delete process.env.HERDR_WORKSPACE_ID;
         delete process.env.HERDR_TAB_ID;
@@ -323,6 +328,12 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     const childOneReloaded = await createHandlers("1");
     const unsafe = await createHandlers("3");
     const missing = await createHandlers();
+    const partial = await createHandlers("4", true);
+    Object.assign(process.env, {
+      HERDR_WORKSPACE_ID: "ws_aaaaaaaa",
+      HERDR_TAB_ID: "tab_aaaaaaaa",
+      HERDR_PANE_ID: "pane_aaaaaaaa",
+    });
 
     // Prime creates its persistent IPython kernel before applying the session
     // exec-env provider, so tool calls must repair stale daemon WMUX_* identity.
@@ -421,6 +432,9 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     const unboundTool = { toolName: "ipython", input: { code: "print('unchanged')" } };
     await missing.get("tool_call")?.(unboundTool, context());
     assert.equal(unboundTool.input.code, "print('unchanged')");
+    const partialTool = { toolName: "ipython", input: { code: "print('also unchanged')" } };
+    await partial.get("tool_call")?.(partialTool, context());
+    assert.equal(partialTool.input.code, "print('also unchanged')");
 
     await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context());
     await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context());
@@ -433,8 +447,8 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       ["ws_22222222", "tab_22222222", "pane_22222222", "completed", ""],
     ]);
     assert.deepEqual(titleCaptured, [
-      { title: "Name workspace one", tabOnlyIfMultiple: false, tabId: "tab_11111111" },
-      { title: "Name workspace two", tabOnlyIfMultiple: false, tabId: "tab_22222222" },
+      { title: "Name workspace one", tabOnlyIfMultiple: false, tabId: "tab_11111111", paneId: "pane_11111111" },
+      { title: "Name workspace two", tabOnlyIfMultiple: false, tabId: "tab_22222222", paneId: "pane_22222222" },
     ]);
     assert.equal(captured[0]?.runId, captured[2]?.runId);
     assert.equal(captured[1]?.runId, captured[3]?.runId);
@@ -903,6 +917,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     ]);
     assert.ok(titleCaptured.every((request) => request.tabOnlyIfMultiple === false));
     assert.ok(titleCaptured.every((request) => request.tabId === "tab_33333333"));
+    assert.ok(titleCaptured.every((request) => request.paneId === "pane_33333333"));
 
     // A global automatic name from another branch must not be mistaken for a
     // manual override when navigating the session tree in either direction.
