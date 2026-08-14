@@ -612,7 +612,7 @@ Prime's internal session name is canonical for automatically owned wmux titles: 
 The gold `?` indicator is reserved for a positively identified explicit input request; the managed Prime Agent extension does not guess that ordinary idle completion requires input.
 New POSIX pane processes export `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` compatibility aliases because Prime Agent 0.7.1 forwards only that allowlist into each daemon session scope; wmux deliberately does not set `HERDR_ENV` or a Herdr socket.
 Daemon workers never trust their ambient environment for routing: the extension accepts only the explicit HERDR tuple in the owner-only worker descriptor after validating its worker PID and root active-session ID, and fails closed when that proof is absent or malformed. Only non-daemon processes may use a complete HERDR tuple and then fall back to one complete `WMUX_*` tuple.
-Prime creates its persistent IPython kernel before applying the daemon session exec environment, so the extension also pins the bound W/T/P IDs into Python and `%%bash` tool calls; wmux commands therefore cannot inherit the daemon's launch pane.
+Prime creates its persistent IPython kernel before applying the daemon session exec environment, so the extension pins proven W/T/P IDs into Python and `%%bash` tool calls and clears every stale W/T/P variable when daemon proof is unavailable; wmux commands therefore cannot inherit the daemon's launch pane.
 A resident Prime session stays bound to its creator pane; reopening a nonresident saved session can bind it to the new pane.
 Existing pane shells must be recreated after rollout to receive the compatibility aliases.
 The installer preserves an unmanaged extension already present at that path.

@@ -2226,17 +2226,25 @@ const futureImportInsertionIndex = (code: string): number => {
   }
   return insertion
 }
+const toolIdentityKeys = [
+  "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
+  "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID",
+] as const
+const clearUnprovenDaemonToolIdentity =
+  process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER === "1" && !boundIdentity
 const bindIpythonEnvironment = (code: string): string => {
-  if (!toolEnvironment) return code
+  if (!toolEnvironment && !clearUnprovenDaemonToolIdentity) return code
   const shellCell = code.match(/^(\s*%%(?:bash|sh)[^\n]*\n)/)
   if (shellCell) {
-    const exports = Object.entries(toolEnvironment)
-      .map(([key, value]) => "export " + key + "='" + value + "'")
-      .join("\n")
-    return shellCell[1] + exports + "\n" + code.slice(shellCell[1].length)
+    const environment = toolEnvironment
+      ? Object.entries(toolEnvironment).map(([key, value]) => "export " + key + "='" + value + "'").join("\n")
+      : "unset " + toolIdentityKeys.join(" ")
+    return shellCell[1] + environment + "\n" + code.slice(shellCell[1].length)
   }
   if (/^\s*%%/.test(code)) return code
-  const prelude = "import os as __wmux_os\n__wmux_os.environ.update(" + JSON.stringify(toolEnvironment) + ")\n"
+  const prelude = toolEnvironment
+    ? "import os as __wmux_os\n__wmux_os.environ.update(" + JSON.stringify(toolEnvironment) + ")\n"
+    : "import os as __wmux_os\nfor __wmux_key in " + JSON.stringify(toolIdentityKeys) + ": __wmux_os.environ.pop(__wmux_key, None)\n"
   const insertion = futureImportInsertionIndex(code)
   const separator = insertion > 0 && code[insertion - 1] !== "\n" ? "\n" : ""
   return code.slice(0, insertion) + separator + prelude + code.slice(insertion)

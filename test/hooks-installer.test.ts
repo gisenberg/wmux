@@ -442,12 +442,28 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     });
     assert.equal(bashResult.stdout.trim(), "ws_22222222|tab_22222222|pane_22222222");
 
-    const unboundTool = { toolName: "ipython", input: { code: "print('unchanged')" } };
+    const staleToolEnv = {
+      ...process.env,
+      WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa",
+      HERDR_WORKSPACE_ID: "ws_aaaaaaaa", HERDR_TAB_ID: "tab_aaaaaaaa", HERDR_PANE_ID: "pane_aaaaaaaa",
+    };
+    const unboundTool = { toolName: "ipython", input: { code:
+      "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('HERDR_PANE_ID')]))" } };
     await missing.get("tool_call")?.(unboundTool, context());
-    assert.equal(unboundTool.input.code, "print('unchanged')");
-    const partialTool = { toolName: "ipython", input: { code: "print('also unchanged')" } };
+    const unboundResult = await execFileAsync("python3", ["-c", unboundTool.input.code], { env: staleToolEnv });
+    assert.deepEqual(JSON.parse(unboundResult.stdout.trim()), [null, null]);
+    const partialTool = { toolName: "ipython", input: { code:
+      "import json, os; print(json.dumps([os.environ.get('WMUX_TAB_ID'), os.environ.get('HERDR_WORKSPACE_ID')]))" } };
     await partial.get("tool_call")?.(partialTool, context());
-    assert.equal(partialTool.input.code, "print('also unchanged')");
+    const partialResult = await execFileAsync("python3", ["-c", partialTool.input.code], { env: staleToolEnv });
+    assert.deepEqual(JSON.parse(partialResult.stdout.trim()), [null, null]);
+    const unboundBashTool = { toolName: "ipython", input: { code:
+      `%%bash
+printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
+    await missing.get("tool_call")?.(unboundBashTool, context());
+    assert.match(unboundBashTool.input.code, /^%%bash\nunset WMUX_WORKSPACE_ID WMUX_TAB_ID WMUX_PANE_ID/);
+    const unboundBashResult = await execFileAsync("bash", ["-c", unboundBashTool.input.code.replace(/^%%bash\n/, "")], { env: staleToolEnv });
+    assert.equal(unboundBashResult.stdout.trim(), "|");
 
     await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context());
     await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context());
