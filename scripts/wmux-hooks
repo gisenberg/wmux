@@ -2065,6 +2065,7 @@ const daemonDescriptorIdentity = (): WmuxIdentity | undefined => {
   const descriptorPath = join(dirname(recoveryJournal), match[1] + ".json")
   const expectedPath = resolve(descriptorPath)
   let descriptorHandle: number | undefined
+  let bindingHandle: number | undefined
   try {
     const directoryStat = lstatSync(dirname(descriptorPath))
     const descriptorStat = lstatSync(descriptorPath)
@@ -2097,14 +2098,49 @@ const daemonDescriptorIdentity = (): WmuxIdentity | undefined => {
       || parsed.rootActiveSessionId !== activeSessionId
       || parsed.createCommand?.type !== "create"
     ) return undefined
-    return validatedIdentity({
+    const descriptorIdentity = validatedIdentity({
       workspaceId: parsed.createCommand?.env?.HERDR_WORKSPACE_ID,
       tabId: parsed.createCommand?.env?.HERDR_TAB_ID,
       paneId: parsed.createCommand?.env?.HERDR_PANE_ID,
     })
+    if (descriptorIdentity) return descriptorIdentity
+
+    // Explicit owner-created migration proof for a legacy worker whose Prime
+    // descriptor predates per-session client env. Prime never writes this sidecar.
+    const bindingPath = join(dirname(descriptorPath), match[1] + ".wmux-binding.json")
+    const bindingStat = lstatSync(bindingPath)
+    if (
+      !bindingStat.isFile()
+      || bindingStat.isSymbolicLink()
+      || (uid !== undefined && bindingStat.uid !== uid)
+      || (bindingStat.mode & 0o077) !== 0
+      || bindingStat.size < 2
+      || bindingStat.size > 16 * 1024
+      || realpathSync(bindingPath) !== resolve(bindingPath)
+    ) return undefined
+    bindingHandle = openSync(bindingPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const openedBindingStat = fstatSync(bindingHandle)
+    if (
+      openedBindingStat.dev !== bindingStat.dev
+      || openedBindingStat.ino !== bindingStat.ino
+      || openedBindingStat.size !== bindingStat.size
+      || !openedBindingStat.isFile()
+    ) return undefined
+    const binding = JSON.parse(readFileSync(bindingHandle, "utf8")) as Record<string, any>
+    if (
+      binding.version !== 1
+      || binding.pid !== process.pid
+      || binding.rootActiveSessionId !== activeSessionId
+      || typeof parsed.rootSessionId !== "string"
+      || binding.rootSessionId !== parsed.rootSessionId
+    ) return undefined
+    return validatedIdentity(binding.identity)
   } catch {
     return undefined
   } finally {
+    if (bindingHandle !== undefined) {
+      try { closeSync(bindingHandle) } catch {}
+    }
     if (descriptorHandle !== undefined) {
       try { closeSync(descriptorHandle) } catch {}
     }

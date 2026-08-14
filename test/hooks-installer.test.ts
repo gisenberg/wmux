@@ -294,7 +294,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
         dispatches: [],
       }));
     };
-    const createHandlers = async (digit?: string, partial = false) => {
+    const createHandlers = async (digit?: string, partial = false, migrationSidecar = false) => {
       // Model a worker process whose ambient tuple belongs to daemon-launch pane A.
       // The owner-only worker descriptor is the only accepted daemon binding proof.
       process.env.HERDR_WORKSPACE_ID = "ws_aaaaaaaa";
@@ -308,9 +308,10 @@ test("Prime Agent extension binds each session to its forwarded pane environment
         version: 1,
         pid: process.pid,
         rootActiveSessionId: workerId,
+        rootSessionId: `session-${workerId}`,
         createCommand: {
           type: "create",
-          ...(digit ? { env: {
+          ...(digit && !migrationSidecar ? { env: {
             HERDR_WORKSPACE_ID: `ws_${digit.repeat(8)}`,
             ...(partial ? {} : {
               HERDR_TAB_ID: `tab_${digit.repeat(8)}`,
@@ -319,6 +320,19 @@ test("Prime Agent extension binds each session to its forwarded pane environment
           } } : {}),
         },
       }), { mode: 0o600 });
+      if (digit && migrationSidecar) {
+        fs.writeFileSync(path.join(workerDir, `${workerId}.wmux-binding.json`), JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          rootActiveSessionId: workerId,
+          rootSessionId: `session-${workerId}`,
+          identity: {
+            workspaceId: `ws_${digit.repeat(8)}`,
+            tabId: `tab_${digit.repeat(8)}`,
+            paneId: `pane_${digit.repeat(8)}`,
+          },
+        }), { mode: 0o600 });
+      }
       process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID = workerId;
       process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL = recoveryJournal;
       const sessionExtensionPath = path.join(home, `.prime-session-${digit ?? "missing"}-${Date.now()}-${Math.random()}.ts`);
@@ -336,6 +350,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     };
     const one = await createHandlers("1");
     const two = await createHandlers("2");
+    const migrated = await createHandlers("5", false, true);
     const childOneA = await createHandlers("1");
     const childOneB = await createHandlers("1");
     const childOneReloaded = await createHandlers("1");
@@ -441,6 +456,12 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
     });
     assert.equal(bashResult.stdout.trim(), "ws_22222222|tab_22222222|pane_22222222");
+
+    const migratedTool = { toolName: "ipython", input: { code:
+      "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_PANE_ID')]))" } };
+    await migrated.get("tool_call")?.(migratedTool, context());
+    const migratedResult = await execFileAsync("python3", ["-c", migratedTool.input.code], { env: process.env });
+    assert.deepEqual(JSON.parse(migratedResult.stdout.trim()), ["ws_55555555", "pane_55555555"]);
 
     const staleToolEnv = {
       ...process.env,
