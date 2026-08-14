@@ -242,7 +242,8 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN", "RLM_DEPTH",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_RETRY_GRACE_MS",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL", "WMUX_PRIME_RETRY_GRACE_MS",
     "WMUX_PRIME_LATE_RETRY_WINDOW_MS",
   ].map((key) => [key, process.env[key]]));
   try {
@@ -294,20 +295,32 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       }));
     };
     const createHandlers = async (digit?: string, partial = false) => {
-      if (digit) {
-        process.env.HERDR_WORKSPACE_ID = `ws_${digit.repeat(8)}`;
-        if (partial) {
-          delete process.env.HERDR_TAB_ID;
-          delete process.env.HERDR_PANE_ID;
-        } else {
-          process.env.HERDR_TAB_ID = `tab_${digit.repeat(8)}`;
-          process.env.HERDR_PANE_ID = `pane_${digit.repeat(8)}`;
-        }
-      } else {
-        delete process.env.HERDR_WORKSPACE_ID;
-        delete process.env.HERDR_TAB_ID;
-        delete process.env.HERDR_PANE_ID;
-      }
+      // Model a worker process whose ambient tuple belongs to daemon-launch pane A.
+      // The owner-only worker descriptor is the only accepted daemon binding proof.
+      process.env.HERDR_WORKSPACE_ID = "ws_aaaaaaaa";
+      process.env.HERDR_TAB_ID = "tab_aaaaaaaa";
+      process.env.HERDR_PANE_ID = "pane_aaaaaaaa";
+      const workerId = (digit ?? "f").repeat(12);
+      const workerDir = path.join(home, ".prime", "agent", "daemon-workers", "test");
+      const recoveryJournal = path.join(workerDir, `${workerId}.recovery.jsonl`);
+      fs.mkdirSync(workerDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(workerDir, `${workerId}.json`), JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        rootActiveSessionId: workerId,
+        createCommand: {
+          type: "create",
+          ...(digit ? { env: {
+            HERDR_WORKSPACE_ID: `ws_${digit.repeat(8)}`,
+            ...(partial ? {} : {
+              HERDR_TAB_ID: `tab_${digit.repeat(8)}`,
+              HERDR_PANE_ID: `pane_${digit.repeat(8)}`,
+            }),
+          } } : {}),
+        },
+      }), { mode: 0o600 });
+      process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID = workerId;
+      process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL = recoveryJournal;
       const sessionExtensionPath = path.join(home, `.prime-session-${digit ?? "missing"}-${Date.now()}-${Math.random()}.ts`);
       fs.copyFileSync(extensionPath, sessionExtensionPath);
       const module = await import(pathToFileURL(sessionExtensionPath).href);
@@ -828,7 +841,8 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_TITLE_SYNC_INTERVAL_MS",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL", "WMUX_PRIME_TITLE_SYNC_INTERVAL_MS",
   ].map((key) => [key, process.env[key]]));
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -851,6 +865,22 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     delete process.env.WMUX_HELPER_TOKEN;
     delete process.env.WMUX_HELPER_TOKEN_PATH;
     delete process.env.WMUX_DELEGATED_RUN;
+    const workerId = "3".repeat(12);
+    const workerDir = path.join(home, ".prime", "agent", "daemon-workers", "test");
+    const recoveryJournal = path.join(workerDir, `${workerId}.recovery.jsonl`);
+    fs.mkdirSync(workerDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(workerDir, `${workerId}.json`), JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      rootActiveSessionId: workerId,
+      createCommand: { type: "create", env: {
+        HERDR_WORKSPACE_ID: "ws_33333333",
+        HERDR_TAB_ID: "tab_33333333",
+        HERDR_PANE_ID: "pane_33333333",
+      } },
+    }), { mode: 0o600 });
+    process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID = workerId;
+    process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL = recoveryJournal;
 
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
     const installed = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
