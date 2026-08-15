@@ -1,4 +1,4 @@
-import type { BootstrapPayload, SurfaceTab } from "./types";
+import type { BootstrapPayload, SurfaceTab, TerminalNotification } from "./types";
 
 export interface RouteTarget {
   workspaceId: string;
@@ -13,6 +13,10 @@ const ACTIVE_TABS_STORAGE_KEY = "wmux.activeTabs";
 
 export const workspaceTabPath = (workspaceId: string, tabId: string): string =>
   `/workspaces/${encodeURIComponent(workspaceId)}/tabs/${encodeURIComponent(tabId)}`;
+
+export const notificationTargetHref = (
+  notification: Pick<TerminalNotification, "href" | "workspaceId" | "tabId">,
+): string => notification.href || workspaceTabPath(notification.workspaceId, notification.tabId);
 
 export const shouldReplaceWorkspaceHistory = (
   isMobile: boolean,

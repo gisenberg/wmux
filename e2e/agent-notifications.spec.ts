@@ -28,19 +28,29 @@ test("a remote approval gate reaches a mobile browser within one heartbeat", asy
       title: string;
       body: string;
       tag: string;
+      data: unknown;
       createdAt: number;
+      onclick: (() => void) | null;
+      close: () => void;
     }> = [];
     class CapturedNotification {
       static permission = "granted";
+      readonly title: string;
+      readonly body: string;
+      readonly tag: string;
+      readonly data: unknown;
+      readonly createdAt = Date.now();
+      onclick: (() => void) | null = null;
 
       constructor(title: string, options?: NotificationOptions) {
-        notifications.push({
-          title,
-          body: options?.body ?? "",
-          tag: options?.tag ?? "",
-          createdAt: Date.now(),
-        });
+        this.title = title;
+        this.body = options?.body ?? "";
+        this.tag = options?.tag ?? "";
+        this.data = options?.data;
+        notifications.push(this);
       }
+
+      close() {}
     }
     Object.defineProperty(window, "Notification", {
       configurable: true,
@@ -120,15 +130,25 @@ test("a remote approval gate reaches a mobile browser within one heartbeat", asy
             title: string;
             body: string;
             tag: string;
+            data: unknown;
             createdAt: number;
           }>;
         }
       ).__wmuxCapturedNotifications ?? [];
-      return captured.at(-1);
+      const latest = captured.at(-1);
+      return latest
+        ? {
+            title: latest.title,
+            body: latest.body,
+            tag: latest.tag,
+            href: (latest.data as { href?: string } | undefined)?.href,
+          }
+        : undefined;
     })).toEqual(expect.objectContaining({
       title: "claude: approval required",
       body: "Approve the remote deployment.",
       tag: expect.stringMatching(/^note_/),
+      href: `/workspaces/${remoteWorkspace.id}/tabs/${remoteTab.id}`,
     }));
     const deliveredAt = await page.evaluate(() => (
       window as typeof window & {
@@ -136,6 +156,20 @@ test("a remote approval gate reaches a mobile browser within one heartbeat", asy
       }
     ).__wmuxCapturedNotifications?.at(-1)?.createdAt ?? 0);
     expect(deliveredAt - startedAt).toBeLessThan(15_000);
+
+    await page.evaluate(() => {
+      const latest = (
+        window as typeof window & {
+          __wmuxCapturedNotifications?: Array<{ onclick: (() => void) | null }>;
+        }
+      ).__wmuxCapturedNotifications?.at(-1);
+      latest?.onclick?.();
+    });
+    await expect(page).toHaveURL(new RegExp(`/workspaces/${remoteWorkspace.id}/tabs/${remoteTab.id}$`));
+    await expect(page.locator(`a[data-workspace-id="${remoteWorkspace.id}"]`)).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   } finally {
     await page.close();
     for (const workspaceId of workspaceIds.reverse()) {

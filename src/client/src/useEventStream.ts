@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, UnauthorizedError } from "./api";
 import { writeBrowserClipboard } from "./clipboard";
+import { notificationTargetHref } from "./route-state";
 import { withTokenParam } from "./token";
 import type {
   BootstrapPayload,
@@ -159,15 +160,16 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
 const showBrowserNotification = (notification: TerminalNotification): void => {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const title = notification.subtitle ? `${notification.title}: ${notification.subtitle}` : notification.title;
+  const href = notificationTargetHref(notification);
   const browserNotification = new Notification(title, {
     body: notification.body,
     tag: notification.id,
-    data: notification.href ? { href: notification.href } : undefined,
+    data: { href },
   });
-  if (notification.href) browserNotification.onclick = () => {
+  browserNotification.onclick = () => {
     window.focus();
-    window.history.pushState(null, "", notification.href!);
-    window.dispatchEvent(new CustomEvent("wmux-notification-navigate", { detail: { href: notification.href } }));
+    window.history.pushState(null, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
     browserNotification.close();
   };
 };
