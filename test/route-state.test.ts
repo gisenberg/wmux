@@ -8,6 +8,7 @@ import {
   findWorkspaceTab,
   markPaneNotificationsReadInState,
   markWorkspaceNotificationsReadInState,
+  notificationTargetHref,
   parseRouteTarget,
   shouldReplaceWorkspaceHistory,
   workspaceTabPath,
@@ -89,6 +90,18 @@ test("parseRouteTarget parses workspace and optional tab", () => {
 test("workspaceTabPath round-trips through parseRouteTarget", () => {
   const path = workspaceTabPath("ws x", "t/y");
   assert.deepEqual(parseRouteTarget(path), { workspaceId: "ws x", tabId: "t/y" });
+});
+
+test("notificationTargetHref links ordinary notifications to their exact workspace tab", () => {
+  assert.equal(
+    notificationTargetHref({ workspaceId: "ws x", tabId: "t/y" }),
+    "/workspaces/ws%20x/tabs/t%2Fy",
+  );
+});
+
+test("notificationTargetHref preserves specialized notification deep links", () => {
+  const href = "/workspaces/ws1/tabs/t1?agentInput=request-1&generation=2";
+  assert.equal(notificationTargetHref({ workspaceId: "ws1", tabId: "t1", href }), href);
 });
 
 test("mobile workspace switches replace history unless explicitly overridden", () => {
