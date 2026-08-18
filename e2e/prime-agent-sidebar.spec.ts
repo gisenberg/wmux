@@ -48,7 +48,9 @@ test("Prime heartbeat scheduling pulses only while the agent is idle", async ({
     await expect(sidebarRow).toHaveAttribute("data-agent-name", "prime-agent");
     await expect(sidebarRow).toHaveAttribute("data-agent-status", "running");
     await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
-    await expect(sidebarRow).toHaveAccessibleName(/prime-agent working/);
+    await expect(sidebarRow).toHaveAccessibleName(
+      /prime-agent working, workspace 1\/1 pane active/,
+    );
 
     const scheduled = await request.post("/api/agent-events", {
       data: {
@@ -72,7 +74,9 @@ test("Prime heartbeat scheduling pulses only while the agent is idle", async ({
     expect(setupCompleted.ok()).toBeTruthy();
     await expect(sidebarRow).toHaveAttribute("data-agent-status", "heartbeat");
     await expect(sidebarRow).toHaveAttribute("data-agent-marker", /[·♡♥]/);
-    await expect(sidebarRow).toHaveAccessibleName(/prime-agent heartbeat/);
+    await expect(sidebarRow).toHaveAccessibleName(
+      /prime-agent heartbeat, workspace 1\/1 pane scheduled/,
+    );
 
     const delivered = await request.post("/api/agent-events", {
       data: {
