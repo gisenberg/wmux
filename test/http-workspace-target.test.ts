@@ -150,6 +150,148 @@ test("split creation rejects a pane outside the target tab without mutating stat
   });
 });
 
+test("pane-scoped auto titles validate the exact workspace, tab, and pane tuple", async () => {
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  await withServer(machines, async (baseUrl) => {
+    const first = await postWorkspace(baseUrl, { machineId: "local" });
+    const firstPayload = await first.json() as {
+      workspace: { id: string; tabs: Array<{ id: string; panes: Array<{ id: string }> }> };
+    };
+    const second = await postWorkspace(baseUrl, { machineId: "local" });
+    const secondPayload = await second.json() as {
+      workspace: { id: string; tabs: Array<{ id: string; panes: Array<{ id: string }> }> };
+    };
+    const firstTarget = firstPayload.workspace.tabs[0];
+    const secondTarget = secondPayload.workspace.tabs[0];
+    const postTitle = (body: object) => fetch(
+      `${baseUrl}/api/workspaces/${firstPayload.workspace.id}/auto-title`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+
+    const valid = await postTitle({
+      title: "Exact target",
+      tabId: firstTarget.id,
+      paneId: firstTarget.panes[0].id,
+      tabOnlyIfMultiple: false,
+    });
+    assert.equal(valid.status, 200);
+
+    const missingTab = await postTitle({ title: "Missing tab", paneId: firstTarget.panes[0].id });
+    assert.equal(missingTab.status, 400);
+    assert.deepEqual(await missingTab.json(), { error: "auto_title_pane_requires_tab" });
+
+    const missingPane = await postTitle({ title: "Missing pane", tabId: firstTarget.id, paneId: "pane_missing" });
+    assert.equal(missingPane.status, 404);
+    assert.deepEqual(await missingPane.json(), { error: "pane_not_found" });
+
+    const mismatch = await postTitle({
+      title: "Cross workspace",
+      tabId: secondTarget.id,
+      paneId: secondTarget.panes[0].id,
+    });
+    assert.equal(mismatch.status, 400);
+    assert.deepEqual(await mismatch.json(), { error: "auto_title_target_mismatch" });
+  });
+});
+
+test("auto-title route validates exact pane ownership and rejects ambiguous legacy sources", async () => {
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  await withServer(machines, async (baseUrl) => {
+    const created = await postWorkspace(baseUrl, { machineId: "local" });
+    const initial = await created.json() as {
+      workspace: { id: string; activeTabId: string; tabs: Array<{ panes: Array<{ id: string }> }> };
+    };
+    const workspaceId = initial.workspace.id;
+    const tabId = initial.workspace.activeTabId;
+    const primaryPaneId = initial.workspace.tabs[0].panes[0].id;
+    const postAutoTitle = (body: object) => fetch(
+      `${baseUrl}/api/workspaces/${workspaceId}/auto-title`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+
+    const legacy = await postAutoTitle({
+      title: "Sole pane legacy",
+      tabId,
+      tabOnlyIfMultiple: false,
+    });
+    assert.equal(legacy.status, 200);
+
+    const split = await fetch(`${baseUrl}/api/tabs/${tabId}/split`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paneId: primaryPaneId, direction: "vertical" }),
+    });
+    const splitPayload = await split.json() as {
+      tab: { panes: Array<{ id: string }> };
+    };
+    const secondaryPaneId = splitPayload.tab.panes.find(
+      (pane) => pane.id !== primaryPaneId,
+    )?.id;
+    assert.ok(secondaryPaneId);
+
+    const ambiguous = await postAutoTitle({
+      title: "Ambiguous legacy",
+      tabId,
+      tabOnlyIfMultiple: false,
+    });
+    assert.equal(ambiguous.status, 400);
+    assert.deepEqual(await ambiguous.json(), { error: "ambiguous_auto_title_source" });
+
+    const secondary = await postAutoTitle({
+      title: "Secondary pane",
+      tabId,
+      paneId: secondaryPaneId,
+      tabOnlyIfMultiple: false,
+    });
+    const secondaryPayload = await secondary.json() as {
+      workspace: { name: string };
+      tab: { title: string };
+      workspaceApplied: boolean;
+      tabApplied: boolean;
+    };
+    assert.equal(secondary.status, 200);
+    assert.equal(secondaryPayload.workspaceApplied, false);
+    assert.equal(secondaryPayload.tabApplied, false);
+    assert.equal(secondaryPayload.workspace.name, "Sole pane legacy");
+    assert.equal(secondaryPayload.tab.title, "Sole pane legacy");
+
+    const exact = await postAutoTitle({
+      title: "Primary pane",
+      tabId,
+      paneId: primaryPaneId,
+      tabOnlyIfMultiple: false,
+    });
+    const exactPayload = await exact.json() as {
+      workspace: { name: string };
+      tab: { title: string };
+    };
+    assert.equal(exact.status, 200);
+    assert.equal(exactPayload.workspace.name, "Primary pane");
+    assert.equal(exactPayload.tab.title, "Primary pane");
+
+    const other = await postWorkspace(baseUrl, { machineId: "local" });
+    const otherPayload = await other.json() as {
+      workspace: { tabs: Array<{ panes: Array<{ id: string }> }> };
+    };
+    const mismatch = await postAutoTitle({
+      title: "Wrong tuple",
+      tabId,
+      paneId: otherPayload.workspace.tabs[0].panes[0].id,
+      tabOnlyIfMultiple: false,
+    });
+    assert.equal(mismatch.status, 400);
+    assert.deepEqual(await mismatch.json(), { error: "auto_title_target_mismatch" });
+  });
+});
+
 test("workspace creation reports when no machine target exists", async () => {
   await withServer([], async (baseUrl) => {
     const response = await postWorkspace(baseUrl);

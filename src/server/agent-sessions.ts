@@ -3,7 +3,7 @@ import {
   AgentTimelineStore,
   type AgentTimelineLifecycleInput,
 } from "./agent-timeline.js";
-import { stripMarkup, type StateStore } from "./state.js";
+import { autoTitleOwnership, stripMarkup, type StateStore } from "./state.js";
 import type {
   AgentActivity,
   AgentSessionTimeline,
@@ -235,13 +235,18 @@ export class AgentSessionService {
       }
 
       let workspaceChanged = false;
+      const titleOwnership = autoTitleOwnership(
+        target.workspace,
+        target.tab,
+        target.paneId,
+      );
       if (delegationDisposition.accepted && title) {
-        if (target.workspace.nameSource !== "user") {
+        if (titleOwnership.workspace && target.workspace.nameSource !== "user") {
           target.workspace.name = title;
           target.workspace.nameSource = "auto";
           workspaceChanged = true;
         }
-        if (target.tab.titleSource !== "user") {
+        if (titleOwnership.tab && target.tab.titleSource !== "user") {
           target.tab.title = title;
           target.tab.titleSource = "auto";
           workspaceChanged = true;
@@ -251,6 +256,7 @@ export class AgentSessionService {
       const descriptor = summary || `${agent} ${status}`;
       if (
         delegationDisposition.accepted
+        && titleOwnership.workspace
         && descriptor
         && target.workspace.descriptorSource !== "user"
       ) {
@@ -770,7 +776,13 @@ const markLatestAgentInterrupted = (
   const workspace = state.workspaces.find(
     (candidate) => candidate.id === latest.workspaceId,
   );
-  if (workspace && workspace.descriptorSource !== "user") {
+  const tab = workspace?.tabs.find((candidate) => candidate.id === latest.tabId);
+  if (
+    workspace
+    && tab
+    && autoTitleOwnership(workspace, tab, latest.paneId).workspace
+    && workspace.descriptorSource !== "user"
+  ) {
     workspace.descriptor = latest.summary;
     workspace.descriptorSource = "auto";
     workspace.updatedAt = interruptedAt;

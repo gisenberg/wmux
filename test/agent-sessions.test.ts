@@ -88,6 +88,96 @@ test("agent sessions own lifecycle, title, and notification updates", () => {
 });
 
 
+test("agent title ownership follows deterministic layout-primary panes", () => {
+  withAgentSessions((state, agents) => {
+    const initial = state.snapshot().workspaces[0];
+    const firstTab = initial.tabs[0];
+    const primaryPaneId = firstTab.panes[0].id;
+    const split = state.splitPane(firstTab.id, primaryPaneId, "vertical");
+    const secondaryPaneId = split.panes.find((pane) => pane.id !== primaryPaneId)?.id;
+    assert.ok(secondaryPaneId);
+
+    const before = state.snapshot().workspaces[0];
+    agents.recordAgentEvent({
+      workspaceId: before.id,
+      tabId: firstTab.id,
+      paneId: secondaryPaneId,
+      runId: "secondary-title",
+      agent: "prime-agent",
+      status: "running",
+      title: "Secondary session",
+      summary: "Secondary work",
+    });
+    let current = state.snapshot().workspaces[0];
+    assert.equal(current.name, before.name);
+    assert.equal(current.tabs[0].title, before.tabs[0].title);
+    assert.equal(current.descriptor, before.descriptor);
+
+    agents.recordAgentEvent({
+      workspaceId: current.id,
+      tabId: firstTab.id,
+      paneId: primaryPaneId,
+      runId: "primary-title",
+      agent: "prime-agent-primary",
+      status: "running",
+      title: "Primary session",
+      summary: "Primary work",
+    });
+    current = state.snapshot().workspaces[0];
+    assert.equal(current.name, "Primary session");
+    assert.equal(current.tabs[0].title, "Primary session");
+    assert.equal(current.descriptor, "Primary work");
+
+    assert.equal(state.removePane(primaryPaneId), true);
+    agents.recordAgentEvent({
+      workspaceId: current.id,
+      tabId: firstTab.id,
+      paneId: secondaryPaneId,
+      runId: "transferred-title",
+      agent: "prime-agent-transferred",
+      status: "running",
+      title: "Transferred session",
+      summary: "Transferred work",
+    });
+    current = state.snapshot().workspaces[0];
+    assert.equal(current.name, "Transferred session");
+    assert.equal(current.tabs[0].title, "Transferred session");
+    assert.equal(current.descriptor, "Transferred work");
+
+    const secondTab = state.createTab(current.id);
+    const secondPaneId = secondTab.panes[0].id;
+    agents.recordAgentEvent({
+      workspaceId: current.id,
+      tabId: secondTab.id,
+      paneId: secondPaneId,
+      runId: "second-tab-title",
+      agent: "prime-agent-second-tab",
+      status: "running",
+      title: "Second tab session",
+      summary: "Second tab work",
+    });
+    current = state.snapshot().workspaces[0];
+    assert.equal(current.name, "Transferred session");
+    assert.equal(current.descriptor, "Transferred work");
+    assert.equal(current.tabs.find((tab) => tab.id === secondTab.id)?.title, "Second tab session");
+
+    assert.deepEqual(state.removeTab(current.id, firstTab.id), [secondaryPaneId]);
+    agents.recordAgentEvent({
+      workspaceId: current.id,
+      tabId: secondTab.id,
+      paneId: secondPaneId,
+      runId: "first-tab-transferred-title",
+      agent: "prime-agent-first-tab-transferred",
+      status: "running",
+      title: "Workspace transferred",
+      summary: "Workspace owner transferred",
+    });
+    current = state.snapshot().workspaces[0];
+    assert.equal(current.name, "Workspace transferred");
+    assert.equal(current.descriptor, "Workspace owner transferred");
+  });
+});
+
 test("scheduled heartbeat metadata is orthogonal to the agent lifecycle", () => {
   withAgentSessions((state, agents) => {
     const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;

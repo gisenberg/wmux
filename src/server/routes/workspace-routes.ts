@@ -420,13 +420,38 @@ export const workspaceRoutes: readonly ApiRoute[] = [
       const body = (await readJsonBody()) as {
         title?: string;
         tabId?: string;
+        paneId?: string;
         descriptor?: string;
         tabOnlyIfMultiple?: boolean;
       };
+      if (body.paneId !== undefined) {
+        if (!body.tabId) throw new HttpError(400, "auto_title_pane_requires_tab");
+        const source = deps.state.findPaneContext(body.paneId);
+        if (!source) throw new HttpError(404, "pane_not_found");
+        if (source.workspace.id !== match[1] || source.tab.id !== body.tabId) {
+          throw new HttpError(400, "auto_title_target_mismatch");
+        }
+      } else {
+        const workspace = deps.state.snapshot().workspaces.find(
+          (candidate) => candidate.id === match[1],
+        );
+        if (!workspace) throw new HttpError(404, "workspace_not_found");
+        const paneCount = workspace.tabs.reduce(
+          (count, tab) => count + tab.panes.length,
+          0,
+        );
+        if (paneCount !== 1) {
+          throw new HttpError(400, "ambiguous_auto_title_source");
+        }
+        if (body.tabId && body.tabId !== workspace.tabs[0]?.id) {
+          throw new HttpError(400, "auto_title_target_mismatch");
+        }
+      }
       const result = deps.state.setAutoTitle({
         workspaceId: match[1],
         title: body.title ?? "",
         tabId: body.tabId,
+        sourcePaneId: body.paneId,
         descriptor: body.descriptor,
         tabOnlyIfMultiple: body.tabOnlyIfMultiple,
       });

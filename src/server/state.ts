@@ -107,9 +107,20 @@ interface SetAutoTitleInput {
   workspaceId: string;
   title: string;
   tabId?: string;
+  sourcePaneId?: string;
   descriptor?: string;
   tabOnlyIfMultiple?: boolean;
 }
+
+export const autoTitleOwnership = (
+  workspace: Workspace,
+  tab: SurfaceTab,
+  paneId: string,
+): { workspace: boolean; tab: boolean } => ({
+  tab: firstPaneId(tab.layout) === paneId,
+  workspace: workspace.tabs[0]?.id === tab.id
+    && firstPaneId(workspace.tabs[0].layout) === paneId,
+});
 
 // Terminal title/cwd updates stream from the PTY constantly, so persistence is
 // debounced: mutations mark the store dirty and emit "change" immediately (so
@@ -581,19 +592,37 @@ export class StateStore extends EventEmitter {
     const title = cleanTitle(input.title, "");
     if (!title) throw new Error("title is required");
 
+    let sourceTab: SurfaceTab | undefined;
+    let sourcePaneId = input.sourcePaneId;
+    if (sourcePaneId) {
+      if (!input.tabId) throw new Error("auto title source pane requires a tab");
+      const source = this.findPaneContext(sourcePaneId);
+      if (!source || source.workspace.id !== workspace.id || source.tab.id !== input.tabId) {
+        throw new Error("auto title source pane does not match workspace and tab");
+      }
+      sourceTab = source.tab;
+    } else {
+      const paneIds = workspace.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id));
+      if (paneIds.length !== 1) throw new Error("auto title source pane is ambiguous");
+      sourcePaneId = paneIds[0];
+      sourceTab = workspace.tabs[0];
+      if (input.tabId && sourceTab?.id !== input.tabId) {
+        throw new Error("auto title source pane does not match workspace and tab");
+      }
+    }
+    if (!sourceTab) throw new Error("auto title source pane does not match workspace and tab");
+    const ownership = autoTitleOwnership(workspace, sourceTab, sourcePaneId);
+
     let workspaceApplied = false;
     let tabApplied = false;
-    const workspaceTitleCanAdvance = workspace.nameSource !== "user";
-    if (
-      workspaceTitleCanAdvance
-      && (workspace.name !== title || workspace.nameSource !== "auto")
-    ) {
+    if (ownership.workspace && workspace.nameSource !== "user"
+      && (workspace.name !== title || workspace.nameSource !== "auto")) {
       workspace.name = title;
       workspace.nameSource = "auto";
       workspaceApplied = true;
     }
-
-    if (typeof input.descriptor === "string" && workspace.descriptorSource !== "user") {
+    if (ownership.workspace && typeof input.descriptor === "string"
+      && workspace.descriptorSource !== "user") {
       const descriptor = cleanDescriptor(input.descriptor, "");
       const descriptorSource = descriptor ? "auto" : "default";
       if (workspace.descriptor !== descriptor || workspace.descriptorSource !== descriptorSource) {
@@ -603,20 +632,15 @@ export class StateStore extends EventEmitter {
       }
     }
 
-    let tab: SurfaceTab | undefined;
-    if (input.tabId && (!input.tabOnlyIfMultiple || workspace.tabs.length > 1)) {
-      tab = workspace.tabs.find((candidate) => candidate.id === input.tabId);
-      if (!tab) throw new Error("tab not found");
-      if (
-        tab.titleSource !== "user"
-        && (tab.title !== title || tab.titleSource !== "auto")
-      ) {
-        tab.title = title;
-        tab.titleSource = "auto";
-        tabApplied = true;
-      }
+    const tab = input.tabId && (!input.tabOnlyIfMultiple || workspace.tabs.length > 1)
+      ? sourceTab
+      : undefined;
+    if (tab && ownership.tab && tab.titleSource !== "user"
+      && (tab.title !== title || tab.titleSource !== "auto")) {
+      tab.title = title;
+      tab.titleSource = "auto";
+      tabApplied = true;
     }
-
     if (workspaceApplied || tabApplied) {
       workspace.updatedAt = now();
       this.save();

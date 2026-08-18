@@ -19,6 +19,7 @@ import { formatSessionReference } from "./session-reference";
 import {
   SIDEBAR_AGENT_RUNNING_FRAMES,
   sidebarAgentStatusPresentation,
+  sidebarWorkspaceAgentContext,
 } from "./sidebar-agent-status";
 import type { MachineVersionStatus, Workspace, WorkspaceReorderPosition } from "./types";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
@@ -45,6 +46,10 @@ export interface OpenTuiSidebarWorkspace {
   agentCreated?: boolean;
   agentName?: string;
   agentStatus?: WorkspaceAgentStatus;
+  agentPaneCount: number;
+  activeAgentPaneCount: number;
+  heartbeatAgentPaneCount: number;
+  paneCount: number;
   sessionId?: string;
   versionStatus?: MachineVersionStatus;
   versionLabel?: string;
@@ -640,7 +645,7 @@ export function OpenTuiSidebar({
                 aria-level={workspace.depth + 1}
                 aria-current={workspace.active ? "page" : undefined}
                 aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
-                aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentName && workspace.agentStatus ? `, ${workspace.agentName} ${sidebarAgentStatusPresentation(workspace.agentStatus, workspace.reachable, animationTick).label}` : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
+                aria-label={`${workspace.title}${groupSidebarSessionsByHost ? "" : `, host ${workspace.host}`}${workspace.favorite ? ", favorite" : ""}${workspace.agentName && workspace.agentStatus ? `, ${workspace.agentName} ${sidebarAgentStatusPresentation(workspace.agentStatus, workspace.reachable, animationTick).label}${sidebarWorkspaceAgentContext(workspace.activeAgentPaneCount, workspace.heartbeatAgentPaneCount, workspace.agentPaneCount, workspace.paneCount) ? `, workspace ${sidebarWorkspaceAgentContext(workspace.activeAgentPaneCount, workspace.heartbeatAgentPaneCount, workspace.agentPaneCount, workspace.paneCount)}` : ""}` : ""}${workspace.agentCreated ? `, created by ${workspace.agentName ?? "an agent"}` : ""}${workspace.hiddenUnreadCount ? `, ${workspace.hiddenUnreadCount} hidden unread` : ""}${workspace.hiddenAgentStatus ? `, hidden descendant agent status ${workspace.hiddenAgentStatus}` : ""}`}
                 data-agent-created={workspace.agentCreated ? "true" : undefined}
                 data-workspace-id={workspace.id}
                 data-agent-machine={workspace.machineId}
@@ -1130,8 +1135,15 @@ const drawSidebarGrid = (
           workspace.reachable,
           model.animationTick,
         );
+        const aggregateAgentContext = sidebarWorkspaceAgentContext(
+          workspace.activeAgentPaneCount,
+          workspace.heartbeatAgentPaneCount,
+          workspace.agentPaneCount,
+          workspace.paneCount,
+        );
         const statusContext = [
           workspace.agentStatus ? statusPresentation.label : "",
+          aggregateAgentContext,
           workspace.agentName,
         ].filter(Boolean);
         const statusContextLine = [

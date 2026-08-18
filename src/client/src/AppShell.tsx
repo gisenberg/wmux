@@ -36,6 +36,7 @@ import { OpenTuiMobileChrome } from "./OpenTuiMobileChrome";
 import type { OpenTuiActivityRow } from "./OpenTuiActivityPanel";
 import { OpenTuiCommandPalette } from "./OpenTuiCommandPalette";
 import { OpenTuiSidebar } from "./OpenTuiSidebar";
+import { aggregateAgentActivityByWorkspace, agentLifecycleStatus, latestAgentActivityByPane } from "./workspace-agent-activity";
 import type { OpenTuiSidebarMachine, OpenTuiSidebarWorkspace } from "./OpenTuiSidebar";
 import { OpenTuiTopbar } from "./OpenTuiTopbar";
 import { applyClientViewToState, loadActivePaneSelections, loadActiveTabSelections, markWorkspaceNotificationsReadInState, parseRouteTarget, workspaceTabPath } from "./route-state";
@@ -402,8 +403,8 @@ export function AppShell() {
   const runs = state?.runs ?? [];
   const streams = state?.streams ?? [];
   const bellByWorkspaceId = useMemo(() => bellWorkspaces(state, bellPaneIds), [bellPaneIds, state]);
-  const latestAgentByWorkspaceId = useMemo(() => latestAgentByWorkspace(agentEvents), [agentEvents]);
-  const latestAgentByPaneId = useMemo(() => latestAgentByPane(agentEvents), [agentEvents]);
+  const agentActivityByWorkspaceId = useMemo(() => aggregateAgentActivityByWorkspace(agentEvents), [agentEvents]);
+  const latestAgentByPaneId = useMemo(() => latestAgentActivityByPane(agentEvents), [agentEvents]);
   const latestRunByPaneId = useMemo(() => latestRunByPane(runs), [runs]);
   const activePaneHasAgentContext = paneHasAgentContext(
     activePane,
@@ -467,7 +468,7 @@ export function AppShell() {
   const workspaceActivity = useMemo(() => {
     const activity = new Map<string, WorkspaceActivityAggregate>();
     for (const workspace of state?.workspaces ?? []) {
-      const agent = latestAgentByWorkspaceId.get(workspace.id);
+      const agent = agentActivityByWorkspaceId.get(workspace.id)?.representative;
       activity.set(workspace.id, {
         unreadCount: unreadByWorkspaceId.get(workspace.id) ?? 0,
         bell: bellByWorkspaceId.has(workspace.id),
@@ -475,7 +476,7 @@ export function AppShell() {
       });
     }
     return activity;
-  }, [bellByWorkspaceId, latestAgentByWorkspaceId, state?.workspaces, unreadByWorkspaceId]);
+  }, [agentActivityByWorkspaceId, bellByWorkspaceId, state?.workspaces, unreadByWorkspaceId]);
   const openTuiWorkspaceTree = useMemo(() => deriveWorkspaceTree({
     workspaces: state?.workspaces ?? [],
     activeWorkspaceId: activeWorkspace?.id,
@@ -486,7 +487,8 @@ export function AppShell() {
     () =>
       openTuiWorkspaceTree.rows.flatMap((treeRow) => {
         const workspace = treeRow.workspace;
-        const latestAgent = latestAgentByWorkspaceId.get(workspace.id);
+        const agentActivity = agentActivityByWorkspaceId.get(workspace.id);
+        const latestAgent = agentActivity?.representative;
         const presentation = workspacePresentationTarget(workspace, latestAgent);
         const presentationMachineId = presentation.machineId;
         const machine = machineFor(displayMachines, presentationMachineId);
@@ -530,6 +532,10 @@ export function AppShell() {
             agentCreated: workspace.createdBy === "agent",
             agentName: latestAgentName,
             agentStatus: latestAgent ? workspaceAgentStatusClass(latestAgent.status, latestAgent.heartbeatActive) : undefined,
+            agentPaneCount: agentActivity?.paneCount ?? 0,
+            activeAgentPaneCount: agentActivity?.activePaneCount ?? 0,
+            heartbeatAgentPaneCount: agentActivity?.heartbeatPaneCount ?? 0,
+            paneCount: workspace.tabs.reduce((count, candidate) => count + candidate.panes.length, 0),
             sessionId: pane?.id,
             versionStatus: version?.status,
             versionLabel: version?.label,
@@ -551,7 +557,7 @@ export function AppShell() {
       activeWorkspace?.id,
       bellByWorkspaceId,
       displayMachines,
-      latestAgentByWorkspaceId,
+      agentActivityByWorkspaceId,
       latestUnreadByWorkspaceId,
       machines,
       unreadByWorkspaceId,
@@ -565,13 +571,13 @@ export function AppShell() {
         const machineWorkspaces = (state?.workspaces ?? []).filter(
           (workspace) => workspacePresentationTarget(
             workspace,
-            latestAgentByWorkspaceId.get(workspace.id),
+            agentActivityByWorkspaceId.get(workspace.id)?.representative,
           ).machineId === machine.id,
         );
         const activeAgentCount = machineWorkspaces.filter((workspace) => {
-          const agent = latestAgentByWorkspaceId.get(workspace.id);
+          const agent = agentActivityByWorkspaceId.get(workspace.id)?.representative;
           if (!agent) return false;
-          const status = agentStatusClass(agent.status);
+          const status = agentLifecycleStatus(agent.status);
           return status === "running" || status === "waiting";
         }).length;
         return {
@@ -584,7 +590,7 @@ export function AppShell() {
           activeAgentCount,
         };
       }),
-    [displayMachines, latestAgentByWorkspaceId, state?.workspaces],
+    [agentActivityByWorkspaceId, displayMachines, state?.workspaces],
   );
   // The same visible order the sidebar renders; digit and previous/next
   // workspace shortcuts index into this list.
@@ -1246,7 +1252,7 @@ export function AppShell() {
       const workspaceIds = (store.get()?.workspaces ?? [])
         .filter((workspace) => workspacePresentationTarget(
           workspace,
-          latestAgentByWorkspaceId.get(workspace.id),
+          agentActivityByWorkspaceId.get(workspace.id)?.representative,
         ).machineId === machineId)
         .map((workspace) => workspace.id);
       let latestState: BootstrapPayload | undefined;
@@ -2260,22 +2266,6 @@ const stripMarkdown = (value: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
-const latestAgentByWorkspace = (events: AgentActivity[]): Map<string, AgentActivity> => {
-  const latest = new Map<string, AgentActivity>();
-  for (const event of events) {
-    if (!latest.has(event.workspaceId)) latest.set(event.workspaceId, event);
-  }
-  return latest;
-};
-
-const latestAgentByPane = (events: AgentActivity[]): Map<string, AgentActivity> => {
-  const latest = new Map<string, AgentActivity>();
-  for (const event of events) {
-    if (!latest.has(event.paneId)) latest.set(event.paneId, event);
-  }
-  return latest;
-};
-
 const workspaceAgentName = (event: AgentActivity): string => event.agent.trim();
 
 const workspaceAgentStatusLabel = (event: AgentActivity): string => `${event.agent} ${event.status}`.trim();
@@ -2300,20 +2290,11 @@ const latestRunByPane = (runs: TerminalRun[]): Map<string, TerminalRun> => {
   return latest;
 };
 
-const agentStatusClass = (status: string): "running" | "waiting" | "completed" | "failed" | "updated" => {
-  const normalized = status.toLowerCase();
-  if (["failed", "error", "cancelled", "stopped"].includes(normalized)) return "failed";
-  if (["completed", "done", "success"].includes(normalized)) return "completed";
-  if (normalized === "waiting") return "waiting";
-  if (["running", "started", "working"].includes(normalized)) return "running";
-  return "updated";
-};
-
 const workspaceAgentStatusClass = (
   status: string,
   heartbeatActive = false,
 ): WorkspaceAgentStatus => {
-  const lifecycle = agentStatusClass(status);
+  const lifecycle = agentLifecycleStatus(status);
   return heartbeatActive && ["completed", "updated"].includes(lifecycle)
     ? "heartbeat"
     : lifecycle;

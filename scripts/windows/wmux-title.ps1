@@ -33,23 +33,31 @@ function Get-WmuxToken {
 
 $WmuxUrl = $env:WMUX_URL
 if (-not $WmuxUrl) { $WmuxUrl = 'http://127.0.0.1:3478' }
-$WorkspaceId = $env:WMUX_WORKSPACE_ID
-$TabId = $env:WMUX_TAB_ID
+$SourceWorkspaceId = $env:WMUX_WORKSPACE_ID
+$SourceTabId = $env:WMUX_TAB_ID
+$SourcePaneId = $env:WMUX_PANE_ID
+$WorkspaceId = $SourceWorkspaceId
+$TabId = $SourceTabId
+$PaneId = ''
 $Title = ''
 $Descriptor = ''
 $Manual = $false
 $TabOnlyIfMultiple = $true
+$WorkspaceExplicit = $false
+$TabExplicit = $false
+$PaneExplicit = $false
 
 function Show-Usage {
-  Write-Error 'Usage: wmux-title [--manual] [--workspace <id>] [--tab <id>] [--descriptor <text>] [--tab-always] --title <text>'
+  Write-Error 'Usage: wmux-title [--manual] [--workspace <id>] [--tab <id>] [--pane <id>] [--descriptor <text>] [--tab-always] --title <text>'
 }
 
 for ($Index = 0; $Index -lt $args.Count; $Index++) {
   $Arg = [string]$args[$Index]
   switch ($Arg) {
     '--url' { $Index++; $WmuxUrl = [string]$args[$Index]; continue }
-    '--workspace' { $Index++; $WorkspaceId = [string]$args[$Index]; continue }
-    '--tab' { $Index++; $TabId = [string]$args[$Index]; continue }
+    '--workspace' { $Index++; $WorkspaceId = [string]$args[$Index]; $WorkspaceExplicit = $true; continue }
+    '--tab' { $Index++; $TabId = [string]$args[$Index]; $TabExplicit = $true; continue }
+    '--pane' { $Index++; $PaneId = [string]$args[$Index]; $PaneExplicit = $true; continue }
     '--title' { $Index++; $Title = [string]$args[$Index]; continue }
     '--descriptor' { $Index++; $Descriptor = [string]$args[$Index]; continue }
     '--manual' { $Manual = $true; continue }
@@ -71,6 +79,16 @@ if (-not $WorkspaceId -or -not $Title) {
   exit 2
 }
 
+if (-not $Manual) {
+  if ($PaneExplicit) {
+    if (-not $WorkspaceExplicit -or -not $TabExplicit) {
+      throw '--pane requires explicit --workspace and --tab'
+    }
+  } elseif ($WorkspaceId -eq $SourceWorkspaceId -and $TabId -eq $SourceTabId) {
+    $PaneId = $SourcePaneId
+  }
+}
+
 if ($Manual) {
   $Path = "/api/workspaces/$WorkspaceId/title"
   $Payload = [ordered]@{ title = $Title }
@@ -81,6 +99,7 @@ if ($Manual) {
     tabOnlyIfMultiple = $TabOnlyIfMultiple
   }
   if ($TabId) { $Payload.tabId = $TabId }
+  if ($PaneId) { $Payload.paneId = $PaneId }
   if ($Descriptor) { $Payload.descriptor = $Descriptor }
 }
 
