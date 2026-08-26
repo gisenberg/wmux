@@ -3010,9 +3010,26 @@ export default function (pi: any) {
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
-    const activity = sharedActivities.get(identity.paneId)
-    if (!activity) return
-    await resumeRetryFailure(identity, activity, key, depth)
+    const activity = activityFor(identity)
+    if (await resumeRetryFailure(identity, activity, key, depth)) return
+
+    // Agent-to-agent messages can reactivate an idle root or descendant without
+    // another before_agent_start. Recreate the pane lifecycle from agent_start.
+    if (depth > 0) {
+      if (activity.descendants.has(key)) return
+      const descendant = { identity, runId: randomUUID(), prompt: "" }
+      activity.descendants.set(key, descendant)
+      if (activity.root || activity.pendingRootTerminal || activity.syntheticDescendantTurn) return
+      activity.syntheticDescendantTurn = descendant
+      await send({ hook_event_name: "UserPromptSubmit" }, descendant)
+      return
+    }
+    if (activity.root?.sessionKey === key) return
+    const root = { identity, runId: randomUUID(), prompt: "" }
+    activity.root = { sessionKey: key, binding: root }
+    activity.pendingRootTerminal = undefined
+    activity.syntheticDescendantTurn = undefined
+    await send({ hook_event_name: "UserPromptSubmit" }, root)
   })
   pi.on("agent_end", async (event: any, ctx: any) => {
     if (process.env.WMUX_DELEGATED_RUN === "1") return

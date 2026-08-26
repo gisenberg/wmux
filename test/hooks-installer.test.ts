@@ -725,6 +725,38 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     assert.equal(captured.at(-1)?.status, "completed");
     assert.equal(captured.at(-1)?.runId, lateRunId);
 
+    // Agent-to-agent messages reactivate idle sessions at agent_start without a
+    // new before_agent_start. Both descendant and root turns must reopen wmux.
+    const messageChildCount = captured.length;
+    await childOneA.get("agent_start")?.({}, context(1, false, "message-child"));
+    assert.equal(captured.length, messageChildCount + 1);
+    assert.equal(captured.at(-1)?.status, "running");
+    const messageChildRunId = captured.at(-1)?.runId;
+    await childOneA.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "message child done", stopReason: "stop",
+    }] }, context(1, false, "message-child"));
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.runId, messageChildRunId);
+
+    const messageRootCount = captured.length;
+    await one.get("agent_start")?.({}, context(0, false, "message-root"));
+    assert.equal(captured.length, messageRootCount + 1);
+    assert.equal(captured.at(-1)?.status, "running");
+    const messageRootRunId = captured.at(-1)?.runId;
+    await childOneA.get("agent_start")?.({}, context(1, false, "message-child-under-root"));
+    await childOneA.get("agent_start")?.({}, context(1, false, "message-child-under-root"));
+    assert.equal(captured.length, messageRootCount + 1);
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "message root done", stopReason: "stop",
+    }] }, context(0, false, "message-root"));
+    assert.equal(captured.length, messageRootCount + 1);
+    await childOneA.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "nested message child done", stopReason: "stop",
+    }] }, context(1, false, "message-child-under-root"));
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.message, "message root done");
+    assert.equal(captured.at(-1)?.runId, messageRootRunId);
+
     // If the root grace expires while descendants still hold its Error, that
     // terminal is unsent. A late agent_start restores the original run instead
     // of splitting it, and descendant release cannot flush the stale failure.
