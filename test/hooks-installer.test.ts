@@ -177,6 +177,7 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.match(extension, /agent_start/);
     assert.match(extension, /WMUX_PRIME_RETRY_GRACE_MS/);
     assert.match(extension, /WMUX_PRIME_LATE_RETRY_WINDOW_MS/);
+    assert.match(extension, /WMUX_PRIME_IDLE_RECONCILE_MS/);
     assert.match(extension, /scheduled-jobs\.json/);
     assert.match(extension, /HeartbeatScheduled/);
     assert.match(extension, /HeartbeatCleared/);
@@ -246,7 +247,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN", "RLM_DEPTH",
     "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_RETRY_GRACE_MS",
-    "WMUX_PRIME_LATE_RETRY_WINDOW_MS",
+    "WMUX_PRIME_LATE_RETRY_WINDOW_MS", "WMUX_PRIME_IDLE_RECONCILE_MS",
   ].map((key) => [key, process.env[key]]));
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -268,14 +269,20 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       WMUX_TAB_ID: "tab_aaaaaaaa",
       WMUX_PANE_ID: "pane_aaaaaaaa",
       PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
-      WMUX_PRIME_RETRY_GRACE_MS: "80",
+      WMUX_PRIME_RETRY_GRACE_MS: "240",
       WMUX_PRIME_LATE_RETRY_WINDOW_MS: "500",
+      WMUX_PRIME_IDLE_RECONCILE_MS: "80",
     });
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
     const extensionPath = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
-    const context = (rlmDepth = 0, pending = false, sessionId = rlmDepth > 0 ? "child-default" : "root") => ({
+    const context = (
+      rlmDepth = 0,
+      pending = false,
+      sessionId = rlmDepth > 0 ? "child-default" : "root",
+      idle = false,
+    ) => ({
       hasPendingMessages: () => pending,
-      isIdle: () => true,
+      isIdle: () => idle,
       sessionManager: {
         getSessionId: () => sessionId,
         getSessionDir: () => path.join(home, ".prime", "agent", "sessions"),
@@ -547,6 +554,32 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "finished" }] }, context());
     assert.equal(captured.at(-1)?.status, "completed");
     assert.equal(captured.at(-1)?.runId, pendingRunId);
+    const continuationCount = captured.length;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, continuationCount);
+
+    // Prime can be between streams while queued work still exists. Keep the
+    // binding until the queue drains, then reconcile without another hook.
+    const pendingIdleState = { pending: true, idle: true };
+    const pendingIdleContext = {
+      ...context(0, false, "root-pending-idle"),
+      hasPendingMessages: () => pendingIdleState.pending,
+      isIdle: () => pendingIdleState.idle,
+    };
+    await one.get("before_agent_start")?.({ prompt: "Pending queue settles idle" }, pendingIdleContext);
+    const pendingIdleRunId = captured.at(-1)?.runId;
+    const pendingIdleCount = captured.length;
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "settled after pending queue", stopReason: "stop",
+    }] }, pendingIdleContext);
+    assert.equal(captured.length, pendingIdleCount);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, pendingIdleCount);
+    pendingIdleState.pending = false;
+    await waitUntil(() => captured.length === pendingIdleCount + 1);
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.message, "settled after pending queue");
+    assert.equal(captured.at(-1)?.runId, pendingIdleRunId);
 
     // Prime ends an in-progress tool loop before deciding to auto-compact. The
     // post-compaction continue does not emit another before_agent_start, so the
@@ -624,6 +657,18 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     await unsafe.get("session_start")?.({ reason: "startup" }, context(0, false, "../escape"));
     assert.equal(captured.length, traversalCount);
     await unsafe.get("session_shutdown")?.({ reason: "quit" }, context(0, false, "../escape"));
+
+    // A reload can inherit a binding whose terminal hook was already missed.
+    // The successor module closes it once the retained session is observably idle.
+    await one.get("before_agent_start")?.({ prompt: "Heal stale reload" }, context(0, false, "root-stale-reload"));
+    const staleReloadRunId = captured.at(-1)?.runId;
+    const staleReloadCount = captured.length;
+    await one.get("session_shutdown")?.({ reason: "reload" }, context(0, false, "root-stale-reload"));
+    await childOneReloaded.get("session_start")?.({ reason: "reload" }, context(0, false, "root-stale-reload", true));
+    await waitUntil(() => captured.at(-1)?.runId === staleReloadRunId && captured.at(-1)?.status === "completed");
+    assert.ok(captured.length >= staleReloadCount + 1);
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.runId, staleReloadRunId);
 
     // Missing forwarded identity fails closed even when daemon ambient WMUX_*
     // variables contain another pane. Delegated worker sessions remain silent.
@@ -757,6 +802,39 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     assert.equal(captured.at(-1)?.message, "message root done");
     assert.equal(captured.at(-1)?.runId, messageRootRunId);
 
+    // Pending-message terminal hints on both a root and descendant must settle
+    // exactly once when both sessions become idle, preserving the root outcome.
+    const pendingAggregateState = { root: true, child: true };
+    const pendingAggregateRootContext = {
+      ...context(0, false, "pending-aggregate-root"),
+      hasPendingMessages: () => pendingAggregateState.root,
+      isIdle: () => true,
+    };
+    const pendingAggregateChildContext = {
+      ...context(1, false, "pending-aggregate-child"),
+      hasPendingMessages: () => pendingAggregateState.child,
+      isIdle: () => true,
+    };
+    await one.get("before_agent_start")?.({ prompt: "Pending aggregate settles" }, pendingAggregateRootContext);
+    const pendingAggregateRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "pending child" }, pendingAggregateChildContext);
+    const pendingAggregateCount = captured.length;
+    await childOneA.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "pending child done", stopReason: "stop",
+    }] }, pendingAggregateChildContext);
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "pending aggregate root done", stopReason: "stop",
+    }] }, pendingAggregateRootContext);
+    assert.equal(captured.length, pendingAggregateCount);
+    pendingAggregateState.root = false;
+    pendingAggregateState.child = false;
+    await waitUntil(() => captured.length === pendingAggregateCount + 1);
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.message, "pending aggregate root done");
+    assert.equal(captured.at(-1)?.runId, pendingAggregateRunId);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, pendingAggregateCount + 1);
+
     // If the root grace expires while descendants still hold its Error, that
     // terminal is unsent. A late agent_start restores the original run instead
     // of splitting it, and descendant release cannot flush the stale failure.
@@ -854,13 +932,16 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     assert.equal(captured.at(-1)?.runId, retryRunId);
     assert.equal(captured.slice(retryRunningCount).some((event) => event.status === "failed"), false);
 
-    // A reload during retry transfers through the process-shared hold. The
-    // successor module's agent_start cancels the predecessor's timer.
+    // A reload during retry transfers through the process-shared hold. Idle
+    // startup healing must not steal the binding before agent_start resumes it.
     await one.get("before_agent_start")?.({ prompt: "Reload during retry" }, context(0, false, "root-retry-reload"));
     const reloadRetryRunId = captured.at(-1)?.runId;
     const reloadRetryCount = captured.length;
     await one.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "error", errorMessage: "Retry across reload." }] }, context(0, false, "root-retry-reload"));
     await one.get("session_shutdown")?.({ reason: "reload" }, context(0, false, "root-retry-reload"));
+    await childOneReloaded.get("session_start")?.({}, context(0, false, "root-retry-reload", true));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, reloadRetryCount);
     await childOneReloaded.get("agent_start")?.({}, context(0, false, "root-retry-reload"));
     await childOneReloaded.get("agent_end")?.({ messages: [{ role: "assistant", content: "Reload retry recovered", stopReason: "stop" }] }, context(0, false, "root-retry-reload"));
     assert.equal(captured.length, reloadRetryCount + 1);
