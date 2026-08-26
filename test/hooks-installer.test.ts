@@ -185,8 +185,11 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.match(extension, /stopReason === "aborted" \? "Interrupted"/);
     assert.match(extension, /stopReason === "toolUse"/);
     assert.match(extension, /WMUX_DELEGATED_RUN/);
-    assert.match(extension, /HERDR_WORKSPACE_ID/);
+    assert.match(extension, /identityTupleFromEnvironment\("HERDR"\)/);
     assert.match(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER/);
+    assert.doesNotMatch(extension, /daemonDescriptorIdentity/);
+    assert.doesNotMatch(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER_(?:ACTIVE_SESSION_ID|RECOVERY_JOURNAL)/);
+    assert.match(extension, /pi\.on\("tool_call"/);
     assert.match(extension, /hasPendingMessages/);
     assert.match(extension, /--prime-agent-hook/);
     assert.match(extension, /wmux-title/);
@@ -242,8 +245,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN", "RLM_DEPTH",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL", "WMUX_PRIME_RETRY_GRACE_MS",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_RETRY_GRACE_MS",
     "WMUX_PRIME_LATE_RETRY_WINDOW_MS",
   ].map((key) => [key, process.env[key]]));
   try {
@@ -294,47 +296,36 @@ test("Prime Agent extension binds each session to its forwarded pane environment
         dispatches: [],
       }));
     };
-    const createHandlers = async (digit?: string, partial = false, migrationSidecar = false) => {
-      // Model a worker process whose ambient tuple belongs to daemon-launch pane A.
-      // The owner-only worker descriptor is the only accepted daemon binding proof.
-      process.env.HERDR_WORKSPACE_ID = "ws_aaaaaaaa";
-      process.env.HERDR_TAB_ID = "tab_aaaaaaaa";
-      process.env.HERDR_PANE_ID = "pane_aaaaaaaa";
-      const workerId = (digit ?? "f").repeat(12);
-      const workerDir = path.join(home, ".prime", "agent", "daemon-workers", "test");
-      const recoveryJournal = path.join(workerDir, `${workerId}.recovery.jsonl`);
-      fs.mkdirSync(workerDir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(workerDir, `${workerId}.json`), JSON.stringify({
-        version: 1,
-        pid: process.pid,
-        rootActiveSessionId: workerId,
-        rootSessionId: `session-${workerId}`,
-        createCommand: {
-          type: "create",
-          ...(digit && !migrationSidecar ? { env: {
-            HERDR_WORKSPACE_ID: `ws_${digit.repeat(8)}`,
-            ...(partial ? {} : {
-              HERDR_TAB_ID: `tab_${digit.repeat(8)}`,
-              HERDR_PANE_ID: `pane_${digit.repeat(8)}`,
-            }),
-          } } : {}),
-        },
-      }), { mode: 0o600 });
-      if (digit && migrationSidecar) {
-        fs.writeFileSync(path.join(workerDir, `${workerId}.wmux-binding.json`), JSON.stringify({
-          version: 1,
-          pid: process.pid,
-          rootActiveSessionId: workerId,
-          rootSessionId: `session-${workerId}`,
-          identity: {
-            workspaceId: `ws_${digit.repeat(8)}`,
-            tabId: `tab_${digit.repeat(8)}`,
-            paneId: `pane_${digit.repeat(8)}`,
-          },
-        }), { mode: 0o600 });
+    const sessionNames = new Map<string, string | undefined>();
+    const createHandlers = async (
+      digit?: string,
+      partial = false,
+      daemon = true,
+      prefix: "HERDR" | "WMUX" = "HERDR",
+    ) => {
+      // Prime Agent 0.8 scopes the forwarded HERDR tuple around each daemon
+      // session's extension load. Durable v2 worker descriptors omit this env.
+      for (const prefix of ["HERDR", "WMUX"]) {
+        for (const field of ["WORKSPACE_ID", "TAB_ID", "PANE_ID"]) {
+          delete process.env[`${prefix}_${field}`];
+        }
       }
-      process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID = workerId;
-      process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL = recoveryJournal;
+      if (daemon) {
+        process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER = "1";
+        // Model a worker whose ambient WMUX tuple belongs to launch pane A.
+        process.env.WMUX_WORKSPACE_ID = "ws_aaaaaaaa";
+        process.env.WMUX_TAB_ID = "tab_aaaaaaaa";
+        process.env.WMUX_PANE_ID = "pane_aaaaaaaa";
+      } else {
+        delete process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER;
+      }
+      if (digit) {
+        process.env[`${prefix}_WORKSPACE_ID`] = `ws_${digit.repeat(8)}`;
+        if (!partial) {
+          process.env[`${prefix}_TAB_ID`] = `tab_${digit.repeat(8)}`;
+          process.env[`${prefix}_PANE_ID`] = `pane_${digit.repeat(8)}`;
+        }
+      }
       const sessionExtensionPath = path.join(home, `.prime-session-${digit ?? "missing"}-${Date.now()}-${Math.random()}.ts`);
       fs.copyFileSync(extensionPath, sessionExtensionPath);
       const module = await import(pathToFileURL(sessionExtensionPath).href);
@@ -343,36 +334,58 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       module.default({
         on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(name, handler),
         getSessionName: () => sessionName,
-        setSessionName: (name: string) => { sessionName = name; },
+        setSessionName: (name: string) => {
+          sessionName = name;
+          sessionNames.set(digit ?? "missing", name);
+        },
         appendEntry: () => {},
       });
       return handlers;
     };
     const one = await createHandlers("1");
     const two = await createHandlers("2");
-    const migrated = await createHandlers("5", false, true);
     const childOneA = await createHandlers("1");
     const childOneB = await createHandlers("1");
     const childOneReloaded = await createHandlers("1");
     const unsafe = await createHandlers("3");
     const missing = await createHandlers();
     const partial = await createHandlers("4", true);
+    const malformed = await createHandlers("g");
+    const nonDaemon = await createHandlers("6", false, false, "WMUX");
+    const nonDaemonPartialHerdr = await createHandlers("7", true, false, "HERDR");
+    const nonDaemonPartialWmux = await createHandlers("8", true, false, "WMUX");
     Object.assign(process.env, {
+      PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
+      WMUX_WORKSPACE_ID: "ws_aaaaaaaa",
+      WMUX_TAB_ID: "tab_aaaaaaaa",
+      WMUX_PANE_ID: "pane_aaaaaaaa",
       HERDR_WORKSPACE_ID: "ws_aaaaaaaa",
       HERDR_TAB_ID: "tab_aaaaaaaa",
       HERDR_PANE_ID: "pane_aaaaaaaa",
     });
 
-    // Prime creates its persistent IPython kernel before applying the session
-    // exec-env provider, so tool calls must repair stale daemon WMUX_* identity.
-    const pythonTool = { toolName: "ipython", input: {
-      code: "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID'), os.environ.get('WMUX_PANE_ID')]))",
-    } };
+    // Prime Agent 0.8 scopes extension loading but not the already-created
+    // persistent IPython kernel. Repair each tool cell from the captured tuple.
+    assert.equal(one.has("tool_call"), true);
+    const namingSource = 'await prime_session_name.set_name("Name workspace one")';
+    const namingTool = { toolName: "ipython", input: { code: namingSource } };
+    await one.get("tool_call")?.(namingTool, context());
+    assert.match(namingTool.input.code, /^import os as __wmux_os/);
+    assert.ok(namingTool.input.code.endsWith(namingSource));
+
+    const pythonTool = { toolName: "ipython", input: { code:
+      "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID'), os.environ.get('WMUX_PANE_ID'), os.environ.get('HERDR_WORKSPACE_ID'), os.environ.get('HERDR_TAB_ID'), os.environ.get('HERDR_PANE_ID')]))" } };
     await one.get("tool_call")?.(pythonTool, context());
-    const pythonResult = await execFileAsync("python3", ["-c", pythonTool.input.code], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
-    });
-    assert.deepEqual(JSON.parse(pythonResult.stdout.trim()), ["ws_11111111", "tab_11111111", "pane_11111111"]);
+    const staleToolEnv = {
+      ...process.env,
+      WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa",
+      HERDR_WORKSPACE_ID: "ws_aaaaaaaa", HERDR_TAB_ID: "tab_aaaaaaaa", HERDR_PANE_ID: "pane_aaaaaaaa",
+    };
+    const pythonResult = await execFileAsync("python3", ["-c", pythonTool.input.code], { env: staleToolEnv });
+    assert.deepEqual(JSON.parse(pythonResult.stdout.trim()), [
+      "ws_11111111", "tab_11111111", "pane_11111111",
+      "ws_11111111", "tab_11111111", "pane_11111111",
+    ]);
 
     const futureTool = { toolName: "ipython", input: { code: [
       "   ",
@@ -383,14 +396,12 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       "    generator_stop,",
       ")",
       "import json, os",
-      "print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID'), os.environ.get('WMUX_PANE_ID')]))",
+      "print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('HERDR_WORKSPACE_ID')]))",
     ].join("\n") } };
     await one.get("tool_call")?.(futureTool, context());
     assert.ok(futureTool.input.code.indexOf("from __future__ import (") < futureTool.input.code.indexOf("__wmux_os.environ.update"));
-    const futureResult = await execFileAsync("python3", ["-c", futureTool.input.code], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
-    });
-    assert.deepEqual(JSON.parse(futureResult.stdout.trim()), ["ws_11111111", "tab_11111111", "pane_11111111"]);
+    const futureResult = await execFileAsync("python3", ["-c", futureTool.input.code], { env: staleToolEnv });
+    assert.deepEqual(JSON.parse(futureResult.stdout.trim()), ["ws_11111111", "ws_11111111"]);
 
     const escapedTripleTool = { toolName: "ipython", input: { code: [
       String.raw`"""line \"""`,
@@ -401,9 +412,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       "print(json.dumps([__doc__, os.environ.get('WMUX_WORKSPACE_ID')]))",
     ].join("\n") } };
     await one.get("tool_call")?.(escapedTripleTool, context());
-    const escapedTripleResult = await execFileAsync("python3", ["-c", escapedTripleTool.input.code], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa" },
-    });
+    const escapedTripleResult = await execFileAsync("python3", ["-c", escapedTripleTool.input.code], { env: staleToolEnv });
     assert.deepEqual(JSON.parse(escapedTripleResult.stdout.trim()), ['line """\ncontinued\n', "ws_11111111"]);
 
     const docstringTool = { toolName: "ipython", input: { code: [
@@ -413,81 +422,98 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       ")",
       "from __future__ import annotations",
       "import json, os",
-      "print(json.dumps([__doc__, os.environ.get('WMUX_WORKSPACE_ID')]))",
+      "print(json.dumps([__doc__, os.environ.get('HERDR_TAB_ID')]))",
     ].join("\n") } };
     await one.get("tool_call")?.(docstringTool, context());
     assert.ok(docstringTool.input.code.indexOf("from __future__ import annotations") < docstringTool.input.code.indexOf("__wmux_os.environ.update"));
-    const docstringResult = await execFileAsync("python3", ["-c", docstringTool.input.code], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa" },
-    });
-    assert.deepEqual(JSON.parse(docstringResult.stdout.trim()), ["module documentation", "ws_11111111"]);
+    const docstringResult = await execFileAsync("python3", ["-c", docstringTool.input.code], { env: staleToolEnv });
+    assert.deepEqual(JSON.parse(docstringResult.stdout.trim()), ["module documentation", "tab_11111111"]);
 
     const joinedDocstringTool = { toolName: "ipython", input: { code: [
       '"module " \\',
       '"documentation"',
       "from __future__ import annotations",
       "import json, os",
-      "print(json.dumps([__doc__, os.environ.get('WMUX_WORKSPACE_ID')]))",
+      "print(json.dumps([__doc__, os.environ.get('WMUX_PANE_ID')]))",
     ].join("\n") } };
     await one.get("tool_call")?.(joinedDocstringTool, context());
-    const joinedDocstringResult = await execFileAsync("python3", ["-c", joinedDocstringTool.input.code], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa" },
-    });
-    assert.deepEqual(JSON.parse(joinedDocstringResult.stdout.trim()), ["module documentation", "ws_11111111"]);
+    const joinedDocstringResult = await execFileAsync("python3", ["-c", joinedDocstringTool.input.code], { env: staleToolEnv });
+    assert.deepEqual(JSON.parse(joinedDocstringResult.stdout.trim()), ["module documentation", "pane_11111111"]);
 
     const crlfFutureTool = { toolName: "ipython", input: { code: [
       "from __future__ import annotations, \\",
       "    generator_stop",
       "import json, os",
-      "print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_TAB_ID')]))",
+      "print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('HERDR_TAB_ID')]))",
     ].join("\r\n") } };
     await one.get("tool_call")?.(crlfFutureTool, context());
-    const crlfFutureResult = await execFileAsync("python3", ["-c", crlfFutureTool.input.code], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa" },
-    });
+    const crlfFutureResult = await execFileAsync("python3", ["-c", crlfFutureTool.input.code], { env: staleToolEnv });
     assert.deepEqual(JSON.parse(crlfFutureResult.stdout.trim()), ["ws_11111111", "tab_11111111"]);
 
-    const bashTool = { toolName: "ipython", input: {
-      code: `%%bash\nprintf '%s|%s|%s\n' "$WMUX_WORKSPACE_ID" "$WMUX_TAB_ID" "$WMUX_PANE_ID"`,
+    const shellTool = { toolName: "ipython", input: {
+      code: `%%bash
+printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"`,
     } };
-    await two.get("tool_call")?.(bashTool, context());
-    assert.match(bashTool.input.code, /^%%bash\nexport WMUX_WORKSPACE_ID='ws_22222222'/);
-    const bashResult = await execFileAsync("bash", ["-c", bashTool.input.code.replace(/^%%bash\n/, "")], {
-      env: { ...process.env, WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa" },
-    });
-    assert.equal(bashResult.stdout.trim(), "ws_22222222|tab_22222222|pane_22222222");
+    await two.get("tool_call")?.(shellTool, context());
+    assert.match(shellTool.input.code, /^%%bash\nexport WMUX_WORKSPACE_ID='ws_22222222'/);
+    const shellResult = await execFileAsync("bash", ["-c", shellTool.input.code.replace(/^%%bash\n/, "")], { env: staleToolEnv });
+    assert.equal(shellResult.stdout.trim(), "pane_22222222|pane_22222222");
 
-    const migratedTool = { toolName: "ipython", input: { code:
-      "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('WMUX_PANE_ID')]))" } };
-    await migrated.get("tool_call")?.(migratedTool, context());
-    const migratedResult = await execFileAsync("python3", ["-c", migratedTool.input.code], { env: process.env });
-    assert.deepEqual(JSON.parse(migratedResult.stdout.trim()), ["ws_55555555", "pane_55555555"]);
+    const captureTool = { toolName: "ipython", input: { code: [
+      "%%capture captured",
+      "from __future__ import annotations",
+      "import json, os",
+      "print(json.dumps([os.environ.get('WMUX_PANE_ID'), os.environ.get('HERDR_PANE_ID')]))",
+    ].join("\n") } };
+    await two.get("tool_call")?.(captureTool, context());
+    assert.match(captureTool.input.code, /^%%capture captured\nfrom __future__ import annotations\nimport os as __wmux_os/);
+    const captureResult = await execFileAsync(
+      "python3",
+      ["-c", captureTool.input.code.replace(/^%%capture captured\n/, "")],
+      { env: staleToolEnv },
+    );
+    assert.deepEqual(JSON.parse(captureResult.stdout.trim()), ["pane_22222222", "pane_22222222"]);
 
-    const staleToolEnv = {
-      ...process.env,
-      WMUX_WORKSPACE_ID: "ws_aaaaaaaa", WMUX_TAB_ID: "tab_aaaaaaaa", WMUX_PANE_ID: "pane_aaaaaaaa",
-      HERDR_WORKSPACE_ID: "ws_aaaaaaaa", HERDR_TAB_ID: "tab_aaaaaaaa", HERDR_PANE_ID: "pane_aaaaaaaa",
-    };
-    const unboundTool = { toolName: "ipython", input: { code:
-      "import json, os; print(json.dumps([os.environ.get('WMUX_WORKSPACE_ID'), os.environ.get('HERDR_PANE_ID')]))" } };
-    await missing.get("tool_call")?.(unboundTool, context());
-    const unboundResult = await execFileAsync("python3", ["-c", unboundTool.input.code], { env: staleToolEnv });
-    assert.deepEqual(JSON.parse(unboundResult.stdout.trim()), [null, null]);
-    const partialTool = { toolName: "ipython", input: { code:
-      "import json, os; print(json.dumps([os.environ.get('WMUX_TAB_ID'), os.environ.get('HERDR_WORKSPACE_ID')]))" } };
-    await partial.get("tool_call")?.(partialTool, context());
-    const partialResult = await execFileAsync("python3", ["-c", partialTool.input.code], { env: staleToolEnv });
-    assert.deepEqual(JSON.parse(partialResult.stdout.trim()), [null, null]);
-    const unboundBashTool = { toolName: "ipython", input: { code:
+    for (const unbound of [missing, partial, malformed]) {
+      const unboundTool = { toolName: "ipython", input: { code:
+        "import json, os; print(json.dumps([os.environ.get('WMUX_PANE_ID'), os.environ.get('HERDR_PANE_ID')]))" } };
+      await unbound.get("tool_call")?.(unboundTool, context());
+      const unboundResult = await execFileAsync("python3", ["-c", unboundTool.input.code], { env: staleToolEnv });
+      assert.deepEqual(JSON.parse(unboundResult.stdout.trim()), [null, null]);
+    }
+    const unboundShellTool = { toolName: "ipython", input: { code:
       `%%bash
 printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
-    await missing.get("tool_call")?.(unboundBashTool, context());
-    assert.match(unboundBashTool.input.code, /^%%bash\nunset WMUX_WORKSPACE_ID WMUX_TAB_ID WMUX_PANE_ID/);
-    const unboundBashResult = await execFileAsync("bash", ["-c", unboundBashTool.input.code.replace(/^%%bash\n/, "")], { env: staleToolEnv });
-    assert.equal(unboundBashResult.stdout.trim(), "|");
+    await missing.get("tool_call")?.(unboundShellTool, context());
+    assert.match(unboundShellTool.input.code, /^%%bash\nunset WMUX_WORKSPACE_ID WMUX_TAB_ID WMUX_PANE_ID/);
+    const unboundShellResult = await execFileAsync(
+      "bash",
+      ["-c", unboundShellTool.input.code.replace(/^%%bash\n/, "")],
+      { env: staleToolEnv },
+    );
+    assert.equal(unboundShellResult.stdout.trim(), "|");
+
+    const unboundCaptureTool = { toolName: "ipython", input: { code: [
+      "%%capture captured",
+      "import json, os",
+      "print(json.dumps([os.environ.get('WMUX_PANE_ID'), os.environ.get('HERDR_PANE_ID')]))",
+    ].join("\n") } };
+    await partial.get("tool_call")?.(unboundCaptureTool, context());
+    assert.match(unboundCaptureTool.input.code, /^%%capture captured\nimport os as __wmux_os/);
+    const unboundCaptureResult = await execFileAsync(
+      "python3",
+      ["-c", unboundCaptureTool.input.code.replace(/^%%capture captured\n/, "")],
+      { env: staleToolEnv },
+    );
+    assert.deepEqual(JSON.parse(unboundCaptureResult.stdout.trim()), [null, null]);
 
     await one.get("before_agent_start")?.({ prompt: "Name workspace one" }, context());
     await two.get("before_agent_start")?.({ prompt: "Name workspace two" }, context());
+    assert.equal(sessionNames.get("1"), "Name workspace one");
+    assert.equal(sessionNames.get("2"), "Name workspace two");
+    assert.equal(sessionNames.has("missing"), false);
+    assert.equal(sessionNames.has("4"), false);
+    assert.equal(sessionNames.has("g"), false);
     await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "done one" }] }, context());
     await two.get("agent_end")?.({ messages: [{ role: "assistant", content: "done two" }] }, context());
     assert.deepEqual(captured.slice(0, 4).map((event) => [event.workspaceId, event.tabId, event.paneId, event.status, event.title]), [
@@ -602,8 +628,15 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     // Missing forwarded identity fails closed even when daemon ambient WMUX_*
     // variables contain another pane. Delegated worker sessions remain silent.
     const quietCount = captured.length;
-    await missing.get("before_agent_start")?.({ prompt: "ambient must not route" }, context());
-    await missing.get("agent_end")?.({ messages: [] }, context());
+    for (const unbound of [
+      missing, partial, malformed, nonDaemonPartialHerdr, nonDaemonPartialWmux,
+    ]) {
+      await unbound.get("before_agent_start")?.({ prompt: "ambient must not route" }, context());
+      await unbound.get("agent_end")?.({ messages: [] }, context());
+    }
+    for (const key of ["missing", "4", "g", "7", "8"]) {
+      assert.equal(sessionNames.has(key), false);
+    }
     process.env.WMUX_DELEGATED_RUN = "1";
     await one.get("before_agent_start")?.({ prompt: "delegated" }, context());
     await one.get("agent_end")?.({ messages: [] }, context());
@@ -617,6 +650,17 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
       sessionManager: { getSessionId: () => "", getHeader: () => ({ rlmDepth: 1 }) },
     });
     assert.equal(captured.length, quietCount);
+
+    // Standalone/non-daemon Prime remains compatible with a complete WMUX_*
+    // tuple when no HERDR key is present.
+    await nonDaemon.get("before_agent_start")?.({ prompt: "Standalone compatibility" }, context(0, false, "standalone"));
+    const standaloneRunId = captured.at(-1)?.runId;
+    await nonDaemon.get("agent_end")?.({ messages: [{ role: "assistant", content: "standalone done" }] }, context(0, false, "standalone"));
+    assert.deepEqual(captured.slice(-2).map((event) => [event.paneId, event.status]), [
+      ["pane_66666666", "running"],
+      ["pane_66666666", "completed"],
+    ]);
+    assert.equal(captured.at(-1)?.runId, standaloneRunId);
 
     // Root completion stays deferred across independently evaluated child
     // extensions until every nested session is idle. A queued child continuation
@@ -878,8 +922,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID",
-    "PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL", "WMUX_PRIME_TITLE_SYNC_INTERVAL_MS",
+    "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_TITLE_SYNC_INTERVAL_MS",
   ].map((key) => [key, process.env[key]]));
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -902,23 +945,6 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     delete process.env.WMUX_HELPER_TOKEN;
     delete process.env.WMUX_HELPER_TOKEN_PATH;
     delete process.env.WMUX_DELEGATED_RUN;
-    const workerId = "3".repeat(12);
-    const workerDir = path.join(home, ".prime", "agent", "daemon-workers", "test");
-    const recoveryJournal = path.join(workerDir, `${workerId}.recovery.jsonl`);
-    fs.mkdirSync(workerDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(workerDir, `${workerId}.json`), JSON.stringify({
-      version: 1,
-      pid: process.pid,
-      rootActiveSessionId: workerId,
-      createCommand: { type: "create", env: {
-        HERDR_WORKSPACE_ID: "ws_33333333",
-        HERDR_TAB_ID: "tab_33333333",
-        HERDR_PANE_ID: "pane_33333333",
-      } },
-    }), { mode: 0o600 });
-    process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID = workerId;
-    process.env.PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL = recoveryJournal;
-
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
     const installed = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
     const entries: any[] = [];
