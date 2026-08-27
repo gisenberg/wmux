@@ -59,11 +59,11 @@ test("Windows bootstrap wraps profile prompts only when profile loading is enabl
   assert.match(profileBootstrap, /\$ErrorActionPreference = \$WmuxOriginalErrorActionPreference/);
 });
 
-test("Windows prompts resynchronize ConPTY cursor state before rendering", () => {
+test("Windows prompts clear stale terminal tails without repositioning ConPTY", () => {
   const bootstrap = buildWindowsPowerShellBootstrap(machine, undefined, {});
-  assert.match(bootstrap, /\[Console\]::SetCursorPosition\(\[Console\]::CursorLeft, \[Console\]::CursorTop\)/);
   assert.match(bootstrap, /\[Console\]::Write\("\$\(\[char\]27\)\[0K"\)/);
-  assert.match(bootstrap, /function global:prompt \{\s+__wmuxSynchronizeConsoleCursor/);
+  assert.doesNotMatch(bootstrap, /SetCursorPosition/);
+  assert.match(bootstrap, /function global:prompt \{\s+__wmuxClearPromptTail/);
 });
 
 test("Windows agent config prefers ConPTY with stdio fallback", () => {

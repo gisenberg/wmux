@@ -1142,9 +1142,9 @@ function global:__wmuxEmitCwd {
   } catch {}
 }
 
-function global:__wmuxSynchronizeConsoleCursor {
+function global:__wmuxClearPromptTail {
   try {
-    [Console]::SetCursorPosition([Console]::CursorLeft, [Console]::CursorTop)
+    # ConPTY console coordinates can lag terminal output, so never reposition here.
     [Console]::Write("$([char]27)[0K")
   } catch {}
 }
@@ -1156,7 +1156,7 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPreserveOriginalPrompt = $PreserveExisting
   function global:prompt {
-    __wmuxSynchronizeConsoleCursor
+    __wmuxClearPromptTail
     __wmuxEmitCwd
     if ($global:__wmuxPreserveOriginalPrompt -and $global:__wmuxOriginalPrompt) {
       try {
