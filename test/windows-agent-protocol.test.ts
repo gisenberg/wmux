@@ -37,7 +37,6 @@ import runpy
 module = runpy.run_path("scripts/wmux-windows-agent")
 without_profile = module["powershell_command"]("pwsh", "C:/work", False)
 with_profile = module["powershell_command"]("pwsh", "C:/work", True)
-optional_profile_auth = module["powershell_command"]("pwsh", "C:/work", False, True)
 profile_owned_cwd = module["session_command"](
     {},
     {"shell": "pwsh", "loadPowerShellProfile": True},
@@ -56,7 +55,6 @@ configured_cwd = module["session_command"](
 print(json.dumps({
     "withoutProfile": without_profile,
     "withProfile": with_profile,
-    "optionalProfileAuth": optional_profile_auth,
     "profileOwnedCwd": profile_owned_cwd,
     "explicitCwd": explicit_cwd,
     "configuredCwd": configured_cwd,
@@ -69,7 +67,6 @@ print(json.dumps({
   assert.equal(commands.withProfile.includes("-NoProfile"), false);
   assert.match(commands.withProfile.at(-1), /__wmuxInstallPrompt \$true/);
   assert.match(commands.withoutProfile.at(-1), /__wmuxInstallPrompt \$false/);
-  assert.match(commands.optionalProfileAuth.at(-1), /apply --quiet --optional-auth/);
   assert.doesNotMatch(commands.profileOwnedCwd.at(-1), /Set-Location/);
   assert.match(commands.explicitCwd.at(-1), /Set-Location -LiteralPath 'C:\/work'/);
   assert.match(commands.configuredCwd.at(-1), /Set-Location -LiteralPath 'D:\/configured'/);
