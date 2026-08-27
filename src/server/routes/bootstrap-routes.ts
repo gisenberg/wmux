@@ -1,4 +1,3 @@
-import { readAgentProfileBundle } from "../agent-profile.js";
 import { buildDoctorReport } from "../doctor.js";
 import {
   auditDurableSessions,
@@ -51,22 +50,6 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
           await auditDurableSessions(),
         ),
       );
-    },
-  },
-  {
-    id: "agent-profile",
-    method: "GET",
-    pattern: "/api/agent-profile",
-    policy: routePolicy(
-      "agent-profile",
-      "GET",
-      "/api/agent-profile",
-      "normal",
-      ["helper"],
-    ),
-    handler: async ({ response, sendJson }) => {
-      response.setHeader("cache-control", "no-store");
-      sendJson(200, readAgentProfileBundle());
     },
   },
   {

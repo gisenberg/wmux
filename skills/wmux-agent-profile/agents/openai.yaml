@@ -1,4 +1,0 @@
-interface:
-  display_name: "wmux Agent Profile"
-  short_description: "Safely sync agent settings, skills, and tools"
-  default_prompt: "Use $wmux-agent-profile to inspect, plan, or apply my agent profile, add a skill with provenance, or bootstrap an approved pinned tool without overwriting local configuration."

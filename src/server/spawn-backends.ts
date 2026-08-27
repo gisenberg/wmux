@@ -90,7 +90,6 @@ const sshBackend: Backend = {
         ),
         extraEnv: remoteEnv,
         helperPathExport: `export PATH="$wmux_helper_dir:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH";`,
-        agentProfileOptionalAuth: machine.source === "registered",
         useSystemdScope: false,
       });
     const runtimePath = stageSshRuntime(machine, target, sessionName, remoteCommand, extraEnv.WMUX_PANE_ID);
@@ -170,7 +169,6 @@ const localBackend: Backend = {
         ),
         extraEnv,
         helperPathExport: `export PATH=${shellQuote(`${process.cwd()}/scripts`)}":$HOME/.local/bin:$PATH";`,
-        agentProfileOptionalAuth: false,
         useSystemdScope: false,
       });
       return {
@@ -194,7 +192,7 @@ const localBackend: Backend = {
         args: [
           "-lc",
           `export PATH=${shellQuote(`${process.cwd()}/scripts`)}":$HOME/.local/bin:$PATH"; `
-            + `wmux-agent-profile apply --quiet || true; ${managedShell}`,
+            + managedShell,
         ],
         cwd: startCwd,
         env,
@@ -204,7 +202,7 @@ const localBackend: Backend = {
     }
     return {
       file: "/bin/sh",
-      args: ["-lc", `wmux-agent-profile apply --quiet || true; exec ${shellQuote(shell)}`],
+      args: ["-lc", `exec ${shellQuote(shell)}`],
       cwd: startCwd,
       env,
       title: path.basename(shell),
@@ -688,7 +686,6 @@ interface DurableShellInput {
   shellCommand: string;
   extraEnv: Record<string, string>;
   helperPathExport?: string;
-  agentProfileOptionalAuth: boolean;
   useSystemdScope: boolean;
 }
 
@@ -701,7 +698,6 @@ export const durableShellScript = ({
   shellCommand,
   extraEnv,
   helperPathExport,
-  agentProfileOptionalAuth,
 }: DurableShellInput): string => {
   const exports = Object.entries(extraEnv)
     .filter(([key, value]) => value && key !== "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY")
@@ -762,8 +758,6 @@ unset -f __wmux_stage_agent_input_v1;`
     ? `export WMUX_AGENT_INPUT_CAPABILITY_PATH=${agentInputCapabilityPath}; export WMUX_AGENT_INPUT_CREDENTIAL_PATH=${agentInputCredentialPath};`
     : "";
   const pathExport = helperPathExport ?? "";
-  const optionalAuth = agentProfileOptionalAuth ? " --optional-auth" : "";
-  const agentProfileApply = `${pathExport} if command -v wmux-agent-profile >/dev/null 2>&1; then wmux-agent-profile apply --quiet${optionalAuth} || true; fi;`;
   const startDir = cwd ? `cd ${shellQuote(cwd)} 2>/dev/null || true;` : "";
   const paneCommand = `${startDir} ${agentInputPathExports} ${exports} ${pathExport} ${shellCommand}`;
   const tmuxCreateCommand = [
@@ -809,12 +803,12 @@ unset -f __wmux_stage_agent_input_v1;`
   const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
 
   if (backend === "tmux") {
-    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${pathExport} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
   if (backend === "screen") {
-    return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
+    return `${persistCredentials} ${agentInputStage} ${pathExport} if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; echo '[wmux] screen is required for this machine sessionBackend.' >&2; ${fallbackShell}`;
   }
-  return `${persistCredentials} ${agentInputStage} ${agentProfileApply} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; ${fallbackShell}`;
+  return `${persistCredentials} ${agentInputStage} ${pathExport} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; if command -v screen >/dev/null 2>&1; then ${screenCommand}; exit $?; fi; ${fallbackShell}`;
 };
 
 const stageLocalRuntime = (sessionName: string, innerScript: string): string => {
@@ -1053,13 +1047,10 @@ __WMUX_STREAM_AGENT_SERVICE_HELPER__
 cat > "$wmux_helper_dir/wmux-sunshine-setup" <<'__WMUX_SUNSHINE_SETUP_HELPER__'
 ${localHelperScript("wmux-sunshine-setup")}
 __WMUX_SUNSHINE_SETUP_HELPER__
-cat > "$wmux_helper_dir/wmux-agent-profile" <<'__WMUX_AGENT_PROFILE_HELPER__'
-${localHelperScript("wmux-agent-profile")}
-__WMUX_AGENT_PROFILE_HELPER__
 cat > "$wmux_helper_dir/wmuxctl" <<'__WMUX_CTL_HELPER__'
 ${localSkillScript("wmux", "scripts", "wmuxctl.py")}
 __WMUX_CTL_HELPER__
-chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-shell-run-event" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-agent-run" "$wmux_helper_dir/wmux-agent-input-broker" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmux-agent-profile" "$wmux_helper_dir/wmuxctl";
+chmod +x "$wmux_helper_dir/wmux-media" "$wmux_helper_dir/wmux-notify" "$wmux_helper_dir/wmux-title" "$wmux_helper_dir/wmux-agent-event" "$wmux_helper_dir/wmux-hooks" "$wmux_helper_dir/wmux-run" "$wmux_helper_dir/wmux-shell-run-event" "$wmux_helper_dir/wmux-opencode-run" "$wmux_helper_dir/wmux-agent-run" "$wmux_helper_dir/wmux-agent-input-broker" "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-stream-agent" "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_helper_dir/wmuxctl";
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmux-clip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wclip" 2>/dev/null || true;
 ln -sf "$wmux_helper_dir/wmux-copy" "$wmux_helper_dir/wmclip" 2>/dev/null || true;
@@ -1088,7 +1079,6 @@ for wmux_path_dir in $wmux_candidate_path; do
         ln -sf "$wmux_helper_dir/wmux-stream-agent" "$wmux_path_dir/wmux-stream-agent" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-stream-agent-service" "$wmux_path_dir/wmux-stream-agent-service" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmux-sunshine-setup" "$wmux_path_dir/wmux-sunshine-setup" 2>/dev/null || true;
-        ln -sf "$wmux_helper_dir/wmux-agent-profile" "$wmux_path_dir/wmux-agent-profile" 2>/dev/null || true;
         ln -sf "$wmux_helper_dir/wmuxctl" "$wmux_path_dir/wmuxctl" 2>/dev/null || true;
       fi;
       ;;

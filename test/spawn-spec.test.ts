@@ -211,11 +211,10 @@ test("local durable reattach uses a fresh systemd scope", () => {
   assert.match(firstRuntime, /tmux set-option -t 'wmux_pane_fixed001' status off/);
 });
 
-test("raw local panes apply an available agent profile before the shell", () => {
+test("raw local panes launch through the managed shell wrapper", () => {
   const spec = buildSpawnSpec(machines[1].machine, 120, 40, extraEnv);
   assert.equal(spec.file, "/bin/sh");
   assert.ok((spec.env.PATH ?? "").split(path.delimiter).includes(path.join(os.homedir(), ".local", "bin")));
-  assert.match(spec.args.join(" "), /wmux-agent-profile apply --quiet/);
   assert.match(spec.args.join(" "), /exec/);
 });
 
@@ -310,23 +309,9 @@ test("POSIX SSH staging includes the hook installer beside its event helper", { 
   assert.match(command, /ln -sf .*wmux-agent-run/);
   assert.match(command, /ln -sf .*wmux-shell-run-event/);
   assert.match(command, /ln -sf .*wmuxctl/);
-  assert.match(command, /wmux-agent-profile/);
-  assert.match(command, /wmux-agent-profile apply --quiet/);
   assert.match(command, /\$HOME\/\.local\/bin/);
   assert.match(command, /chmod 600 "\$HOME\/\.wmux\/(?:token|url)"/);
   assert.equal(wrapper.includes(extraEnv.WMUX_TOKEN), false, "credentials stay in the staged payload");
-});
-
-test("registered POSIX SSH panes make missing profile auth optional", { skip: process.platform === "win32" }, () => {
-  const spec = buildSpawnSpec({ ...machines[5].machine, source: "registered" }, 120, 40, {
-    ...extraEnv,
-    WMUX_TOKEN: "",
-  });
-  const wrapper = fs.readFileSync(spec.args[0], "utf8");
-  const payloadMatch = wrapper.match(/wmux_payload='([^']+)'/);
-  assert.ok(payloadMatch, "wrapper identifies its staged payload");
-  const command = fs.readFileSync(payloadMatch[1], "utf8");
-  assert.match(command, /wmux-agent-profile apply --quiet --optional-auth/);
 });
 
 test("static POSIX and Windows panes stage helper auth without exposing it in argv", { skip: process.platform === "win32" }, () => {

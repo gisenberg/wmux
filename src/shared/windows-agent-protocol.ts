@@ -117,7 +117,6 @@ export interface WindowsAgentCreateRequest {
   cwd: string;
   shell: string;
   loadPowerShellProfile: boolean;
-  agentProfileOptionalAuth: boolean;
   helperBundle: {
     bundleVersion: string;
     files: Array<{ name: string; dataBase64: string; sha256: string }>;

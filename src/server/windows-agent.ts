@@ -530,7 +530,6 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
           cwd: this.cwd || this.machine.cwd || "",
           shell: this.machine.shell || "",
           loadPowerShellProfile: this.machine.loadPowerShellProfile === true,
-          agentProfileOptionalAuth: this.machine.source === "registered",
           helperBundle: {
             bundleVersion: helperBundle?.bundleVersion ?? "",
             files: helperBundle?.files ?? [],
@@ -581,7 +580,6 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       cwd: this.cwd || this.machine.cwd || "",
       shell: this.machine.shell || "",
       loadPowerShellProfile: this.machine.loadPowerShellProfile === true,
-      agentProfileOptionalAuth: this.machine.source === "registered",
       helperBundle: {
         bundleVersion: helperBundle?.bundleVersion ?? "",
         files: helperBundle?.files ?? [],

@@ -16,6 +16,13 @@ function global:__wmuxEmitCwd {
   } catch {}
 }
 
+function global:__wmuxSynchronizeConsoleCursor {
+  try {
+    [Console]::SetCursorPosition([Console]::CursorLeft, [Console]::CursorTop)
+    [Console]::Write("$([char]27)[0K")
+  } catch {}
+}
+
 function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   if (-not (Test-Path variable:global:__wmuxPromptInstalled)) {
     $ExistingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
@@ -23,6 +30,7 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPreserveOriginalPrompt = $PreserveExisting
   function global:prompt {
+    __wmuxSynchronizeConsoleCursor
     __wmuxEmitCwd
     if ($global:__wmuxPreserveOriginalPrompt -and $global:__wmuxOriginalPrompt) {
       try {
