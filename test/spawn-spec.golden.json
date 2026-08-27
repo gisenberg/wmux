@@ -19,7 +19,7 @@
       "file": "/bin/sh",
       "args": [
         "-lc",
-        "wmux-agent-profile apply --quiet || true; exec '/bin/bash'"
+        "exec '/bin/bash'"
       ],
       "cwd": "/home/fixed/project",
       "title": "bash",

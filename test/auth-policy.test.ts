@@ -56,7 +56,7 @@ const routeCases: Array<[string, string, string]> = [
   ["registry-update", "PUT", "/api/registry/hosts/host"],
   ["registry-list", "GET", "/api/registry/hosts"], ["registry-register", "POST", "/api/registry/hosts"],
   ["registry-delete", "DELETE", "/api/registry/hosts/host"], ["session-audit", "GET", "/api/session-audit"],
-  ["doctor", "GET", "/api/doctor"], ["agent-profile", "GET", "/api/agent-profile"], ["streams", "GET", "/api/streams"],
+  ["doctor", "GET", "/api/doctor"], ["streams", "GET", "/api/streams"],
   ["windows-bootstrap", "GET", "/api/helpers/windows/win/bootstrap"], ["windows-helpers", "GET", "/api/helpers/windows/win"],
   ["stream-request-status", "GET", "/api/streams/host/request"], ["stream-request", "POST", "/api/streams/host/request"],
   ["stream-release", "DELETE", "/api/streams/host/request/request"], ["session-cleanup", "DELETE", "/api/session-audit/tmux/name"],

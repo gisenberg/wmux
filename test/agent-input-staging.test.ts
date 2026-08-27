@@ -103,7 +103,6 @@ tmuxTest("full durable tmux command keeps its long-lived child alive with staged
           "fi;",
           `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
         ].join(" "),
-        agentProfileOptionalAuth: true,
         useSystemdScope: false,
       });
       const trapAction = `printf hup > ${shellQuoteForTest(path.join(fixture.directory, "hup"))}`;
@@ -162,7 +161,6 @@ tmuxTest("feature-disabled full durable tmux command stays alive without agent-i
         WMUX_TAB_ID: "tab-durable-disabled",
       },
       helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
     fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
@@ -209,7 +207,6 @@ tmuxTest("durable agent-input staging fails closed on a symlinked capability pat
         WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: `aic_${"u".repeat(36)}.${"V".repeat(43)}`,
       },
       helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
     fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
@@ -246,7 +243,6 @@ tmuxTest("durable agent-input staging fails closed when its private write cannot
         WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: `aic_${"w".repeat(36)}.${"X".repeat(43)}`,
       },
       helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
     fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });

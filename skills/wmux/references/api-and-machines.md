@@ -28,7 +28,7 @@ HTTP routes are declared under `src/server/routes/`.
 Each entry owns a stable route id, an exact method/path matcher, its request-body limit, its authorization policy, and its handler.
 The current route ids are:
 
-- Service and browser state: `health`, `auth-info`, `login`, `auth-session`, `bootstrap`, `settings`, `doctor`, `session-audit`, `session-cleanup`, and `agent-profile`.
+- Service and browser state: `health`, `auth-info`, `login`, `auth-session`, `bootstrap`, `settings`, `doctor`, `session-audit`, and `session-cleanup`.
 - Workspace lifecycle: `workspace-create`, `workspace-reorder`, `workspace-notifications-read`, `workspace-close`, `workspace-title`, `workspace-auto-title`, `tab-create`, `tab-close`, `tab-title`, `pane-split`, `split-ratio`, `pane-input`, `pane-notifications-read`, and `pane-close`.
 - Events and review: `notification-create`, `notification-read`, `agent-event`, `agent-session-timeline`, `delegation-status`, `run-event`, `pane-review-create`, and `repository-snapshot-read`.
 - Media and streams: `media`, `clipboard`, `pane-paste-image-stage`, `pane-paste-image-delete`, `pane-attachment-create`, `attachment-read`, `streams`, `stream-request-status`, `stream-request`, and `stream-release`.

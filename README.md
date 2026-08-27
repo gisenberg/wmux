@@ -529,7 +529,6 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
 | `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, Claude, or Prime Agent TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
-| `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
 
 Examples:
@@ -540,8 +539,6 @@ wmux-notify --title "Build" --body "Completed"
 wmux-run -- npm test
 wmux-media ./image.png
 git diff | wmux-copy
-wmux-agent-profile plan
-wmux-agent-profile status
 ```
 
 ### Agent lifecycle hooks
@@ -750,11 +747,6 @@ The bundled Codex skill lives in `skills/wmux`:
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 ln -sfnT "$(pwd)/skills/wmux" "${CODEX_HOME:-$HOME/.codex}/skills/wmux"
 ```
-
-Personal agent instructions and skills can live in a private
-`../wmux-agent-profile` peer directory and be applied conservatively when a new
-pane starts. See [Agent profiles](docs/AGENT_PROFILES.md) and the sanitized
-[`examples/wmux-agent-profile`](examples/wmux-agent-profile).
 
 Remote helper commands are staged when a new pane starts; existing shells are
 not retrofitted automatically, and agent hooks still require the explicit setup

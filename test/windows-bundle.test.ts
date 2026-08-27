@@ -38,26 +38,11 @@ test("bundle stages the one-shot heartbeat diagnostic without a standalone servi
   assert.match(healthProbe, /heartbeatManagedByAgent/);
 });
 
-test("bundle stages and runs the agent profile helper", () => {
-  const bundle = buildWindowsHelperBundle(machine);
-  assert.ok(bundle.files.some((file) => file.name === "wmux-agent-profile.py"));
-  assert.ok(bundle.files.some((file) => file.name === "wmux-agent-profile.cmd"));
-  const bootstrap = buildWindowsPowerShellBootstrap(machine, undefined, {});
-  assert.match(bootstrap, /wmux-agent-profile\.cmd/);
-  assert.match(bootstrap, /apply --quiet/);
-});
-
 test("bundle stages the cross-platform one-shot agent runner for Windows panes", () => {
   const bundle = buildWindowsHelperBundle(machine);
   assert.ok(bundle.files.some((file) => file.name === "wmux-agent-run.py"));
   assert.ok(bundle.files.some((file) => file.name === "wmux-agent-run.cmd"));
   assert.ok(bundle.files.some((file) => file.name === "wmux_agent_contract.py"));
-});
-
-test("registered Windows bootstrap makes missing profile auth optional", () => {
-  const bootstrap = buildWindowsPowerShellBootstrap({ ...machine, source: "registered" }, undefined, {});
-  assert.match(bootstrap, /wmux-agent-profile\.cmd/);
-  assert.match(bootstrap, /apply --quiet --optional-auth/);
 });
 
 test("Windows bootstrap wraps profile prompts only when profile loading is enabled", () => {
@@ -72,6 +57,13 @@ test("Windows bootstrap wraps profile prompts only when profile loading is enabl
   assert.match(profileBootstrap, /__wmuxOriginalPrompt/);
   assert.match(profileBootstrap, /Set-PSReadLineOption -PredictionSource None/);
   assert.match(profileBootstrap, /\$ErrorActionPreference = \$WmuxOriginalErrorActionPreference/);
+});
+
+test("Windows prompts resynchronize ConPTY cursor state before rendering", () => {
+  const bootstrap = buildWindowsPowerShellBootstrap(machine, undefined, {});
+  assert.match(bootstrap, /\[Console\]::SetCursorPosition\(\[Console\]::CursorLeft, \[Console\]::CursorTop\)/);
+  assert.match(bootstrap, /\[Console\]::Write\("\$\(\[char\]27\)\[0K"\)/);
+  assert.match(bootstrap, /function global:prompt \{\s+__wmuxSynchronizeConsoleCursor/);
 });
 
 test("Windows agent config prefers ConPTY with stdio fallback", () => {

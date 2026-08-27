@@ -13,6 +13,7 @@ import {
   type RGBA,
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
+import { writeBrowserClipboard } from "./clipboard";
 import { compactMiddlePath } from "./path-display";
 import { workspaceTabPath } from "./route-state";
 import { formatSessionReference } from "./session-reference";
@@ -729,6 +730,10 @@ export function OpenTuiSidebar({
             setContextMenu(null);
             void onToggleFavoriteWorkspace?.(workspaceId);
           }}
+          onCopyWorkspaceId={(workspaceId) => {
+            setContextMenu(null);
+            void writeBrowserClipboard(workspaceId).catch(() => undefined);
+          }}
           onBeginRename={() => {
             if (contextMenu.kind !== "workspace") return;
             setContextMenu({ ...contextMenu, renaming: true });
@@ -760,6 +765,7 @@ function SidebarContextMenu({
   onClose,
   onConfirmGroup,
   onToggleFavorite,
+  onCopyWorkspaceId,
   onBeginRename,
   onRenameWorkspace,
   onCloseWorkspace,
@@ -772,6 +778,7 @@ function SidebarContextMenu({
   onClose: () => void;
   onConfirmGroup: () => void;
   onToggleFavorite: (workspaceId: string) => void;
+  onCopyWorkspaceId: (workspaceId: string) => void;
   onBeginRename: () => void;
   onRenameWorkspace: (workspaceId: string, title: string) => void;
   onCloseWorkspace: (workspaceId: string) => void;
@@ -875,6 +882,15 @@ function SidebarContextMenu({
           >
             <span aria-hidden="true">[R]</span>
             Rename workspace
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!workspace}
+            onClick={() => workspace && onCopyWorkspaceId(workspace.id)}
+          >
+            <span aria-hidden="true">[C]</span>
+            Copy workspace ID
           </button>
           <button
             type="button"

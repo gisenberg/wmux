@@ -1142,6 +1142,13 @@ function global:__wmuxEmitCwd {
   } catch {}
 }
 
+function global:__wmuxSynchronizeConsoleCursor {
+  try {
+    [Console]::SetCursorPosition([Console]::CursorLeft, [Console]::CursorTop)
+    [Console]::Write("$([char]27)[0K")
+  } catch {}
+}
+
 function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   if (-not (Test-Path variable:global:__wmuxPromptInstalled)) {
     $ExistingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
@@ -1149,6 +1156,7 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPreserveOriginalPrompt = $PreserveExisting
   function global:prompt {
+    __wmuxSynchronizeConsoleCursor
     __wmuxEmitCwd
     if ($global:__wmuxPreserveOriginalPrompt -and $global:__wmuxOriginalPrompt) {
       try {
@@ -1251,10 +1259,9 @@ __wmuxApplyConsoleTheme
 """
 
 
-def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile_auth: bool = False) -> str:
+def powershell_bootstrap(cwd: str, preserve_prompt: bool) -> str:
     escaped_cwd = cwd.replace("'", "''")
     preserve_prompt_literal = "$true" if preserve_prompt else "$false"
-    optional_auth_argument = " --optional-auth" if optional_agent_profile_auth else ""
     cwd_bootstrap = (
         f"\nSet-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue"
         if cwd
@@ -1265,10 +1272,7 @@ def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile
         + WINDOWS_CONSOLE_THEME_PS1
         + CWD_PROMPT_PS1
         + f"""
-$AgentProfileHelper = if ($env:WMUX_HELPER_DIR) {{ Join-Path $env:WMUX_HELPER_DIR 'wmux-agent-profile.cmd' }} else {{ $null }}
-if ($AgentProfileHelper -and (Test-Path -LiteralPath $AgentProfileHelper -PathType Leaf)) {{
-  & $AgentProfileHelper apply --quiet{optional_auth_argument}
-}}{cwd_bootstrap}
+{cwd_bootstrap}
 __wmuxInstallPrompt {preserve_prompt_literal}
 __wmuxEmitCwd
 $ErrorActionPreference = $WmuxOriginalErrorActionPreference
@@ -1280,7 +1284,6 @@ def powershell_command(
     shell: str,
     cwd: str,
     load_profile: bool = False,
-    optional_agent_profile_auth: bool = False,
 ) -> list[str]:
     executable = shell or "pwsh"
     command = [
@@ -1294,7 +1297,7 @@ def powershell_command(
         "Bypass",
         "-NoExit",
         "-Command",
-        powershell_bootstrap(cwd, load_profile, optional_agent_profile_auth),
+        powershell_bootstrap(cwd, load_profile),
     ])
     return command
 
@@ -1325,7 +1328,6 @@ def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -
             shell,
             requested_cwd,
             payload.get("loadPowerShellProfile") is True,
-            payload.get("agentProfileOptionalAuth") is True,
         )
     return shell if os.name == "nt" else [shell, "-l"]
 
