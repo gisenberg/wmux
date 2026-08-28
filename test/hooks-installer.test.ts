@@ -190,6 +190,9 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.doesNotMatch(extension, /daemonDescriptorIdentity/);
     assert.doesNotMatch(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER_(?:ACTIVE_SESSION_ID|RECOVERY_JOURNAL)/);
     assert.match(extension, /pi\.on\("tool_call"/);
+    assert.match(extension, /pi\.on\("tool_result"/);
+    assert.match(extension, /hook_event_name: "Question"/);
+    assert.match(extension, /hook_event_name: "Resume"/);
     assert.match(extension, /hasPendingMessages/);
     assert.match(extension, /--prime-agent-hook/);
     assert.match(extension, /wmux-title/);
@@ -536,6 +539,45 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
       ["pane_11111111", "running", ""],
       ["pane_11111111", "completed", ""],
     ]);
+
+    // The interactive questionnaire is a positive input request. Keep the pane
+    // waiting until every overlapping questionnaire tool has resolved.
+    const questionStart = captured.length;
+    await one.get("before_agent_start")?.({ prompt: "Ask deployment questions" }, context(0, false, "root-questionnaire"));
+    const questionRunId = captured.at(-1)?.runId;
+    await one.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "question-1", input: {} }, context(0, false, "root-questionnaire"));
+    await one.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "question-1", input: {} }, context(0, false, "root-questionnaire"));
+    await one.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "question-2", input: {} }, context(0, false, "root-questionnaire"));
+    assert.deepEqual(captured.slice(questionStart).map((event) => [event.status, event.attentionReason]), [
+      ["running", undefined],
+      ["waiting", "input"],
+    ]);
+    await one.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "question-1" }, context(0, false, "root-questionnaire"));
+    await one.get("tool_result")?.({ toolName: "ipython", toolCallId: "other-tool" }, context(0, false, "root-questionnaire"));
+    assert.equal(captured.at(-1)?.status, "waiting");
+    await one.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "question-2" }, context(0, false, "root-questionnaire"));
+    assert.equal(captured.at(-1)?.status, "running");
+    assert.equal(captured.at(-1)?.runId, questionRunId);
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "questions answered" }] }, context(0, false, "root-questionnaire"));
+    assert.deepEqual(captured.slice(questionStart).map((event) => event.status), [
+      "running", "waiting", "running", "completed",
+    ]);
+    assert.ok(captured.slice(questionStart).every((event) => event.runId === questionRunId));
+
+    // A nested questionnaire updates the pane's published root lifecycle rather
+    // than creating an unrelated child run.
+    const nestedQuestionStart = captured.length;
+    await one.get("before_agent_start")?.({ prompt: "Delegate a question" }, context(0, false, "root-nested-question"));
+    const nestedQuestionRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "ask parent" }, context(1, false, "child-question"));
+    await childOneA.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "child-question-1", input: {} }, context(1, false, "child-question"));
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "root waits for child" }] }, context(0, false, "root-nested-question"));
+    await childOneA.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "child-question-1" }, context(1, false, "child-question"));
+    await childOneA.get("agent_end")?.({ messages: [{ role: "assistant", content: "child answered" }] }, context(1, false, "child-question"));
+    assert.deepEqual(captured.slice(nestedQuestionStart).map((event) => event.status), [
+      "running", "waiting", "running", "completed",
+    ]);
+    assert.ok(captured.slice(nestedQuestionStart).every((event) => event.runId === nestedQuestionRunId));
 
     // A queued continuation remains on one run without a false completion flicker.
     await one.get("before_agent_start")?.({ prompt: "Continue pending work" }, context());

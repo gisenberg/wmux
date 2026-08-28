@@ -2023,6 +2023,7 @@ type SharedPaneActivity = {
   descendants: Map<string, TurnBinding>
   pendingRootTerminal?: PendingTerminal
   syntheticDescendantTurn?: TurnBinding
+  pendingQuestions: Map<string, string>
   retryFailures: Map<string, PendingRetryFailure>
   lateRetryFailures: Map<string, LateRetryFailure>
   heartbeatSessions: Map<string, { generation: string; active: boolean }>
@@ -2262,6 +2263,7 @@ const sharedActivities = (
 const activityFor = (identity: WmuxIdentity): SharedPaneActivity => {
   const existing = sharedActivities.get(identity.paneId)
   if (existing) {
+    existing.pendingQuestions ??= new Map()
     existing.retryFailures ??= new Map()
     existing.lateRetryFailures ??= new Map()
     existing.heartbeatSessions ??= new Map()
@@ -2269,6 +2271,7 @@ const activityFor = (identity: WmuxIdentity): SharedPaneActivity => {
   }
   const created: SharedPaneActivity = {
     descendants: new Map(),
+    pendingQuestions: new Map(),
     retryFailures: new Map(),
     lateRetryFailures: new Map(),
     heartbeatSessions: new Map(),
@@ -2322,12 +2325,58 @@ const cleanupActivity = async (identity: WmuxIdentity, activity: SharedPaneActiv
       && activity.descendants.size === 0
       && !activity.pendingRootTerminal
       && !activity.syntheticDescendantTurn
+      && activity.pendingQuestions.size === 0
       && activity.retryFailures.size === 0
       && activity.lateRetryFailures.size === 0
       && activity.heartbeatSessions.size === 0
     ) sharedActivities.delete(identity.paneId)
     return
   }
+}
+const paneLifecycleBinding = (activity: SharedPaneActivity, key: string): TurnBinding | undefined =>
+  activity.root?.binding
+  ?? activity.pendingRootTerminal?.binding
+  ?? activity.syntheticDescendantTurn
+  ?? activity.descendants.get(key)
+const questionKey = (session: string, toolCallId: string) => JSON.stringify([session, toolCallId])
+const clearQuestionsForSession = (activity: SharedPaneActivity, key: string) => {
+  let cleared = false
+  for (const [pendingKey, owner] of activity.pendingQuestions) {
+    if (owner !== key) continue
+    activity.pendingQuestions.delete(pendingKey)
+    cleared = true
+  }
+  return cleared && activity.pendingQuestions.size === 0
+}
+const markQuestionPending = async (event: any, ctx: any) => {
+  if (process.env.WMUX_DELEGATED_RUN === "1") return
+  const identity = boundIdentity
+  const depth = sessionDepth(ctx)
+  const key = sessionKey(ctx)
+  const toolCallId = typeof event?.toolCallId === "string" ? event.toolCallId : ""
+  if (!identity || depth === undefined || !key || !toolCallId || toolCallId.length > 512) return
+  const activity = sharedActivities.get(identity.paneId)
+  const binding = activity && paneLifecycleBinding(activity, key)
+  if (!activity || !binding) return
+  const pendingKey = questionKey(key, toolCallId)
+  if (activity.pendingQuestions.has(pendingKey)) return
+  const publishWaiting = activity.pendingQuestions.size === 0
+  activity.pendingQuestions.set(pendingKey, key)
+  if (publishWaiting) await send({ hook_event_name: "Question" }, binding)
+}
+const markQuestionResolved = async (event: any, ctx: any) => {
+  if (process.env.WMUX_DELEGATED_RUN === "1") return
+  const identity = boundIdentity
+  const depth = sessionDepth(ctx)
+  const key = sessionKey(ctx)
+  const toolCallId = typeof event?.toolCallId === "string" ? event.toolCallId : ""
+  if (!identity || depth === undefined || !key || !toolCallId || toolCallId.length > 512) return
+  const activity = sharedActivities.get(identity.paneId)
+  if (!activity || !activity.pendingQuestions.delete(questionKey(key, toolCallId))) return
+  if (activity.pendingQuestions.size > 0) return
+  const binding = paneLifecycleBinding(activity, key)
+  if (binding) await send({ hook_event_name: "Resume" }, binding)
+  await cleanupActivity(identity, activity)
 }
 const finishDescendant = async (
   identity: WmuxIdentity,
@@ -2858,9 +2907,16 @@ export default function (pi: any) {
     }, titleReconcileIntervalMs)
     titleTimer.unref?.()
   })
-  pi.on("tool_call", (event: any) => {
+  pi.on("tool_call", async (event: any, ctx: any) => {
+    if (event?.toolName === "questionnaire") {
+      await markQuestionPending(event, ctx)
+      return
+    }
     if (event?.toolName !== "ipython" || typeof event?.input?.code !== "string") return
     event.input.code = bindIpythonEnvironment(event.input.code)
+  })
+  pi.on("tool_result", async (event: any, ctx: any) => {
+    if (event?.toolName === "questionnaire") await markQuestionResolved(event, ctx)
   })
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     await reconcileHeartbeatState(ctx)
@@ -3085,13 +3141,18 @@ export default function (pi: any) {
       clearInterval(heartbeatTimer)
       heartbeatTimer = undefined
     }
-    if (process.env.WMUX_DELEGATED_RUN === "1" || event?.reason === "reload") return
+    if (process.env.WMUX_DELEGATED_RUN === "1") return
     const identity = boundIdentity
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
     const activity = sharedActivities.get(identity.paneId)
+    const clearedFinalQuestion = activity ? clearQuestionsForSession(activity, key) : false
+    if (event?.reason === "reload") return
     if (activity) cancelRetryFailure(activity, key)
+    if (activity?.root && depth > 0 && clearedFinalQuestion) {
+      await send({ hook_event_name: "Resume" }, activity.root.binding)
+    }
     const heartbeatMember = activity?.heartbeatSessions.get(heartbeatSessionKey ?? key)
     if (activity && heartbeatMember?.generation === heartbeatGeneration) {
       activity.heartbeatSessions.delete(heartbeatSessionKey ?? key)

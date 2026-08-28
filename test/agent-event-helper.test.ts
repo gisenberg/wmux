@@ -446,7 +446,7 @@ test("OpenCode hooks report running, waiting, failed, and completed lifecycles",
 });
 
 
-test("Prime Agent hooks distinguish normal completion from explicit input attention", async () => {
+test("Prime Agent hooks report questionnaire waiting and explicit input attention", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-event-"));
   const captured: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {
@@ -467,6 +467,8 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
       { hook_event_name: "HeartbeatScheduled" },
       { hook_event_name: "Stop", prompt: "add Prime Agent support", last_assistant_message: "Prime Agent done.", wmux_heartbeat_active: true },
       { hook_event_name: "HeartbeatCleared" },
+      { hook_event_name: "Question", prompt: "choose deployment" },
+      { hook_event_name: "Resume", prompt: "choose deployment" },
       { hook_event_name: "InputRequired", prompt: "approve deployment", last_assistant_message: "Approval required." },
       { hook_event_name: "Error", last_assistant_message: "Prime Agent failed." },
       { hook_event_name: "Interrupted", last_assistant_message: "Prime Agent was interrupted." },
@@ -511,6 +513,22 @@ test("Prime Agent hooks distinguish normal completion from explicit input attent
         status: undefined,
         heartbeatActive: false,
         summary: "",
+        message: undefined,
+        attentionReason: undefined,
+      },
+      {
+        agent: "prime-agent",
+        status: "waiting",
+        heartbeatActive: undefined,
+        summary: "prime-agent waiting for question",
+        message: undefined,
+        attentionReason: "input",
+      },
+      {
+        agent: "prime-agent",
+        status: "running",
+        heartbeatActive: undefined,
+        summary: "prime-agent running",
         message: undefined,
         attentionReason: undefined,
       },
