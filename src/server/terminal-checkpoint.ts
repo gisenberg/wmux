@@ -15,7 +15,15 @@ const privateModePattern = /\x1b\[\?([0-9;]+)([hl])/g;
 const modeCarryLimit = 96;
 const maxCheckpointScrollbackLines = 10_000;
 const maxCheckpointScrollbackBytes = 2 * 1024 * 1024;
-type ScrollbackSeed = "none" | "history" | "history-and-viewport";
+// Longest trailing escape or control-string fragment held back between writes.
+const partialSequenceCarryLimit = 4096;
+
+interface SnapshotOptions {
+  // Start from RIS so a freshly cleared browser terminal restores every mode.
+  reset: boolean;
+  // Seed the checkpoint's plain-text scrollback before painting the screen.
+  seedHistory: boolean;
+}
 
 interface CheckpointThemeConfig {
   fgColor?: number;
@@ -58,6 +66,7 @@ export class TerminalCheckpoint {
   private terminal?: GhosttyTerminal;
   private privateModes = new Map<number, boolean>();
   private modeCarry = "";
+  private sequenceCarry = "";
   private readonly themeConfig?: CheckpointThemeConfig;
 
   constructor(cols: number, rows: number, themeEnvironment: Record<string, string> = {}) {
@@ -85,8 +94,16 @@ export class TerminalCheckpoint {
   write(data: string): void {
     if (!this.terminal || !data) return;
     this.capturePrivateModes(data);
+    // Windows agent polls and resize boundaries split output at arbitrary
+    // byte offsets. Hold back a trailing partial sequence so a reframe between
+    // chunks cannot hand its continuation to a fresh parser as plain text.
+    const combined = this.sequenceCarry + data;
+    const carryLength = partialTerminalSequenceLength(combined);
+    this.sequenceCarry = carryLength > 0 ? combined.slice(combined.length - carryLength) : "";
+    const body = carryLength > 0 ? combined.slice(0, combined.length - carryLength) : combined;
+    if (!body) return;
     try {
-      this.terminal.write(data);
+      this.terminal.write(body);
     } catch (error) {
       this.disable(error);
     }
@@ -110,7 +127,14 @@ export class TerminalCheckpoint {
     if (!this.terminal) return;
     const targetCols = normalizeCols(cols);
     const targetRows = normalizeRows(rows);
-    const snapshot = this.snapshotForDimensions(targetCols, targetRows, "history");
+    if (this.terminal.isAlternateScreen()) {
+      // A repainted snapshot only carries the active screen. Full-screen apps
+      // redraw after ConPTY resizes them anyway, so resize in place and keep
+      // the inactive primary screen for when the app exits.
+      this.resize(targetCols, targetRows);
+      return;
+    }
+    const snapshot = this.snapshotForDimensions(targetCols, targetRows, { reset: true, seedHistory: true });
     if (!snapshot || !this.terminal) return;
     try {
       const next = loadGhostty()?.createTerminal(targetCols, targetRows, this.themeConfig);
@@ -127,19 +151,34 @@ export class TerminalCheckpoint {
   snapshot(): string {
     const terminal = this.terminal;
     if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows, "none");
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, { reset: true, seedHistory: false });
   }
 
+  /**
+   * Attach replay for a freshly cleared browser terminal: the retained
+   * scrollback first, then the authoritative screen painted in place.
+   */
   snapshotWithScrollbackSeed(): string {
     const terminal = this.terminal;
     if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows, "history-and-viewport");
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, { reset: true, seedHistory: true });
+  }
+
+  /**
+   * Repaint the active screen of an already attached browser terminal.
+   * Deliberately no RIS: resetting a live browser terminal discards its
+   * scrollback and the modes it restored on attach.
+   */
+  repaint(): string {
+    const terminal = this.terminal;
+    if (!terminal) return "";
+    return this.snapshotForDimensions(terminal.cols, terminal.rows, { reset: false, seedHistory: false });
   }
 
   private snapshotForDimensions(
     targetCols: number,
     targetRows: number,
-    scrollbackSeed: ScrollbackSeed,
+    options: SnapshotOptions,
   ): string {
     const terminal = this.terminal;
     if (!terminal) return "";
@@ -147,22 +186,26 @@ export class TerminalCheckpoint {
       terminal.update();
       const cursor = terminal.getCursor();
       const cells = terminal.getViewport();
-      const paintCols = Math.min(terminal.cols, targetCols);
-      const paintRows = Math.min(terminal.rows, targetRows);
-      const output: string[] = ["\x1bc"];
       const alternateScreen = terminal.isAlternateScreen();
-      if (alternateScreen) output.push("\x1b[?1049h");
+      const paintCols = Math.min(terminal.cols, targetCols);
+      // conhost keeps the cursor row visible when the viewport shrinks and
+      // scrolls the rows above it into history, so anchor the paint window on
+      // the cursor instead of blindly clipping the bottom of the screen.
+      const rowOffset = !alternateScreen && cursor.y >= targetRows ? cursor.y - targetRows + 1 : 0;
+      const paintRows = Math.min(terminal.rows - rowOffset, targetRows);
+      const output: string[] = options.reset ? ["\x1bc"] : [];
+      if (alternateScreen && options.reset) output.push("\x1b[?1049h");
 
-      if (scrollbackSeed !== "none" && !alternateScreen) {
-        output.push("\x1b[?7l", "\x1b[2J", "\x1b[H");
-        const viewportLines = scrollbackSeed === "history-and-viewport"
-          ? Array.from({ length: paintRows }, (_, row) =>
-            cellsToText(cells.slice(row * terminal.cols, (row + 1) * terminal.cols), paintCols))
-          : [];
-        const viewportBytes = viewportLines.reduce((total, line) => total + Buffer.byteLength(line) + 2, 0);
-        output.push(...this.scrollbackSeedLines(Math.max(0, maxCheckpointScrollbackBytes - viewportBytes))
+      if (options.seedHistory && !alternateScreen) {
+        const scrolledLines = Array.from({ length: rowOffset }, (_, row) =>
+          cellsToText(cells.slice(row * terminal.cols, (row + 1) * terminal.cols), terminal.cols));
+        const scrolledBytes = scrolledLines.reduce((total, line) => total + Buffer.byteLength(line) + 2, 0);
+        // Seed with wrapping enabled so history longer than the target width
+        // reflows the way conhost reflows its buffer on a narrower resize.
+        output.push("\x1b[?7h", "\x1b[2J", "\x1b[H");
+        output.push(...this.scrollbackSeedLines(Math.max(0, maxCheckpointScrollbackBytes - scrolledBytes))
           .flatMap((line) => [line, "\r\n"]));
-        output.push(...viewportLines.flatMap((line) => [line, "\r\n"]));
+        output.push(...scrolledLines.flatMap((line) => [line, "\r\n"]));
         output.push("\r\n".repeat(Math.max(0, targetRows - 1)));
       }
 
@@ -173,7 +216,7 @@ export class TerminalCheckpoint {
       for (let row = 0; row < paintRows; row += 1) {
         output.push(`\x1b[${row + 1};1H`);
         for (let col = 0; col < paintCols; col += 1) {
-          const cell = cells[row * terminal.cols + col];
+          const cell = cells[(row + rowOffset) * terminal.cols + col];
           if (!cell || cell.width === 0) continue;
           if (col + cell.width > paintCols) continue;
           const style = cellStyleKey(cell);
@@ -189,7 +232,7 @@ export class TerminalCheckpoint {
       this.restorePrivateModes(output, terminal);
       output.push(cursorStyleSequence(cursor.style, cursor.blinking));
       output.push(
-        `\x1b[${Math.min(cursor.y, targetRows - 1) + 1};${Math.min(cursor.x, targetCols - 1) + 1}H`,
+        `\x1b[${Math.min(cursor.y - rowOffset, targetRows - 1) + 1};${Math.min(cursor.x, targetCols - 1) + 1}H`,
       );
       output.push(cursor.visible ? "\x1b[?25h" : "\x1b[?25l");
       return output.join("");
@@ -288,7 +331,8 @@ export const selectAttachReplay = (
 };
 
 const cellStyleKey = (cell: GhosttyCell): string =>
-  `${cell.flags}:${cell.fg_r},${cell.fg_g},${cell.fg_b}:${cell.bg_r},${cell.bg_g},${cell.bg_b}`;
+  `${cell.flags}:${cell.fgIsDefault ? "default" : `${cell.fg_r},${cell.fg_g},${cell.fg_b}`}`
+  + `:${cell.bgIsDefault ? "default" : `${cell.bg_r},${cell.bg_g},${cell.bg_b}`}`;
 
 const cellStyleSequence = (cell: GhosttyCell): string => {
   const codes = [0];
@@ -300,8 +344,51 @@ const cellStyleSequence = (cell: GhosttyCell): string => {
   if (cell.flags & CellFlags.INVERSE) codes.push(7);
   if (cell.flags & CellFlags.INVISIBLE) codes.push(8);
   if (cell.flags & CellFlags.STRIKETHROUGH) codes.push(9);
-  codes.push(38, 2, cell.fg_r, cell.fg_g, cell.fg_b, 48, 2, cell.bg_r, cell.bg_g, cell.bg_b);
+  // Keep semantic defaults as defaults so a restored screen still follows a
+  // later color-scheme change instead of freezing the palette of one theme.
+  if (cell.fgIsDefault) codes.push(39);
+  else codes.push(38, 2, cell.fg_r, cell.fg_g, cell.fg_b);
+  if (cell.bgIsDefault) codes.push(49);
+  else codes.push(48, 2, cell.bg_r, cell.bg_g, cell.bg_b);
   return `\x1b[${codes.join(";")}m`;
+};
+
+/**
+ * Length of an unterminated escape, CSI, or control-string fragment at the end
+ * of `data`, or 0 when the tail is complete. Bounded so a runaway payload can
+ * never stall the checkpoint.
+ */
+export const partialTerminalSequenceLength = (data: string): number => {
+  const start = data.lastIndexOf("\x1b");
+  if (start === -1 || data.length - start > partialSequenceCarryLimit) return 0;
+  const tail = data.slice(start);
+  if (tail.length === 1) return 1;
+  const introducer = tail.charCodeAt(1);
+  if (introducer === 0x5b) {
+    // CSI: parameters and intermediates until a final byte in 0x40..0x7e.
+    for (let index = 2; index < tail.length; index += 1) {
+      const code = tail.charCodeAt(index);
+      if (code >= 0x40 && code <= 0x7e) return 0;
+      if (code < 0x20 || code > 0x3f) return 0;
+    }
+    return tail.length;
+  }
+  if (introducer === 0x5d || introducer === 0x50 || introducer === 0x5f || introducer === 0x5e || introducer === 0x58) {
+    // OSC, DCS, APC, PM, SOS: terminated by ST (whose ESC would be the last
+    // one found above) or, for OSC, by BEL.
+    if (introducer === 0x5d && tail.includes("\x07")) return 0;
+    return tail.length;
+  }
+  if (introducer >= 0x20 && introducer <= 0x2f) {
+    // nF escape such as ESC ( B: intermediates until a final byte 0x30..0x7e.
+    for (let index = 2; index < tail.length; index += 1) {
+      const code = tail.charCodeAt(index);
+      if (code >= 0x30 && code <= 0x7e) return 0;
+      if (code < 0x20 || code > 0x2f) return 0;
+    }
+    return tail.length;
+  }
+  return 0;
 };
 
 const cellsToText = (cells: GhosttyCell[] | null, cols: number): string => {

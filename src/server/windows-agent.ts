@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { StringDecoder } from "node:string_decoder";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -31,6 +32,9 @@ import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./ter
 
 interface AgentEvents {
   output: [string];
+  // Screen-shaped repaint for attached browsers only; never for textual
+  // output watchers, whose line boundaries it would destroy.
+  screen: [string];
   title: [string];
   cwd: [string];
   agentPort: [number, string];
@@ -304,6 +308,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private replay: string[] = [];
   private replayBytes = 0;
   private replayTruncated = false;
+  private outputDecoder = new StringDecoder("utf8");
   private checkpoint: TerminalCheckpoint;
   private exited = false;
   private exitCode: number | null = null;
@@ -698,8 +703,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.resizeRepaintDeadline = 0;
       this.resizeRepaintSawOutput = false;
       if (!this.checkpoint.isAlternateScreen) return;
-      const snapshot = this.checkpoint.snapshot();
-      if (snapshot) this.emit("output", snapshot);
+      const snapshot = this.checkpoint.repaint();
+      if (snapshot) this.emit("screen", snapshot);
     }, Math.max(0, delayMs));
     this.resizeRepaintTimer.unref?.();
   }
@@ -1102,6 +1107,16 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const startCursor = typeof response.startCursor === "number" ? response.startCursor : Math.max(requestedCursor, base);
     const endCursor = typeof response.cursor === "number" ? response.cursor : startCursor;
     if (base > requestedCursor) this.replayTruncated = true;
+    if (endCursor < startCursor) {
+      // The agent's replay restarted under the same pane id. Never walk the
+      // cursor backwards through bytes the browser already rendered; rejoin
+      // the new buffer from its base behind an explicit reset.
+      this.replayTruncated = true;
+      this.cursor = base;
+      this.outputDecoder = new StringDecoder("utf8");
+      this.appendAndEmit("\x1bc", emit);
+      return;
+    }
 
     if (response.cols && response.rows && !sameSize(this.checkpoint.dimensions, response.cols, response.rows)) {
       this.checkpoint.reframe(response.cols, response.rows);
@@ -1112,13 +1127,15 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const resizes = (response.resizes ?? [])
       .filter((event) => event.cursor > startCursor && event.cursor <= endCursor)
       .sort((left, right) => left.cursor - right.cursor);
+    // Poll and resize boundaries fall on arbitrary byte offsets, so one
+    // decoder carries split UTF-8 sequences across every slice in order.
     for (const event of resizes) {
       const nextOffset = Math.min(data.length, Math.max(offset, event.cursor - startCursor));
-      this.appendAndEmit(data.subarray(offset, nextOffset).toString("utf8"), emit);
+      this.appendAndEmit(this.outputDecoder.write(data.subarray(offset, nextOffset)), emit);
       this.checkpoint.reframe(event.cols, event.rows);
       offset = nextOffset;
     }
-    this.appendAndEmit(data.subarray(offset).toString("utf8"), emit);
+    this.appendAndEmit(this.outputDecoder.write(data.subarray(offset)), emit);
     this.cursor = endCursor;
     // A long poll can describe geometry captured before a newer browser
     // resize. Preserve its byte-boundary replay above, then converge the

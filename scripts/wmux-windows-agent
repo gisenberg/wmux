@@ -1170,6 +1170,15 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
 }
 
 try {
+  # Native tools write UTF-8; without this conhost decodes them with the OEM
+  # code page and the browser sees mojibake. Applies to stdio sessions too.
+  $WmuxUtf8 = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $WmuxUtf8
+  [Console]::InputEncoding = $WmuxUtf8
+  $global:OutputEncoding = $WmuxUtf8
+} catch {}
+
+try {
   Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue
 } catch {}
 """
@@ -1332,6 +1341,15 @@ def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -
     return shell if os.name == "nt" else [shell, "-l"]
 
 
+def stdio_input_bytes(data: bytes) -> bytes:
+    """Map terminal keystrokes onto a line-oriented pipe.
+
+    Enter arrives as CR and pasted Windows text as CRLF; both must become one
+    LF so a pasted block does not run every line followed by an empty command.
+    """
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 class StdioBackend:
     name = BACKEND_STDIO
 
@@ -1360,11 +1378,16 @@ class StdioBackend:
     def write(self, data: bytes) -> None:
         if not self.process.stdin:
             return
-        self.process.stdin.write(data.replace(b"\r", b"\n"))
+        payload = stdio_input_bytes(data)
+        if not payload:
+            return
+        self.process.stdin.write(payload)
         self.process.stdin.flush()
 
-    def write_terminal_response(self, data: bytes) -> None:
-        self.write(data)
+    def write_terminal_response(self, _data: bytes) -> None:
+        # A pipe-backed shell reads stdin as command text, so a DA/DSR reply
+        # would execute as a garbled command line instead of answering a query.
+        return
 
     def resize(self, _cols: int, _rows: int) -> None:
         return

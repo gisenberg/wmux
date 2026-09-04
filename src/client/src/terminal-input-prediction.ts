@@ -129,9 +129,32 @@ export const terminalPredictionCellPaint = (
   };
 };
 
+// Single-cell printable codepoints whose terminal width is unambiguously one
+// column: ASCII plus the Latin, Greek, and Cyrillic letter blocks without
+// their combining-mark ranges. Wide, zero-width, and astral input still goes
+// through the authoritative echo only.
+const NARROW_PRINTABLE_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x20, 0x7e],
+  [0xa1, 0xac],
+  [0xae, 0x2ff],
+  [0x370, 0x377],
+  [0x37a, 0x37f],
+  [0x384, 0x3ff],
+  [0x400, 0x482],
+  [0x48a, 0x52f],
+];
+
+export const isPredictableTerminalCodepoint = (codepoint: number): boolean =>
+  NARROW_PRINTABLE_RANGES.some(([start, end]) => codepoint >= start && codepoint <= end);
+
 export const predictedTerminalInput = (sequence: number, data: string): PredictedTerminalInput | null => {
   if (data === "\b" || data === "\x7f") return { sequence, kind: "backspace", text: "" };
-  if (data.length === 1 && data >= " " && data <= "~") {
+  const codepoint = data.codePointAt(0);
+  if (
+    codepoint !== undefined
+    && String.fromCodePoint(codepoint) === data
+    && isPredictableTerminalCodepoint(codepoint)
+  ) {
     return { sequence, kind: "insert", text: data };
   }
   return null;
@@ -140,8 +163,10 @@ export const predictedTerminalInput = (sequence: number, data: string): Predicte
 export const terminalPredictionCursorMatches = (
   cursor: TerminalPredictionCursor | null | undefined,
   anchor: Pick<TerminalPredictionCursor, "x" | "y"> | null | undefined,
+  requireVisible = true,
 ): boolean => Boolean(
-  cursor?.visible
+  cursor
+  && (cursor.visible || !requireVisible)
   && anchor
   && cursor.x === anchor.x
   && cursor.y === anchor.y
@@ -224,6 +249,16 @@ export const extendTerminalPredictionEchoProbe = (
   return { ...probe, inputs };
 };
 
+const predictedCellMatches = (
+  cell: PredictedTerminalCell,
+  readCodepoint: (col: number, row: number) => number | undefined,
+): boolean => {
+  const codepoint = readCodepoint(cell.col, cell.row);
+  return cell.text
+    ? codepoint === cell.text.codePointAt(0)
+    : codepoint === 0 || codepoint === 32;
+};
+
 export const terminalPredictionEchoProbeMatches = (
   probe: TerminalPredictionEchoProbe,
   acknowledgedSequence: number | undefined,
@@ -233,7 +268,7 @@ export const terminalPredictionEchoProbeMatches = (
   screen: TerminalPredictionScreen,
   readCodepoint: (col: number, row: number) => number | undefined,
 ): boolean => {
-  if (acknowledgedSequence === undefined || screen !== probe.screen || !cursor.visible) return false;
+  if (acknowledgedSequence === undefined || screen !== probe.screen) return false;
   const acknowledgedInputs = probe.inputs.filter((input) => input.sequence <= acknowledgedSequence);
   const layout = layoutPredictedTerminalInput(probe.origin, cols, rows, acknowledgedInputs);
   if (!layout || cursor.x !== layout.cursor.col || cursor.y !== layout.cursor.row) return false;
@@ -247,10 +282,50 @@ export const terminalPredictionEchoProbeMatches = (
     || readCodepoint(originCell.col, originCell.row) !== expectedOriginCodepoint
   ) return false;
 
-  return layout.cells.every((cell) => {
-    const codepoint = readCodepoint(cell.col, cell.row);
-    return cell.text
-      ? codepoint === cell.text.codePointAt(0)
-      : codepoint === 0 || codepoint === 32;
-  });
+  return layout.cells.every((cell) => predictedCellMatches(cell, readCodepoint));
+};
+
+export interface TerminalPredictionSettlement {
+  // Leading predictions the terminal now reflects; the rest stay pending.
+  confirmed: number;
+  anchor: { x: number; y: number };
+}
+
+// Output is tagged with the newest input the server had forwarded when it
+// sent the chunk, so an acknowledgement is only an upper bound: the chunk may
+// carry an earlier keystroke's echo, or none at all. Confirm the longest
+// acknowledged prefix the terminal actually shows and keep the remainder
+// pending; report divergence only when no prefix explains the cursor.
+export const settlePredictedTerminalInput = (
+  anchor: { x: number; y: number },
+  cols: number,
+  rows: number,
+  predictions: readonly PredictedTerminalInput[],
+  acknowledgedSequence: number,
+  cursor: { x: number; y: number },
+  readCodepoint: (col: number, row: number) => number | undefined,
+): TerminalPredictionSettlement | null => {
+  let acknowledgedCount = 0;
+  while (
+    acknowledgedCount < predictions.length
+    && predictions[acknowledgedCount]!.sequence <= acknowledgedSequence
+  ) acknowledgedCount += 1;
+
+  for (let count = acknowledgedCount; count >= 0; count -= 1) {
+    if (count === 0) {
+      return cursor.x === anchor.x && cursor.y === anchor.y
+        ? { confirmed: 0, anchor }
+        : null;
+    }
+    const layout = layoutPredictedTerminalInput(
+      { ...anchor, visible: true },
+      cols,
+      rows,
+      predictions.slice(0, count),
+    );
+    if (!layout || layout.cursor.col !== cursor.x || layout.cursor.row !== cursor.y) continue;
+    if (!layout.cells.every((cell) => predictedCellMatches(cell, readCodepoint))) continue;
+    return { confirmed: count, anchor: { x: layout.cursor.col, y: layout.cursor.row } };
+  }
+  return null;
 };

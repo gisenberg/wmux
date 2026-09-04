@@ -1,21 +1,53 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { selectAttachReplay, TerminalCheckpoint } from "../src/server/terminal-checkpoint.js";
+import {
+  partialTerminalSequenceLength,
+  selectAttachReplay,
+  TerminalCheckpoint,
+} from "../src/server/terminal-checkpoint.js";
 import { terminalThemeEnvironment } from "../src/server/terminal-theme.js";
 
-test("checkpoint snapshots preserve the selected terminal defaults and ANSI palette", () => {
+test("checkpoint snapshots keep semantic defaults and paint the ANSI palette explicitly", () => {
   const checkpoint = new TerminalCheckpoint(12, 2, terminalThemeEnvironment("tokyo-night"));
   try {
     checkpoint.write("default \x1b[31mred\x1b[39;49m");
     const snapshot = checkpoint.snapshot();
-    assert.match(snapshot, /38;2;192;202;245;48;2;26;27;38/);
-    assert.match(snapshot, /38;2;247;118;142;48;2;26;27;38/);
+    // Default cells stay default so a later color-scheme change still applies.
+    assert.match(snapshot, /\x1b\[0;39;49md/);
+    assert.match(snapshot, /38;2;247;118;142;49mr/);
+    assert.doesNotMatch(snapshot, /38;2;192;202;245/);
     assert.doesNotMatch(snapshot, /48;2;0;0;0/);
 
     checkpoint.reframe(12, 4);
-    assert.doesNotMatch(checkpoint.snapshot(), /48;2;0;0;0/);
+    const reframed = checkpoint.snapshot();
+    assert.match(reframed, /\x1b\[0;39;49md/);
+    assert.match(reframed, /38;2;247;118;142;49mr/);
+    assert.doesNotMatch(reframed, /48;2;0;0;0/);
   } finally {
     checkpoint.dispose();
+  }
+});
+
+test("checkpoint restores retain default and inverse styling through a round trip", () => {
+  const source = new TerminalCheckpoint(16, 2);
+  const restored = new TerminalCheckpoint(16, 2);
+  try {
+    source.write("\x1b[7minv\x1b[27m \x1b[44mblue\x1b[49m plain");
+    restored.write(source.snapshot());
+    assert.deepEqual(restored.screenLines(), source.screenLines());
+    const cells = (checkpoint: TerminalCheckpoint) => (checkpoint as unknown as {
+      terminal: { update(): void; getViewport(): { fgIsDefault: boolean; bgIsDefault: boolean; flags: number }[] };
+    }).terminal;
+    cells(source).update();
+    cells(restored).update();
+    const sourceCells = cells(source).getViewport().slice(0, 16)
+      .map((cell) => `${cell.fgIsDefault}:${cell.bgIsDefault}:${cell.flags}`);
+    const restoredCells = cells(restored).getViewport().slice(0, 16)
+      .map((cell) => `${cell.fgIsDefault}:${cell.bgIsDefault}:${cell.flags}`);
+    assert.deepEqual(restoredCells, sourceCells);
+  } finally {
+    source.dispose();
+    restored.dispose();
   }
 });
 
@@ -117,18 +149,96 @@ test("checkpoint snapshots retain split private input-mode sequences", () => {
   }
 });
 
-test("normal-screen checkpoints can seed the visible viewport into scrollback", () => {
+test("normal-screen attach replay seeds history without duplicating the visible viewport", () => {
   const checkpoint = new TerminalCheckpoint(12, 3);
+  const restored = new TerminalCheckpoint(12, 3);
   try {
     checkpoint.write(Array.from({ length: 12 }, (_, index) => `line-${String(index + 1).padStart(2, "0")}`)
       .join("\r\n"));
     const replay = checkpoint.snapshotWithScrollbackSeed();
+    assert.match(replay, /^\x1bc/);
     assert.match(replay, /line-01\r\nline-02\r\n/);
-    assert.match(replay, /line-10\r\nline-11\r\nline-12/);
-    assert.equal(replay.split("line-12").length - 1, 2);
+    assert.match(replay, /line-09\r\n/);
+    assert.equal(replay.split("line-10").length - 1, 1);
+    assert.equal(replay.split("line-12").length - 1, 1);
+
+    restored.write(replay);
+    assert.deepEqual(restored.screenLines(), checkpoint.screenLines());
+    assert.deepEqual(restored.cursor(), checkpoint.cursor());
+    const scrollback = (restored as unknown as {
+      terminal: { getScrollbackLength(): number; getScrollbackLine(offset: number): { codepoint: number }[] | null };
+    }).terminal;
+    assert.equal(scrollback.getScrollbackLength(), 9);
+    const lastHistory = scrollback.getScrollbackLine(8)?.map((cell) => String.fromCodePoint(cell.codepoint || 32))
+      .join("").trimEnd();
+    assert.equal(lastHistory, "line-09");
+  } finally {
+    checkpoint.dispose();
+    restored.dispose();
+  }
+});
+
+test("live repaints never reset the attached terminal", () => {
+  const checkpoint = new TerminalCheckpoint(12, 3);
+  try {
+    checkpoint.write("history\r\n\x1b[?1049h\x1b[2J\x1b[Hfull-screen");
+    const repaint = checkpoint.repaint();
+    assert.doesNotMatch(repaint, /\x1bc/);
+    assert.doesNotMatch(repaint, /\x1b\[\?1049h/);
+    assert.match(repaint, /full-screen/);
   } finally {
     checkpoint.dispose();
   }
+});
+
+test("reframing inside the alternate screen keeps the primary screen for when the app exits", () => {
+  const checkpoint = new TerminalCheckpoint(12, 3);
+  try {
+    checkpoint.write("PS> vim\r\n\x1b[?1049h\x1b[2J\x1b[Heditor");
+    checkpoint.reframe(14, 4);
+    assert.equal(checkpoint.isAlternateScreen, true);
+    assert.deepEqual(checkpoint.dimensions, { cols: 14, rows: 4 });
+    assert.match(checkpoint.screenLines()[0], /^editor/);
+    checkpoint.write("\x1b[?1049l");
+    assert.match(checkpoint.screenLines().join("\n"), /PS> vim/);
+  } finally {
+    checkpoint.dispose();
+  }
+});
+
+test("checkpoint writes carry a split escape sequence across a reframe", () => {
+  const checkpoint = new TerminalCheckpoint(20, 3);
+  try {
+    checkpoint.write("ok \x1b[38;2;12");
+    checkpoint.reframe(24, 4);
+    checkpoint.write("0;34;56mcolored");
+    assert.equal(checkpoint.screenLines()[0].trimEnd(), "ok colored");
+    assert.match(checkpoint.snapshot(), /38;2;120;34;56/);
+
+    checkpoint.write("\r\n\x1b]0;title");
+    checkpoint.reframe(20, 4);
+    checkpoint.write(" more\x07after");
+    assert.equal(checkpoint.screenLines()[1].trimEnd(), "after");
+  } finally {
+    checkpoint.dispose();
+  }
+});
+
+test("partial terminal sequence detection recognizes every unterminated tail", () => {
+  assert.equal(partialTerminalSequenceLength("plain text"), 0);
+  assert.equal(partialTerminalSequenceLength("text\x1b"), 1);
+  assert.equal(partialTerminalSequenceLength("text\x1b["), 2);
+  assert.equal(partialTerminalSequenceLength("text\x1b[38;2;1"), 8);
+  assert.equal(partialTerminalSequenceLength("text\x1b[31m"), 0);
+  assert.equal(partialTerminalSequenceLength("text\x1b[?25l"), 0);
+  assert.equal(partialTerminalSequenceLength("text\x1b]7;file:///C:/"), 15);
+  assert.equal(partialTerminalSequenceLength("text\x1b]7;file:///C:/\x07"), 0);
+  assert.equal(partialTerminalSequenceLength("text\x1b]7;file:///C:/\x1b\\"), 0);
+  assert.equal(partialTerminalSequenceLength("text\x1bP>|ghostty"), 11);
+  assert.equal(partialTerminalSequenceLength("text\x1b("), 2);
+  assert.equal(partialTerminalSequenceLength("text\x1b(B"), 0);
+  assert.equal(partialTerminalSequenceLength("text\x1bc"), 0);
+  assert.equal(partialTerminalSequenceLength(`\x1b]52;c;${"A".repeat(5000)}`), 0);
 });
 
 test("Windows-style reframing keeps the viewport and cursor anchored from the top", () => {
@@ -156,7 +266,8 @@ test("Windows-style reframing carries scrollback across resize boundaries withou
     checkpoint.reframe(10, 4);
     const replay = checkpoint.snapshotWithScrollbackSeed();
     assert.match(replay, /line-01\r\nline-02\r\n/);
-    assert.equal(replay.split("line-12").length - 1, 2);
+    assert.equal(replay.split("line-12").length - 1, 1);
+    assert.equal(replay.split("line-09").length - 1, 1);
   } finally {
     checkpoint.dispose();
   }
@@ -174,6 +285,7 @@ test("Windows-style reframing clips discarded rows and columns when shrinking", 
       "\x1b[5;12H",
     ].join(""));
 
+    checkpoint.write("\x1b[3;10H");
     checkpoint.reframe(7, 3);
 
     assert.deepEqual(checkpoint.screenLines(), [
@@ -183,6 +295,24 @@ test("Windows-style reframing clips discarded rows and columns when shrinking", 
     ]);
     assert.deepEqual(checkpoint.cursor(), { x: 6, y: 2, visible: true });
     assert.doesNotMatch(checkpoint.screenLines().join("\n"), /DISCARD/);
+  } finally {
+    checkpoint.dispose();
+  }
+});
+
+test("Windows-style shrinking keeps the cursor row visible and scrolls the rows above into history", () => {
+  const checkpoint = new TerminalCheckpoint(12, 5);
+  try {
+    checkpoint.write("one\r\ntwo\r\nthree\r\nfour\r\nPS> ");
+    assert.deepEqual(checkpoint.cursor(), { x: 4, y: 4, visible: true });
+
+    checkpoint.reframe(12, 3);
+
+    assert.deepEqual(checkpoint.screenLines().map((line) => line.trimEnd()), ["three", "four", "PS>"]);
+    assert.deepEqual(checkpoint.cursor(), { x: 4, y: 2, visible: true });
+    const replay = checkpoint.snapshotWithScrollbackSeed();
+    assert.match(replay, /one\r\ntwo\r\n/);
+    assert.equal(replay.split("three").length - 1, 1);
   } finally {
     checkpoint.dispose();
   }
