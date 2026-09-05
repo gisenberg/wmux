@@ -224,7 +224,9 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
   New POSIX pane processes export `HERDR_WORKSPACE_ID`/`HERDR_TAB_ID`/`HERDR_PANE_ID` compatibility aliases because Prime Agent 0.8.0 forwards that allowlist into daemon session scopes; `HERDR_ENV` and a Herdr socket are deliberately not set.
   Prime Agent 0.8.0 scopes the forwarded HERDR tuple while each daemon session loads extensions. The extension captures only one complete validated tuple during that scope and fails closed when it is absent or malformed. Non-daemon processes may fall back to one complete `WMUX_*` tuple only when no HERDR field is present.
   Prime Agent 0.8.0 does not pin the scoped client environment into an already-created persistent IPython kernel. The extension must not inspect durable worker descriptors; it pins its captured tuple into each Python or `%%bash` tool call and clears stale W/T/P variables when no complete tuple was captured.
-  A resident Prime session remains bound to its creator pane; reopening a nonresident saved session can bind it to the new pane.
+  On older Prime versions, a resident session remains bound to its creator pane; reopening a nonresident saved session can bind it to the new pane.
+  When foreground client context snapshots are available, capture one validated generation per callback and preserve immutable turn bindings across lifecycle, questionnaires, idle recovery, titles, and heartbeat work.
+  Reject malformed, stale, conflicting, and retired callbacks without changing the accepted generation's state.
 - `wmuxctl delegate` uses the POSIX staged `wmux-agent-run` helper for visible one-shot OpenCode, Codex, Claude, or Prime Agent work.
   `wmuxctl tui` uses its prompt-free supervisor mode: the helper resolves the executable before `chdir`, blocks on the unique launch ACK before starting the child, and quarantines input after an exact exit marker until Ctrl-C or the exact release line.
   The controller requires fresh child output plus a bounded safety-gate observation interval, sends any prompt as one bracketed paste followed by separate Enter, and never closes the workspace.
