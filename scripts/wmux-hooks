@@ -1464,6 +1464,10 @@ const createQuestionBroker = (injectedClient: unknown) => {
         })
       }
     })
+    // A control write can race the broker's exit; the close handler owns the
+    // resulting state change, so an EPIPE on stdin must not become an
+    // uncaught exception inside the OpenCode host.
+    brokerChild.stdin?.on("error", () => {})
     brokerChild.on("error", () => {
       if (brokerChild !== child || retiredChildren.has(brokerChild)) return
       structuredReady = false
@@ -1532,8 +1536,11 @@ const createQuestionBroker = (injectedClient: unknown) => {
     snapshotHandler = undefined
     readyResolve(undefined)
   }
+  // Disable also closes the broker's stdin so its readline ends even if the
+  // shutdown message races its readiness handshake; a later re-enable always
+  // spawns a fresh broker through restart().
   return { send: write, disable: () => { structuredReady = false; restartInProgress = false
-      pendingRestartMessages.length = 0; writeControl({ type: "unsupported" }) },
+      pendingRestartMessages.length = 0; writeControl({ type: "unsupported" }); child?.stdin.end() },
     ready, isReady: () => structuredReady || restartInProgress, structuredClient: () => structuredClient,
     onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler }, restart, close }
 }

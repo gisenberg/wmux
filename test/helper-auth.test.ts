@@ -44,7 +44,6 @@ test("every POSIX helper refuses an explicit unreadable helper path without lega
     ["python3", [script("wmux-copy"), mediaFile]],
     ["python3", [script("wmux-run"), "--", "/bin/true"]],
     ["python3", [script("wmux-shell-run-event"), "start", "--run-id", "run-test", "--command", "true"]],
-    ["python3", [script("wmux-agent-profile"), "status", "--json"]],
     ["python3", ["-c", "import importlib.machinery,sys;m=importlib.machinery.SourceFileLoader('stream',sys.argv[1]).load_module();m.wmux_headers()", script("wmux-stream-agent")]],
     [process.execPath, [script("wmux-doctor"), "--json"]],
   ];

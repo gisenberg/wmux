@@ -140,6 +140,8 @@ export const buildWindowsPowerShellBootstrap = (
   return `
 $WmuxOriginalErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
+$WmuxOriginalProgressPreference = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
 ${envLines}
 
 $LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData\\Local' }
@@ -288,16 +290,13 @@ $ConsoleThemeHelper = Join-Path $HelperDir 'wmux-console-theme.ps1'
 if (Test-Path -LiteralPath $ConsoleThemeHelper -PathType Leaf) {
   & $ConsoleThemeHelper
 }
-$AgentProfileHelper = Join-Path $HelperDir 'wmux-agent-profile.cmd'
-if (Test-Path -LiteralPath $AgentProfileHelper -PathType Leaf) {
-  & $AgentProfileHelper apply --quiet${machine.source === "registered" ? " --optional-auth" : ""}
-}
 $StartCwd = __wmuxNormalizeStartCwd $env:WMUX_START_CWD
 if ($StartCwd) {
   Set-Location -LiteralPath $StartCwd -ErrorAction SilentlyContinue
 }
 __wmuxInstallPrompt ${machine.loadPowerShellProfile === true ? "$true" : "$false"}
 __wmuxEmitCwd
+$ProgressPreference = $WmuxOriginalProgressPreference
 $ErrorActionPreference = $WmuxOriginalErrorActionPreference
 `;
 };
@@ -454,14 +453,6 @@ const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
   {
     name: "wmux-windows-agent.cmd",
     content: pythonCmdShim("wmux-windows-agent.py"),
-  },
-  {
-    name: "wmux-agent-profile.py",
-    content: localScript("wmux-agent-profile"),
-  },
-  {
-    name: "wmux-agent-profile.cmd",
-    content: pythonCmdShim("wmux-agent-profile.py"),
   },
   {
     name: "wmux-agent-run.py",

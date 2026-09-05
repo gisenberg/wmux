@@ -103,7 +103,6 @@ tmuxTest("full durable tmux command keeps its long-lived child alive with staged
           "fi;",
           `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
         ].join(" "),
-        agentProfileOptionalAuth: true,
         useSystemdScope: false,
       });
       const trapAction = `printf hup > ${shellQuoteForTest(path.join(fixture.directory, "hup"))}`;
@@ -162,7 +161,6 @@ tmuxTest("feature-disabled full durable tmux command stays alive without agent-i
         WMUX_TAB_ID: "tab-durable-disabled",
       },
       helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
     fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
@@ -209,7 +207,6 @@ tmuxTest("durable agent-input staging fails closed on a symlinked capability pat
         WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: `aic_${"u".repeat(36)}.${"V".repeat(43)}`,
       },
       helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
     fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
@@ -246,7 +243,6 @@ tmuxTest("durable agent-input staging fails closed when its private write cannot
         WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY: `aic_${"w".repeat(36)}.${"X".repeat(43)}`,
       },
       helperPathExport: `export PATH=${shellQuoteForTest(fixture.bin)}:$PATH;`,
-      agentProfileOptionalAuth: true,
       useSystemdScope: false,
     });
     fs.writeFileSync(fixture.runtimePath, `#!/bin/sh\n${script}\n`, { mode: 0o700 });
@@ -369,7 +365,7 @@ test("local and SSH agent backends carry pane capability only as an authenticate
     const agent = http.createServer(async (request, response) => {
       response.setHeader("content-type", "application/json");
       if (request.method === "GET" && request.url === "/health") {
-        response.end(JSON.stringify({ ok: true, protocolVersion: 6, capabilities: ["posix-runtime-files-v1"] }));
+        response.end(JSON.stringify({ ok: true, protocolVersion: 7, capabilities: ["posix-runtime-files-v1"] }));
         return;
       }
       if (request.method === "POST" && /^\/sessions\/[^/]+$/.test(request.url ?? "")) {
@@ -434,8 +430,8 @@ test("feature-disabled, legacy POSIX, and Windows agent sessions start without a
       response.setHeader("content-type", "application/json");
       if (request.method === "GET" && request.url === "/health") {
         response.end(JSON.stringify(machineKind !== "powershell-ssh"
-          ? { ok: true, protocolVersion: 6, capabilities: [] }
-          : { ok: true, protocolVersion: 6, releaseVersion: "", capabilities: [] }));
+          ? { ok: true, protocolVersion: 7, capabilities: [] }
+          : { ok: true, protocolVersion: 7, releaseVersion: "", capabilities: [] }));
         return;
       }
       if (request.method === "GET" && request.url === "/sessions") {

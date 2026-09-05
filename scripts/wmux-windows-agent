@@ -1142,6 +1142,13 @@ function global:__wmuxEmitCwd {
   } catch {}
 }
 
+function global:__wmuxClearPromptTail {
+  try {
+    # ConPTY console coordinates can lag terminal output, so never reposition here.
+    [Console]::Write("$([char]27)[0K")
+  } catch {}
+}
+
 function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   if (-not (Test-Path variable:global:__wmuxPromptInstalled)) {
     $ExistingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
@@ -1149,6 +1156,7 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPreserveOriginalPrompt = $PreserveExisting
   function global:prompt {
+    __wmuxClearPromptTail
     __wmuxEmitCwd
     if ($global:__wmuxPreserveOriginalPrompt -and $global:__wmuxOriginalPrompt) {
       try {
@@ -1160,6 +1168,15 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPromptInstalled = $true
 }
+
+try {
+  # Native tools write UTF-8; without this conhost decodes them with the OEM
+  # code page and the browser sees mojibake. Applies to stdio sessions too.
+  $WmuxUtf8 = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $WmuxUtf8
+  [Console]::InputEncoding = $WmuxUtf8
+  $global:OutputEncoding = $WmuxUtf8
+} catch {}
 
 try {
   Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue
@@ -1251,10 +1268,9 @@ __wmuxApplyConsoleTheme
 """
 
 
-def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile_auth: bool = False) -> str:
+def powershell_bootstrap(cwd: str, preserve_prompt: bool) -> str:
     escaped_cwd = cwd.replace("'", "''")
     preserve_prompt_literal = "$true" if preserve_prompt else "$false"
-    optional_auth_argument = " --optional-auth" if optional_agent_profile_auth else ""
     cwd_bootstrap = (
         f"\nSet-Location -LiteralPath '{escaped_cwd}' -ErrorAction SilentlyContinue"
         if cwd
@@ -1265,10 +1281,7 @@ def powershell_bootstrap(cwd: str, preserve_prompt: bool, optional_agent_profile
         + WINDOWS_CONSOLE_THEME_PS1
         + CWD_PROMPT_PS1
         + f"""
-$AgentProfileHelper = if ($env:WMUX_HELPER_DIR) {{ Join-Path $env:WMUX_HELPER_DIR 'wmux-agent-profile.cmd' }} else {{ $null }}
-if ($AgentProfileHelper -and (Test-Path -LiteralPath $AgentProfileHelper -PathType Leaf)) {{
-  & $AgentProfileHelper apply --quiet{optional_auth_argument}
-}}{cwd_bootstrap}
+{cwd_bootstrap}
 __wmuxInstallPrompt {preserve_prompt_literal}
 __wmuxEmitCwd
 $ErrorActionPreference = $WmuxOriginalErrorActionPreference
@@ -1280,7 +1293,6 @@ def powershell_command(
     shell: str,
     cwd: str,
     load_profile: bool = False,
-    optional_agent_profile_auth: bool = False,
 ) -> list[str]:
     executable = shell or "pwsh"
     command = [
@@ -1294,7 +1306,7 @@ def powershell_command(
         "Bypass",
         "-NoExit",
         "-Command",
-        powershell_bootstrap(cwd, load_profile, optional_agent_profile_auth),
+        powershell_bootstrap(cwd, load_profile),
     ])
     return command
 
@@ -1325,9 +1337,17 @@ def session_command(config: dict[str, Any], payload: dict[str, Any], cwd: str) -
             shell,
             requested_cwd,
             payload.get("loadPowerShellProfile") is True,
-            payload.get("agentProfileOptionalAuth") is True,
         )
     return shell if os.name == "nt" else [shell, "-l"]
+
+
+def stdio_input_bytes(data: bytes) -> bytes:
+    """Map terminal keystrokes onto a line-oriented pipe.
+
+    Enter arrives as CR and pasted Windows text as CRLF; both must become one
+    LF so a pasted block does not run every line followed by an empty command.
+    """
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 class StdioBackend:
@@ -1358,11 +1378,16 @@ class StdioBackend:
     def write(self, data: bytes) -> None:
         if not self.process.stdin:
             return
-        self.process.stdin.write(data.replace(b"\r", b"\n"))
+        payload = stdio_input_bytes(data)
+        if not payload:
+            return
+        self.process.stdin.write(payload)
         self.process.stdin.flush()
 
-    def write_terminal_response(self, data: bytes) -> None:
-        self.write(data)
+    def write_terminal_response(self, _data: bytes) -> None:
+        # A pipe-backed shell reads stdin as command text, so a DA/DSR reply
+        # would execute as a garbled command line instead of answering a query.
+        return
 
     def resize(self, _cols: int, _rows: int) -> None:
         return

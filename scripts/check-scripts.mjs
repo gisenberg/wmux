@@ -38,7 +38,6 @@ run(python.command, [
   "-m",
   "py_compile",
   "scripts/wmux-agent-event",
-  "scripts/wmux-agent-profile",
   "scripts/wmux-agent-run",
   "scripts/wmux_agent_contract.py",
   "scripts/wmux-copy",

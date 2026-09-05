@@ -794,8 +794,15 @@ test("terminal-generated response metadata survives client message parsing", () 
     data: "x",
     sequence: 42,
   });
-  assert.equal(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 0 })), null);
-  assert.equal(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 1.5 })), null);
+  // A malformed sequence forfeits echo acknowledgement but never drops keystrokes.
+  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 0 })), {
+    type: "input",
+    data: "x",
+  });
+  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "input", data: "x", sequence: 1.5 })), {
+    type: "input",
+    data: "x",
+  });
 });
 
 test("pane output acknowledges each browser's latest input sequence without tagging output watchers", () => {

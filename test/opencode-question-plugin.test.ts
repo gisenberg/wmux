@@ -461,7 +461,7 @@ exec "${path.join(repoRoot, "scripts", "wmux-agent-input-broker")}" "$@"
   } finally {
     if (originalFetch) globalThis.fetch = originalFetch;
     if (plugin) await plugin.event({ event: { type: "question.future", properties: { sessionID: "session-one" } } }).catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await settleBrokers();
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -594,8 +594,9 @@ process.stdin.on("data", (chunk) => {
       "a timed-out lookup disables structured handling and queued events settle without more SDK calls");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
-    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(() => {
+    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(async () => {
       for (const childId of brokerChildIds()) process.kill(childId, "SIGTERM");
+      await settleBrokers();
     });
     clearFixtureStructuredClient();
     for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
@@ -669,8 +670,9 @@ process.stdin.on("data", (chunk) => {
     assert.doesNotMatch(fs.readFileSync(messagesPath, "utf8"), /"type":"asked"/);
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
-    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(() => {
+    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(async () => {
       for (const childId of brokerChildIds()) process.kill(childId, "SIGTERM");
+      await settleBrokers();
     });
     clearFixtureStructuredClient();
     for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
@@ -753,8 +755,9 @@ process.stdin.on("data", (chunk) => {
       id: "oversized", sessionID: "session", questions, nativePending: false })) > 128 * 1024);
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
-    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(() => {
+    await waitFor(() => brokerChildIds().length === 0, () => JSON.stringify(brokerChildIds())).catch(async () => {
       for (const childId of brokerChildIds()) process.kill(childId, "SIGTERM");
+      await settleBrokers();
     });
     clearFixtureStructuredClient();
     for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
@@ -864,6 +867,7 @@ process.stdin.on("data", (chunk) => {
         assert.equal(sessionCalls, variant.expectedSessionCalls);
       } finally {
         if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+        await settleBrokers();
         clearFixtureStructuredClient();
         for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -945,6 +949,7 @@ test("new generated plugin fails structured handling closed against an old serve
     assert.equal(sdkInvocations, 0, "an old server cannot expose an answer for SDK invocation");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    await settleBrokers();
     await new Promise((resolve) => setTimeout(resolve, 150));
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
@@ -1055,6 +1060,7 @@ test("generated plugin reports sanitized injected-transport, health, and method 
         }
       } finally {
         if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+        await settleBrokers();
         clearFixtureStructuredClient();
         for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
         server.closeAllConnections();
@@ -1224,6 +1230,7 @@ test("startup reconciliation never publishes an incomplete native snapshot and k
     "an incomplete startup snapshot retries autonomously and preserves top-level filtering");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    await settleBrokers();
     clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) {
@@ -1365,6 +1372,7 @@ test("snapshot cut fencing survives delayed list and session validation for new 
       "the cut-scoped barrier excludes the post-cut replacement key instead of replaying stale list metadata");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    await settleBrokers();
     clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value;
@@ -1626,6 +1634,7 @@ test("serial SDK delivery starts only at invocation and a timed-out queued deliv
     assert.ok(Math.abs(sdkCalls[0].at - starts[0].at) < 500, "the accepted start is adjacent to actual SDK invocation");
   } finally {
     if (plugin) await plugin.event({ event: { type: "question.future", properties: {} } }).catch(() => undefined);
+    await settleBrokers();
     clearFixtureStructuredClient();
     await new Promise((resolve) => setTimeout(resolve, 100));
     for (const [key, value] of Object.entries(prior)) {
@@ -1818,6 +1827,20 @@ const waitFor = async (predicate: () => boolean, detail: () => string = () => ""
     if (Date.now() > deadline) throw new Error(`timed out ${detail()}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+};
+
+// Broker shutdown persists status files for up to ~100 ms after the plugin
+// disables it; removing the temporary home first races those writes.
+const settleBrokers = async (): Promise<void> => {
+  try {
+    await waitFor(() => brokerChildIds().length === 0, () => "for broker shutdown", 2_000);
+  } catch {
+    for (const childId of brokerChildIds()) {
+      try { process.kill(childId, "SIGKILL"); } catch {}
+    }
+    await waitFor(() => brokerChildIds().length === 0, () => "for broker termination", 2_000).catch(() => undefined);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
 };
 
 const brokerChildIds = (parentId = process.pid): number[] => {

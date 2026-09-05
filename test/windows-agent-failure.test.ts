@@ -336,7 +336,6 @@ test("Windows agent session creation forwards profile preferences", async () => 
   await waitUntil(() => createBody !== undefined);
   assert.deepEqual(phases.slice(0, 2), ["checking-agent", "creating-session"]);
   assert.equal(createBody?.loadPowerShellProfile, true);
-  assert.equal(createBody?.agentProfileOptionalAuth, true);
   await session.attachReady;
   assert.equal(session.isExited, false);
   session.detach();
@@ -1521,7 +1520,9 @@ test("Windows agent coalesces resize bursts and repaints a settled alternate scr
     24,
   );
   const output: string[] = [];
+  const screens: string[] = [];
   session.on("output", (data) => output.push(data));
+  session.on("screen", (data) => screens.push(data));
   try {
     await session.attachReady;
     session.resize(85, 25);
@@ -1532,14 +1533,19 @@ test("Windows agent coalesces resize bursts and repaints a settled alternate scr
     session.resize(110, 35);
 
     await waitUntil(() => remoteCols === 110 && remoteRows === 35);
-    await waitUntil(() => output.length === 1, 2000);
+    await waitUntil(() => screens.length === 1, 2000);
     assert.deepEqual(resizes, [
       { cols: 90, rows: 28 },
       { cols: 110, rows: 35 },
     ]);
     assert.equal(maxActiveResizes, 1);
-    assert.equal(output.length, 1);
-    assert.match(output[0] ?? "", /^\x1bc\x1b\[\?1049h/);
+    // The repaint goes to attached browsers only and must not reset a live
+    // terminal: no RIS, no alternate-screen re-entry, just the repainted rows.
+    assert.equal(output.length, 0);
+    assert.equal(screens.length, 1);
+    assert.doesNotMatch(screens[0] ?? "", /\x1bc/);
+    assert.doesNotMatch(screens[0] ?? "", /\x1b\[\?1049h/);
+    assert.match(screens[0] ?? "", /READY/);
     const checkpoint = (session as unknown as { checkpoint: TerminalCheckpoint }).checkpoint;
     assert.deepEqual(checkpoint.dimensions, { cols: 110, rows: 35 });
   } finally {
@@ -1703,4 +1709,96 @@ test("Windows agent hydrates a 24-row replay before attaching it to a taller spl
     server.close();
     await once(server, "close");
   }
+});
+
+test("Windows agent output decodes UTF-8 across poll and resize boundaries and rejoins a restarted replay", async () => {
+  const chunks: Array<{ data: Buffer; startCursor: number; cursor: number; resizes?: Array<{ cursor: number; cols: number; rows: number }> }> = [
+    { data: Buffer.from([0x6f, 0x6b, 0x20, 0xc3]), startCursor: 0, cursor: 4 },
+    {
+      data: Buffer.from([0xa9, 0x20, 0xe2, 0x94, 0x80, 0x20, 0x65, 0x6e, 0x64]),
+      startCursor: 4,
+      cursor: 13,
+      resizes: [{ cursor: 8, cols: 100, rows: 30 }],
+    },
+  ];
+  let restarted = false;
+  const requestedCursors: number[] = [];
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "POST" && url.pathname === "/sessions/pane_utf8") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "pane_utf8", pid: 123, base: 0, cursor: 0, cols: 80, rows: 24 }));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/sessions/pane_utf8/output") {
+      const cursor = Number(url.searchParams.get("cursor") ?? "0");
+      requestedCursors.push(cursor);
+      const chunk = chunks.shift();
+      const reply = (body: Record<string, unknown>) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ base: 0, cols: 80, rows: 24, exited: false, ...body }));
+      };
+      if (chunk) {
+        reply({
+          startCursor: chunk.startCursor,
+          cursor: chunk.cursor,
+          resizes: chunk.resizes ?? [],
+          dataBase64: chunk.data.toString("base64"),
+        });
+        return;
+      }
+      if (!restarted && cursor === 13) {
+        // The agent replaced the session: its replay restarted at a lower cursor.
+        restarted = true;
+        reply({ startCursor: 13, cursor: 3, dataBase64: "" });
+        return;
+      }
+      if (restarted && cursor === 0) {
+        reply({ startCursor: 0, cursor: 3, dataBase64: Buffer.from("new").toString("base64") });
+        return;
+      }
+      setTimeout(() => reply({ startCursor: cursor, cursor, dataBase64: "" }), 20);
+      return;
+    }
+    if (request.method === "DELETE") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const machine: MachineConfig = {
+    id: "windows",
+    name: "Windows",
+    kind: "powershell-ssh",
+    host: "127.0.0.1",
+    sessionBackend: "agent",
+    agentUrl: `http://127.0.0.1:${address.port}`,
+  };
+  const pane: PaneState = {
+    id: "pane_utf8",
+    machineId: "windows",
+    title: "PowerShell",
+    status: "idle",
+    createdAt: new Date(0).toISOString(),
+  };
+
+  const outputs: string[] = [];
+  const session = new WindowsAgentSession(pane, machine, 80, 24);
+  session.on("output", (data) => outputs.push(data));
+  await waitUntil(() => outputs.join("").includes("new"), 3000);
+  const joined = outputs.join("");
+  assert.equal(joined, "ok é ─ end\x1bcnew");
+  assert.doesNotMatch(joined, /�/);
+  assert.ok(requestedCursors.includes(0) && requestedCursors.includes(13));
+  assert.equal(requestedCursors.filter((cursor) => cursor === 0).length >= 2, true);
+  assert.match(session.replayOutput, /ok é ─ end/);
+
+  session.kill();
+  server.close();
+  await once(server, "close");
 });

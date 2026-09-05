@@ -1,4 +1,4 @@
-export const WINDOWS_AGENT_PROTOCOL_VERSION = 6;
+export const WINDOWS_AGENT_PROTOCOL_VERSION = 7;
 
 export const WINDOWS_AGENT_CAPABILITIES = [
   "paste-images-v1",
@@ -117,7 +117,6 @@ export interface WindowsAgentCreateRequest {
   cwd: string;
   shell: string;
   loadPowerShellProfile: boolean;
-  agentProfileOptionalAuth: boolean;
   helperBundle: {
     bundleVersion: string;
     files: Array<{ name: string; dataBase64: string; sha256: string }>;

@@ -482,6 +482,16 @@ dispatch, predicted paint, sequence-acknowledged output, and Ghostty canvas
 rendering. It separates normal-shell and alternate-screen/TUI samples, retains
 no input text, and can copy or clear its bounded in-memory measurements.
 
+Typed text is predicted locally once one authoritative echo has been verified
+at the cursor.
+Prediction covers single-cell printable input (ASCII plus the Latin, Greek,
+and Cyrillic letter blocks) and backspace; wide, combining, and pasted input
+always wait for the real echo.
+Output acknowledgements are an upper bound on which keystroke a chunk answers,
+so predictions settle by comparing the terminal against the predicted cells
+and keep only the unconfirmed remainder, which keeps fast bursts predicted
+over slow links and Windows hosts.
+
 ### Keyboard shortcuts
 
 These are the defaults. Override individual actions through the `keybindings`
@@ -529,7 +539,6 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
 | `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, Claude, or Prime Agent TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
-| `wmux-agent-profile` | Plan/apply agent profiles, add skills, and bootstrap pinned tools |
 | `wmux-doctor` | Report host, pane, and durability health |
 
 Examples:
@@ -540,8 +549,6 @@ wmux-notify --title "Build" --body "Completed"
 wmux-run -- npm test
 wmux-media ./image.png
 git diff | wmux-copy
-wmux-agent-profile plan
-wmux-agent-profile status
 ```
 
 ### Agent lifecycle hooks
@@ -751,11 +758,6 @@ mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 ln -sfnT "$(pwd)/skills/wmux" "${CODEX_HOME:-$HOME/.codex}/skills/wmux"
 ```
 
-Personal agent instructions and skills can live in a private
-`../wmux-agent-profile` peer directory and be applied conservatively when a new
-pane starts. See [Agent profiles](docs/AGENT_PROFILES.md) and the sanitized
-[`examples/wmux-agent-profile`](examples/wmux-agent-profile).
-
 Remote helper commands are staged when a new pane starts; existing shells are
 not retrofitted automatically, and agent hooks still require the explicit setup
 above.
@@ -809,6 +811,8 @@ The current agent listener intentionally refuses hostname, IPv6, and public-addr
 
 Managed configs use `backend: "auto"`: ConPTY is preferred and terminal-safe stdio is the fallback when `pywinpty` is unavailable.
 Existing explicit `"conpty"` or `"stdio"` values remain pinned.
+Every wmux PowerShell bootstrap switches the console input and output encoding to UTF-8 so native tools such as `git` and `python` render non-ASCII output correctly.
+The stdio fallback is line-oriented: the shell provides no keystroke echo, arrow keys are not interpreted, and the pane cannot be resized until `pywinpty` is installed.
 When the base agent is outdated and idle, new pane creation stages the update and safely restarts that base before attaching.
 If the base still owns panes, wmux instead starts a side-by-side agent generation; existing panes remain pinned to the agent that owns them, and generation ports are persisted so wmux restarts reconnect each pane correctly.
 Password-backed rollout retirement leaves its dormant, credentialed task slot registered while removing the generation config; full uninstall removes every task and its Task Scheduler credential.
@@ -985,6 +989,13 @@ known implementation gaps. Report vulnerabilities privately according to the
   close.
 - Dynamic registered panes need separately provisioned auth for helpers that
   post back to wmux.
+- Output acknowledgements name the newest forwarded keystroke rather than the
+  keystroke that produced the bytes. The browser settles predictions against
+  the rendered cells to compensate, but the Windows agent does not yet record
+  per-input replay markers for exact attribution.
+- The Windows stdio fallback has no local echo, and legacy WSMan `powershell`
+  machines receive no wmux bootstrap, so neither disables PSReadLine
+  predictions nor supports local text prediction.
 - Kitty graphics supports direct, file, temporary-file, and POSIX shared-memory
   transfers with native z-index and scrollback-aware placement.
   Kitty animation, Sixel, iTerm2 images, and Windows named shared memory remain

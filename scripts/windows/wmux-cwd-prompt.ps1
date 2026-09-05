@@ -16,6 +16,13 @@ function global:__wmuxEmitCwd {
   } catch {}
 }
 
+function global:__wmuxClearPromptTail {
+  try {
+    # ConPTY console coordinates can lag terminal output, so never reposition here.
+    [Console]::Write("$([char]27)[0K")
+  } catch {}
+}
+
 function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   if (-not (Test-Path variable:global:__wmuxPromptInstalled)) {
     $ExistingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
@@ -23,6 +30,7 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPreserveOriginalPrompt = $PreserveExisting
   function global:prompt {
+    __wmuxClearPromptTail
     __wmuxEmitCwd
     if ($global:__wmuxPreserveOriginalPrompt -and $global:__wmuxOriginalPrompt) {
       try {
@@ -34,6 +42,15 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
   }
   $global:__wmuxPromptInstalled = $true
 }
+
+try {
+  # Native tools write UTF-8; without this conhost decodes them with the OEM
+  # code page and the browser sees mojibake. Applies to stdio sessions too.
+  $WmuxUtf8 = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $WmuxUtf8
+  [Console]::InputEncoding = $WmuxUtf8
+  $global:OutputEncoding = $WmuxUtf8
+} catch {}
 
 try {
   Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue
