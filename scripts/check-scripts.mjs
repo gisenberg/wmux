@@ -22,6 +22,7 @@ run(process.execPath, [
   "scripts/generate-agent-contract.mjs",
   "--check",
 ]);
+run(process.execPath, ["scripts/generate-hooks.mjs", "--check"]);
 
 const python = [
   { command: "python3", args: [] },
@@ -56,6 +57,8 @@ run(python.command, [
 
 for (const script of [
   "scripts/wmux-hooks",
+  "scripts/verify-remote.mjs",
+  "scripts/verification-runner.cjs",
   "scripts/wmux-agent-input-broker",
   "scripts/wmux-moonlight-gateway",
   "scripts/wmux-set-password",

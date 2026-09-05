@@ -28,6 +28,11 @@ This is intentionally not a multi-tenant SaaS app. Bearer authentication is defe
 
 ## Commands
 
+- Prefer `npm run verify:remote` for full checks of committed local changes, using the private runner configuration described in [docs/VERIFICATION.md](docs/VERIFICATION.md).
+  Keep focused tests and typechecks local during editing.
+  Use the concurrent external-host E2E split by default; use full POSIX-host E2E as the fallback and report why.
+  Do not silently run the full suite on the wmux service host when external runners are available.
+
 - `npm install` installs dependencies.
 - `npm run dev -- --host 127.0.0.1 --port 3478` starts the app in development mode with Vite middleware.
 - `npm run typecheck` runs client and server TypeScript checks.
