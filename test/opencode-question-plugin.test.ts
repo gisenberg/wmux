@@ -1710,9 +1710,10 @@ test("generated plugin uses injected transport from a separate import/cache cont
         const plugin = await pluginModule.default({ client, directory: ${JSON.stringify(repoRoot)},
           serverUrl: new URL("http://127.0.0.1:1/unreachable-cache-context") });
         process.stdout.write("READY\\n");
-        await new Promise((resolve) => setTimeout(resolve, 750));
+        await new Promise((resolve) => process.once("message", resolve));
         await plugin.event({ event: { type: "question.future", properties: {} } });
         await new Promise((resolve) => setTimeout(resolve, 100));
+        process.disconnect();
       `, { mode: 0o600 });
       const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -1754,9 +1755,9 @@ test("generated plugin uses injected transport from a separate import/cache cont
         );
         const sdkManifest = path.join(configHome, "opencode", "node_modules", "@opencode-ai", "sdk", "package.json");
         variant.mutate(sdkManifest, home);
-        child = spawn(process.execPath, ["--experimental-transform-types", runnerPath], { env, stdio: ["ignore", "pipe", "pipe"] });
-        child.stdout.on("data", (chunk) => { output += chunk.toString(); });
-        child.stderr.on("data", (chunk) => { errors += chunk.toString(); });
+        child = spawn(process.execPath, ["--experimental-transform-types", runnerPath], { env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+        child.stdout!.on("data", (chunk) => { output += chunk.toString(); });
+        child.stderr!.on("data", (chunk) => { errors += chunk.toString(); });
         await waitFor(() => output.includes("READY"), () => errors);
         if (variant.launches) {
           await waitFor(() => requestPaths.includes("/api/agent-input/sources/register")
@@ -1770,6 +1771,7 @@ test("generated plugin uses injected transport from a separate import/cache cont
           assert.deepEqual(brokerChildIds(child.pid), [], `${variant.name} launched a broker`);
           assert.equal(requests, 0, `${variant.name} reached broker bootstrap`);
         }
+        child.send("verified");
         const exitCode = child.exitCode ?? await new Promise<number | null>((resolve) => child!.once("exit", resolve));
         assert.equal(exitCode, 0, errors);
       } finally {
