@@ -135,7 +135,7 @@ test("retro profile history migrates the legacy id and retains five unique choic
 });
 
 test("historical boot details match the machines and operating-system eras", () => {
-  assert.match(profileById("commodore-64").boot.map((bootStep) => bootStep.text).join(""), /664 BLOCKS FREE/);
+  assert.match(profileById("commodore-64").boot.map((bootStep) => bootStep.text).join(""), /624 BLOCKS FREE/);
   assert.match(profileById("commodore-128").boot.map((bootStep) => bootStep.text).join(""), /\(C\)1985 COMMODORE/);
   assert.deepEqual(profileById("commodore-128").colors, {
     page: "#b0e0b8",
@@ -178,14 +178,48 @@ test("lower-confidence profiles use the verified native interpreter and prompt c
 });
 
 test("tape boots declare both border phases and styles honor reduced motion", () => {
-  for (const profileId of ["zx-spectrum", "amstrad-cpc", "oric-atmos"]) {
+  for (const profileId of ["zx-spectrum"]) {
     const phases = new Set(profileById(profileId).boot.map((bootStep) => bootStep.tapeBorder).filter(Boolean));
     assert.deepEqual([...phases].sort(), ["data", "header"], profileId);
+  }
+  for (const profileId of ["amstrad-cpc", "oric-atmos"]) {
+    assert.ok(profileById(profileId).boot.every((step) => !step.tapeBorder));
   }
   const styles = readFileSync(new URL("../src/client/src/styles.css", import.meta.url), "utf8");
   assert.match(styles, /\.retro-boot-framebuffer::after/);
   assert.doesNotMatch(styles, /\.retro-graphical-framebuffer::after/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*retro-tape-border-header/);
+  assert.match(styles, /background-position: 0 -24px/);
+});
+
+test("POST counts in place, then beeps, and MODE 7 uses teletext geometry", () => {
+  const pc = profileById("ibm-pc-at");
+  const counts = pc.boot.filter((step) => step.overwrite);
+  assert.equal(counts.length, 17);
+  assert.equal(counts[0].text, "000000 KB OK");
+  assert.equal(counts.at(-1)?.text, "016384 KB OK");
+  assert.ok(counts.every((step) => !step.text.includes("\n")));
+  assert.ok(pc.boot.indexOf(pc.boot.find((step) => step.postSound)!) > pc.boot.indexOf(counts.at(-1)!));
+  const bbc = profileById("bbc-micro");
+  assert.equal(bbc.rows, 25);
+  assert.equal(bbc.columns, 40);
+  assert.match(bbc.fontFamily, /SAA 5050/);
+});
+
+test("Spectrum uses bottom-line keyword entry and both tape blocks with a gap", () => {
+  const spectrum = profileById("zx-spectrum");
+  assert.equal(spectrum.boot[0].position?.row, 23);
+  assert.equal(spectrum.boot[1].typedFrom, 5);
+  assert.equal(spectrum.boot[1].clear, true);
+  assert.deepEqual(spectrum.boot.slice(2, 7).map((step) => step.tapeBorder), ["header", "data", undefined, "header", "data"]);
+  assert.ok(spectrum.boot.every((step) => !step.text.includes("Bytes:")));
+  for (const profile of RETRO_BOOT_PROFILES) {
+    for (const step of profile.boot) {
+      if (!step.position) continue;
+      assert.ok(step.position.row >= 1 && step.position.row <= profile.rows, profile.id);
+      assert.ok(step.position.column >= 1 && step.position.column <= profile.columns, profile.id);
+    }
+  }
 });
 
 test("boot text stays within each machine's native line width", () => {

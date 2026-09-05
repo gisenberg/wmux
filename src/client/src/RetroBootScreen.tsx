@@ -68,6 +68,8 @@ function RetroTerminalBootScreen({
   const readyRef = useRef(ready);
   const onAuthenticatedRef = useRef(onAuthenticated);
   const onCompleteRef = useRef(onComplete);
+  const acknowledgeGuruRef = useRef<(() => void) | null>(null);
+  const guruAcknowledgedRef = useRef(false);
   const hasBootArtwork = profile.showBootArtwork !== false;
   const isAmiga = profile.id === "amiga-workbench" || profile.id === "amiga-guru-meditation";
   const [visualPhase, setVisualPhase] = useState<BootVisualPhase>(() =>
@@ -75,6 +77,7 @@ function RetroTerminalBootScreen({
   );
   const [tapeBorderPhase, setTapeBorderPhase] = useState<TapeBorderPhase | null>(null);
   const [status, setStatus] = useState(`Starting ${profile.name}`);
+  const [bootStepIndex, setBootStepIndex] = useState<number | null>(null);
   useRetroFramebuffer(screenRef, profile.id);
 
   useEffect(() => {
@@ -94,7 +97,8 @@ function RetroTerminalBootScreen({
   }, [onComplete]);
 
   useEffect(() => {
-    let stopPostSound = profile.id === "amiga-workbench" ? () => undefined : playRetroPostSound(profile.id);
+    let stopPostSound = profile.id === "amiga-workbench" || profile.boot.some((step) => step.postSound)
+      ? () => undefined : playRetroPostSound(profile.id);
     let cancelled = false;
     let terminal: Terminal | null = null;
     let authStage: "idle" | "username" | "password" | "submitting" = "idle";
@@ -104,6 +108,19 @@ function RetroTerminalBootScreen({
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const pause = (milliseconds: number) =>
       new Promise<void>((resolve) => window.setTimeout(resolve, reducedMotion ? 0 : milliseconds));
+    const waitForGuru = () => new Promise<void>((resolve) => {
+      if (guruAcknowledgedRef.current) {
+        resolve();
+        return;
+      }
+      const finish = () => {
+        window.clearTimeout(timer);
+        acknowledgeGuruRef.current = null;
+        resolve();
+      };
+      const timer = window.setTimeout(finish, reducedMotion ? 0 : 2_000);
+      acknowledgeGuruRef.current = finish;
+    });
     const terminalText = (text: string) => text.replaceAll("\n", "\r\n");
     const write = (text: string) => terminal?.write(terminalText(text));
     const writeCommitted = (text: string) =>
@@ -221,7 +238,7 @@ function RetroTerminalBootScreen({
       if (!hasBootArtwork) {
         setVisualPhase("terminal");
       } else if (profile.specialBoot === "amiga-guru") {
-        await pause(2_000);
+        await waitForGuru();
         if (cancelled) return;
         setStatus("Restarting after Guru Meditation");
         setVisualPhase("blank");
@@ -245,9 +262,18 @@ function RetroTerminalBootScreen({
       setVisualPhase("terminal");
       setStatus(profile.bootStatus);
       write("\x1b[2J\x1b[H");
-      for (const bootStep of profile.boot) {
+      for (const [stepIndex, bootStep] of profile.boot.entries()) {
         if (cancelled) return;
+        setBootStepIndex(stepIndex);
         setTapeBorderPhase(bootStep.tapeBorder ?? null);
+        if (bootStep.clear) write("\x1b[2J\x1b[H");
+        if (bootStep.position) write(`\x1b[${bootStep.position.row};${bootStep.position.column}H`);
+        if (bootStep.overwrite) write("\r\x1b[2K");
+        if (bootStep.inverse) write("\x1b[7m");
+        if (bootStep.postSound) {
+          stopPostSound();
+          stopPostSound = playRetroPostSound(profile.id);
+        }
         if (bootStep.typedFrom === undefined) {
           write(bootStep.text);
         } else {
@@ -262,9 +288,11 @@ function RetroTerminalBootScreen({
             }
           }
         }
+        if (bootStep.inverse) write("\x1b[27m");
         await pause(bootStep.delay);
       }
       setTapeBorderPhase(null);
+      setBootStepIndex(null);
 
       setStatus("Waiting for wmux service");
       let challenged = false;
@@ -292,7 +320,8 @@ function RetroTerminalBootScreen({
       void showAuthChallenge();
       while (!readyRef.current && !cancelled) {
         void showAuthChallenge();
-        await pause(80);
+        // This is a service poll, not an animation delay.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 80));
       }
       if (cancelled) return;
 
@@ -307,6 +336,7 @@ function RetroTerminalBootScreen({
     void start();
     return () => {
       cancelled = true;
+      acknowledgeGuruRef.current?.();
       stopPostSound();
       terminal?.dispose();
     };
@@ -329,6 +359,8 @@ function RetroTerminalBootScreen({
       style={style}
       data-boot-profile={profile.id}
       data-tape-border={tapeBorderPhase ?? undefined}
+      data-boot-step={bootStepIndex ?? undefined}
+      data-boot-phase={visualPhase}
     >
       <section className="retro-boot-bezel" aria-label={`${profile.name} wmux loading`}>
         <div className="retro-boot-framebuffer">
@@ -344,12 +376,16 @@ function RetroTerminalBootScreen({
           </div>
           {visualPhase === "blank" ? <div className="retro-boot-amiga-blank" aria-hidden="true" /> : null}
           {visualPhase === "guru" ? (
-            <div className="retro-amiga-guru" role="img" aria-label="Amiga Guru Meditation software failure">
-              <div className="retro-amiga-guru-alert">
+            <button type="button" className="retro-amiga-guru" aria-label="Continue after Amiga Guru Meditation"
+              onClick={() => {
+                guruAcknowledgedRef.current = true;
+                acknowledgeGuruRef.current?.();
+              }}>
+              <span className="retro-amiga-guru-alert">
                 <span>Software Failure. Press left mouse button to continue.</span>
                 <span>Guru Meditation #0000000B.00C01570</span>
-              </div>
-            </div>
+              </span>
+            </button>
           ) : null}
           {visualPhase === "artwork" ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
           <span className="visually-hidden" role="status" aria-live="polite">

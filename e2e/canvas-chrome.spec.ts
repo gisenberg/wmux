@@ -1,4 +1,13 @@
 import { awaitAppShell, createNestedWorkspacePair, expect, test } from "./fixtures";
+import { RETRO_BOOT_PROFILES } from "../src/client/src/retro-boot-profiles";
+
+const profileRandom = (id: string) => {
+  const index = RETRO_BOOT_PROFILES.findIndex((profile) => profile.id === id);
+  if (index < 0) throw new Error(`Unknown boot profile ${id}`);
+  const weightBefore = RETRO_BOOT_PROFILES.slice(0, index).reduce((sum, profile) => sum + (profile.weight ?? 1), 0);
+  const total = RETRO_BOOT_PROFILES.reduce((sum, profile) => sum + (profile.weight ?? 1), 0);
+  return (weightBefore + (RETRO_BOOT_PROFILES[index].weight ?? 1) / 2) / total;
+};
 
 const waitForLifeFrameWindow = async (
   page: import("@playwright/test").Page,
@@ -227,6 +236,8 @@ test("Spectrum tape phases animate their native palettes and stop under reduced 
       const style = getComputedStyle(element);
       return element.getAttribute("data-tape-border") === "header"
         && style.animationName === "retro-tape-border-shift"
+        && !style.backgroundImage.includes("135deg")
+        && style.backgroundSize === "100% 24px"
         && style.backgroundImage.includes("rgb(0, 215, 215)")
         && style.backgroundImage.includes("rgb(215, 0, 0)");
     }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
@@ -265,6 +276,7 @@ test("mobile tape borders stay inside browser safe-area chrome", async ({ browse
       return element.getAttribute("data-tape-border") === "header"
         && screenStyle.backgroundColor === "rgb(12, 13, 15)"
         && screenStyle.backgroundImage === "none"
+        && !bezelStyle.backgroundImage.includes("135deg")
         && bezelStyle.backgroundImage.includes("rgb(0, 215, 215)");
     }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
     await boot.page.screenshot({ path: testInfo.outputPath("zx-spectrum-mobile-header.png") });
@@ -272,6 +284,79 @@ test("mobile tape borders stay inside browser safe-area chrome", async ({ browse
     await boot.close();
   }
 });
+
+test("PC POST advances its in-place memory count before loading DOS", async ({ browser, page: currentPage }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop POST coverage");
+  const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("ibm-pc-at") });
+  try {
+    const screen = boot.page.locator('[data-boot-profile="ibm-pc-at"]');
+    await expect.poll(() => screen.getAttribute("data-boot-step"), { intervals: [10, 20, 50] }).toMatch(/^[1-9]$/);
+    await expect(screen.locator("canvas")).toBeVisible();
+    await boot.page.screenshot({ path: testInfo.outputPath("pc-memory-count.png") });
+    await expect.poll(() => screen.getAttribute("data-boot-step"), { intervals: [10, 20, 50] }).toMatch(/^(1[89]|2\d)$/);
+    await boot.page.screenshot({ path: testInfo.outputPath("pc-post-complete.png") });
+  } finally {
+    await boot.close();
+  }
+});
+
+test("BBC boot uses the teletext face and fits the framebuffer", async ({ browser, page: currentPage }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop teletext coverage");
+  const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("bbc-micro") });
+  try {
+    const screen = boot.page.locator('[data-boot-profile="bbc-micro"]');
+    await expect.poll(() => screen.getAttribute("data-boot-step")).toMatch(/^[2-9]$/);
+    await expect(screen.locator("canvas")).toBeVisible();
+    expect(await boot.page.evaluate(() => document.fonts.check('16px "Retro SAA 5050"'))).toBe(true);
+    await boot.page.screenshot({ path: testInfo.outputPath("bbc-mode7.png") });
+  } finally {
+    await boot.close();
+  }
+});
+
+test("NeXT desktop uses a vertical floating menu opposite the dock", async ({ browser, page: currentPage }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop NeXT layout coverage");
+  const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("nextcube") });
+  try {
+    const menu = boot.page.locator(".retro-next-menu");
+    await expect(menu).toBeVisible();
+    const title = await menu.locator("strong").boundingBox();
+    const info = await menu.locator(":scope > span").first().boundingBox();
+    const view = await menu.locator(":scope > span").last().boundingBox();
+    const dock = await boot.page.locator(".retro-next-dock").boundingBox();
+    expect(info!.y).toBeGreaterThan(title!.y);
+    expect(view!.y).toBeGreaterThan(info!.y);
+    expect(view!.x).toBe(info!.x);
+    expect(dock!.x).toBeGreaterThan(info!.x + info!.width);
+    await boot.page.screenshot({ path: testInfo.outputPath("next-workspace-menu.png") });
+  } finally {
+    await boot.close();
+  }
+});
+
+for (const activation of ["click", "Enter"] as const) {
+  test(`Guru Meditation acknowledges ${activation} without completing bootstrap`, async ({ browser, page: currentPage }, testInfo) => {
+    test.skip(testInfo.project.name !== "chromium", "desktop Guru interaction coverage");
+    const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("amiga-guru-meditation") });
+    try {
+      const screen = boot.page.locator('[data-boot-profile="amiga-guru-meditation"]');
+      const recovery = boot.page.getByRole("button", { name: "Continue after Amiga Guru Meditation" });
+      await expect(recovery).toBeVisible();
+      if (activation === "click") await recovery.click();
+      else {
+        await recovery.focus();
+        await boot.page.keyboard.press("Enter");
+      }
+      await expect(screen).not.toHaveAttribute("data-boot-phase", "guru", { timeout: 1_500 });
+      await expect(screen).toHaveAttribute("data-boot-phase", "artwork");
+      await boot.page.screenshot({ path: testInfo.outputPath(`guru-recovery-${activation}.png`) });
+      await expect(screen).toBeVisible();
+      await expect(boot.page.locator("main.app-shell")).toHaveCount(0);
+    } finally {
+      await boot.close();
+    }
+  });
+}
 
 test("TRS-80 Model 4 keeps all 80 columns inside the mobile framebuffer", async ({
   browser,

@@ -37,6 +37,9 @@ the redraw cap applies only while an alternate-screen application is active.
 
 The desktop view and both mobile surfaces show the same live Codex workspace.
 
+Startup includes a rotating gallery of retro-computer loading and authentication scenes.
+See [retro boot fidelity](docs/RETRO_BOOT_FIDELITY.md) for historical references, deliberate wmux fiction, audio policy and remaining approximations.
+
 ## Architecture
 
 | Component | Responsibility |

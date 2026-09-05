@@ -3834,29 +3834,15 @@ button.active-tool {
   --retro-tape-data-b: #e6db00;
 }
 
-.retro-boot-amstrad-cpc {
-  --retro-tape-header-a: #0080ff;
-  --retro-tape-header-b: #ffea00;
-  --retro-tape-data-a: #001a8d;
-  --retro-tape-data-b: #ffe746;
-}
-
-.retro-boot-oric-atmos {
-  --retro-tape-header-a: #00d7d7;
-  --retro-tape-header-b: #d70000;
-  --retro-tape-data-a: #f3f3f3;
-  --retro-tape-data-b: #111;
-}
-
 .retro-boot-screen.retro-tape-border-header,
 .retro-boot-screen.retro-tape-border-data {
-  background-size: 34px 34px;
+  background-size: 100% 24px;
   animation: retro-tape-border-shift 180ms linear infinite;
 }
 
 .retro-boot-screen.retro-tape-border-header {
   background-image: repeating-linear-gradient(
-    135deg,
+    180deg,
     var(--retro-tape-header-a) 0 12px,
     var(--retro-tape-header-b) 12px 24px
   );
@@ -3864,7 +3850,7 @@ button.active-tool {
 
 .retro-boot-screen.retro-tape-border-data {
   background-image: repeating-linear-gradient(
-    135deg,
+    180deg,
     var(--retro-tape-data-a) 0 6px,
     var(--retro-tape-data-b) 6px 12px
   );
@@ -3873,7 +3859,7 @@ button.active-tool {
 
 @keyframes retro-tape-border-shift {
   to {
-    background-position: 34px 0;
+    background-position: 0 -24px;
   }
 }
 
@@ -4021,9 +4007,20 @@ button.active-tool {
   position: absolute;
   inset: 0;
   z-index: 4;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  cursor: pointer;
   background: #000;
   color: #f22;
   font-family: "Retro Amiga Topaz", monospace;
+}
+
+.retro-amiga-guru:focus-visible {
+  outline: 2px solid #f22;
+  outline-offset: -2px;
 }
 
 .retro-amiga-guru-alert {
@@ -4155,8 +4152,7 @@ button.active-tool {
 
 .retro-mac-menu,
 .retro-lisa-menu,
-.retro-atari-menu,
-.retro-next-menu {
+.retro-atari-menu {
   height: 24px;
   border-bottom: 2px solid #000;
   background: #fff;
@@ -4386,12 +4382,32 @@ button.active-tool {
 }
 
 .retro-next-menu {
-  width: 240px;
-  height: auto;
-  margin: 12px;
-  border: 2px solid #111;
-  background: #d2d2d2;
-  white-space: normal;
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: grid;
+  width: 124px;
+  border: 1px solid #000;
+  background: #aaa;
+  box-shadow: 2px 2px 0 #555;
+  font: 14px Helvetica, Arial, sans-serif;
+}
+
+.retro-next-menu strong {
+  padding: 4px 6px;
+  background: #000;
+  color: #fff;
+}
+
+.retro-next-menu > span {
+  display: flex;
+  justify-content: space-between;
+  border: 2px outset #ccc;
+  padding: 3px 6px;
+}
+
+.retro-next-menu i {
+  font-style: normal;
 }
 
 .retro-next-dock {
@@ -4675,13 +4691,13 @@ button.active-tool {
 
   .retro-boot-screen.retro-tape-border-header .retro-boot-bezel,
   .retro-boot-screen.retro-tape-border-data .retro-boot-bezel {
-    background-size: 34px 34px;
+    background-size: 100% 24px;
     animation: retro-tape-border-shift 180ms linear infinite;
   }
 
   .retro-boot-screen.retro-tape-border-header .retro-boot-bezel {
     background-image: repeating-linear-gradient(
-      135deg,
+      180deg,
       var(--retro-tape-header-a) 0 12px,
       var(--retro-tape-header-b) 12px 24px
     );
@@ -4689,7 +4705,7 @@ button.active-tool {
 
   .retro-boot-screen.retro-tape-border-data .retro-boot-bezel {
     background-image: repeating-linear-gradient(
-      135deg,
+      180deg,
       var(--retro-tape-data-a) 0 6px,
       var(--retro-tape-data-b) 6px 12px
     );
