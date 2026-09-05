@@ -3,11 +3,13 @@ import test from "node:test";
 import { RETRO_POST_SOUNDS } from "../src/client/src/retro-boot-audio";
 import { RETRO_BOOT_PROFILES } from "../src/client/src/retro-boot-profiles";
 
-test("every retro boot profile has a short POST sound", () => {
-  const profileIds = RETRO_BOOT_PROFILES.map((profile) => profile.id).sort();
-  assert.deepEqual(Object.keys(RETRO_POST_SOUNDS).sort(), profileIds);
+test("only explicitly supported approximations have short boot sounds", () => {
+  const profileIds = RETRO_BOOT_PROFILES.map((profile) => profile.id);
+  assert.deepEqual(Object.keys(RETRO_POST_SOUNDS).sort(), ["amiga-workbench", "apple-iie", "ibm-pc-at"]);
 
   for (const [profileId, tones] of Object.entries(RETRO_POST_SOUNDS)) {
+    assert.ok(profileIds.includes(profileId));
+    assert.ok(tones);
     assert.ok(tones.length > 0, profileId);
     const finishMs = Math.max(...tones.map((postTone) => (postTone.offsetMs ?? 0) + postTone.durationMs));
     assert.ok(finishMs <= 1_000, `${profileId} cue lasts ${finishMs}ms`);
@@ -22,15 +24,11 @@ test("recognizable POST cues use the machine-specific tone shape", () => {
   assert.deepEqual(RETRO_POST_SOUNDS["apple-iie"], [
     { frequency: 1000, durationMs: 100, offsetMs: 0, type: "square" },
   ]);
-  assert.deepEqual(RETRO_POST_SOUNDS["atari-st"], [
-    { frequency: 880, durationMs: 150, offsetMs: 0, type: "sine" },
-  ]);
-  assert.deepEqual(RETRO_POST_SOUNDS["nec-pc-9801"], [
-    { frequency: 2000, durationMs: 80, offsetMs: 0, type: "square" },
-  ]);
-  assert.equal(RETRO_POST_SOUNDS["amiga-workbench"].length, 3);
+  assert.equal(RETRO_POST_SOUNDS["atari-st"], undefined);
+  assert.equal(RETRO_POST_SOUNDS["amiga-guru-meditation"], undefined);
+  assert.equal(RETRO_POST_SOUNDS["amiga-workbench"]?.length, 3);
   assert.ok(
-    RETRO_POST_SOUNDS["amiga-workbench"].every(
+    RETRO_POST_SOUNDS["amiga-workbench"]?.every(
       (postTone) => postTone.filterFrequency === 520 && postTone.volume === 0.012,
     ),
   );

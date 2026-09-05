@@ -1,5 +1,24 @@
 import type { Page } from "@playwright/test";
-import { expect, test, type E2eWorkspace } from "./fixtures";
+import { awaitAppShell, createNestedWorkspacePair, expect, test, type E2eWorkspace } from "./fixtures";
+
+test("workspace action copies the exact ID through the secure-context clipboard", async ({ context, page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "real clipboard requires the loopback Chromium fixture");
+  const { child, root } = await createNestedWorkspacePair(request);
+  try {
+    await page.goto(`/workspaces/${root.id}/tabs/${root.activeTabId}`);
+    await awaitAppShell(page);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+    await page.locator(`a[role="treeitem"][href^="/workspaces/${child.id}/"]`).press("Shift+F10");
+    const menu = page.getByRole("menu", { name: `Agent actions: ${child.name}` });
+    await menu.getByRole("menuitem", { name: "Copy workspace ID" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(child.id);
+  } finally {
+    for (const workspace of [child, root]) {
+      const response = await request.delete(`/api/workspaces/${workspace.id}`);
+      expect(response.ok()).toBe(true);
+    }
+  }
+});
 
 const openSettings = async (page: Page, mobile: boolean): Promise<void> => {
   await page.keyboard.press("Control+K");

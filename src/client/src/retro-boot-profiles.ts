@@ -3,6 +3,11 @@ export interface RetroBootStep {
   delay: number;
   typedFrom?: number;
   tapeBorder?: "header" | "data";
+  clear?: boolean;
+  position?: { row: number; column: number };
+  overwrite?: boolean;
+  inverse?: boolean;
+  postSound?: boolean;
 }
 
 export interface RetroBootProfile {
@@ -93,7 +98,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     rows: 25,
     fontFamily: '"C64 Pro Mono", monospace',
     fontSize: { desktop: 17, mobile: 9 },
-    colors: { page: "#7869c4", border: "#7869c4", background: "#40318d", foreground: "#a5a0e0" },
+    colors: { page: "#7869c4", border: "#7869c4", background: "#40318d", foreground: "#7869c4" },
     bootStatus: "Reading Commodore disk directory",
     showBootArtwork: false,
     boot: [
@@ -103,12 +108,13 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       typed('LOAD "$",8\n\n', 90),
       step("SEARCHING FOR $\nLOADING\nREADY.\n", 110),
       typed("LIST\n\n", 70),
-      step('0 "WMUX BOOT DISK" 64 2A\n'),
-      step('4    "GHOSTTY"          PRG\n', 45),
+      step("0 ", 0),
+      { ...step('"WMUX BOOT DISK  " 64 2A\n'), inverse: true },
+      step('4    "WMUX"             PRG\n', 45),
       step('8    "MACHINES"         SEQ\n', 45),
       step('12   "WORKSPACES"       SEQ\n', 45),
       step('16   "SESSIONS"         PRG\n', 45),
-      step("664 BLOCKS FREE.\n\nREADY.\n", 90),
+      step("624 BLOCKS FREE.\n\nREADY.\n", 90),
       typed('LOAD "*",8\n\n', 90),
       step("SEARCHING FOR *\nLOADING\nREADY.\n", 110),
       typed("RUN\n", 80),
@@ -124,7 +130,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     fontFamily: '"C64 Pro Mono", monospace',
     fontSize: { desktop: 17, mobile: 9 },
     colors: { page: "#b0e0b8", border: "#b0e0b8", background: "#5a5a5a", foreground: "#b0e0b8" },
-    bootStatus: "Starting Commodore 128 CP/M services",
+    bootStatus: "Loading Commodore 128 BASIC program",
     showBootArtwork: false,
     boot: [
       step(centeredLine("COMMODORE BASIC V7.0 122365 BYTES FREE", 40), 110),
@@ -182,8 +188,13 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     bootStatus: "Running 386 BIOS power-on self-test",
     showBootArtwork: false,
     boot: [
-      step("American Megatrends 386DX BIOS (C)1989\n", 130),
-      step("\n016384 KB OK\n", 120),
+      step("386DX BIOS\n\n", 130),
+      // A condensed POST count, rewritten in place rather than a scrolling log.
+      ...Array.from({ length: 17 }, (_, index): RetroBootStep => ({
+        ...step(`${String(index * 1024).padStart(6, "0")} KB OK`, 60),
+        overwrite: true,
+      })),
+      { ...step("\n", 120), postSound: true },
       step("Keyboard .............. Detected\n", 55),
       step("Floppy Drive A: ....... 1.44 MB\n", 55),
       step("Primary Master: ....... WMUX-IDE 40MB\n", 65),
@@ -200,8 +211,8 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     name: "BBC Micro",
     ariaLabel: "BBC Micro authentication console",
     columns: 40,
-    rows: 32,
-    fontFamily: '"Retro BBC Micro", monospace',
+    rows: 25,
+    fontFamily: '"Retro SAA 5050", monospace',
     fontSize: { desktop: 16, mobile: 10 },
     colors: { page: "#050505", border: "#151515", background: "#050505", foreground: "#f1f1f1" },
     bootStatus: "Reading BBC Micro filing system",
@@ -284,16 +295,17 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
     bootStatus: "Loading ZX Spectrum tape",
     showBootArtwork: false,
     boot: [
-      step("\n (C) 1982 Sinclair Research Ltd\n\n", 150),
-      typed('LOAD ""\n', 110),
-      tapeStep("Program: WMUX\n", 650, "header"),
-      tapeStep("Bytes: GHOSTTY\n", 350, "data"),
-      tapeStep("Bytes: MACHINES\n", 350, "data"),
-      tapeStep("Bytes: SESSIONS\n", 350, "data"),
-      tapeStep("Bytes: WORKSPACE\n", 350, "data"),
-      step("\n0 OK, 0:1\n", 100),
-      typed("RUN\n", 80),
-      step("WMUX TERMINAL LINK\n", 70),
+      { ...step(" (C) 1982 Sinclair Research Ltd", 650), position: { row: 23, column: 1 } },
+      // LOAD is a single J-key token, not four separately typed letters.
+      { ...typed('""\n', 110, "LOAD "), clear: true, position: { row: 23, column: 1 } },
+      { ...tapeStep("", 650, "header"), position: { row: 23, column: 1 }, overwrite: true },
+      tapeStep("", 120, "data"),
+      { ...step("Program: WMUX", 220), position: { row: 1, column: 1 } },
+      tapeStep("", 400, "header"),
+      tapeStep("", 900, "data"),
+      { ...step("0 OK, 0:1", 150), position: { row: 23, column: 1 }, overwrite: true },
+      { ...typed("\n", 80, "RUN"), position: { row: 23, column: 1 }, overwrite: true },
+      { ...step("WMUX TERMINAL LINK\n", 70), clear: true },
     ],
     auth: { ...standardAuth, failed: "R Tape loading error, 0:1\n" },
   },
@@ -447,9 +459,9 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       step("            and Locomotive Software Ltd.\n\n", 80),
       step("BASIC 1.0\n\nReady\n", 100),
       typed('RUN"WMUX\n', 100),
-      tapeStep("Press PLAY then any key:\n", 350, "header"),
-      tapeStep("Loading WMUX block 1\n", 260, "data"),
-      tapeStep("Loading WMUX block 2\n", 260, "data"),
+      step("Press PLAY then any key:\n", 350),
+      { ...step("Loading WMUX block 1", 260), overwrite: true },
+      { ...step("Loading WMUX block 2\n", 260), overwrite: true },
       step("WMUX HOST TERMINAL\n", 80),
     ],
     auth: { ...standardAuth, failed: "Login error\nReady\n" },
@@ -847,8 +859,8 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       step("(C) 1983 TANGERINE\n\n", 90),
       step("Ready\n", 80),
       typed('CLOAD"WMUX"\n', 100),
-      tapeStep("Searching...\n", 350, "header"),
-      tapeStep("Loading WMUX...\n", 300, "data"),
+      step("Searching...\n", 350),
+      step("Loading WMUX...\n", 300),
       step("Ready\n", 80),
       typed("RUN\n", 80),
     ],

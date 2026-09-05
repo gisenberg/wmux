@@ -226,6 +226,14 @@ function GraphicalDesktop({ shell, booting }: { shell: NonNullable<RetroBootProf
   if (shell === "risc-os") return <div className="retro-riscos-desktop"><div className="retro-riscos-iconbar"><span className="retro-riscos-apps"><i />Apps</span><span className="retro-riscos-drive"><i />4</span><span className="retro-riscos-acorn" aria-label="Acorn system"><i /></span></div></div>;
   if (shell === "lisa") return <div className="retro-lisa-desktop"><div className="retro-lisa-menu">Desk　File/Print　Edit　Housekeeping</div><div className="retro-lisa-icons"><span className="retro-lisa-icon retro-lisa-clock"><i />Clock</span><span className="retro-lisa-icon retro-lisa-calculator"><i />Calculator</span><span className="retro-lisa-icon retro-lisa-terminal"><i />LisaTerminal</span><span className="retro-lisa-icon retro-lisa-wastebasket"><i />Wastebasket</span></div></div>;
   if (shell === "irix") return <div className="retro-irix-desktop"><div className="retro-irix-toolchest">Toolchest</div></div>;
-  if (shell === "nextstep") return <div className="retro-next-desktop"><div className="retro-next-menu">Workspace　Info　File　Edit　Disk　View</div><div className="retro-next-dock"><img src={nextLogo} alt="NeXT" /></div></div>;
+  if (shell === "nextstep") return (
+    <div className="retro-next-desktop">
+      <div className="retro-next-menu" aria-hidden="true">
+        <strong>Workspace</strong>
+        {["Info", "File", "Edit", "Disk", "View"].map((label) => <span key={label}>{label}<i>▸</i></span>)}
+      </div>
+      <div className="retro-next-dock"><img src={nextLogo} alt="NeXT" /></div>
+    </div>
+  );
   return <div className="retro-os2-desktop"><div className="retro-os2-icon retro-os2-system"><i />OS/2 System</div><div className="retro-os2-icon retro-os2-connections"><i />Connections</div><div className="retro-os2-launchpad"><img src={os2Logo} alt="IBM OS/2 Warp" /><span className="retro-os2-launch-icons"><i className="retro-os2-window-icon" /><i className="retro-os2-folder-icon" /><i className="retro-os2-help-icon">?</i></span></div></div>;
 }
