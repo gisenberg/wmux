@@ -145,6 +145,8 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
   Windows PowerShell bootstraps seed the isolated ConPTY console color table from the shared terminal palette, and server-side VT checkpoints must use the same foreground, background, and ANSI palette so size-aware replay does not flatten semantic defaults to black/white.
   Checkpoint snapshots emit SGR 39/49 for default-colored cells so a restored screen still follows a later color-scheme change.
   `TerminalCheckpoint.snapshot()` starts with RIS and is only for freshly cleared terminals and persistence; live repaints of an attached browser use `repaint()` through the browser-only `screen` backend event, which must never reset the terminal, re-enter the alternate screen, or reach textual output watchers.
+  Resize repairs must expire within one second; if output has not become quiet, drop the repair instead of scheduling a surprise repaint after the turn finishes.
+  Same-size agent reattachments must not trigger a resize or arm a new repair.
   Windows agent output is decoded through one `StringDecoder` per session because polls and resize boundaries split UTF-8 at arbitrary byte offsets, and the checkpoint holds back a trailing partial escape sequence across reframes for the same reason.
   Reframes keep the cursor row visible when the viewport shrinks, seed only history into scrollback (never the visible viewport), and resize in place while the alternate screen is active so the inactive primary screen survives.
   Keep replay display-only and never let a partial replay query consume live output or send a stale response.
@@ -194,6 +196,7 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Local text prediction lives in `src/client/src/terminal-input-prediction.ts` and arms only after an authoritative echo probe verifies the cursor and cell at the typed position.
   `inputSequence` on pane output is the newest input the server had forwarded on that socket, so it is an upper bound: settle predictions by confirming the longest acknowledged prefix the terminal actually shows, keep the remainder pending under the expiry timers, and disarm only when no prefix explains the cursor.
   Settle synchronously after each Ghostty write rather than on the next render so keystrokes typed between an echo's write and its paint stay predicted.
+  Echo-probe arming follows the same longest-confirmed-prefix rule and carries unconfirmed probe inputs into the ordered prediction queue.
   A hidden cursor holds the overlay instead of disarming, because ConPTY brackets every frame with cursor hide/show and a chunk boundary can land between them.
   Predict only single-cell printable codepoints from the narrow allowlist plus backspace; never predict wide, combining, zero-width, or multi-character input.
 
