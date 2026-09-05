@@ -4646,7 +4646,10 @@ button.active-tool {
   resize: none;
 }
 
-.retro-graphical-lisa .retro-graphical-login,
+.retro-graphical-lisa .retro-graphical-login {
+  font-family: "Retro Lisa Console", monospace;
+}
+
 .retro-graphical-nextstep .retro-graphical-login {
   font-family: Helvetica, Arial, sans-serif;
 }
