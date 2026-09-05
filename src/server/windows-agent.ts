@@ -23,6 +23,7 @@ import {
   type WindowsHelperBundle,
 } from "./windows-helpers.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
+import { ResizeRepaint } from "./resize-repaint.js";
 import { captureOsc7 } from "./osc7.js";
 import {
   sessionAgentOriginAtPort,
@@ -54,8 +55,6 @@ const SESSION_CREATE_TIMEOUT_MS = 30_000;
 const UPDATE_ACTIVATION_TIMEOUT_MS = 30_000;
 const UPDATE_RESTART_TIMEOUT_MS = 60_000;
 const LIVE_RESIZE_SETTLE_MS = 100;
-const RESIZE_REPAINT_QUIET_MS = 120;
-const RESIZE_REPAINT_MAX_WAIT_MS = 1000;
 
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
   return sessionAgentOriginForEndpoint(machine);
@@ -323,9 +322,13 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private pendingResize: { cols: number; rows: number } | undefined;
   private resizeInFlight: Promise<void> | undefined;
   private resizeSettleTimer: ReturnType<typeof setTimeout> | undefined;
-  private resizeRepaintTimer: ReturnType<typeof setTimeout> | undefined;
-  private resizeRepaintDeadline = 0;
-  private resizeRepaintSawOutput = false;
+  private agentSize?: { cols: number; rows: number };
+  private readonly resizeRepaint = new ResizeRepaint(() => {
+    if (this.stopped || this.exited || this.pendingResize || this.resizeInFlight) return;
+    if (!this.checkpoint.isAlternateScreen) return;
+    const snapshot = this.checkpoint.repaint();
+    if (snapshot) this.emit("screen", snapshot);
+  });
   private pendingInput: Array<{ data: string; terminalResponse: boolean }> = [];
   private inputQueue: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -425,6 +428,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   resize(cols: number, rows: number): void {
     if (this.exited || this.stopped || cols < 2 || rows < 1) return;
+    if (cols === this.desiredCols && rows === this.desiredRows
+      && (this.pendingResize || this.resizeInFlight
+        || this.agentSize && sameSize(this.agentSize, cols, rows))) return;
+    this.resizeRepaint.cancel();
     this.desiredCols = cols;
     this.desiredRows = rows;
     if (!sameSize(this.checkpoint.dimensions, cols, rows)) {
@@ -448,7 +455,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     if (this.disposal) return this.disposal;
     this.stopped = true;
     this.cancelResizeSettle();
-    this.cancelResizeRepaint();
+    this.resizeRepaint.cancel();
     this.checkpoint.dispose();
     this.resolveAttachReady();
     this.disposal = this.delete(WINDOWS_AGENT_PATHS.session(this.pane.id))
@@ -469,7 +476,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     if (this.stopped) return;
     this.stopped = true;
     this.cancelResizeSettle();
-    this.cancelResizeRepaint();
+    this.resizeRepaint.cancel();
     this.checkpoint.dispose();
     this.resolveAttachReady();
   }
@@ -604,6 +611,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     fallbackRows: number,
     recreated: boolean,
   ): Promise<void> {
+    this.resizeRepaint.cancel();
+    this.agentSize = response.cols && response.rows ? { cols: response.cols, rows: response.rows } : undefined;
     if (recreated) {
       this.checkpoint.dispose();
       this.checkpoint = new TerminalCheckpoint(fallbackCols, fallbackRows, this.extraEnv);
@@ -650,7 +659,10 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     if (!next) return;
     this.pendingResize = undefined;
     const request = this.post<void>(WINDOWS_AGENT_PATHS.resize(this.pane.id), next)
-      .then(() => this.armResizeRepaint())
+      .then(() => {
+        this.agentSize = next;
+        if (!this.stopped && !this.exited && !this.pendingResize) this.resizeRepaint.arm();
+      })
       .catch((error) => this.reportTransportFailure("resize", error));
     // The agent accepts requests concurrently, so permit only one resize on
     // the wire and retain just the newest geometry while it is in flight.
@@ -674,46 +686,6 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private cancelResizeSettle(): void {
     if (this.resizeSettleTimer) clearTimeout(this.resizeSettleTimer);
     this.resizeSettleTimer = undefined;
-  }
-
-  private armResizeRepaint(): void {
-    this.resizeRepaintDeadline = Date.now() + RESIZE_REPAINT_MAX_WAIT_MS;
-    this.resizeRepaintSawOutput = false;
-    this.scheduleResizeRepaint(RESIZE_REPAINT_MAX_WAIT_MS);
-  }
-
-  private noteResizeRepaintOutput(): void {
-    if (!this.resizeRepaintDeadline) return;
-    this.resizeRepaintSawOutput = true;
-    this.scheduleResizeRepaint(RESIZE_REPAINT_QUIET_MS);
-  }
-
-  private scheduleResizeRepaint(delayMs: number): void {
-    if (this.resizeRepaintTimer) clearTimeout(this.resizeRepaintTimer);
-    this.resizeRepaintTimer = setTimeout(() => {
-      this.resizeRepaintTimer = undefined;
-      if (this.pendingResize || this.resizeInFlight) {
-        this.scheduleResizeRepaint(RESIZE_REPAINT_QUIET_MS);
-        return;
-      }
-      if (!this.resizeRepaintSawOutput && Date.now() < this.resizeRepaintDeadline) {
-        this.scheduleResizeRepaint(this.resizeRepaintDeadline - Date.now());
-        return;
-      }
-      this.resizeRepaintDeadline = 0;
-      this.resizeRepaintSawOutput = false;
-      if (!this.checkpoint.isAlternateScreen) return;
-      const snapshot = this.checkpoint.repaint();
-      if (snapshot) this.emit("screen", snapshot);
-    }, Math.max(0, delayMs));
-    this.resizeRepaintTimer.unref?.();
-  }
-
-  private cancelResizeRepaint(): void {
-    if (this.resizeRepaintTimer) clearTimeout(this.resizeRepaintTimer);
-    this.resizeRepaintTimer = undefined;
-    this.resizeRepaintDeadline = 0;
-    this.resizeRepaintSawOutput = false;
   }
 
   private async flushPendingResize(): Promise<void> {
@@ -1178,7 +1150,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.liveResetEmitted = true;
       this.liveOutputObserved = true;
     }
-    this.noteResizeRepaintOutput();
+    this.resizeRepaint.output();
   }
 
   private appendReplay(data: string): void {

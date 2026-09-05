@@ -1548,6 +1548,10 @@ test("Windows agent coalesces resize bursts and repaints a settled alternate scr
     assert.match(screens[0] ?? "", /READY/);
     const checkpoint = (session as unknown as { checkpoint: TerminalCheckpoint }).checkpoint;
     assert.deepEqual(checkpoint.dimensions, { cols: 110, rows: 35 });
+    session.resize(110, 35);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.equal(resizes.length, 2, "same-size reattachment must not resize the agent");
+    assert.equal(screens.length, 1, "same-size reattachment must not arm another repaint");
   } finally {
     session.detach();
     server.close();

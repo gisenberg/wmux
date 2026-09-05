@@ -259,7 +259,7 @@ const predictedCellMatches = (
     : codepoint === 0 || codepoint === 32;
 };
 
-export const terminalPredictionEchoProbeMatches = (
+export const settleTerminalPredictionEchoProbe = (
   probe: TerminalPredictionEchoProbe,
   acknowledgedSequence: number | undefined,
   cursor: { x: number; y: number; visible?: boolean },
@@ -267,23 +267,30 @@ export const terminalPredictionEchoProbeMatches = (
   rows: number,
   screen: TerminalPredictionScreen,
   readCodepoint: (col: number, row: number) => number | undefined,
-): boolean => {
-  if (acknowledgedSequence === undefined || screen !== probe.screen) return false;
-  const acknowledgedInputs = probe.inputs.filter((input) => input.sequence <= acknowledgedSequence);
-  const layout = layoutPredictedTerminalInput(probe.origin, cols, rows, acknowledgedInputs);
-  if (!layout || cursor.x !== layout.cursor.col || cursor.y !== layout.cursor.row) return false;
+): TerminalPredictionSettlement | null => {
+  if (acknowledgedSequence === undefined || screen !== probe.screen || !cursor.visible) return null;
+  const settlement = settlePredictedTerminalInput(
+    probe.origin, cols, rows, probe.inputs, acknowledgedSequence, cursor, readCodepoint,
+  );
+  if (!settlement?.confirmed) return null;
+  const layout = layoutPredictedTerminalInput(probe.origin, cols, rows, probe.inputs.slice(0, settlement.confirmed));
+  if (!layout) return null;
 
   const originCell = layout.cells.find((cell) => cell.col === probe.origin.x && cell.row === probe.origin.y);
-  if (!originCell?.text) return false;
+  if (!originCell?.text) return null;
   const expectedOriginCodepoint = originCell.text.codePointAt(0);
   if (
     expectedOriginCodepoint === undefined
     || probe.previousCodepoint === expectedOriginCodepoint
     || readCodepoint(originCell.col, originCell.row) !== expectedOriginCodepoint
-  ) return false;
+  ) return null;
 
-  return layout.cells.every((cell) => predictedCellMatches(cell, readCodepoint));
+  return settlement;
 };
+
+export const terminalPredictionEchoProbeMatches = (
+  ...args: Parameters<typeof settleTerminalPredictionEchoProbe>
+): boolean => settleTerminalPredictionEchoProbe(...args) !== null;
 
 export interface TerminalPredictionSettlement {
   // Leading predictions the terminal now reflects; the rest stay pending.
@@ -302,9 +309,12 @@ export const settlePredictedTerminalInput = (
   rows: number,
   predictions: readonly PredictedTerminalInput[],
   acknowledgedSequence: number,
-  cursor: { x: number; y: number },
+  cursor: TerminalPredictionCursor,
   readCodepoint: (col: number, row: number) => number | undefined,
 ): TerminalPredictionSettlement | null => {
+  // ConPTY can split a cursor-hidden redraw across polls. Its intermediate
+  // cursor is not an authoritative divergence; retain the bounded overlay.
+  if (cursor.visible === false) return { confirmed: 0, anchor };
   let acknowledgedCount = 0;
   while (
     acknowledgedCount < predictions.length

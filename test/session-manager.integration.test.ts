@@ -1437,6 +1437,7 @@ test(
         manager.watchOutput(pane.id, second, 80, 24);
         const ready = await waitForMessage(second, (message) => message.type === "ready");
         assert.equal(ready.outputOnly, true);
+        assert.equal(ready.replayKind, "raw");
         assert.match(ready.replay, /durable-output-marker/);
         fake(second).close();
       } finally {

@@ -36,7 +36,7 @@ import {
   terminalPredictionCursorMatches,
   terminalPredictionCellPaint,
   terminalPredictionStyleAtCursor,
-  terminalPredictionEchoProbeMatches,
+  settleTerminalPredictionEchoProbe,
   type PredictedTerminalInput,
   type TerminalPredictionEchoProbe,
   type TerminalPredictionScreen,
@@ -468,7 +468,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       const cursor = term.wasmTerm?.getCursor();
       if (!probe || !cursor || predictionProbeAcknowledgedSequence === undefined) return;
       const screen = predictionScreen(term);
-      if (!terminalPredictionEchoProbeMatches(
+      const settlement = settleTerminalPredictionEchoProbe(
         probe,
         predictionProbeAcknowledgedSequence,
         cursor,
@@ -476,17 +476,23 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         safeRows(term.rows),
         screen,
         (col, row) => terminalCodepoint(term, col, row),
-      )) {
+      );
+      if (!settlement) {
         schedulePredictionProbeVerification(term);
         return;
       }
+      // The ack may cover more input than this chunk echoes. Carry every
+      // unconfirmed probe keystroke into the optimistic overlay in order.
+      predictedInputs = probe.inputs.slice(settlement.confirmed);
+      predictionAcknowledgedSequence = predictionProbeAcknowledgedSequence;
       predictionArmedScreen = screen;
-      predictionArmedCursor = { x: cursor.x, y: cursor.y };
+      predictionArmedCursor = settlement.anchor;
       if (predictionCanvasRef.current) {
         predictionCanvasRef.current.dataset.armedScreen = screen;
         predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(predictionArmedCursor);
       }
       clearPredictionProbe();
+      if (predictedInputs.length > 0) schedulePredictionExpiry();
     }
 
     const schedulePredictionExpiry = () => {
@@ -508,7 +514,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         || !metrics
         || !cursor
         || !anchor
-        || !terminalPredictionCursorMatches(cursor, anchor, false)
+        || cursor.visible && !terminalPredictionCursorMatches(cursor, anchor, false)
         || predictionMetricsStale
         || currentDevicePixelRatio !== rendererDevicePixelRatio
         || predictionArmedScreen !== predictionScreen(term)
@@ -522,7 +528,6 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       // can land between them. Hold the overlay until the cursor is visible
       // again; the expiry timers still bound how long predictions may wait.
       if (!cursor.visible) {
-        clearPredictionLayer();
         return;
       }
       const layout = layoutPredictedTerminalInput(
@@ -586,6 +591,10 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         return;
       }
       if (predictedInputs.length === 0) return;
+      if (predictionArmedScreen !== predictionScreen(term)) {
+        disarmPrediction();
+        return;
+      }
       if (predictionAcknowledgedSequence !== undefined) {
         const anchor = predictionArmedCursor;
         const cursor = term.wasmTerm?.getCursor();
@@ -1495,7 +1504,8 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           const prediction = predictedTerminalInput(sequence, data);
           const screen = predictionScreen(term);
           const cursor = term.wasmTerm?.getCursor();
-          const predictionAnchorMatches = terminalPredictionCursorMatches(cursor, predictionArmedCursor, false);
+          const predictionAnchorMatches = cursor?.visible === false && predictedInputs.length > 0
+            || terminalPredictionCursorMatches(cursor, predictionArmedCursor, false);
           const canPredict = connectedRef.current
             && activeRef.current
             && !replayingTerminalOutput

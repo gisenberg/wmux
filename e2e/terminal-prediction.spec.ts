@@ -115,6 +115,60 @@ const openDelayedTerminal = async (
 const predictionCells = async (prediction: Locator): Promise<PredictionCell[]> =>
   JSON.parse((await prediction.getAttribute("data-prediction-cells")) ?? "[]") as PredictionCell[];
 
+test("partial burst echoes and cursor-hidden redraws preserve optimistic typing", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "deterministic desktop protocol coverage");
+  const inputs: Array<{ data: string; sequence: number }> = [];
+  let emit!: (data: string, sequence: number) => void;
+  await page.routeWebSocket(/\/ws\/panes\//, (socket) => {
+    const url = new URL(socket.url());
+    const paneId = url.pathname.split("/").pop()!;
+    let ready = false;
+    emit = (data, inputSequence) => socket.send(JSON.stringify({ type: "output", paneId, data, inputSequence }));
+    socket.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (!ready) {
+        ready = true;
+        socket.send(JSON.stringify({
+          type: "ready", paneId, pid: 1, title: "Prediction fixture", status: "idle",
+          cols: Number(url.searchParams.get("cols")), rows: Number(url.searchParams.get("rows")),
+          resizeOwner: true, replay: "\x1bc\x1b[?25hPS> ", replayKind: "raw",
+        }));
+      }
+      if (message.type === "input" && !message.terminalResponse) inputs.push(message);
+    });
+  });
+  const workspace = await createWorkspace(request);
+  try {
+    await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+    await awaitAppShell(page);
+    const pane = page.locator(".terminal-pane.active");
+    await expect(pane).toHaveClass(/terminal-ready/);
+    const prediction = pane.locator(".terminal-input-prediction-canvas");
+    await pane.locator(".terminal-host textarea").focus();
+    await page.keyboard.type("ab");
+    await expect.poll(() => inputs.length).toBe(2);
+    emit("a", inputs[1]!.sequence);
+    await expect(prediction).toHaveAttribute("data-armed-cursor", JSON.stringify({ x: 5, y: 0 }));
+    await expect.poll(() => predictionCells(prediction)).toEqual([{ col: 5, row: 0 }]);
+
+    // ConPTY temporarily moves its hidden cursor elsewhere while painting.
+    emit("\x1b[?25l\x1b[3;1H", inputs[1]!.sequence);
+    await expect(prediction).toHaveAttribute("data-active", "true");
+    await page.keyboard.type("c");
+    await expect.poll(() => inputs.length).toBe(3);
+    emit("\x1b[1;6Hb\x1b[?25h", inputs[2]!.sequence);
+    await expect(prediction).toHaveAttribute("data-armed-cursor", JSON.stringify({ x: 6, y: 0 }));
+    await expect.poll(() => predictionCells(prediction)).toEqual([{ col: 6, row: 0 }]);
+    emit("c", inputs[2]!.sequence);
+    await expect(prediction).not.toHaveAttribute("data-active", "true");
+    await expect(prediction).toHaveAttribute("data-armed-cursor", JSON.stringify({ x: 7, y: 0 }));
+    expect(inputs.map((input) => input.data)).toEqual(["a", "b", "c"]);
+    await page.screenshot({ path: testInfo.outputPath("settled-prediction.png") });
+  } finally {
+    await request.delete(`/api/workspaces/${workspace.id}`);
+  }
+});
+
 const canvasInkBounds = async (
   canvas: Locator,
   cell: PredictionCell,

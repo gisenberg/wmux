@@ -9,6 +9,7 @@ import {
   layoutPredictedTerminalInput,
   predictedTerminalInput,
   settlePredictedTerminalInput,
+  settleTerminalPredictionEchoProbe,
   terminalPredictionCellPaint,
   terminalPredictionCursorMatches,
   terminalPredictionEchoProbeMatches,
@@ -209,6 +210,40 @@ test("terminal prediction echo verification handles an acknowledged input burst"
     "alternate",
     (col, row) => cells.get(`${col}:${row}`),
   ), false);
+});
+
+test("a partial burst echo arms prediction and retains the ordered unconfirmed suffix", () => {
+  const first = createTerminalPredictionEchoProbe(
+    predictedTerminalInput(1, "a")!, { x: 2, y: 1, visible: true }, 10, 5, "normal", 0,
+  )!;
+  const probe = extendTerminalPredictionEchoProbe(first, predictedTerminalInput(2, "b")!, 10, 5)!;
+  const cells = new Map([["2:1", 97]]);
+  const read = (col: number, row: number) => cells.get(`${col}:${row}`);
+  const settlement = settleTerminalPredictionEchoProbe(
+    probe, 2, { x: 3, y: 1, visible: true }, 10, 5, "normal", read,
+  );
+  assert.deepEqual(settlement, { confirmed: 1, anchor: { x: 3, y: 1 } });
+  const pending = probe.inputs.slice(settlement!.confirmed);
+  assert.deepEqual(pending, [predictedTerminalInput(2, "b")]);
+  pending.push(predictedTerminalInput(3, "c")!);
+  assert.deepEqual(layoutPredictedTerminalInput({ ...settlement!.anchor, visible: true }, 10, 5, pending)?.cells,
+    [{ col: 3, row: 1, text: "b" }, { col: 4, row: 1, text: "c" }]);
+  cells.set("3:1", 98);
+  assert.deepEqual(settlePredictedTerminalInput(settlement!.anchor, 10, 5, pending, 3, { x: 4, y: 1 }, read),
+    { confirmed: 1, anchor: { x: 4, y: 1 } });
+  assert.equal(settleTerminalPredictionEchoProbe(probe, 2, { x: 3, y: 1, visible: false }, 10, 5, "normal", read), null);
+  assert.equal(settleTerminalPredictionEchoProbe(probe, 0, { x: 3, y: 1, visible: true }, 10, 5, "normal", read), null);
+});
+
+test("cursor-hidden ConPTY frames retain predictions until the authoritative cursor returns", () => {
+  const anchor = { x: 2, y: 1 };
+  const inputs = [predictedTerminalInput(1, "a")!];
+  assert.deepEqual(settlePredictedTerminalInput(anchor, 10, 5, inputs, 1,
+    { x: 0, y: 0, visible: false }, () => 0), { confirmed: 0, anchor });
+  assert.equal(settlePredictedTerminalInput(anchor, 10, 5, inputs, 1,
+    { x: 0, y: 0, visible: true }, () => 0), null);
+  assert.deepEqual(settlePredictedTerminalInput(anchor, 10, 5, inputs, 1,
+    { x: 3, y: 1, visible: true }, () => 97), { confirmed: 1, anchor: { x: 3, y: 1 } });
 });
 
 test("terminal prediction echo verification rejects hidden and unchanged input", () => {

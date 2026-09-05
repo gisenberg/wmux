@@ -25,13 +25,13 @@ test("external verification guards checkout ownership, cleanliness, leases and e
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nif [ "$1" = fetch ]; then exec '${realGit}' fetch "$WMUX_FIXTURE_SOURCE" "$3"; fi\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
     fs.mkdirSync(path.join(checkout, "node_modules"));
-    fs.writeFileSync(path.join(bin, "npm"), '#!/bin/sh\nprintf "fixture npm %s %s\\n" "$1" "$2"\nexit "${FIXTURE_EXIT:-0}"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "npm"), '#!/bin/sh\n[ -z "${TMUX+x}${TMUX_PANE+x}${STY+x}" ] || exit 91\nprintf "fixture npm %s %s\\n" "$1" "$2"\nexit "${FIXTURE_EXIT:-0}"\n', { mode: 0o755 });
     const execute = (extraEnv: Record<string, string> = {}, options: Record<string, string> = {}) => spawnSync(process.execPath, ["-e", `(${runnerModule.remoteMain.toString()})(${JSON.stringify({ checkout, commit, id: "fixture", script: "check", ...options })})`], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, WMUX_FIXTURE_SOURCE: checkout, ...extraEnv },
     });
     const lock = path.join(checkout, ".git/wmux-verification.lock");
-    const passed = execute();
+    const passed = execute({ TMUX: "/tmp/fixture-tmux,1,0", TMUX_PANE: "%1", STY: "fixture-screen" });
     assert.equal(passed.status, 0, passed.stderr);
     assert.match(passed.stdout, new RegExp(`WMUX:VERIFY:fixture:${commit}:0:\\d+`));
     assert.match(passed.stdout, /fixture npm run check/);
