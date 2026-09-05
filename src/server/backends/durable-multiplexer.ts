@@ -43,7 +43,7 @@ export class DurableMultiplexerBackend extends RawPtyBackend {
     ) {
       return { data: "", kind: "raw" };
     }
-    return super.readReplay(session);
+    return super.readReplay(session, outputOnly);
   }
 
   override async stageFile(
