@@ -25,7 +25,7 @@ const codexHookCommand = `${eventScript} --agent codex --codex-hook`;
 const usage = () => {
   console.error(`Usage:
   wmux-hooks install claude
-  wmux-hooks install codex
+  wmux-hooks install codex [--agent-titles]
   wmux-hooks install opencode
   wmux-hooks install prime-agent
   wmux-hooks status
@@ -147,20 +147,42 @@ const installClaude = () => {
 const installCodex = () => {
   const settingsPath = path.join(os.homedir(), ".codex", "hooks.json");
   const settings = readJson(settingsPath);
+  const managedCommand = /^\S*\/wmux-agent-event --agent codex --codex-hook(?: --no-title)?$/;
+  const events = ["UserPromptSubmit", "PreToolUse", "Stop"];
+  const agentTitles = process.argv.includes("--agent-titles") || events.some((eventName) =>
+    (settings.hooks?.[eventName] ?? []).some((group) => (group.hooks ?? []).some((hook) =>
+      hook.type === "command" && typeof hook.command === "string"
+      && managedCommand.test(hook.command) && hook.command.endsWith(" --no-title"))));
+  // Upgrade only wmux's generated commands, including an earlier install path.
+  // Preserve unrelated hooks and preserve an existing agent-title opt-in when
+  // a routine reinstall omits the flag.
+  let migrated = false;
+  for (const eventName of events) {
+    for (const group of settings.hooks?.[eventName] ?? []) {
+      for (const hook of group.hooks ?? []) {
+        if (hook.type !== "command" || typeof hook.command !== "string"
+          || !managedCommand.test(hook.command)) continue;
+        const command = codexHookCommand + (agentTitles ? " --no-title" : "");
+        if (hook.command !== command) { hook.command = command; migrated = true; }
+      }
+    }
+  }
+  const command = codexHookCommand + (agentTitles ? " --no-title" : "");
   const changed = [
-    addHook(settings, "UserPromptSubmit", codexHookCommand, {
+    migrated,
+    addHook(settings, "UserPromptSubmit", command, {
       statusMessage: "Updating wmux workspace",
     }),
-    addHook(settings, "PreToolUse", codexHookCommand, {
+    addHook(settings, "PreToolUse", command, {
       statusMessage: "Updating wmux workspace",
     }),
-    addHook(settings, "Stop", codexHookCommand, {
+    addHook(settings, "Stop", command, {
       statusMessage: "Summarizing wmux workspace",
     }),
   ].some(Boolean);
   if (changed) writeJson(settingsPath, settings);
   console.log(`${changed ? "Installed" : "Already installed"} Codex hooks in ${settingsPath}`);
-  console.log(`Hook command: ${codexHookCommand}`);
+  console.log(`Hook command: ${command}`);
   console.log("Run /hooks inside Codex to review and trust this hook before expecting it to run.");
 };
 
@@ -277,7 +299,8 @@ const status = () => {
   const codexPath = path.join(os.homedir(), ".codex", "hooks.json");
   const codexSettings = readJson(codexPath);
   const codexInstalled = ["UserPromptSubmit", "PreToolUse", "Stop"].every((eventName) =>
-    hasCommand(codexSettings.hooks?.[eventName] ?? [], codexHookCommand),
+    hasCommand(codexSettings.hooks?.[eventName] ?? [], codexHookCommand)
+    || hasCommand(codexSettings.hooks?.[eventName] ?? [], codexHookCommand + " --no-title"),
   );
   const openCodePath = opencodePluginPath();
   const expectedOpenCodePlugin = opencodePlugin();

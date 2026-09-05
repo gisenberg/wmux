@@ -48,6 +48,7 @@ See [retro boot fidelity](docs/RETRO_BOOT_FIDELITY.md) for historical references
 | HTTP transport | Declarative route table with stable route ids, exact method/path matching, body limits, authorization policy, request dispatch, static delivery, event publication, and WebSocket upgrades |
 | Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
 | Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; the versioned timeline store retains prompts, outcomes, touched files, and archived working-tree snapshots; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
+| Optional Codex wmux plugin | An MCP server exposes the current pane's exact wmux context and title actions to ordinary Codex sessions; it uses the existing helper credential boundary and wmux automatic-title API |
 | Session manager | One live client per pane, persisted registered-host disposal snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Raw PTY, durable `tmux`/`screen`, and native session-agent adapters; POSIX and Windows agents own pane processes, replay, dynamic-registration heartbeat, and view-only capture supervision |
@@ -575,6 +576,15 @@ The Claude installer merges lifecycle commands into `~/.claude/settings.json`
 and installs a small generated delegation skill at
 `~/.claude/skills/wmux/SKILL.md`. An existing skill not marked as wmux-managed is
 preserved instead of overwritten.
+The optional [`wmux` Codex plugin](docs/CODEX_PLUGIN.md) adds MCP tools to
+ordinary Codex sessions for inspecting and naming their bound wmux workspace and
+tab. It never wraps or replaces the `codex` command, and it uses the existing
+helper credential boundary and server-enforced title ownership.
+Its prompt hook asks Codex to choose a task-level sidebar title and preserve it
+through follow-ups. With this plugin, opt existing Codex lifecycle hooks into
+`wmux-hooks install codex --agent-titles` so prompt/stop telemetry does not
+overwrite that title. Review and trust the plugin hook with `/hooks`.
+
 The Codex installer merges commands into `~/.codex/hooks.json`; start a new
 Codex session, run `/hooks`, and review and trust the wmux command before
 expecting events. Codex sandbox or approval settings do not replace this hook

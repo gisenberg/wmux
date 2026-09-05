@@ -1,0 +1,20 @@
+{
+  "name": "wmux",
+  "version": "0.2.0+codex.20260905224159",
+  "license": "MIT",
+  "description": "Let ordinary Codex agents inspect and name their bound wmux session.",
+  "author": {
+    "name": "wmux contributors"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Wmux",
+    "shortDescription": "Name the current wmux session.",
+    "longDescription": "MCP tools for a normal Codex agent to inspect and name its own wmux workspace and tab. It does not replace, wrap, or modify Codex.",
+    "developerName": "wmux contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me use Wmux."
+  }
+}
