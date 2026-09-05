@@ -5,8 +5,10 @@ import {
   createTerminalPredictionEchoProbe,
   effectiveTerminalPredictionCellStyle,
   extendTerminalPredictionEchoProbe,
+  isPredictableTerminalCodepoint,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  settlePredictedTerminalInput,
   terminalPredictionCellPaint,
   terminalPredictionCursorMatches,
   terminalPredictionEchoProbeMatches,
@@ -31,12 +33,107 @@ const terminalCell = (overrides: Partial<GhosttyCell> = {}): GhosttyCell => ({
   ...overrides,
 });
 
-test("terminal prediction accepts bounded printable input and backspace only", () => {
+test("terminal prediction accepts single narrow printable input and backspace only", () => {
   assert.deepEqual(predictedTerminalInput(1, "a"), { sequence: 1, kind: "insert", text: "a" });
   assert.deepEqual(predictedTerminalInput(2, "\x7f"), { sequence: 2, kind: "backspace", text: "" });
+  assert.deepEqual(predictedTerminalInput(5, "λ"), { sequence: 5, kind: "insert", text: "λ" });
+  assert.deepEqual(predictedTerminalInput(6, "é"), { sequence: 6, kind: "insert", text: "é" });
+  assert.deepEqual(predictedTerminalInput(7, "ж"), { sequence: 7, kind: "insert", text: "ж" });
   assert.equal(predictedTerminalInput(3, "\r"), null);
   assert.equal(predictedTerminalInput(4, "ab"), null);
-  assert.equal(predictedTerminalInput(5, "λ"), null);
+  assert.equal(predictedTerminalInput(8, "\x1b"), null);
+  assert.equal(predictedTerminalInput(9, "\x7f\x7f"), null);
+  assert.equal(predictedTerminalInput(10, "漢"), null);
+  assert.equal(predictedTerminalInput(11, "😀"), null);
+  assert.equal(predictedTerminalInput(12, "\u0301"), null);
+  assert.equal(predictedTerminalInput(13, "\u00ad"), null);
+  assert.equal(predictedTerminalInput(14, "\u200b"), null);
+  assert.equal(predictedTerminalInput(15, "e\u0301"), null);
+});
+
+test("terminal prediction codepoint allowlist excludes wide, combining, and zero-width input", () => {
+  assert.equal(isPredictableTerminalCodepoint(0x20), true);
+  assert.equal(isPredictableTerminalCodepoint(0x7e), true);
+  assert.equal(isPredictableTerminalCodepoint(0x7f), false);
+  assert.equal(isPredictableTerminalCodepoint(0xa0), false);
+  assert.equal(isPredictableTerminalCodepoint(0xdf), true);
+  assert.equal(isPredictableTerminalCodepoint(0x300), false);
+  assert.equal(isPredictableTerminalCodepoint(0x483), false);
+  assert.equal(isPredictableTerminalCodepoint(0x1100), false);
+  assert.equal(isPredictableTerminalCodepoint(0xfe0f), false);
+  assert.equal(isPredictableTerminalCodepoint(0x1f600), false);
+});
+
+test("terminal prediction settlement confirms the longest echoed prefix of an acknowledgement", () => {
+  const predictions = [
+    predictedTerminalInput(1, "a")!,
+    predictedTerminalInput(2, "b")!,
+    predictedTerminalInput(3, "c")!,
+  ];
+  const anchor = { x: 4, y: 2 };
+  const settle = (
+    cells: Record<string, number>,
+    cursor: { x: number; y: number },
+    acknowledged: number,
+  ) => settlePredictedTerminalInput(
+    anchor,
+    10,
+    5,
+    predictions,
+    acknowledged,
+    cursor,
+    (col, row) => cells[`${col}:${row}`] ?? 0,
+  );
+
+  // Output tagged with a later keystroke may still carry only the first echo.
+  assert.deepEqual(
+    settle({ "4:2": "a".codePointAt(0)! }, { x: 5, y: 2 }, 3),
+    { confirmed: 1, anchor: { x: 5, y: 2 } },
+  );
+  // Unrelated output tagged with the newest input has not echoed anything yet.
+  assert.deepEqual(settle({}, anchor, 2), { confirmed: 0, anchor });
+  // Every acknowledged echo present.
+  assert.deepEqual(
+    settle({ "4:2": "a".codePointAt(0)!, "5:2": "b".codePointAt(0)! }, { x: 6, y: 2 }, 2),
+    { confirmed: 2, anchor: { x: 6, y: 2 } },
+  );
+  // Predictions past the acknowledgement never confirm, even if cells match.
+  assert.equal(
+    settle({ "4:2": "a".codePointAt(0)!, "5:2": "b".codePointAt(0)! }, { x: 6, y: 2 }, 1),
+    null,
+  );
+  // A cursor no prefix explains is a divergence.
+  assert.equal(settle({ "4:2": "a".codePointAt(0)! }, { x: 7, y: 2 }, 3), null);
+  assert.equal(settle({ "4:2": "z".codePointAt(0)! }, { x: 5, y: 2 }, 3), null);
+});
+
+test("terminal prediction settlement confirms erased cells for acknowledged backspaces", () => {
+  const predictions = [
+    predictedTerminalInput(1, "a")!,
+    predictedTerminalInput(2, "\x7f")!,
+    predictedTerminalInput(3, "b")!,
+  ];
+  const anchor = { x: 3, y: 0 };
+  const settled = settlePredictedTerminalInput(
+    anchor,
+    10,
+    2,
+    predictions,
+    2,
+    { x: 3, y: 0 },
+    (col, row) => (col === 3 && row === 0 ? 32 : 0),
+  );
+  assert.deepEqual(settled, { confirmed: 2, anchor: { x: 3, y: 0 } });
+  const stillEchoed = settlePredictedTerminalInput(
+    anchor,
+    10,
+    2,
+    predictions,
+    2,
+    { x: 3, y: 0 },
+    (col, row) => (col === 3 && row === 0 ? "a".codePointAt(0)! : 0),
+  );
+  assert.deepEqual(stillEchoed, { confirmed: 0, anchor });
 });
 
 test("terminal prediction remains armed only at its verified visible cursor", () => {

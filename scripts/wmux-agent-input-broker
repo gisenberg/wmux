@@ -1103,8 +1103,11 @@ function acceptMessage(message) {
     pendingAttestation.resolve(message);
     return;
   }
-  if (!runtimeReady || !credential?.supported) return;
+  // The plugin may give up before this broker finishes its readiness
+  // handshake; honoring the shutdown only when ready leaves both processes
+  // waiting on each other forever.
   if (message.type === "unsupported") return disable("plugin-unsupported");
+  if (!runtimeReady || !credential?.supported) return;
   if (message.type === "asked") return acceptAsked(message);
   if (message.type === "resolved") return acceptResolved(message);
   if (message.type === "snapshot") return acceptSnapshot(message);

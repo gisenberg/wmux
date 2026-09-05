@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "node:test";
 
-test("Windows agent stdio backend maps bare LF to CRLF", (t) => {
+test("Windows agent stdio backend maps bare LF to CRLF and collapses CRLF input", (t) => {
   const python = findPython();
   if (!python) {
     t.skip("python not available");
@@ -32,6 +32,17 @@ for data, previous, expected, expected_state in cases:
     actual, state = module.terminalize_stdio_output(data, previous)
     if actual != expected or state != expected_state:
         raise AssertionError((data, previous, actual, state, expected, expected_state))
+
+input_cases = [
+    (b"dir\r", b"dir\n"),
+    (b"one\r\ntwo\r\n", b"one\ntwo\n"),
+    (b"mixed\rlf\n", b"mixed\nlf\n"),
+    (b"plain", b"plain"),
+]
+for data, expected in input_cases:
+    actual = module.stdio_input_bytes(data)
+    if actual != expected:
+        raise AssertionError((data, actual, expected))
 print("ok")
 `;
   const result = spawnSync(python.command, [...python.args, "-c", script], {

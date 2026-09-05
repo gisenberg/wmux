@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
 import {
   buildWindowsHelperBundle,
@@ -57,6 +59,17 @@ test("Windows bootstrap wraps profile prompts only when profile loading is enabl
   assert.match(profileBootstrap, /__wmuxOriginalPrompt/);
   assert.match(profileBootstrap, /Set-PSReadLineOption -PredictionSource None/);
   assert.match(profileBootstrap, /\$ErrorActionPreference = \$WmuxOriginalErrorActionPreference/);
+});
+
+test("Windows bootstraps switch the console to UTF-8 and silence staging progress", () => {
+  const bootstrap = buildWindowsPowerShellBootstrap(machine, undefined, {});
+  assert.match(bootstrap, /\[Console\]::OutputEncoding = \$WmuxUtf8/);
+  assert.match(bootstrap, /\[Console\]::InputEncoding = \$WmuxUtf8/);
+  assert.match(bootstrap, /\$global:OutputEncoding = \$WmuxUtf8/);
+  assert.match(bootstrap, /\$ProgressPreference = 'SilentlyContinue'/);
+  assert.match(bootstrap, /\$ProgressPreference = \$WmuxOriginalProgressPreference/);
+  const agentSource = fs.readFileSync(path.resolve("scripts/wmux-windows-agent"), "utf8");
+  assert.match(agentSource, /\[Console\]::OutputEncoding = \$WmuxUtf8/);
 });
 
 test("Windows prompts clear stale terminal tails without repositioning ConPTY", () => {
@@ -238,7 +251,7 @@ test("health probe reports the staged and expected bundle versions", () => {
 
 test("agent bundle uses the platform release and exposes protocol compatibility separately", () => {
   assert.match(expectedWindowsAgentReleaseVersion(), /^v\d+\.\d+\.\d+-win$/);
-  assert.equal(expectedWindowsAgentProtocolVersion(), 6);
+  assert.equal(expectedWindowsAgentProtocolVersion(), 7);
   const agent = buildWindowsHelperBundle(machine).files.find((file) => file.name === "wmux-windows-agent.py");
   assert.ok(agent);
   const content = Buffer.from(agent.dataBase64, "base64").toString("utf8");

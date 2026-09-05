@@ -1,4 +1,4 @@
-export const WINDOWS_AGENT_PROTOCOL_VERSION = 6;
+export const WINDOWS_AGENT_PROTOCOL_VERSION = 7;
 
 export const WINDOWS_AGENT_CAPABILITIES = [
   "paste-images-v1",

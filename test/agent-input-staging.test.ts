@@ -365,7 +365,7 @@ test("local and SSH agent backends carry pane capability only as an authenticate
     const agent = http.createServer(async (request, response) => {
       response.setHeader("content-type", "application/json");
       if (request.method === "GET" && request.url === "/health") {
-        response.end(JSON.stringify({ ok: true, protocolVersion: 6, capabilities: ["posix-runtime-files-v1"] }));
+        response.end(JSON.stringify({ ok: true, protocolVersion: 7, capabilities: ["posix-runtime-files-v1"] }));
         return;
       }
       if (request.method === "POST" && /^\/sessions\/[^/]+$/.test(request.url ?? "")) {
@@ -430,8 +430,8 @@ test("feature-disabled, legacy POSIX, and Windows agent sessions start without a
       response.setHeader("content-type", "application/json");
       if (request.method === "GET" && request.url === "/health") {
         response.end(JSON.stringify(machineKind !== "powershell-ssh"
-          ? { ok: true, protocolVersion: 6, capabilities: [] }
-          : { ok: true, protocolVersion: 6, releaseVersion: "", capabilities: [] }));
+          ? { ok: true, protocolVersion: 7, capabilities: [] }
+          : { ok: true, protocolVersion: 7, releaseVersion: "", capabilities: [] }));
         return;
       }
       if (request.method === "GET" && request.url === "/sessions") {

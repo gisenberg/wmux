@@ -19,7 +19,7 @@ const pwshAvailable = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-Command", "$
 }).status === 0;
 
 test("Windows agent protocol exports stable paths and bounded polling semantics", () => {
-  assert.equal(WINDOWS_AGENT_PROTOCOL_VERSION, 6);
+  assert.equal(WINDOWS_AGENT_PROTOCOL_VERSION, 7);
   assert.equal(WINDOWS_AGENT_PATHS.session("pane one"), "/sessions/pane%20one");
   assert.equal(
     WINDOWS_AGENT_PATHS.output("pane one", 42, WINDOWS_AGENT_LONG_POLL.defaultTimeoutMs),
@@ -827,7 +827,7 @@ with tempfile.TemporaryDirectory() as root:
     unauthorized: 401,
     accepted: 201,
     capabilities: ["paste-images-v1", "registration-heartbeat-v1", "stream-supervision-v1", "posix-runtime-files-v1"],
-    protocol: 6,
+    protocol: 7,
     deleted: true,
     remains: false,
   });
