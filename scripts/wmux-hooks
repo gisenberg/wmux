@@ -2024,6 +2024,7 @@ type ClientActivation =
 type SharedClientBinding = {
   highWaterGeneration: number
   identity: WmuxIdentity
+  retired?: boolean
 }
 type ClientBindingRegistry = {
   entries: Map<string, SharedClientBinding>
@@ -2478,7 +2479,7 @@ const activityRetired = (binding: ClientBinding) => {
   if (binding.generation === 0) return false
   const current = bindingRegistry(binding)
   if (!current) return possiblyRetiredFamily(binding.familyId)
-  return current.highWaterGeneration !== binding.generation || !sameIdentity(current.identity, binding.identity)
+  return current.retired === true || current.highWaterGeneration !== binding.generation || !sameIdentity(current.identity, binding.identity)
 }
 const activityFor = (binding: ClientBinding): SharedPaneActivity => {
   const key = activityKey(binding)
@@ -3062,6 +3063,12 @@ export default function (pi: any) {
   const unbindClientBinding = () => {
     const previous = activeClientBinding
     clearIdleReconcile()
+    if (previous && previous.generation > 0) {
+      const shared = bindingRegistry(previous)
+      if (shared?.highWaterGeneration === previous.generation && sameIdentity(shared.identity, previous.identity)) {
+        shared.retired = true
+      }
+    }
     activeClientBinding = undefined
     pendingClientBinding = undefined
     retireActiveClientBinding(previous)
@@ -3094,6 +3101,7 @@ export default function (pi: any) {
     const shared = sharedClientBindings.get(proposed.familyId)
     if (!shared) return possiblyRetiredFamily(proposed.familyId) ? "stale" : "accepted"
     if (proposed.generation < shared.highWaterGeneration) return "stale"
+    if (proposed.generation === shared.highWaterGeneration && shared.retired) return "stale"
     if (proposed.generation === shared.highWaterGeneration && !sameIdentity(shared.identity, proposed.identity)) return "conflict"
     return "accepted"
   }
@@ -3137,6 +3145,7 @@ export default function (pi: any) {
     if (!binding || binding.generation === 0) return Boolean(binding)
     const shared = bindingRegistry(binding)
     return Boolean(shared
+      && !shared.retired
       && shared.highWaterGeneration === binding.generation
       && sameIdentity(shared.identity, binding.identity))
   }

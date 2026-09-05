@@ -1442,6 +1442,16 @@ test("Prime Agent extension rebinds immutable client context generations without
     assert.ok(captured.slice(absentCount).some((event) =>
       event.paneId === "pane_bbbbbbbb" && event.heartbeatActive === false,
     ));
+    const retiredCount = captured.length;
+    await childHandlers.get("agent_start")?.({}, context(1, "client-child", 1, client(2, "b")));
+    await rootHandlers.get("before_agent_start")?.({ prompt: "retired owner" }, context(0, "client-root", 0, client(2, "b")));
+    assert.equal(captured.length, retiredCount);
+    const resumedContext = context(0, "client-root", 0, client(3, "c"));
+    await rootHandlers.get("session_client_context_changed")?.({}, resumedContext);
+    await rootHandlers.get("before_agent_start")?.({ prompt: "new owner after detach" }, resumedContext);
+    assert.equal(captured.at(-1)?.paneId, "pane_cccccccc");
+    assert.equal(captured.at(-1)?.status, "running");
+    await rootHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "resumed" }] }, resumedContext);
 
     // High-water retention is a bounded LRU. Evictions enter a fixed-size
     // fail-closed tombstone instead of making generation one reclaimable.
