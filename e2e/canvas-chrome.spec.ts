@@ -42,7 +42,7 @@ const openDelayedRetroBoot = async ({
   if (controlledClock) {
     const start = new Date("2025-01-01T00:00:00Z");
     await page.clock.install({ time: start });
-    await page.clock.pauseAt(start);
+    await page.clock.pauseAt(new Date(start.getTime() + 60_000));
   }
   let releaseBootstrap: () => void = () => undefined;
   const bootstrapGate = new Promise<void>((resolve) => {
