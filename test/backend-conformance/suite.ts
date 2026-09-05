@@ -75,9 +75,9 @@ const spawn = async (
   const baseline = output.snapshot().length;
   backend.write(
     session,
-    backend.id === "windows-agent"
-      ? "Write-Output 'WMUX_BACKEND_READY'\r"
-      : "stty -echo; printf 'WMUX_BACKEND_READY\\n'\r",
+    backend.machine.kind === "powershell" || backend.machine.kind === "powershell-ssh"
+      ? "Write-Output ('WMUX_BACKEND_' + 'READY')\r"
+      : "stty -echo; printf '%s%s\\n' 'WMUX_BACKEND_' 'READY'\r",
   );
   await output.waitFor("WMUX_BACKEND_READY", baseline);
   return { session, output };
@@ -98,7 +98,10 @@ export const exerciseBackendConformance = async (
   try {
     const started = await spawn(backend, paneId);
     session = started.session;
-    const output = started.output;
+    let output = started.output;
+    if (backend.machine.sessionBackend === "tmux" || backend.machine.sessionBackend === "agent") {
+      assert.equal(backend.capabilities.restartDurable, true, "the actual backend must confirm durability");
+    }
 
     let baseline = output.snapshot().length;
     backend.write(
@@ -112,7 +115,8 @@ export const exerciseBackendConformance = async (
     baseline = output.snapshot().length;
     backend.write(
       session,
-      windows ? "Write-Output 'WMUX_RESIZED_101_31'\r" : "stty size\r",
+      windows ? "Write-Output 'WMUX_RESIZED_101_31'\r"
+        : "wmux_resize_attempt=0; while [ \"$(stty size)\" != '31 101' ] && [ \"$wmux_resize_attempt\" -lt 100 ]; do wmux_resize_attempt=$((wmux_resize_attempt + 1)); sleep 0.02; done; stty size\r",
     );
     await output.waitFor(windows ? "WMUX_RESIZED_101_31" : /\b31 101\b/, baseline);
 
@@ -152,6 +156,7 @@ export const exerciseBackendConformance = async (
         persistedCheckpoint,
       );
       session = restarted.session;
+      output = restarted.output;
       const restoredReplay = backend.readReplay(session);
       assert.equal(restoredReplay.kind, "checkpoint");
       assert.match(restoredReplay.data, /WMUX_ALT_SCREEN/);
@@ -167,6 +172,10 @@ export const exerciseBackendConformance = async (
     }
 
     if (backend.capabilities.restartDurable) {
+      backend.write(session, windows
+        ? "$global:wmuxConformanceRetained = 'retained-process'; Write-Output ('WMUX_SAVED_' + 'STATE')\r"
+        : "wmux_conformance_retained=retained-process; printf '%s%s\\n' 'WMUX_SAVED_' 'STATE'\r");
+      await output.waitFor("WMUX_SAVED_STATE");
       backend.detach(session);
       const reattached = await spawn(backend, paneId);
       session = reattached.session;
@@ -177,6 +186,11 @@ export const exerciseBackendConformance = async (
       );
       await reattached.output.waitFor("WMUX_REATTACHED", baseline);
       assert.match(backend.readReplay(session, true).data, /WMUX_REATTACHED/);
+      baseline = reattached.output.snapshot().length;
+      backend.write(session, windows
+        ? "Write-Output ('WMUX_PERSISTED:' + $global:wmuxConformanceRetained)\r"
+        : "printf 'WMUX_PERSISTED:%s\\n' \"$wmux_conformance_retained\"\r");
+      await reattached.output.waitFor("WMUX_PERSISTED:retained-process", baseline);
     }
 
     const exited = new Promise<void>((resolve, reject) => {

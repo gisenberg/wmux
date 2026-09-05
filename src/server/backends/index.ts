@@ -8,7 +8,7 @@ import {
   durableMultiplexerCapabilities,
 } from "./durable-multiplexer.js";
 import { RawPtyBackend, rawPtyCapabilities } from "./raw-pty.js";
-import { WindowsAgentBackend, WINDOWS_AGENT_CAPABILITIES } from "./windows-agent-backend.js";
+import { SessionAgentBackend, SESSION_AGENT_CAPABILITIES } from "./session-agent-backend.js";
 
 export const isDurableMultiplexerMachine = (machine: MachineConfig): boolean => {
   const backend = machine.sessionBackend ?? "auto";
@@ -26,7 +26,7 @@ export const createSessionBackend = (
 ): SessionBackend => {
   const snapshot = structuredClone(machine);
   if (shouldUseSessionAgent(snapshot)) {
-    return new WindowsAgentBackend(snapshot, pasteImages, options.windowsAgentBasePort);
+    return new SessionAgentBackend(snapshot, pasteImages, options.windowsAgentBasePort);
   }
   if (isDurableMultiplexerMachine(snapshot)) return new DurableMultiplexerBackend(snapshot, pasteImages);
   return new RawPtyBackend(snapshot, pasteImages);
@@ -41,7 +41,7 @@ export const sessionBackendKindForMachine = (machine: MachineConfig): SessionBac
 
 export const sessionBackendCapabilitiesForMachine = (machine: MachineConfig): BackendCapabilities =>
   shouldUseSessionAgent(machine)
-    ? WINDOWS_AGENT_CAPABILITIES
+    ? SESSION_AGENT_CAPABILITIES
     : isDurableMultiplexerMachine(machine)
       ? durableMultiplexerCapabilities(machine)
       : rawPtyCapabilities(machine);

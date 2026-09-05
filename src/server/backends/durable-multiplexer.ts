@@ -10,17 +10,26 @@ import type {
   BackendSpawnSpec,
   StageFileMetadata,
 } from "./backend.js";
-import { RawPtyBackend } from "./raw-pty.js";
+import { RawPtyBackend, rawPtyCapabilities } from "./raw-pty.js";
+import { BackendObservation } from "../backend-observation.js";
+import { PtySession } from "../pty-session.js";
 import type { PasteImageStager, StagedPasteImage } from "../paste-image-staging.js";
 import type { MachineConfig } from "../types.js";
 
 export class DurableMultiplexerBackend extends RawPtyBackend {
   readonly id = "durable-multiplexer" as const;
-  readonly capabilities: BackendCapabilities;
+  private observation?: BackendObservation;
+  override get capabilities(): BackendCapabilities {
+    const mode = this.observation?.mode;
+    if (mode === "tmux" || mode === "screen") {
+      return durableMultiplexerCapabilities({ ...this.machine, sessionBackend: mode });
+    }
+    // A configured preference is not proof that the target had a multiplexer.
+    return rawPtyCapabilities(this.machine);
+  }
 
   constructor(machine: MachineConfig, pasteImages: PasteImageStager) {
     super(machine, pasteImages);
-    this.capabilities = durableMultiplexerCapabilities(machine);
   }
 
   override readReplay(
@@ -67,7 +76,9 @@ export class DurableMultiplexerBackend extends RawPtyBackend {
   }
 
   override spawn(spec: BackendSpawnSpec): BackendSession {
-    return super.spawn(spec);
+    this.observation = new BackendObservation();
+    return new PtySession(spec.pane, this.machine, spec.cols, spec.rows,
+      spec.env, spec.restoredCheckpoint, this.observation);
   }
 }
 

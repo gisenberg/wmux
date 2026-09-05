@@ -1,0 +1,1750 @@
+import type QuestionContract from "../../scripts/opencode-question-contract.json";
+import { tool } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode-ai/plugin"
+import type { OpencodeClient } from "@opencode-ai/sdk/v2/client"
+import type { Event as LegacyEvent } from "@opencode-ai/sdk"
+import type { Event as StructuredEvent } from "@opencode-ai/sdk/v2"
+import { Effect } from "effect"
+import { spawn } from "node:child_process"
+import crypto from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
+import { performance } from "node:perf_hooks"
+import type { ChildProcessByStdio } from "node:child_process"
+import type { Readable, Writable } from "node:stream"
+
+const eventScript = "__WMUX_EVENT_SCRIPT__"
+const brokerScript = "__WMUX_BROKER_SCRIPT__"
+const questionContractPath = "__WMUX_QUESTION_CONTRACT_PATH__"
+const questionContract = JSON.parse("__WMUX_QUESTION_CONTRACT__") as typeof QuestionContract | null
+const delegated = process.env.WMUX_DELEGATED_RUN === "1"
+const MAX_PROMPT = 128 * 1024
+const MAX_OUTPUT = 128 * 1024
+const MAX_CHANNEL = 512 * 1024
+const INPUT_DELAY_MS = 100
+const REQUEST_TIMEOUT_MS = 10_000
+const QUESTION_EVENT_TIMEOUT_MS = 10_000
+const MAX_QUESTION_EVENT_TASKS = 256
+const MAX_BROKER_LINE_BYTES = 128 * 1024
+const MIN_WAIT_TIMEOUT_SECONDS = 0.1
+const MAX_WAIT_TIMEOUT_SECONDS = 14_400
+const DEFAULT_WAIT_TIMEOUT_SECONDS = { review: 1_800, change: 7_200, deploy: 7_200 } as const
+
+class DelegationTimeoutError extends Error {}
+class DelegationAbortError extends Error {}
+class DelegationProtocolError extends Error {}
+class DelegationObservationError extends Error {}
+
+const utf8Prefix = (value: unknown, limit = MAX_OUTPUT) => {
+  if (typeof value !== "string") return ""
+  const bytes = Buffer.from(value)
+  if (bytes.length <= limit) return value
+  let end = limit
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1
+  return bytes.subarray(0, end).toString("utf8")
+}
+
+const utf8Tail = (value: string, limit: number) => {
+  const bytes = Buffer.from(value)
+  if (bytes.length <= limit) return value
+  let start = bytes.length - limit
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1
+  return bytes.subarray(start).toString("utf8")
+}
+
+const cleanLine = (value: unknown, limit: number) =>
+  utf8Prefix(typeof value === "string" ? value.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim() : "", limit)
+
+const cleanMessage = (value: unknown) => utf8Prefix(
+  typeof value === "string"
+    ? value.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").trim()
+    : "",
+  MAX_OUTPUT,
+)
+
+const redact = (value: unknown, secrets: string[]) => {
+  let text = typeof value === "string" ? value : ""
+  for (const secret of secrets) {
+    if (secret) text = text.split(secret).join("[redacted]")
+  }
+  return cleanMessage(text)
+}
+
+const wmuxConfig = () => {
+  const home = process.env.HOME ?? ""
+  const expandHome = (filePath: string) => filePath === "~"
+    ? home
+    : filePath.startsWith("~/")
+      ? home + filePath.slice(1)
+      : filePath
+  const read = (filePath: string) => {
+    try { return fs.readFileSync(filePath, "utf8").trim() } catch { return "" }
+  }
+  const scopedPattern = /^[A-Za-z0-9_-]{32,256}$/
+  const envConfigured = Object.prototype.hasOwnProperty.call(process.env, "WMUX_AUTOMATION_TOKEN")
+  if (envConfigured) {
+    const token = process.env.WMUX_AUTOMATION_TOKEN?.trim() ?? ""
+    if (!scopedPattern.test(token)) throw new Error("configured automation token is empty or malformed")
+    return { url: process.env.WMUX_URL || read(home + "/.wmux/url"), token }
+  }
+  const pathConfigured = Object.prototype.hasOwnProperty.call(process.env, "WMUX_AUTOMATION_TOKEN_PATH")
+  const configuredPath = process.env.WMUX_AUTOMATION_TOKEN_PATH?.trim() ?? ""
+  if (pathConfigured && !configuredPath) throw new Error("configured automation token path is empty")
+  const automationPath = expandHome(configuredPath || "~/.wmux/automation-token")
+  if (pathConfigured || fs.existsSync(automationPath)) {
+    let token = ""
+    try { token = fs.readFileSync(automationPath, "utf8").trim() } catch {
+      throw new Error("configured automation token file is empty or unreadable")
+    }
+    if (!token) throw new Error("configured automation token file is empty or unreadable")
+    if (!scopedPattern.test(token)) throw new Error("configured automation token file is malformed")
+    return { url: process.env.WMUX_URL || read(home + "/.wmux/url"), token }
+  }
+  if (process.env.WMUX_BROWSER_AUTH_MODE === "login-only") {
+    throw new Error("login-only mode requires an automation token")
+  }
+  const legacyPath = expandHome(process.env.WMUX_TOKEN_PATH?.trim() || "~/.wmux/token")
+  return {
+    url: process.env.WMUX_URL || read(home + "/.wmux/url"),
+    token: process.env.WMUX_TOKEN || read(legacyPath),
+  }
+}
+
+const joinUrl = (base: string, suffix: string) => {
+  while (suffix.startsWith("/")) suffix = suffix.slice(1)
+  return new URL(suffix, base.endsWith("/") ? base : base + "/").toString()
+}
+
+const requestJson = async (
+  base: string,
+  token: string,
+  pathname: string,
+  init: RequestInit = {},
+  timeoutMilliseconds = REQUEST_TIMEOUT_MS,
+) => {
+  if (!Number.isFinite(timeoutMilliseconds) || timeoutMilliseconds <= 0) {
+    throw new DelegationTimeoutError("delegation timed out")
+  }
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...((init.headers as Record<string, string>) ?? {}),
+  }
+  if (token) headers.authorization = "Bearer " + token
+  if (init.signal?.aborted) throw new DelegationAbortError("delegation aborted")
+  const controller = new AbortController()
+  let timedOut = false
+  const forwardAbort = () => controller.abort(init.signal?.reason)
+  init.signal?.addEventListener("abort", forwardAbort, { once: true })
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMilliseconds)
+  try {
+    const response = await fetch(joinUrl(base, pathname), { ...init, headers, signal: controller.signal })
+    let body: any
+    try { body = await response.json() } catch {
+      if (init.signal?.aborted) throw new DelegationAbortError("delegation aborted")
+      if (timedOut) throw new DelegationProtocolError("wmux request timed out")
+      throw new DelegationProtocolError("wmux returned invalid JSON")
+    }
+    if (!response.ok) throw new DelegationProtocolError("wmux request failed (HTTP " + response.status + ")")
+    return body
+  } catch (error) {
+    if (error instanceof DelegationAbortError || error instanceof DelegationProtocolError) throw error
+    if (init.signal?.aborted) throw new DelegationAbortError("delegation aborted")
+    if (timedOut) throw new DelegationProtocolError("wmux request timed out")
+    throw new DelegationProtocolError("wmux request failed")
+  } finally {
+    clearTimeout(timer)
+    init.signal?.removeEventListener("abort", forwardAbort)
+  }
+}
+
+const deleteWorkspace = async (base: string, token: string, workspaceId: string, signal?: AbortSignal) => {
+  const result: any = await requestJson(base, token, "/api/workspaces/" + encodeURIComponent(workspaceId), {
+    method: "DELETE",
+    ...(signal ? { signal } : {}),
+  })
+  if (result?.removed !== true) throw new DelegationProtocolError("wmux workspace close was not confirmed")
+}
+
+const terminalLines = (value: string) => value
+  .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_])/g, "")
+  .replace(/\r\n/g, "\n")
+  .replace(/\r/g, "\n")
+  .split("\n")
+
+const hasReadyMarker = (value: string) => terminalLines(value).some((line) => line === "WMUX_AGENT_READY")
+
+const hasPosixShellPrompt = (value: string) => terminalLines(value).some((line) => /[$#%❯]\s*$/u.test(line))
+
+const hasDoneMarker = (value: string, runId: string) => terminalLines(value).some((line) => {
+  const match = /^WMUX_AGENT_DONE ([A-Za-z0-9._-]+) (-?\d+)$/.exec(line)
+  return match?.[1] === runId && Number.isSafeInteger(Number(match[2]))
+})
+
+const decodeBase64Json = (encoded: string) => {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) return undefined
+  try {
+    const json = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(encoded, "base64"))
+    return JSON.parse(json)
+  } catch {
+    return undefined
+  }
+}
+
+const extractResult = (output: string, runId: string) => {
+  let payload: any
+  let exitCode: number | undefined
+  for (const line of terminalLines(output)) {
+    if (line.startsWith("WMUX_AGENT_RESULT ")) {
+      const candidate = decodeBase64Json(line.slice("WMUX_AGENT_RESULT ".length))
+      if (
+        candidate && candidate.runId === runId && typeof candidate.ok === "boolean"
+        && (candidate.result === undefined || typeof candidate.result === "string")
+        && (candidate.error === undefined || typeof candidate.error === "string")
+      ) payload = candidate
+      continue
+    }
+    const done = /^WMUX_AGENT_DONE ([A-Za-z0-9._-]+) (-?\d+)$/.exec(line)
+    if (done?.[1] === runId) {
+      const candidate = Number(done[2])
+      if (Number.isSafeInteger(candidate)) exitCode = candidate
+    }
+  }
+  if (!payload || exitCode === undefined) throw new DelegationProtocolError("delegated result was incomplete")
+  return { payload, exitCode }
+}
+
+const terminalDelegationStates = new Set([
+  "completed",
+  "failed",
+  "error",
+  "cancelled",
+  "stopped",
+  "timed_out",
+  "interrupted",
+])
+
+const durableResult = (delegation: any) => {
+  const state = delegation?.state
+  if (!terminalDelegationStates.has(state)) return undefined
+  const ok = state === "completed"
+  const detail = cleanMessage(ok
+    ? delegation?.result
+    : delegation?.error || delegation?.summary)
+  return {
+    ok,
+    detail,
+    exitCode: ok ? 0 : 1,
+    recovered: true,
+    state,
+  }
+}
+
+type ChannelWaiter = {
+  predicate: (output: string, ready: boolean) => boolean
+  after: number
+  resolve: (output: string) => void
+  reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
+  signal: AbortSignal
+  abort: () => void
+}
+
+class PaneChannel {
+  private outputValue = ""
+  private outputStart = 0
+  private paneReady = false
+  private failed?: Error
+  private closed = false
+  private waiters = new Set<ChannelWaiter>()
+
+  private constructor(
+    private ws: WebSocket,
+    private base: string,
+    private token: string,
+    private paneId: string,
+  ) {
+    ws.onmessage = (event: MessageEvent) => {
+      try {
+        const message = JSON.parse(String(event.data))
+        if (message.type === "ready") {
+          this.paneReady = true
+          this.append(typeof message.replay === "string" ? message.replay : "")
+        } else if (message.type === "output") {
+          this.append(typeof message.data === "string" ? message.data : "")
+        }
+      } catch {
+        // Ignore unrelated or malformed pane frames; protocol markers remain strict.
+      }
+    }
+    ws.onerror = () => this.fail(new DelegationProtocolError("wmux pane channel failed"))
+    ws.onclose = () => {
+      if (!this.closed) this.fail(new DelegationProtocolError("wmux pane channel closed"))
+    }
+  }
+
+  static open(base: string, token: string, paneId: string, timeout: number, signal: AbortSignal) {
+    return new Promise<PaneChannel>((resolve, reject) => {
+      const endpoint = new URL(joinUrl(base, "ws/panes/" + encodeURIComponent(paneId) + "/output"))
+      endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:"
+      endpoint.searchParams.set("cols", "96")
+      endpoint.searchParams.set("rows", "32")
+      const ws = new WebSocket(endpoint, token ? { headers: { Authorization: "Bearer " + token } } as any : undefined)
+      const channel = new PaneChannel(ws, base, token, paneId)
+      let settled = false
+      const finish = (error?: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal.removeEventListener("abort", onAbort)
+        ws.removeEventListener?.("open", onOpen)
+        if (error) {
+          channel.close()
+          reject(error)
+        } else resolve(channel)
+      }
+      const onOpen = () => finish()
+      const onAbort = () => finish(new DelegationAbortError("delegation aborted"))
+      const timer = setTimeout(() => finish(new DelegationTimeoutError("delegation timed out")), timeout)
+      if (signal.aborted) return onAbort()
+      signal.addEventListener("abort", onAbort, { once: true })
+      ws.addEventListener?.("open", onOpen, { once: true })
+      ws.onopen = onOpen
+      ws.onerror = () => {
+        channel.fail(new DelegationProtocolError("wmux pane channel failed"))
+        finish(new DelegationProtocolError("wmux pane channel failed"))
+      }
+      ws.onclose = () => {
+        if (!channel.closed) channel.fail(new DelegationProtocolError("wmux pane channel closed"))
+        finish(new DelegationProtocolError("wmux pane channel closed"))
+      }
+    })
+  }
+
+  private append(value: string) {
+    const combined = this.outputValue + value
+    const next = utf8Tail(combined, MAX_CHANNEL)
+    this.outputStart += combined.length - next.length
+    this.outputValue = next
+    this.flush()
+  }
+
+  private outputAfter(offset: number) {
+    return this.outputValue.slice(Math.max(0, offset - this.outputStart))
+  }
+
+  checkpoint() {
+    return this.outputStart + this.outputValue.length
+  }
+
+  private flush() {
+    for (const waiter of [...this.waiters]) {
+      const output = this.outputAfter(waiter.after)
+      if (!waiter.predicate(output, this.paneReady)) continue
+      this.remove(waiter)
+      waiter.resolve(output)
+    }
+  }
+
+  private remove(waiter: ChannelWaiter) {
+    if (!this.waiters.delete(waiter)) return
+    clearTimeout(waiter.timer)
+    waiter.signal.removeEventListener("abort", waiter.abort)
+  }
+
+  private fail(error: Error) {
+    if (this.failed || this.closed) return
+    this.failed = error
+    for (const waiter of [...this.waiters]) {
+      this.remove(waiter)
+      waiter.reject(error)
+    }
+  }
+
+  waitFor(predicate: ChannelWaiter["predicate"], timeout: number, signal: AbortSignal, after = this.outputStart) {
+    return new Promise<string>((resolve, reject) => {
+      if (signal.aborted) return reject(new DelegationAbortError("delegation aborted"))
+      if (this.failed) return reject(this.failed)
+      if (this.closed) return reject(new DelegationProtocolError("wmux pane channel is closed"))
+      const output = this.outputAfter(after)
+      if (predicate(output, this.paneReady)) return resolve(output)
+      const waiter = {} as ChannelWaiter
+      waiter.predicate = predicate
+      waiter.after = after
+      waiter.resolve = resolve
+      waiter.reject = reject
+      waiter.signal = signal
+      waiter.abort = () => {
+        this.remove(waiter)
+        reject(new DelegationAbortError("delegation aborted"))
+      }
+      waiter.timer = setTimeout(() => {
+        this.remove(waiter)
+        reject(new DelegationTimeoutError("delegation timed out"))
+      }, timeout)
+      this.waiters.add(waiter)
+      signal.addEventListener("abort", waiter.abort, { once: true })
+    })
+  }
+
+  async send(data: string, signal: AbortSignal) {
+    if (this.closed || this.failed || this.ws.readyState !== 1) {
+      throw new DelegationProtocolError("wmux pane channel is unavailable")
+    }
+    await requestJson(this.base, this.token, "/api/panes/" + encodeURIComponent(this.paneId) + "/input", {
+      method: "POST",
+      body: JSON.stringify({ data }),
+      signal,
+    })
+  }
+
+  interrupt() {
+    void this.send("\u0003", new AbortController().signal).catch(() => {})
+  }
+
+  close() {
+    if (this.closed) return
+    this.closed = true
+    for (const waiter of [...this.waiters]) {
+      this.remove(waiter)
+      waiter.reject(new DelegationProtocolError("wmux pane channel is closed"))
+    }
+    try { this.ws.close() } catch {}
+  }
+}
+
+const delay = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal.aborted) return reject(new DelegationAbortError("delegation aborted"))
+  const timer = setTimeout(() => {
+    signal.removeEventListener("abort", onAbort)
+    resolve()
+  }, milliseconds)
+  const onAbort = () => {
+    clearTimeout(timer)
+    reject(new DelegationAbortError("delegation aborted"))
+  }
+  signal.addEventListener("abort", onAbort, { once: true })
+})
+
+const sendLine = async (channel: PaneChannel, value: string, signal: AbortSignal) => {
+  await channel.send(value, signal)
+  await delay(INPUT_DELAY_MS, signal)
+  await channel.send("\r", signal)
+}
+
+const taskOutput = (
+  state: string,
+  ids: Record<string, string>,
+  detail: string,
+  ok: boolean,
+  workspaceClosed = false,
+  closeWarning = "",
+) => {
+  const tag = state === "waiting" ? "task_pending" : ok ? "task_result" : "task_error"
+  return [
+  "OpenCode delegation " + state + ".",
+  "State: " + state,
+  "Run ID: " + ids.runId,
+  "Machine: " + ids.machine,
+  "Mode: " + ids.mode,
+  "Controller wait seconds: " + ids.waitTimeoutSeconds,
+  "Workspace ID: " + ids.workspaceId,
+  "Tab ID: " + ids.tabId,
+  "Pane ID: " + ids.paneId,
+  workspaceClosed ? "Workspace closed: true" : "URL: " + ids.url,
+  workspaceClosed ? "URL: unavailable (workspace closed)" : "Workspace closed: false",
+  ...(closeWarning ? ["Close warning: " + utf8Prefix(closeWarning, 500)] : []),
+  "<" + tag + ">",
+  detail,
+  "</" + tag + ">",
+  ].join("\n")
+}
+
+const closeOutput = (state: string, workspaceId: string, closed: boolean, message: string) => [
+  "wmux workspace close result.",
+  "State: " + state,
+  "Workspace ID: " + workspaceId,
+  "Workspace closed: " + String(closed),
+  message,
+].join("\n")
+
+const closeWorkspaceTool = tool({
+  description: "Close an agent-created wmux workspace when it is no longer needed.",
+  args: { workspace_id: tool.schema.string() },
+  execute: async (args: any, context: any) => {
+    if (typeof args.workspace_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(args.workspace_id)) {
+      throw new Error("invalid wmux workspace ID")
+    }
+    if (context.abort.aborted) throw new DelegationAbortError("workspace close aborted")
+    try {
+      await Effect.runPromise(context.ask({
+        permission: "wmux_close",
+        patterns: [args.workspace_id],
+        always: ["*"],
+        metadata: { workspaceId: args.workspace_id },
+      }))
+    } catch {
+      if (context.abort.aborted) throw new DelegationAbortError("workspace close aborted")
+      throw new Error("wmux workspace close permission denied")
+    }
+    const { url, token } = wmuxConfig()
+    if (!url) throw new Error("wmux URL is not configured")
+    const bootstrap: any = await requestJson(url, token, "/api/bootstrap", { signal: context.abort })
+    const workspace = Array.isArray(bootstrap.workspaces)
+      ? bootstrap.workspaces.find((candidate: any) => candidate?.id === args.workspace_id)
+      : undefined
+    if (!workspace) {
+      return closeOutput("not_found", args.workspace_id, false, "Workspace was not found or was already closed.")
+    }
+    if (workspace.createdBy !== "agent") {
+      return closeOutput("refused", args.workspace_id, false, "Refused: only agent-created workspaces may be closed by this tool.")
+    }
+    await deleteWorkspace(url, token, args.workspace_id, context.abort)
+    return closeOutput("closed", args.workspace_id, true, "Agent-created workspace closed.")
+  },
+})
+
+const delegate = tool({
+  description: "Delegate an OpenCode task to a visible durable POSIX wmux pane. The timeout bounds controller waiting only and never kills the worker.",
+  args: {
+    machine: tool.schema.string(),
+    directory: tool.schema.string(),
+    prompt: tool.schema.string(),
+    agent: tool.schema.string().optional(),
+    title: tool.schema.string().optional(),
+    mode: tool.schema.string().optional(),
+    timeout_seconds: tool.schema.number().optional(),
+    auto_approve: tool.schema.boolean().optional(),
+    close_on_success: tool.schema.boolean().optional(),
+    retain_workspace: tool.schema.boolean().optional(),
+  },
+  execute: async (args: any, context: any) => {
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(args.machine)) throw new Error("invalid delegation machine")
+    if (typeof args.directory !== "string" || !args.directory.startsWith("/") || args.directory.length > 4096 || args.directory.includes("\0")) throw new Error("invalid delegation directory")
+    if (typeof args.prompt !== "string" || !args.prompt || Buffer.byteLength(args.prompt) > MAX_PROMPT) throw new Error("invalid delegation prompt")
+    if (args.agent !== undefined && (typeof args.agent !== "string" || args.agent.length > 512 || args.agent.includes("\0"))) throw new Error("invalid delegation agent")
+    if (args.title !== undefined && (typeof args.title !== "string" || args.title.length > 512 || args.title.includes("\0"))) throw new Error("invalid delegation title")
+    const mode: unknown = args.mode ?? "change"
+    if (mode !== "change" && mode !== "deploy") throw new Error("mode must be change or deploy")
+    if (args.close_on_success !== undefined && typeof args.close_on_success !== "boolean") throw new Error("invalid close_on_success")
+    if (args.retain_workspace !== undefined && typeof args.retain_workspace !== "boolean") throw new Error("invalid retain_workspace")
+    if (args.close_on_success === true && args.retain_workspace === true) throw new Error("close_on_success conflicts with retain_workspace")
+    const automaticCleanup = args.retain_workspace !== true
+    if (
+      args.timeout_seconds !== undefined
+      && (
+        typeof args.timeout_seconds !== "number"
+        || !Number.isFinite(args.timeout_seconds)
+        || args.timeout_seconds < MIN_WAIT_TIMEOUT_SECONDS
+        || args.timeout_seconds > MAX_WAIT_TIMEOUT_SECONDS
+      )
+    ) throw new Error("timeout_seconds must be 0.1..14400")
+    if (context.abort.aborted) throw new DelegationAbortError("delegation aborted")
+
+    try {
+      await Effect.runPromise(context.ask({
+        permission: "wmux_delegate",
+        patterns: [args.machine, args.directory],
+        always: ["*"],
+        metadata: {
+          machine: args.machine,
+          directory: args.directory,
+          mode,
+          closeOnSuccess: automaticCleanup,
+        },
+      }))
+    } catch {
+      if (context.abort.aborted) throw new DelegationAbortError("delegation aborted")
+      throw new Error("wmux delegation permission denied")
+    }
+
+    const { url, token } = wmuxConfig()
+    if (!url) throw new Error("wmux URL is not configured")
+    const parentPaneId = process.env.WMUX_PANE_ID || ""
+    const bootstrap: any = await requestJson(url, token, "/api/bootstrap", { signal: context.abort })
+    const machine = Array.isArray(bootstrap.machines) && bootstrap.machines.find((candidate: any) =>
+      candidate?.id === args.machine && candidate.reachable === true
+      && (candidate.platform === "linux" || candidate.platform === "mac")
+      && (candidate.kind === "local" || candidate.kind === "ssh"),
+    )
+    if (!machine) throw new Error("machine is not a reachable POSIX local/ssh target")
+    const configuredTimeout = bootstrap?.delegation?.waitTimeoutSeconds?.[mode]
+    const timeoutSeconds = args.timeout_seconds ?? (
+      typeof configuredTimeout === "number"
+      && Number.isFinite(configuredTimeout)
+      && configuredTimeout >= MIN_WAIT_TIMEOUT_SECONDS
+      && configuredTimeout <= MAX_WAIT_TIMEOUT_SECONDS
+        ? configuredTimeout
+        : DEFAULT_WAIT_TIMEOUT_SECONDS[mode]
+    )
+
+    const made: any = await requestJson(url, token, "/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({
+        machineId: args.machine,
+        createdBy: "agent",
+        ...(automaticCleanup ? {
+          cleanupPolicy: "on-success",
+          cleanupTtlSeconds: 24 * 60 * 60,
+        } : {
+          cleanupPolicy: "retain",
+        }),
+        ...(parentPaneId ? { parentPaneId } : {}),
+      }),
+      signal: context.abort,
+    })
+    const workspace = made?.workspace
+    const tab = workspace?.tabs?.[0]
+    const pane = tab?.panes?.[0]
+    if (
+      typeof workspace?.id !== "string" || typeof tab?.id !== "string" || typeof pane?.id !== "string"
+      || !workspace.id || !tab.id || !pane.id
+    ) throw new DelegationProtocolError("wmux workspace response was incomplete")
+
+    const runId = crypto.randomUUID()
+    const directUrl = joinUrl(url, "workspaces/" + encodeURIComponent(workspace.id) + "/tabs/" + encodeURIComponent(tab.id))
+    const secrets = [args.prompt, token]
+    const title = cleanLine(redact(args.title, secrets), 80) || "OpenCode delegation"
+    const ids = {
+      runId,
+      machine: args.machine,
+      mode,
+      waitTimeoutSeconds: String(timeoutSeconds),
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      paneId: pane.id,
+      url: directUrl,
+    }
+    let channel: PaneChannel | undefined
+    let workerSubmitted = false
+    const postLifecycle = (status: string, summary: string, message = "", signal?: AbortSignal) => requestJson(url, token, "/api/agent-events", {
+      method: "POST",
+      body: JSON.stringify({
+        agent: "opencode",
+        runId,
+        status,
+        title,
+        summary: cleanLine(summary, 500),
+        message: redact(message, secrets),
+        workspaceId: workspace.id,
+        tabId: tab.id,
+        paneId: pane.id,
+      }),
+      ...(signal ? { signal } : {}),
+    })
+
+    try {
+      context.metadata({
+        title,
+        metadata: {
+          runId,
+          workspaceId: workspace.id,
+          tabId: tab.id,
+          paneId: pane.id,
+          url: directUrl,
+          mode,
+          waitTimeoutSeconds: timeoutSeconds,
+        },
+      })
+      await requestJson(url, token, "/api/workspaces/" + encodeURIComponent(workspace.id) + "/title", {
+        method: "POST",
+        body: JSON.stringify({ title }),
+        signal: context.abort,
+      })
+      await postLifecycle("running", "OpenCode delegation running", "", context.abort)
+
+      channel = await PaneChannel.open(url, token, pane.id, REQUEST_TIMEOUT_MS, context.abort)
+      await channel.waitFor(
+        (output, ready) => ready && hasPosixShellPrompt(output),
+        REQUEST_TIMEOUT_MS,
+        context.abort,
+      )
+      const commandCheckpoint = channel.checkpoint()
+      await sendLine(channel, "wmux-agent-run", context.abort)
+      await channel.waitFor(
+        (output) => hasReadyMarker(output),
+        REQUEST_TIMEOUT_MS,
+        context.abort,
+        commandCheckpoint,
+      )
+
+      const encoded = Buffer.from(JSON.stringify({
+        runId,
+        runtime: "opencode",
+        prompt: args.prompt,
+        directory: args.directory,
+        ...(args.agent ? { agent: args.agent } : {}),
+        ...(args.title ? { title: args.title } : {}),
+        unattended: args.auto_approve === true,
+        writeAccess: true,
+      })).toString("base64")
+      const resultCheckpoint = channel.checkpoint()
+      await sendLine(channel, encoded, context.abort)
+      workerSubmitted = true
+      const deadline = performance.now() + timeoutSeconds * 1000
+      const remaining = () => {
+        const value = deadline - performance.now()
+        if (value <= 0) throw new DelegationTimeoutError("delegation timed out")
+        return value
+      }
+      let observed: {
+        ok: boolean
+        detail: string
+        exitCode: number
+        recovered: boolean
+        state: string
+      } | undefined
+      while (!observed) {
+        try {
+          const status: any = await requestJson(
+            url,
+            token,
+            "/api/delegations/" + encodeURIComponent(runId),
+            { signal: context.abort },
+            remaining(),
+          )
+          observed = durableResult(status?.delegation)
+        } catch (error) {
+          if (error instanceof DelegationAbortError) throw error
+        }
+        if (observed) break
+        let output = ""
+        const paneWaitMilliseconds = Math.min(1_000, remaining())
+        try {
+          output = await channel.waitFor(
+            (value) => hasDoneMarker(value, runId),
+            paneWaitMilliseconds,
+            context.abort,
+            resultCheckpoint,
+          )
+        } catch (error) {
+          if (error instanceof DelegationTimeoutError) continue
+          if (error instanceof DelegationAbortError) throw error
+          throw new DelegationObservationError(
+            error instanceof Error ? error.message : "wmux pane output became unavailable",
+          )
+        }
+        const { payload, exitCode } = extractResult(output, runId)
+        const ok = exitCode === 0 && payload.ok === true
+        observed = {
+          ok,
+          detail: cleanMessage(ok ? payload.result : (payload.error || payload.result)),
+          exitCode,
+          recovered: false,
+          state: ok ? "completed" : "failed",
+        }
+      }
+      const { ok, exitCode } = observed
+      const fallback = ok ? "Delegated task completed without text output." : "Delegated task failed with exit code " + exitCode + "."
+      const detail = redact(observed.detail, secrets) || fallback
+      if (!observed.recovered) {
+        await postLifecycle(ok ? "completed" : "failed", ok ? "OpenCode delegation completed" : "OpenCode delegation failed", detail, context.abort)
+      }
+      if (!ok || !automaticCleanup) return taskOutput(ok ? "completed" : "failed", ids, detail, ok)
+      try {
+        await deleteWorkspace(url, token, workspace.id, context.abort)
+        return taskOutput("completed", ids, detail, true, true)
+      } catch {
+        return taskOutput(
+          "completed",
+          ids,
+          detail,
+          true,
+          false,
+          "Workspace could not be closed and remains available.",
+        )
+      }
+    } catch (error) {
+      const aborted = error instanceof DelegationAbortError || context.abort.aborted
+      const timedOut = error instanceof DelegationTimeoutError
+      const observationLost = !aborted && workerSubmitted && (
+        timedOut
+        || error instanceof DelegationObservationError
+        || error instanceof DelegationProtocolError
+      )
+      if (observationLost) {
+        const detail = timedOut
+          ? "Controller wait timed out; the delegated worker may still be running."
+          : error instanceof Error
+            ? error.message
+            : "Controller lost pane output; the delegated worker may still be running."
+        await postLifecycle("observer_error", "Lost contact with OpenCode delegation", detail).catch(() => {})
+        await postLifecycle("waiting", "OpenCode delegation detached; worker may still be running").catch(() => {})
+        return taskOutput("waiting", ids, redact(detail, secrets), false)
+      }
+      if (channel) channel.interrupt()
+      const state = timedOut ? "timed_out" : aborted ? "stopped" : "failed"
+      const status = timedOut || aborted ? "stopped" : "failed"
+      const detail = timedOut
+        ? "Delegation timed out."
+        : aborted
+          ? "Delegation was stopped."
+          : error instanceof DelegationProtocolError
+            ? error.message
+            : "Delegation failed before completion."
+      await postLifecycle(status, timedOut ? "OpenCode delegation timed out" : aborted ? "OpenCode delegation stopped" : "OpenCode delegation failed", detail).catch(() => {})
+      return taskOutput(state, ids, redact(detail, secrets), false)
+    } finally {
+      channel?.close()
+    }
+  },
+})
+
+const sendNow = (input: Record<string, unknown>) => new Promise<void>((resolve) => {
+  const child = spawn(eventScript, ["--agent", "opencode", "--opencode-hook"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  })
+  child.once("error", () => resolve())
+  child.once("close", () => resolve())
+  child.stdin.once("error", () => resolve())
+  child.stdin.end(JSON.stringify(input))
+})
+
+let sendQueue = Promise.resolve()
+const send = (input: Record<string, unknown>) => {
+  sendQueue = sendQueue.then(() => sendNow(input)).catch(() => {})
+  return sendQueue
+}
+
+const validQuestion = (value: any) => value && typeof value === "object"
+  && typeof value.header === "string" && value.header.length > 0 && value.header.length <= 120
+  && typeof value.question === "string" && value.question.length > 0 && value.question.length <= 16384
+  && Array.isArray(value.options) && value.options.length <= 128
+  && value.options.every((option: any) => option && typeof option.label === "string"
+    && option.label.length > 0 && option.label.length <= 1024
+    && typeof option.description === "string" && option.description.length <= 4096)
+  && (value.multiple === undefined || typeof value.multiple === "boolean")
+  && (value.custom === undefined || typeof value.custom === "boolean")
+
+const validQuestionIdentifier = (value: unknown) => typeof value === "string"
+  && value.length > 0 && value.length <= 256
+
+const validSessionResult = (result: any, expectedID: string): result is { data: { id: string; parentID?: string } } => {
+  if (result?.response?.status !== 200 || result.error !== undefined
+    || !result.data || typeof result.data !== "object"
+    || result.data.id !== expectedID || !validQuestionIdentifier(result.data.id)
+    || (result.data.parentID !== undefined && !validQuestionIdentifier(result.data.parentID))) return false
+  try { return Buffer.byteLength(JSON.stringify(result.data)) <= 64 * 1024 } catch { return false }
+}
+
+const questionBrokerPrerequisites = () => {
+  const capabilityPath = process.env.WMUX_AGENT_INPUT_CAPABILITY_PATH ?? ""
+  const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  return Boolean(questionContract && process.env.WMUX_PANE_ID
+    && path.isAbsolute(capabilityPath) && path.isAbsolute(credentialPath)
+    && fs.existsSync(path.dirname(credentialPath)))
+}
+
+const persistBrokerStatus = (state: "failed", diagnostic: string) => {
+  const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  if (!path.isAbsolute(credentialPath)) return
+  const statusPath = credentialPath + ".status.json"
+  const directory = path.dirname(statusPath)
+  let temporary = ""
+  try {
+    const directoryStat = fs.lstatSync(directory)
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()
+      || fs.realpathSync(directory) !== path.resolve(directory)
+      || (typeof process.getuid === "function" && directoryStat.uid !== process.getuid())
+      || (directoryStat.mode & 0o077) !== 0) return
+    if (fs.existsSync(statusPath)) {
+      const statusStat = fs.lstatSync(statusPath)
+      if (!statusStat.isFile() || statusStat.isSymbolicLink()
+        || fs.realpathSync(statusPath) !== path.resolve(statusPath)
+        || (typeof process.getuid === "function" && statusStat.uid !== process.getuid())
+        || (statusStat.mode & 0o777) !== 0o600) return
+    }
+    temporary = path.join(directory, "." + path.basename(statusPath) + "." + process.pid + "." + crypto.randomBytes(8).toString("hex") + ".tmp")
+    const handle = fs.openSync(temporary, "wx", 0o600)
+    try {
+      fs.writeFileSync(handle, JSON.stringify({ schemaVersion: 1, state, diagnostic, updatedAt: Date.now() }) + "\n")
+      fs.fsyncSync(handle)
+    } finally { fs.closeSync(handle) }
+    fs.renameSync(temporary, statusPath)
+    const directoryHandle = fs.openSync(directory, "r")
+    try { fs.fsyncSync(directoryHandle) } finally { fs.closeSync(directoryHandle) }
+  } catch {
+    if (temporary) try { fs.rmSync(temporary, { force: true }) } catch {}
+  }
+}
+
+const consumeBrokerRefreshRequest = () => {
+  const credentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  if (!path.isAbsolute(credentialPath)) return false
+  const refreshPath = credentialPath + ".refresh"
+  try {
+    const stat = fs.lstatSync(refreshPath)
+    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(refreshPath) !== path.resolve(refreshPath)
+      || (typeof process.getuid === "function" && stat.uid !== process.getuid())
+      || (stat.mode & 0o777) !== 0o600 || stat.size > 1024) return false
+    const request = JSON.parse(fs.readFileSync(refreshPath, "utf8"))
+    if (request?.schemaVersion !== 1 || typeof request.nonce !== "string"
+      || !/^[A-Za-z0-9_-]{43}$/.test(request.nonce) || !Number.isSafeInteger(request.requestedAt)
+      || Math.abs(Date.now() - request.requestedAt) > 60_000) return false
+    fs.rmSync(refreshPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+type StructuredClientState = {
+  client?: OpencodeClient
+  diagnostic?: "injected_transport_missing" | "injected_transport_invalid"
+    | "v2_client_import_error" | "v2_client_construction_error"
+}
+
+const injectedTransport = (rootClient: unknown): StructuredClientState & { transport?: object } => {
+  if (!rootClient || (typeof rootClient !== "object" && typeof rootClient !== "function")) {
+    return { diagnostic: "injected_transport_missing" }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(rootClient, "_client")
+  if (!descriptor) return { diagnostic: "injected_transport_missing" }
+  if (!("value" in descriptor) || !descriptor.value || typeof descriptor.value !== "object") {
+    return { diagnostic: "injected_transport_invalid" }
+  }
+  const transport = descriptor.value as object
+  for (const method of ["get", "post"]) {
+    const methodDescriptor = Object.getOwnPropertyDescriptor(transport, method)
+    if (!methodDescriptor || !("value" in methodDescriptor) || typeof methodDescriptor.value !== "function") {
+      return { diagnostic: "injected_transport_invalid" }
+    }
+  }
+  return { transport }
+}
+
+const createStructuredClient = async (rootClient: unknown): Promise<StructuredClientState> => {
+  const transportState = injectedTransport(rootClient)
+  if (!transportState.transport) return { diagnostic: transportState.diagnostic }
+  let Client: typeof import("@opencode-ai/sdk/v2/client")["OpencodeClient"]
+  try {
+    const sdk = await import("@opencode-ai/sdk/v2/client")
+    if (typeof sdk.OpencodeClient !== "function") return { diagnostic: "v2_client_import_error" }
+    Client = sdk.OpencodeClient
+  } catch {
+    return { diagnostic: "v2_client_import_error" }
+  }
+  try {
+    return { client: new Client({ client: transportState.transport as never }) }
+  } catch {
+    return { diagnostic: "v2_client_construction_error" }
+  }
+}
+
+const hasClientMethod = (read: () => unknown) => {
+  try { return typeof read() === "function" } catch { return false }
+}
+
+const HEALTH_SOURCE = "plugin.injectedTransport:/global/health" as const
+const HEALTH_ATTESTATION_REPORT_MARGIN_MS = 100
+const failedHealth = (outcome: string, status = 0, called = true) => ({
+  source: HEALTH_SOURCE, called,
+  outcome, status, healthy: false, release: "",
+})
+
+const probeOpenCodeHealth = async (client: OpencodeClient, deadline: number) => {
+  const controller = new AbortController()
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) return failedHealth("timeout")
+  const timer = setTimeout(() => controller.abort(), Math.max(1, remaining - HEALTH_ATTESTATION_REPORT_MARGIN_MS))
+  try {
+    const result = await client.global.health({ signal: controller.signal })
+    if (Date.now() > deadline) return failedHealth("timeout")
+    if (!result || typeof result !== "object" || Array.isArray(result)
+      || Object.getPrototypeOf(result) !== Object.prototype) return failedHealth("shape_invalid")
+    const resultKeys = Reflect.ownKeys(result)
+    if (resultKeys.some((key) => typeof key !== "string" || !["data", "error", "request", "response"].includes(key))) {
+      return failedHealth("shape_invalid")
+    }
+    const dataDescriptor = Object.getOwnPropertyDescriptor(result, "data")
+    const errorDescriptor = Object.getOwnPropertyDescriptor(result, "error")
+    const responseDescriptor = Object.getOwnPropertyDescriptor(result, "response")
+    if (!dataDescriptor || !("value" in dataDescriptor) || !responseDescriptor || !("value" in responseDescriptor)
+      || (errorDescriptor && (!("value" in errorDescriptor) || errorDescriptor.value !== undefined))) {
+      return failedHealth("shape_invalid")
+    }
+    const status = responseDescriptor.value?.status
+    if (!Number.isInteger(status) || status < 0 || status > 999) return failedHealth("shape_invalid")
+    if (status !== 200) return failedHealth("status", status)
+    const data = dataDescriptor.value
+    const keys = data !== null && typeof data === "object" ? Reflect.ownKeys(data) : []
+    const healthyDescriptor = data !== null && typeof data === "object"
+      ? Object.getOwnPropertyDescriptor(data, "healthy") : undefined
+    const versionDescriptor = data !== null && typeof data === "object"
+      ? Object.getOwnPropertyDescriptor(data, "version") : undefined
+    const exact = data !== null && typeof data === "object" && !Array.isArray(data)
+      && Object.getPrototypeOf(data) === Object.prototype
+      && keys.length === 2 && keys.every((key) => key === "healthy" || key === "version")
+      && healthyDescriptor !== undefined && "value" in healthyDescriptor
+      && versionDescriptor !== undefined && "value" in versionDescriptor
+      && healthyDescriptor.value === true && typeof versionDescriptor.value === "string"
+      && versionDescriptor.value.length <= 64 && /^[A-Za-z0-9._+-]+$/.test(versionDescriptor.value)
+    if (!exact) return failedHealth("shape_invalid", status)
+    if (versionDescriptor.value !== questionContract?.openCodeRelease) {
+      return { source: HEALTH_SOURCE, called: true, outcome: "release_mismatch", status: 200,
+        healthy: true, release: versionDescriptor.value }
+    }
+    return { source: HEALTH_SOURCE, called: true, outcome: "ok", status: 200,
+      healthy: true, release: versionDescriptor.value }
+  } catch {
+    return failedHealth(controller.signal.aborted || Date.now() >= deadline ? "timeout" : "transport_error")
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const createQuestionBroker = (injectedClient: unknown) => {
+  if (!questionBrokerPrerequisites()) return undefined
+  let child: ChildProcessByStdio<Writable, Readable, null> | undefined
+  const brokerEnvironment = Object.fromEntries([
+    "HOME", "PATH", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR", "WMUX_URL", "WMUX_PANE_ID",
+    "WMUX_AGENT_INPUT_CAPABILITY_PATH", "WMUX_AGENT_INPUT_CREDENTIAL_PATH",
+  ].flatMap((key) => typeof process.env[key] === "string" ? [[key, process.env[key]!]] : []))
+  brokerEnvironment.WMUX_OPENCODE_QUESTION_CONTRACT_PATH = questionContractPath
+  try {
+    child = spawn(brokerScript, ["serve"], { stdio: ["pipe", "pipe", "ignore"], env: brokerEnvironment })
+  } catch {
+    persistBrokerStatus("failed", "broker_spawn_error")
+    return undefined
+  }
+  // Start the broker before loading the optional structured SDK path so generic
+  // plugin hooks remain available when transport extraction or construction fails.
+  let structuredClient: OpencodeClient | undefined
+  const structuredClientState = createStructuredClient(injectedClient)
+  void structuredClientState.then((state) => { structuredClient = state.client })
+  let buffer = ""
+  let deliveryQueue = Promise.resolve()
+  let queuedDeliveries = 0
+  let snapshotHandler: (() => void) | undefined
+  let readyResolve: (eventSequence: number | undefined) => void
+  const ready = new Promise<number | undefined>((resolve) => { readyResolve = resolve })
+  let runtimeReadyReported = false
+  let structuredReady = false
+  let restartInProgress = false
+  const attestedChallenges = new Set<string>()
+  const deliveryStates = new Map<string, "running" | "acknowledged">()
+  const pendingTerminalAcks = new Map<string, Record<string, unknown>>()
+  const pendingRestartMessages: Record<string, unknown>[] = []
+  const startWaiters = new Map<string, { resolve: (started: boolean) => void; timer: ReturnType<typeof setTimeout> }>()
+  const deliveryControllers = new Set<AbortController>()
+  let closed = false
+  const writeControl = (message: Record<string, unknown>) => {
+    if (!child?.stdin.writable || child.stdin.destroyed) return false
+    const line = JSON.stringify(message)
+    if (Buffer.byteLength(line) > MAX_BROKER_LINE_BYTES) return false
+    child.stdin.write(line + "\n")
+    return true
+  }
+  const write = (message: Record<string, unknown>) => {
+    if (closed || Buffer.byteLength(JSON.stringify(message)) > MAX_BROKER_LINE_BYTES) return false
+    if (structuredReady) {
+      return writeControl(message)
+    } else if (restartInProgress && pendingRestartMessages.length < 256) {
+      pendingRestartMessages.push(message)
+      return true
+    }
+    return false
+  }
+  const sendTerminalAck = (invocationKey: string, message: Record<string, unknown>) => {
+    if (pendingTerminalAcks.size >= 256 && !pendingTerminalAcks.has(invocationKey)) {
+      pendingTerminalAcks.delete(pendingTerminalAcks.keys().next().value!)
+    }
+    pendingTerminalAcks.set(invocationKey, message)
+    if (structuredReady) writeControl(message)
+  }
+  const attest = async (message: any, brokerChild: NonNullable<typeof child>) => {
+    const now = Date.now()
+    if (!message || JSON.stringify(Object.keys(message).sort()) !== JSON.stringify([
+      "type", "handshakeSchema", "nonce", "serverChallenge", "issuedAt", "deadline", "contractDigest",
+    ].sort()) || message.type !== "runtime_challenge" || message.handshakeSchema !== questionContract?.handshakeSchema
+      || typeof message.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.nonce)
+      || !message.serverChallenge || Object.getPrototypeOf(message.serverChallenge) !== Object.prototype
+      || JSON.stringify(Object.keys(message.serverChallenge).sort()) !== JSON.stringify(["id", "nonce", "issuedAt", "deadline"].sort())
+      || typeof message.serverChallenge.id !== "string" || !/^[0-9a-f-]{36}$/.test(message.serverChallenge.id)
+      || typeof message.serverChallenge.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.serverChallenge.nonce)
+      || !Number.isSafeInteger(message.serverChallenge.issuedAt) || !Number.isSafeInteger(message.serverChallenge.deadline)
+      || message.serverChallenge.deadline <= message.serverChallenge.issuedAt
+      || message.serverChallenge.deadline - message.serverChallenge.issuedAt > 30_000
+      || !Number.isSafeInteger(message.issuedAt) || !Number.isSafeInteger(message.deadline)
+      || message.deadline <= message.issuedAt || message.deadline - message.issuedAt > 10_000
+      || now < message.issuedAt || now > message.deadline || message.issuedAt < message.serverChallenge.issuedAt
+      || message.deadline > message.serverChallenge.deadline
+      || message.contractDigest !== questionContract?.canonicalContractDigest) {
+      persistBrokerStatus("failed", "challenge_invalid")
+      return
+    }
+    const challengeKey = message.serverChallenge.id + ":" + message.nonce
+    if (attestedChallenges.has(challengeKey)) return
+    if (attestedChallenges.size >= 16) attestedChallenges.delete(attestedChallenges.values().next().value!)
+    attestedChallenges.add(challengeKey)
+    const clientState = await structuredClientState
+    if (brokerChild !== child) return
+    const capabilities = {
+      globalHealth: hasClientMethod(() => clientState.client?.global?.health),
+      questionList: hasClientMethod(() => clientState.client?.question?.list),
+      questionReply: hasClientMethod(() => clientState.client?.question?.reply),
+      sessionGet: hasClientMethod(() => clientState.client?.session?.get),
+    }
+    const health = clientState.client && capabilities.globalHealth
+      ? await probeOpenCodeHealth(clientState.client, message.deadline)
+      : failedHealth("unavailable", 0, false)
+    if (brokerChild !== child) return
+    const healthDiagnostics: Record<string, string> = {
+      timeout: "health_timeout", transport_error: "health_transport_error", status: "health_status",
+      shape_invalid: "health_shape_invalid", release_mismatch: "health_release_mismatch",
+    }
+    const diagnostic = clientState.diagnostic
+      ?? (!Object.values(capabilities).every(Boolean) ? "client_method_missing"
+        : health.outcome === "ok" ? "ok" : healthDiagnostics[health.outcome] ?? "health_shape_invalid")
+    const attestation = {
+      type: "runtime_attestation",
+      handshakeSchema: message.handshakeSchema,
+      nonce: message.nonce,
+      serverChallenge: message.serverChallenge,
+      challengeIssuedAt: message.issuedAt,
+      challengeDeadline: message.deadline,
+      observedAt: Date.now(),
+      contractDigest: questionContract!.canonicalContractDigest,
+      compatibilityFingerprint: questionContract!.compatibilityFingerprint,
+      eventEnvelope: questionContract!.eventEnvelope,
+      release: health.outcome === "ok" ? health.release : "",
+      health,
+      capabilities,
+      diagnostic,
+    }
+    if (brokerChild.stdin.writable && !brokerChild.stdin.destroyed) {
+      const line = JSON.stringify(attestation)
+      if (Buffer.byteLength(line) <= 128 * 1024) brokerChild.stdin.write(line + "\n")
+    }
+  }
+  const beginDelivery = (delivery: any) => new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      startWaiters.delete(delivery.deliveryId)
+      resolve(false)
+    }, REQUEST_TIMEOUT_MS)
+    startWaiters.set(delivery.deliveryId, { resolve, timer })
+    write({
+      type: "start",
+      deliveryId: delivery.deliveryId,
+      id: delivery.requestId,
+      generation: delivery.expectedGeneration,
+    })
+  })
+  const applyDelivery = async (delivery: any) => {
+    if (!delivery || typeof delivery.deliveryId !== "string" || typeof delivery.requestId !== "string"
+      || !Number.isInteger(delivery.expectedGeneration) || typeof delivery.openCodeRequestId !== "string"
+      || !Array.isArray(delivery.answers) || !delivery.answers.every((answer: unknown) =>
+      Array.isArray(answer) && answer.every((value) => typeof value === "string"))) return
+    const invocationKey = delivery.requestId + ":" + delivery.expectedGeneration
+    if (deliveryStates.has(invocationKey)) return
+    if (deliveryStates.size >= 256) deliveryStates.delete(deliveryStates.keys().next().value!)
+    // The broker emits a delivery only after the server durably records raw
+    // answer exposure. This process-local guard is the second boundary: one
+    // source request generation can invoke question.reply at most once.
+    deliveryStates.set(invocationKey, "running")
+    if (!await beginDelivery(delivery)) {
+      for (const answer of delivery.answers) answer.fill("")
+      delivery.answers.length = 0
+      deliveryStates.delete(invocationKey)
+      return
+    }
+    const input: Parameters<OpencodeClient["question"]["reply"]>[0] = {
+      requestID: delivery.openCodeRequestId,
+      answers: delivery.answers,
+    }
+    let outcome: "applied" | "already_resolved" | "sdk_error" = "sdk_error"
+    let code = "incompatible_reply_result"
+    let retryable = false
+    let compatibleResult = false
+    const controller = new AbortController()
+    deliveryControllers.add(controller)
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, 15_000)
+    try {
+      if (!structuredClient) throw new Error("structured client unavailable")
+      const result = await structuredClient.question.reply(input, { signal: controller.signal })
+      if (result?.response?.status === 200 && result.data === true && result.error === undefined) {
+        outcome = "applied"
+        code = ""
+        compatibleResult = true
+      } else if (result?.response?.status === 404 && (result.error as any)?._tag === "QuestionNotFoundError") {
+        outcome = "already_resolved"
+        code = ""
+        compatibleResult = true
+      } else if (result?.response?.status === 400 && result.error !== undefined) {
+        const tag = (result.error as any)?._tag
+        if (tag === "InvalidRequestError") {
+          code = "InvalidRequest"
+          compatibleResult = true
+        } else if (tag === "BadRequest") {
+          code = "BadRequest"
+          compatibleResult = true
+        }
+      } else if (result?.response && (result.response.status === 408 || result.response.status === 429 || result.response.status >= 500)) {
+        code = "http_" + result.response.status
+        // This legacy wire bit marks an indeterminate SDK outcome. The server
+        // converts it to a non-retryable ambiguity quarantine; it never
+        // authorizes another question.reply invocation.
+        retryable = true
+        compatibleResult = true
+      }
+    } catch {
+      code = timedOut ? "sdk_timeout" : "transport_error"
+      retryable = true
+      compatibleResult = true
+    } finally {
+      clearTimeout(timer)
+      deliveryControllers.delete(controller)
+      for (const answer of input.answers ?? []) answer.fill("")
+      if (Array.isArray(delivery.answers)) delivery.answers.length = 0
+    }
+    sendTerminalAck(invocationKey, {
+      type: "ack",
+      deliveryId: delivery.deliveryId,
+      id: delivery.requestId,
+      generation: delivery.expectedGeneration,
+      outcome,
+      ...(code ? { code } : {}),
+      ...(outcome === "sdk_error" ? { retryable } : {}),
+    })
+    if (outcome === "sdk_error" && (code === "sdk_timeout" || code === "transport_error" || code.startsWith("http_"))) {
+      snapshotHandler?.()
+    }
+    if (!compatibleResult) write({ type: "unsupported" })
+    deliveryStates.set(invocationKey, "acknowledged")
+  }
+  const retiredChildren = new WeakSet<object>()
+  const attachBrokerProcess = (brokerChild: NonNullable<typeof child>) => {
+    brokerChild.stdout.setEncoding("utf8")
+    brokerChild.stdout.on("data", (chunk: string) => {
+      if (brokerChild !== child) return
+      buffer += chunk
+      if (Buffer.byteLength(buffer) > 256 * 1024) {
+        buffer = ""
+        write({ type: "unsupported" })
+        return
+      }
+      for (;;) {
+        const newline = buffer.indexOf("\n")
+        if (newline < 0) break
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        let message: any
+        try { message = JSON.parse(line) } catch { continue }
+        if (message?.type === "runtime_challenge") {
+          void attest(message, brokerChild)
+          continue
+        }
+        if (message?.type === "start_result" && typeof message.deliveryId === "string") {
+          const waiter = startWaiters.get(message.deliveryId)
+          if (waiter) {
+            clearTimeout(waiter.timer)
+            startWaiters.delete(message.deliveryId)
+            waiter.resolve(message.started === true)
+          }
+          continue
+        }
+        if (message?.type === "ack_result" && message.accepted === true && typeof message.id === "string"
+          && Number.isInteger(message.generation)) {
+          pendingTerminalAcks.delete(message.id + ":" + message.generation)
+          continue
+        }
+        if (message?.type === "runtime_ready") {
+          const firstReport = !runtimeReadyReported
+          runtimeReadyReported = true
+          structuredReady = message.supported === true
+          readyResolve(structuredReady && Number.isSafeInteger(message.eventSequence) && message.eventSequence >= 0
+            ? message.eventSequence : undefined)
+          if (structuredReady) {
+            for (const ack of pendingTerminalAcks.values()) writeControl(ack)
+            for (const pending of pendingRestartMessages.splice(0)) writeControl(pending)
+            if (!firstReport) snapshotHandler?.()
+          } else {
+            pendingRestartMessages.length = 0
+          }
+          restartInProgress = false
+          continue
+        }
+        if (message?.type === "snapshot_request") {
+          snapshotHandler?.()
+          continue
+        }
+        if (message?.type !== "delivery") continue
+        if (queuedDeliveries >= 64) {
+          write({ type: "unsupported" })
+          continue
+        }
+        queuedDeliveries += 1
+        deliveryQueue = deliveryQueue.then(() => applyDelivery(message)).catch(() => {}).finally(() => {
+          queuedDeliveries -= 1
+        })
+      }
+    })
+    // A control write can race the broker's exit; the close handler owns the
+    // resulting state change, so an EPIPE on stdin must not become an
+    // uncaught exception inside the OpenCode host.
+    brokerChild.stdin?.on("error", () => {})
+    brokerChild.on("error", () => {
+      if (brokerChild !== child || retiredChildren.has(brokerChild)) return
+      structuredReady = false
+      restartInProgress = false
+      pendingRestartMessages.length = 0
+      persistBrokerStatus("failed", "broker_spawn_error")
+      readyResolve(undefined)
+    })
+    brokerChild.on("close", () => {
+      if (brokerChild !== child || retiredChildren.has(brokerChild)) return
+      const wasReady = structuredReady
+      structuredReady = false
+      restartInProgress = false
+      pendingRestartMessages.length = 0
+      if (wasReady) persistBrokerStatus("failed", "broker_exited")
+      readyResolve(undefined)
+    })
+  }
+  attachBrokerProcess(child)
+  const restart = () => {
+    if (closed) return
+    const previous = child
+    if (previous) {
+      retiredChildren.add(previous)
+      previous.stdin.end()
+      previous.kill()
+    }
+    for (const waiter of startWaiters.values()) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(false)
+    }
+    startWaiters.clear()
+    structuredReady = false
+    restartInProgress = true
+    buffer = ""
+    try {
+      child = spawn(brokerScript, ["serve"], { stdio: ["pipe", "pipe", "ignore"], env: brokerEnvironment })
+      attachBrokerProcess(child)
+    } catch {
+      child = undefined
+      restartInProgress = false
+      pendingRestartMessages.length = 0
+      persistBrokerStatus("failed", "broker_spawn_error")
+    }
+  }
+  const close = () => {
+    if (closed) return
+    closed = true
+    const previous = child
+    child = undefined
+    if (previous) {
+      retiredChildren.add(previous)
+      previous.stdin.end()
+      previous.kill()
+    }
+    for (const controller of deliveryControllers) controller.abort()
+    deliveryControllers.clear()
+    for (const waiter of startWaiters.values()) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(false)
+    }
+    startWaiters.clear()
+    structuredReady = false
+    restartInProgress = false
+    pendingRestartMessages.length = 0
+    snapshotHandler = undefined
+    readyResolve(undefined)
+  }
+  // Disable also closes the broker's stdin so its readline ends even if the
+  // shutdown message races its readiness handshake; a later re-enable always
+  // spawns a fresh broker through restart().
+  return { send: write, disable: () => { structuredReady = false; restartInProgress = false
+      pendingRestartMessages.length = 0; writeControl({ type: "unsupported" }); child?.stdin.end() },
+    ready, isReady: () => structuredReady || restartInProgress, structuredClient: () => structuredClient,
+    onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler }, restart, close }
+}
+
+const text = (parts: Array<{ type: string; text?: string }>) =>
+  parts.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n")
+
+const sessionTitle = (title: string | undefined) =>
+  title && !/^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(title) ? title : ""
+
+const applyPermissionDefaults = (config: any) => {
+  const existing = config.permission
+  const permission: Record<string, unknown> = typeof existing === "string"
+    ? { "*": existing }
+    : existing && typeof existing === "object" && !Array.isArray(existing)
+      ? existing
+      : {}
+  for (const name of ["wmux_delegate", "wmux_close"]) {
+    if (!Object.prototype.hasOwnProperty.call(permission, name)) permission[name] = "ask"
+  }
+  config.permission = permission
+}
+
+export default (async ({ client, directory }) => {
+  const active = new Map<string, { messageID: string; prompt: string; title: string; pending: Set<string> }>()
+  const titles = new Map<string, string>()
+  const brokerOwnerKey = Symbol.for("wmux.opencode.question-broker-owner")
+  const priorBrokerOwner = (globalThis as any)[brokerOwnerKey] as { close: () => void } | undefined
+  priorBrokerOwner?.close()
+  const questionBroker = createQuestionBroker(client)
+  if (questionBroker) (globalThis as any)[brokerOwnerKey] = { close: questionBroker.close }
+  else delete (globalThis as any)[brokerOwnerKey]
+  const refreshWatchKey = Symbol.for("wmux.opencode.question-broker-refresh-watch")
+  const priorRefreshWatch = (globalThis as any)[refreshWatchKey] as { path: string; listener: () => void } | undefined
+  if (priorRefreshWatch) fs.unwatchFile(priorRefreshWatch.path, priorRefreshWatch.listener)
+  const brokerCredentialPath = process.env.WMUX_AGENT_INPUT_CREDENTIAL_PATH ?? ""
+  if (questionBroker && path.isAbsolute(brokerCredentialPath)) {
+    const refreshPath = brokerCredentialPath + ".refresh"
+    const refreshListener = () => {
+      if (consumeBrokerRefreshRequest()) questionBroker.restart()
+    }
+    ;(globalThis as any)[refreshWatchKey] = { path: refreshPath, listener: refreshListener }
+    fs.watchFile(refreshPath, { interval: 500, persistent: false }, refreshListener)
+  }
+  const normalizeQuestion = (question: any) => ({
+    header: question.header,
+    question: question.question,
+    options: question.options.map((option: any) => ({ label: option.label, description: option.description })),
+    multiple: question.multiple ?? false,
+    custom: question.custom ?? true,
+  })
+  let questionEventSequence = 0
+  const questionSequenceReady = questionBroker?.ready.then((eventSequence) => {
+    if (eventSequence !== undefined) questionEventSequence = Math.max(questionEventSequence, eventSequence)
+  }) ?? Promise.resolve()
+  const questionEventTasks = new Map<number, Promise<void>>()
+  let questionEventTail: Promise<void> = Promise.resolve()
+  const forwardQuestion = (request: any, nativePending: boolean, eventId: string, eventSequence: number) => {
+    if (!request || !validQuestionIdentifier(request.id) || !validQuestionIdentifier(request.sessionID)
+      || typeof eventId !== "string" || eventId.length < 1 || eventId.length > 256
+      || !Number.isSafeInteger(eventSequence) || eventSequence <= 0
+      || !Array.isArray(request.questions) || request.questions.length < 1
+      || request.questions.length > 32 || !request.questions.every(validQuestion)) return false
+    return questionBroker?.send({
+      type: "asked",
+      eventId,
+      eventSequence,
+      id: request.id,
+      sessionID: request.sessionID,
+      questions: request.questions.map(normalizeQuestion),
+      nativePending,
+    }) === true
+  }
+  let snapshotInFlight = false
+  let snapshotPending = false
+  let snapshotRetryFailures = 0
+  let snapshotRetryTimer: ReturnType<typeof setTimeout> | undefined
+  const snapshotSdkCall = async <T>(
+    call: (signal: AbortSignal) => Promise<T>,
+    deadline: number,
+  ): Promise<T> => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error("question snapshot SDK timeout")
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error("question snapshot SDK timeout"))
+      }, remaining)
+    })
+    try { return await Promise.race([call(controller.signal), timeout]) } finally { clearTimeout(timer!) }
+  }
+  const waitForSnapshotTasks = async (cutSequence: number, deadline: number): Promise<boolean> => {
+    for (;;) {
+      const tasks = [...questionEventTasks.entries()]
+        .filter(([eventSequence]) => eventSequence <= cutSequence)
+        .map(([, task]) => task)
+      if (tasks.length === 0) return true
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return false
+      let timer: ReturnType<typeof setTimeout>
+      const settled = await Promise.race([
+        Promise.allSettled(tasks).then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), remaining) }),
+      ]).finally(() => clearTimeout(timer!))
+      if (!settled) return false
+    }
+  }
+  const sendSnapshot = (
+    cutSequence: number,
+    complete: boolean,
+    members: Array<{ id: string; sessionID: string; questions: any[] }>,
+  ) => {
+    const message = { type: "snapshot", complete, cutSequence, members }
+    if (Buffer.byteLength(JSON.stringify(message)) > MAX_BROKER_LINE_BYTES) {
+      questionBroker?.send({ type: "snapshot", complete: false, cutSequence, members: [] })
+      return false
+    }
+    return questionBroker?.send(message) === true && complete
+  }
+  const scheduleSnapshotRetry = () => {
+    if (snapshotRetryTimer || !questionBroker?.isReady()) return
+    snapshotRetryFailures = Math.min(snapshotRetryFailures + 1, 8)
+    const delay = Math.min(5_000, 100 * (2 ** (snapshotRetryFailures - 1)))
+    snapshotRetryTimer = setTimeout(() => {
+      snapshotRetryTimer = undefined
+      sendQuestionSnapshot()
+    }, delay)
+    snapshotRetryTimer.unref?.()
+  }
+  const recordSnapshotResult = (complete: boolean) => {
+    if (!complete) {
+      scheduleSnapshotRetry()
+      return
+    }
+    snapshotRetryFailures = 0
+    if (snapshotRetryTimer) clearTimeout(snapshotRetryTimer)
+    snapshotRetryTimer = undefined
+  }
+  const sendQuestionSnapshot = () => {
+    if (!questionBroker?.isReady()) return
+    if (snapshotRetryTimer) clearTimeout(snapshotRetryTimer)
+    snapshotRetryTimer = undefined
+    if (snapshotInFlight) {
+      snapshotPending = true
+      return
+    }
+    const cutSequence = questionEventSequence
+    const structuredClient = questionBroker.structuredClient()
+    if (!structuredClient) {
+      questionBroker.disable()
+      return
+    }
+    snapshotInFlight = true
+    const deadline = Date.now() + 10_000
+    void snapshotSdkCall((signal) => structuredClient.question.list({ directory }, { signal }), deadline).then(async (result) => {
+      if (result?.response?.status !== 200 || result.error !== undefined
+        || !Array.isArray(result?.data) || result.data.length > 256) {
+        sendSnapshot(cutSequence, false, [])
+        scheduleSnapshotRetry()
+        return
+      }
+      if (!result.data.every((request) => request && validQuestionIdentifier(request.id)
+        && validQuestionIdentifier(request.sessionID) && Array.isArray(request.questions)
+        && request.questions.length >= 1 && request.questions.length <= 32
+        && request.questions.every(validQuestion))
+        || new Set(result.data.map((request) => JSON.stringify([request.sessionID, request.id]))).size !== result.data.length) {
+        sendSnapshot(cutSequence, false, [])
+        scheduleSnapshotRetry()
+        return
+      }
+      const validated = result.data as Array<{ id: string; sessionID: string; questions: any[] }>
+      const checked = new Array<{ id: string; sessionID: string; questions: any[] } | null | undefined>(validated.length)
+      let next = 0
+      const worker = async () => {
+        for (;;) {
+          const index = next++
+          if (index >= validated.length) return
+          const request = validated[index]
+          const session = await snapshotSdkCall((signal) => structuredClient.session.get(
+            { sessionID: request.sessionID, directory }, { signal },
+          ), deadline).catch(() => undefined)
+          if (!validSessionResult(session, request.sessionID)) {
+            checked[index] = undefined
+          } else if (session.data.parentID) {
+            checked[index] = null
+          } else {
+            checked[index] = {
+              id: request.id,
+              sessionID: request.sessionID,
+              questions: request.questions.map(normalizeQuestion),
+            }
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(8, validated.length) }, worker))
+      let complete = checked.every((member) => member !== undefined)
+      if (complete) {
+        complete = await waitForSnapshotTasks(cutSequence, deadline)
+      }
+      const members = complete
+        ? checked.filter((member): member is { id: string; sessionID: string; questions: any[] } => member !== null && member !== undefined)
+        : []
+      recordSnapshotResult(sendSnapshot(cutSequence, complete, members))
+    }).catch(() => {
+      sendSnapshot(cutSequence, false, [])
+      scheduleSnapshotRetry()
+    })
+      .finally(() => {
+        snapshotInFlight = false
+        if (snapshotPending) {
+          snapshotPending = false
+          sendQuestionSnapshot()
+        }
+      })
+  }
+  questionBroker?.onSnapshotRequest(() => { void questionSequenceReady.then(sendQuestionSnapshot) })
+  void questionBroker?.ready.then((eventSequence) => {
+    if (eventSequence !== undefined) sendQuestionSnapshot()
+  })
+  const cacheTitle = (sessionID: string, title: unknown) => {
+    titles.delete(sessionID)
+    titles.set(sessionID, sessionTitle(typeof title === "string" ? title : undefined))
+    if (titles.size > 128) {
+      const oldest = titles.keys().next().value
+      if (oldest) titles.delete(oldest)
+    }
+  }
+
+  return {
+    config: async (config) => applyPermissionDefaults(config),
+    tool: { wmux_delegate: delegate, wmux_close: closeWorkspaceTool },
+    "chat.message": async (input, output) => {
+      if (delegated) return
+      const session = await client.session.get({ path: { id: input.sessionID }, query: { directory } }).catch(() => undefined)
+      if (!session || session.data?.parentID) return
+      const prompt = text(output.parts)
+      cacheTitle(input.sessionID, session.data?.title)
+      const title = titles.get(input.sessionID) ?? ""
+      active.set(input.sessionID, { messageID: output.message.id, prompt, title, pending: new Set() })
+      await send({ hook_event_name: "UserPromptSubmit", title, prompt })
+    },
+    // The plugin package still declares v1 events; current runtimes also emit
+    // the attested v2 questionnaire contract. Keep both SDK unions visible.
+    event: async ({ event }: { event: LegacyEvent | StructuredEvent }) => {
+      if (delegated) return
+      if (event.type === "session.updated") {
+        const info = event.properties.info
+        if (!info || typeof info.id !== "string" || info.parentID) return
+        if (typeof info.title !== "string") return
+        cacheTitle(info.id, info.title)
+        return
+      }
+      const questionEvent = event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected"
+      if (typeof event.type === "string" && event.type.startsWith("question.")
+        && event.type !== "question.asked" && event.type !== "question.replied" && event.type !== "question.rejected") {
+        questionBroker?.disable()
+        return
+      }
+      if (questionEvent && (!event.properties || typeof event.properties.sessionID !== "string")) {
+        questionBroker?.disable()
+        return
+      }
+      let structuredShapeValid = true
+      if (event.type === "question.asked" && (!("id" in event) || typeof event.id !== "string"
+        || typeof event.properties.id !== "string" || !Array.isArray(event.properties.questions)
+        || event.properties.questions.length < 1 || event.properties.questions.length > 32
+        || !event.properties.questions.every(validQuestion))) {
+        questionBroker?.disable()
+        structuredShapeValid = false
+      }
+      if ((event.type === "question.replied" || event.type === "question.rejected")
+        && typeof event.properties.requestID !== "string") {
+        questionBroker?.disable()
+        return
+      }
+      const sessionID = "sessionID" in event.properties ? event.properties.sessionID : undefined
+      if (typeof sessionID !== "string" || !sessionID) return
+      const current = active.get(sessionID)
+      if (structuredShapeValid && questionBroker?.isReady()
+        && (event.type === "question.asked" || event.type === "question.replied" || event.type === "question.rejected")) {
+        if (questionEventSequence >= Number.MAX_SAFE_INTEGER || questionEventTasks.size >= MAX_QUESTION_EVENT_TASKS) {
+          questionBroker?.disable()
+        } else {
+          const eventSequence = ++questionEventSequence
+          const structuredTask = questionEventTail.then(async () => {
+            if (!questionBroker.isReady()) return
+            const structuredClient = questionBroker.structuredClient()
+            if (!structuredClient) {
+              questionBroker.disable()
+              return
+            }
+            let topLevel = Boolean(current)
+            if (!topLevel) {
+              try {
+                const session = await snapshotSdkCall(
+                  (signal) => structuredClient.session.get({ sessionID, directory }, { signal }),
+                  Date.now() + QUESTION_EVENT_TIMEOUT_MS,
+                )
+                if (!validSessionResult(session, sessionID)) {
+                  questionBroker.disable()
+                  return
+                }
+                topLevel = !session.data.parentID
+              } catch {
+                questionBroker.disable()
+                return
+              }
+            }
+            if (topLevel && event.type === "question.asked") {
+              if (!("id" in event) || typeof event.id !== "string" || !forwardQuestion(event.properties, false, event.id, eventSequence)) {
+                questionBroker?.disable()
+              }
+            } else if (topLevel) {
+              const requestID = "requestID" in event.properties ? event.properties.requestID : undefined
+              if (typeof requestID !== "string") {
+                questionBroker?.disable()
+              } else {
+                if (!questionBroker.send({
+                  type: "resolved",
+                  eventSequence,
+                  requestID,
+                  sessionID,
+                  result: event.type === "question.replied" ? "replied" : "rejected",
+                })) questionBroker.disable()
+              }
+            }
+          })
+          questionEventTail = structuredTask.catch(() => undefined)
+          questionEventTasks.set(eventSequence, structuredTask)
+          await structuredTask.finally(() => questionEventTasks.delete(eventSequence))
+        }
+      }
+
+      if (!current) return
+
+      if (event.type === "question.asked" || event.type === "permission.asked") {
+        const requestID = event.properties.id
+        if (!requestID) return
+        const key = event.type.split(".")[0] + ":" + requestID
+        if (current.pending.has(key)) return
+        current.pending.add(key)
+        await send({ hook_event_name: "Question", title: current.title, prompt: current.prompt })
+        return
+      }
+      if (event.type === "question.replied" || event.type === "question.rejected" || event.type === "permission.replied") {
+        const requestID = "requestID" in event.properties ? event.properties.requestID : undefined
+        if (!requestID) return
+        const key = event.type.split(".")[0] + ":" + requestID
+        if (!current.pending.delete(key) || current.pending.size) return
+        await send({ hook_event_name: "Resume", title: current.title, prompt: current.prompt })
+        return
+      }
+      if (event.type !== "session.idle" && event.type !== "session.error") return
+      active.delete(sessionID)
+
+      const session = await client.session.get({ path: { id: sessionID }, query: { directory } }).catch(() => undefined)
+      const title = titles.get(sessionID) || sessionTitle(session?.data?.title) || current.title
+
+      if (event.type === "session.error") {
+        const error = event.properties.error
+        const detail = error && "data" in error && "message" in error.data ? String(error.data.message) : ""
+        await send({ hook_event_name: "Error", title, prompt: current.prompt, last_assistant_message: detail })
+        return
+      }
+
+      try {
+        const response = await client.session.messages({ path: { id: sessionID }, query: { directory } })
+        const messages = response.data ?? []
+        const user = messages.find((message) => message.info.id === current.messageID)
+        const assistant = messages.findLast((message) =>
+          message.info.role === "assistant" && message.info.parentID === current.messageID && !message.info.error,
+        )
+        await send({
+          hook_event_name: "Stop",
+          title,
+          prompt: user ? text(user.parts) : current.prompt,
+          last_assistant_message: assistant ? text(assistant.parts) : "",
+        })
+      } catch {
+        await send({ hook_event_name: "Stop", title, prompt: current.prompt })
+      }
+    },
+  }
+}) satisfies Plugin

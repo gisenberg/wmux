@@ -29,9 +29,9 @@ test("session drivers describe restart durability by backend", () => {
 
 test("powershell SSH agent sessions use the agent-owned driver", () => {
   const windows = machine({ kind: "powershell-ssh", host: "windows", sessionBackend: "agent" });
-  assert.equal(sessionBackendKindForMachine(windows), "windows-agent");
+  assert.equal(sessionBackendKindForMachine(windows), "windows-agent", "persisted discriminator remains compatible");
   assert.deepEqual(sessionBackendCapabilitiesForMachine(windows), {
-    transport: "windows-agent",
+    transport: "session-agent",
     restartDurable: true,
     supportsFileStaging: true,
     supportsCwdReport: true,

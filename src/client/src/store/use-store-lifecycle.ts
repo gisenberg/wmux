@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { api, UnauthorizedError } from "../api";
+import { BootstrapRecovery } from "../bootstrap-recovery";
 import { useEventStream } from "../useEventStream";
 import type { BootstrapPayload, EventServerMessage } from "../types";
 import type { AppStore } from "./core";
@@ -29,9 +30,7 @@ export const useStoreLifecycle = ({
 }: StoreLifecycleOptions) => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
-  const retryTimer = useRef<number | undefined>(undefined);
-  const retryAttempt = useRef(0);
-  const requestId = useRef(0);
+  const recoveryRef = useRef<BootstrapRecovery<BootstrapPayload> | undefined>(undefined);
   const loadRef = useRef<() => Promise<void>>(async () => undefined);
   const refreshRef = useRef<(payload?: BootstrapPayload) => Promise<void>>(async () => undefined);
   const pendingHealthResync = useRef<Pick<BootstrapPayload, "revision" | "healthEpoch"> | null>(null);
@@ -40,48 +39,37 @@ export const useStoreLifecycle = ({
     "eventRevision" | "healthEpoch"
   > | null>(null);
 
-  const load = useCallback(async () => {
-    const currentRequestId = ++requestId.current;
-    if (retryTimer.current) window.clearTimeout(retryTimer.current);
-    retryTimer.current = undefined;
-    try {
-      const payload = await api.bootstrap();
-      const routed = rebaseIncomingState(activateRouteTarget(payload));
-      if (currentRequestId !== requestId.current) return;
-      if (!bootstrapSatisfiesEventDelta(pendingEventResync.current, routed)) {
-        void loadRef.current();
-        return;
-      }
-      if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, routed)) {
-        void loadRef.current();
-        return;
-      }
-      pendingHealthResync.current = null;
-      pendingEventResync.current = null;
-      retryAttempt.current = 0;
-      setLoadError(null);
-      setAuthRequired(false);
-      const current = store.get();
-      const next = reconcileIncomingRevision(current, routed);
-      if (next !== current) store.set(next);
-    } catch (error) {
-      if (currentRequestId !== requestId.current) return;
-      if (error instanceof UnauthorizedError) {
-        retryAttempt.current = 0;
-        setLoadError(null);
-        setAuthRequired(true);
-        return;
-      }
-      retryAttempt.current += 1;
-      if (!store.get()) setLoadError(describeError(error));
-      const delay = Math.min(15_000, 500 * (2 ** Math.min(retryAttempt.current, 5)));
-      retryTimer.current = window.setTimeout(() => void loadRef.current(), delay);
-    }
-  }, [activateRouteTarget, describeError, rebaseIncomingState, store]);
+  const load = useCallback(async () => { await recoveryRef.current?.request(); }, []);
   loadRef.current = load;
 
   useEffect(() => {
-    void load();
+    const recovery = new BootstrapRecovery<BootstrapPayload>({
+      fetch: () => api.bootstrap(),
+      apply: (payload) => {
+        const routed = rebaseIncomingState(activateRouteTarget(payload));
+        if (!bootstrapSatisfiesEventDelta(pendingEventResync.current, routed)) return false;
+        if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, routed)) return false;
+        pendingHealthResync.current = null;
+        pendingEventResync.current = null;
+        setLoadError(null);
+        setAuthRequired(false);
+        const current = store.get();
+        const next = reconcileIncomingRevision(current, routed);
+        if (next !== current) store.set(next);
+        return true;
+      },
+      failed: (error) => {
+        if (error instanceof UnauthorizedError) {
+          setLoadError(null);
+          setAuthRequired(true);
+          return false;
+        }
+        if (!store.get()) setLoadError(describeError(error));
+        return true;
+      },
+    });
+    recoveryRef.current = recovery;
+    void recovery.request();
     const resume = () => {
       if (document.visibilityState === "hidden" || store.get()) return;
       void loadRef.current();
@@ -89,12 +77,12 @@ export const useStoreLifecycle = ({
     window.addEventListener("online", resume);
     document.addEventListener("visibilitychange", resume);
     return () => {
-      requestId.current += 1;
-      if (retryTimer.current) window.clearTimeout(retryTimer.current);
+      recovery.stop();
+      if (recoveryRef.current === recovery) recoveryRef.current = undefined;
       window.removeEventListener("online", resume);
       document.removeEventListener("visibilitychange", resume);
     };
-  }, [load, store]);
+  }, [activateRouteTarget, describeError, rebaseIncomingState, store]);
 
   useEffect(() => {
     const requireAuthentication = () => setAuthRequired(true);
@@ -104,6 +92,7 @@ export const useStoreLifecycle = ({
 
   const eventStream = useEventStream({
     enabled: !authRequired,
+    onRecoveryRequested: () => { void loadRef.current(); },
     onResync: (payload) => {
       if (!bootstrapSatisfiesEventDelta(pendingEventResync.current, payload)) return;
       if (!bootstrapSatisfiesHealthDelta(pendingHealthResync.current, payload)) return;
@@ -147,7 +136,6 @@ export const useStoreLifecycle = ({
       }
       store.update((snapshot) => applyHealthDelta(snapshot, delta) ?? null);
     },
-    onAuthRequired: () => setAuthRequired(true),
   });
 
   return {

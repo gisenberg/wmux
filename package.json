@@ -30,7 +30,10 @@
     "test:e2e:browser:webkit": "playwright test --config=playwright.browser.config.ts --project=mobile-webkit",
     "test:e2e:serve": "node --import tsx e2e/remote-server.ts",
     "docs:screenshots": "playwright test e2e/docs-screenshots.spec.ts --project=chromium --project=mobile-chromium",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.e2e.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.e2e.json && tsc -p tsconfig.integrations.json",
+    "generate:hooks": "node scripts/generate-hooks.mjs",
+    "check:hooks": "node scripts/generate-hooks.mjs --check",
+    "verify:remote": "node scripts/verify-remote.mjs",
     "check:scripts": "node scripts/check-scripts.mjs",
     "check:contracts": "node --import tsx scripts/generate-agent-contract.mjs --check",
     "generate:contracts": "node --import tsx scripts/generate-agent-contract.mjs",
@@ -49,11 +52,13 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@opencode-ai/plugin": "1.18.9",
     "@playwright/test": "^1.61.0",
     "@types/node": "^22.19.1",
     "@types/react": "^18.3.27",
     "@types/react-dom": "^18.3.7",
     "@types/ws": "^8.18.1",
+    "effect": "4.0.0-beta.83",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^7.0.2"

@@ -816,7 +816,8 @@ test("same-key metadata stays FIFO through resolve backoff while an unrelated re
   const credentialPath = path.join(directory, "pane.json");
   const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });
   let resolveAttempts = 0;
-  let unrelatedCapturedBeforeRetry = false;
+  let unrelatedCapturedWhileResolvePending = false;
+  let releaseResolve = false;
   let sameKeyOvertook = false;
   const server = http.createServer(async (request, response) => {
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -826,7 +827,7 @@ test("same-key metadata stays FIFO through resolve backoff while an unrelated re
     if (requestPath.endsWith("/challenge")) return send(201, serverChallenge());
     if (requestPath.endsWith("/refresh")) return send(200, { sourceId: "source-one", relaySecret: "R".repeat(43), expiresAt: Date.now() + 600_000, credentialGeneration: 2 });
     if (requestPath.endsWith("/requests")) {
-      if (body.id === "unrelated" && resolveAttempts === 1) unrelatedCapturedBeforeRetry = true;
+      if (body.id === "unrelated" && resolveAttempts > 0 && !releaseResolve) unrelatedCapturedWhileResolvePending = true;
       if (body.id === "same" && body.ordinal === 2 && requests.snapshot().some((item) => item.openCodeRequestId === "same" && item.state === "pending")) sameKeyOvertook = true;
       const result = requests.capture({ occurrenceId: body.occurrenceId, occurrenceKey: body.occurrenceKey,
         occurrenceOrdinal: body.ordinal, payloadDigest: body.payloadDigest, sourceId: "source-one",
@@ -839,7 +840,7 @@ test("same-key metadata stays FIFO through resolve backoff while an unrelated re
     }
     if (requestPath.endsWith("/resolve")) {
       resolveAttempts += 1;
-      if (resolveAttempts === 1) return send(503, { error: "temporary" });
+      if (!releaseResolve) return send(503, { error: "temporary" });
       const id = decodeURIComponent(requestPath.split("/").at(-2)!);
       return send(200, requests.resolveNative(id, body.generation, body.occurrenceId, body.result));
     }
@@ -856,15 +857,19 @@ test("same-key metadata stays FIFO through resolve backoff while an unrelated re
       id: "same", sessionID: "session", questions: [question], nativePending: false });
     await waitFor(() => requests.snapshot().some((item) => item.openCodeRequestId === "same"));
     broker.send({ type: "resolved", eventSequence: 2, requestID: "same", sessionID: "session", result: "replied" });
-    await waitFor(() => resolveAttempts === 1);
+    await waitFor(() => resolveAttempts >= 2);
     broker.send({ type: "asked", eventId: "same-two", eventSequence: 3,
       id: "same", sessionID: "session", questions: [question], nativePending: false });
     broker.send({ type: "asked", eventId: "other-one", eventSequence: 4,
       id: "unrelated", sessionID: "session", questions: [question], nativePending: false });
-    await waitFor(() => requests.snapshot().some((item) => item.openCodeRequestId === "same" && item.generation === 2)
-      && requests.snapshot().some((item) => item.openCodeRequestId === "unrelated"));
+    // Hold the outage until the unrelated capture commits. Scheduler speed
+    // must not decide whether it beats the broker's first retry interval.
+    await waitFor(() => requests.snapshot().some((item) => item.openCodeRequestId === "unrelated"));
+    assert.equal(unrelatedCapturedWhileResolvePending, true, "an unrelated key continues during same-key backoff");
+    assert.equal(requests.snapshot().some((item) => item.openCodeRequestId === "same" && item.generation === 2), false);
+    releaseResolve = true;
+    await waitFor(() => requests.snapshot().some((item) => item.openCodeRequestId === "same" && item.generation === 2));
     assert.equal(sameKeyOvertook, false, "capture N+1 never reaches generation allocation before resolve N succeeds");
-    assert.equal(unrelatedCapturedBeforeRetry, true, "an unrelated key continues during same-key backoff");
     assert.ok(resolveAttempts >= 2);
   } finally {
     await broker.stop(); server.close(); server.closeAllConnections(); await once(server, "close");

@@ -12,8 +12,8 @@ import type {
 import type { MachineConfig } from "../types.js";
 import type { PasteImageStager, StagedPasteImage } from "../paste-image-staging.js";
 
-export const WINDOWS_AGENT_CAPABILITIES: BackendCapabilities = {
-  transport: "windows-agent",
+export const SESSION_AGENT_CAPABILITIES: BackendCapabilities = {
+  transport: "session-agent",
   restartDurable: true,
   supportsFileStaging: true,
   supportsCwdReport: true,
@@ -25,9 +25,12 @@ export const WINDOWS_AGENT_CAPABILITIES: BackendCapabilities = {
   persistentCheckpoint: true,
 };
 
-export class WindowsAgentBackend implements SessionBackend {
+/** Shared native-agent transport; platform mechanics stay in the owning agent. */
+export class SessionAgentBackend implements SessionBackend {
+  // Historical persisted discriminator shared by both POSIX and Windows.
+  // Keep it stable until the endpoint/checkpoint envelopes have a migration.
   readonly id = "windows-agent" as const;
-  readonly capabilities = WINDOWS_AGENT_CAPABILITIES;
+  readonly capabilities = SESSION_AGENT_CAPABILITIES;
 
   constructor(
     readonly machine: MachineConfig,

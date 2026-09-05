@@ -85,8 +85,13 @@ if (process.argv.includes("--json")) {
 const summary = report.summary;
 console.log(`wmux doctor (${report.checkedAt})`);
 console.log(`${summary.paneCount} panes, ${summary.restartDurablePaneCount} restart-durable, ${summary.exitedPaneCount} exited, ${summary.sessionIssueCount} session issues`);
+const persistenceFailed = Boolean(report.persistence?.failureCount);
+if (report.persistence) {
+  const health = report.persistence;
+  console.log(`${persistenceFailed ? "[WARN]" : "[OK]"} state persistence: ${health.dirty ? "pending" : "saved"}${health.errorCode ? ` (${health.errorCode}; retrying)` : ""}`);
+}
 for (const pane of report.panes) {
   const state = pane.issue ? "issue" : pane.status;
   console.log(`${state.padEnd(8)} ${pane.transport.padEnd(18)} ${pane.machineName.padEnd(14)} ${pane.title}${pane.issue ? ` - ${pane.issue}` : ""}`);
 }
-process.exit(summary.exitedPaneCount || summary.sessionIssueCount ? 1 : 0);
+process.exit(summary.exitedPaneCount || summary.sessionIssueCount || persistenceFailed ? 1 : 0);

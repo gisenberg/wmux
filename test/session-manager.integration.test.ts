@@ -1024,6 +1024,39 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
   });
 });
 
+test("lagging viewers and output watchers disconnect without blocking a healthy viewer", async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  await withState(machine, async (state) => {
+    const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+    const manager = new SessionManager(state, [machine]);
+    const healthy = socket();
+    const slow = socket();
+    const watcher = socket();
+    try {
+      manager.attach(pane.id, healthy, 80, 24);
+      manager.attach(pane.id, slow, 80, 24);
+      manager.watchOutput(pane.id, watcher, 80, 24);
+      await Promise.all([healthy, slow, watcher].map((client) => waitForMessage(client, (message) => message.type === "ready")));
+      const closed: number[] = [];
+      for (const client of [slow, watcher]) {
+        fake(client).on("close", (code) => closed.push(code));
+        fake(client).bufferedAmount = 16 * 1024 * 1024;
+      }
+      fake(healthy).message({ type: "input", data: "printf '%s%s\\n' 'healthy-' 'after-lag'\r" });
+      await waitForMessage(healthy, (message) => message.type === "output" && message.data.includes("healthy-after-lag"));
+      assert.deepEqual(closed, [1013, 1013]);
+      assert.equal(fake(healthy).readyState, 1);
+      const recovered = socket();
+      manager.attach(pane.id, recovered, 80, 24);
+      const ready = await waitForMessage(recovered, (message) => message.type === "ready");
+      assert.match(ready.replay, /healthy-after-lag/);
+      assert.equal(state.findPane(pane.id)?.status, "running");
+    } finally {
+      manager.disposeAll();
+    }
+  });
+});
+
 test("session manager reaps expired agent workspaces while preserving retained workspaces", async () => {
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   await withState(machine, async (state) => {
@@ -1507,12 +1540,14 @@ test(
       const ready = await readyPromise;
       assert.equal(ready.outputOnly, true);
       assert.equal(ready.replay, "");
-      assert.equal(ready.waitForRefresh, true);
+      assert.equal(ready.waitForRefresh, undefined, "startup must not promise durable refresh before the backend reports its mode");
       const refreshed = await waitForWebSocketMessage(
         output,
         (message) => message.type === "output" && message.data.length > 0,
       );
       assert.notEqual(refreshed.data, "", "controller should receive the refreshed tmux display");
+      assert.equal(manager.observedCapabilities().get(pane.id)?.restartDurable, true);
+      assert.doesNotMatch(refreshed.data, /wmux-backend;/, "startup reports are not textual terminal output");
 
       const marker = `wmux-controller-live-${process.pid}`;
       const liveOutput = waitForWebSocketMessage(

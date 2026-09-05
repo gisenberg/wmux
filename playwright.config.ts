@@ -24,6 +24,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
+  failOnFlakyTests: Boolean(process.env.CI),
   reporter: process.env.CI ? [["line"], ["html", { outputFolder: "test-results/playwright-report", open: "never" }]] : "line",
   use: {
     baseURL,

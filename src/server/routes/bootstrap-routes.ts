@@ -43,12 +43,16 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
       await deps.refreshMachineStatuses(false);
       sendJson(
         200,
-        buildDoctorReport(
-          deps.state.snapshot(),
-          deps.currentMachines(),
-          deps.getMachineStatuses(),
-          await auditDurableSessions(),
-        ),
+        {
+          ...buildDoctorReport(
+            deps.state.snapshot(),
+            deps.currentMachines(),
+            deps.getMachineStatuses(),
+            await auditDurableSessions(),
+            deps.sessions.observedCapabilities(),
+          ),
+          persistence: deps.state.persistenceHealth(),
+        },
       );
     },
   },

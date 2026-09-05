@@ -539,7 +539,7 @@ Windows panes stage matching helpers when a new pane starts.
 | `wmux-agent-input-broker` | Relay structured OpenCode questions and transient answers through a pane-scoped credential |
 | `wmuxctl delegate` / `tui` | Run a visible one-shot task, a correlated durable Codex session turn, or an interactive OpenCode, Codex, Claude, or Prime Agent TUI |
 | `wmux-agent-run` | Internal POSIX staged runner used by delegation and interactive TUI launch |
-| `wmux-doctor` | Report host, pane, and durability health |
+| `wmux-doctor` | Report host, pane, observed durability, and state-persistence health |
 
 Examples:
 

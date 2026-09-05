@@ -6,6 +6,7 @@ import type { MachineConfig, PaneStartupPhase, PaneState } from "./types.js";
 import { buildSpawnSpec } from "./machines.js";
 import { appendBoundedReplay } from "./replay-buffer.js";
 import { captureOsc7 } from "./osc7.js";
+import type { BackendObservation } from "./backend-observation.js";
 import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./terminal-checkpoint.js";
 
 interface PtyEvents {
@@ -40,9 +41,13 @@ export class PtySession extends EventEmitter<PtyEvents> {
     rows: number,
     extraEnv: Record<string, string> = {},
     private readonly restoredCheckpoint?: AttachReplay,
+    private readonly backendObservation?: BackendObservation,
   ) {
     super();
-    const spec = buildSpawnSpec(machine, cols, rows, extraEnv);
+    const paneEnv = { ...extraEnv, WMUX_PANE_ID: pane.id };
+    const spec = buildSpawnSpec(machine, cols, rows, backendObservation
+      ? { ...paneEnv, WMUX_BACKEND_NONCE: backendObservation.nonce }
+      : paneEnv);
     this.title = spec.title;
     this.checkpoint = new TerminalCheckpoint(cols, rows, extraEnv);
     const trackProcessTitle = spec.trackProcessTitle ?? true;
@@ -55,6 +60,8 @@ export class PtySession extends EventEmitter<PtyEvents> {
     });
 
     this.pty.onData((data) => {
+      if (this.backendObservation) data = this.backendObservation.consume(data);
+      if (!data) return;
       this.checkpoint.write(data);
       this.appendReplay(data);
       this.captureCwd(data);

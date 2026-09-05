@@ -19,6 +19,7 @@ import type {
 import {
   createSessionBackend,
   type BackendRuntimeFile,
+  type BackendCapabilities,
   type BackendSession,
   type SessionBackend,
 } from "./backends/index.js";
@@ -185,14 +186,16 @@ const sameMachineEndpoint = (left: MachineConfig, right: MachineConfig): boolean
     agentPort: right.agentPort,
   });
 
-// Pause the PTY when a consumer socket's outbound buffer exceeds the high-water
-// mark; resume once every consumer drains below the low-water mark.
-const BACKPRESSURE_HIGH_WATER = 4 * 1024 * 1024;
-const BACKPRESSURE_LOW_WATER = 1 * 1024 * 1024;
+// Includes JSON expansion of the bounded initial replay. A lagging view must
+// reconnect from replay, never stop the pane or another consumer's output.
+const MAX_CONSUMER_BUFFER_BYTES = 16 * 1024 * 1024;
 const AGENT_WORKSPACE_CLEANUP_SWEEP_MS = 5_000;
 const STRANDED_ENDPOINT_CLEANUP_SWEEP_MS = 60_000;
 
 export class SessionManager {
+  observedCapabilities(): ReadonlyMap<string, BackendCapabilities> {
+    return new Map([...this.backends].map(([paneId, backend]) => [paneId, { ...backend.capabilities }]));
+  }
   private sessions = new Map<string, BackendSession>();
   private backends = new Map<string, SessionBackend>();
   private sockets = new Map<string, Set<WebSocket>>();
@@ -204,7 +207,7 @@ export class SessionManager {
   private sessionMachines = new Map<string, MachineConfig>();
   private agentInputSessionBindings = new Map<string, AgentInputSessionBinding>();
   private paneInputEpochs = new Map<string, number>();
-  private pausedSessions = new Map<string, ReturnType<typeof setInterval>>();
+  private consumerCloseTimers = new Set<ReturnType<typeof setTimeout>>();
   private durableRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
   private durableCwdRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private durableCwdRefreshInFlight = new Set<string>();
@@ -755,7 +758,6 @@ export class SessionManager {
         backend.write(session, response, true);
       }
       this.broadcastOutput(pane.id, data);
-      this.applyBackpressure(pane.id, session);
       this.scheduleTerminalCheckpoint(pane.id, session);
       this.schedulePaneCwdRefresh(pane, machine, session, {
         delayMs: DURABLE_CWD_OUTPUT_DELAY_MS,
@@ -959,30 +961,6 @@ export class SessionManager {
     }
   }
 
-  // Flow control: a fast PTY (e.g. `yes`) feeding a slow client would grow the
-  // outbound socket buffer without bound. Pause the PTY when any consumer's
-  // buffer crosses the high-water mark, and resume once every buffer drains.
-  private applyBackpressure(paneId: string, session: BackendSession): void {
-    if (this.pausedSessions.has(paneId)) return;
-    if (this.maxBufferedFor(paneId) <= BACKPRESSURE_HIGH_WATER) return;
-    session.pause();
-    const timer = setInterval(() => {
-      if (this.maxBufferedFor(paneId) > BACKPRESSURE_LOW_WATER && !session.isExited) return;
-      clearInterval(timer);
-      this.pausedSessions.delete(paneId);
-      if (!session.isExited) session.resume();
-    }, 50);
-    timer.unref?.();
-    this.pausedSessions.set(paneId, timer);
-  }
-
-  private maxBufferedFor(paneId: string): number {
-    let max = 0;
-    for (const socket of this.sockets.get(paneId) ?? []) max = Math.max(max, socket.bufferedAmount);
-    for (const socket of this.outputWatchers.get(paneId) ?? []) max = Math.max(max, socket.bufferedAmount);
-    return max;
-  }
-
   /** Detach every live client and clear timers. Called on process shutdown. */
   disposeAll(): void {
     clearInterval(this.agentWorkspaceCleanupTimer);
@@ -1001,8 +979,8 @@ export class SessionManager {
     this.durableCwdRefreshTimers.clear();
     this.durableCwdRefreshInFlight.clear();
     this.durableCwdLastReadAt.clear();
-    for (const timer of this.pausedSessions.values()) clearInterval(timer);
-    this.pausedSessions.clear();
+    for (const timer of this.consumerCloseTimers) clearTimeout(timer);
+    this.consumerCloseTimers.clear();
     for (const [paneId, session] of this.sessions) {
       const binding = this.agentInputSessionBindings.get(paneId);
       if (binding) this.agentInputSourceRetirer?.(paneId, binding);
@@ -1285,7 +1263,22 @@ export class SessionManager {
 
   private send(socket: WebSocket, payload: PaneServerMessage): void {
     if (socket.readyState !== socket.OPEN) return;
-    socket.send(JSON.stringify(payload));
+    const encoded = JSON.stringify(payload);
+    if (socket.bufferedAmount + Buffer.byteLength(encoded) > MAX_CONSUMER_BUFFER_BYTES) {
+      const timer = setTimeout(() => {
+        this.consumerCloseTimers.delete(timer);
+        socket.terminate();
+      }, 1_000);
+      timer.unref();
+      this.consumerCloseTimers.add(timer);
+      socket.once("close", () => {
+        clearTimeout(timer);
+        this.consumerCloseTimers.delete(timer);
+      });
+      socket.close(1013, "output gap: consumer too slow; reconnect for bounded replay");
+      return;
+    }
+    socket.send(encoded);
   }
 
   private advancePaneInputEpoch(paneId: string): void {

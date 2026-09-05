@@ -589,9 +589,10 @@ export interface DoctorPaneReport {
   machineName: string;
   status: PaneState["status"];
   exitCode?: number | null;
-  driver: "pty" | "windows-agent";
-  transport: "pty" | "local-multiplexer" | "ssh-multiplexer" | "windows-agent";
+  driver: "pty" | "session-agent" | "windows-agent";
+  transport: "pty" | "local-multiplexer" | "ssh-multiplexer" | "session-agent" | "windows-agent";
   restartDurable: boolean;
+  capabilitySource?: "live" | "unconfirmed";
   replay: boolean;
   cwd: "osc7" | "multiplexer" | "agent";
   machineReachable: boolean;
@@ -600,6 +601,12 @@ export interface DoctorPaneReport {
 
 export interface DoctorReport {
   checkedAt: string;
+  persistence?: {
+    dirty: boolean;
+    failureCount: number;
+    lastSuccessAt?: string;
+    errorCode?: string;
+  };
   summary: {
     paneCount: number;
     restartDurablePaneCount: number;
