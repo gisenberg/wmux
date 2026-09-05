@@ -7,7 +7,13 @@ function remoteMain(options) {
   let code = 1;
   const started = Date.now();
   const run = (command, args, capture = false) => {
-    const result = spawnSync(command, args, { encoding: "utf8", stdio: capture ? "pipe" : "inherit", env: { ...process.env, WMUX_RUNTIME_SCOPED: "1" } });
+    const env = { ...process.env, WMUX_RUNTIME_SCOPED: "1" };
+    // The visible runner may itself be in tmux/screen. Test fixture sessions
+    // are independent, not nested clients of that enclosing multiplexer.
+    delete env.TMUX;
+    delete env.TMUX_PANE;
+    delete env.STY;
+    const result = spawnSync(command, args, { encoding: "utf8", stdio: capture ? "pipe" : "inherit", env });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`${command} failed (${result.status})`);
     return (result.stdout || "").trim();
