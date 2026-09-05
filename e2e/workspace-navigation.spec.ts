@@ -909,9 +909,15 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
   await expect(page.getByRole("button", { name: "Latest" })).toBeVisible();
 
+  // setViewportSize resolves before the app necessarily measures its new
+  // keyboard-closed baseline. Observe that measurement before focusing input.
+  await expect.poll(() => page.evaluate(() =>
+    document.documentElement.style.getPropertyValue("--wmux-viewport-height"),
+  )).toBe("720px");
   await page.getByRole("button", { name: "Latest" }).click();
   const composer = page.getByRole("textbox", { name: "Agent message" });
   await composer.fill("mobile follow-up");
+  await expect(composer).toBeFocused();
   await page.setViewportSize({ width: 390, height: 520 });
   const appShell = page.locator("main.app-shell");
   await expect(appShell).toHaveClass(/mobile-keyboard-open/);
