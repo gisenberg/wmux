@@ -22,11 +22,13 @@ const openDelayedRetroBoot = async ({
   currentPage,
   mobile,
   randomValue,
+  controlledClock = false,
 }: {
   browser: import("@playwright/test").Browser;
   currentPage: import("@playwright/test").Page;
   mobile: boolean;
   randomValue: number;
+  controlledClock?: boolean;
 }) => {
   const storageState = await currentPage.context().storageState();
   const context = await browser.newContext({
@@ -35,6 +37,13 @@ const openDelayedRetroBoot = async ({
     viewport: mobile ? { width: 412, height: 915 } : { width: 1440, height: 900 },
   });
   const page = await context.newPage();
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  if (controlledClock) {
+    const start = new Date("2025-01-01T00:00:00Z");
+    await page.clock.install({ time: start });
+    await page.clock.pauseAt(start);
+  }
   let releaseBootstrap: () => void = () => undefined;
   const bootstrapGate = new Promise<void>((resolve) => {
     releaseBootstrap = resolve;
@@ -54,6 +63,7 @@ const openDelayedRetroBoot = async ({
     close: async () => {
       releaseBootstrap();
       await context.close();
+      expect(pageErrors, "retro boot must not throw browser errors").toEqual([]);
     },
   };
 };
@@ -229,31 +239,38 @@ test("Spectrum tape phases animate their native palettes and stop under reduced 
     currentPage,
     mobile: false,
     randomValue: 0.212_765_957_446_808_5,
+    controlledClock: true,
   });
   try {
     const screen = boot.page.locator('[data-boot-profile="zx-spectrum"]');
-    await expect.poll(async () => screen.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return element.getAttribute("data-tape-border") === "header"
-        && style.animationName === "retro-tape-border-shift"
-        && !style.backgroundImage.includes("135deg")
-        && style.backgroundSize === "100% 24px"
-        && style.backgroundImage.includes("rgb(0, 215, 215)")
-        && style.backgroundImage.includes("rgb(215, 0, 0)");
-    }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
+    await expect.poll(async () => {
+      await boot.page.clock.runFor(50);
+      return screen.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return element.getAttribute("data-tape-border") === "header"
+          && style.animationName === "retro-tape-border-shift"
+          && !style.backgroundImage.includes("135deg")
+          && style.backgroundSize === "100% 24px"
+          && style.backgroundImage.includes("rgb(0, 215, 215)")
+          && style.backgroundImage.includes("rgb(215, 0, 0)");
+      });
+    }, { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
     await boot.page.screenshot({ path: testInfo.outputPath("zx-spectrum-header.png") });
 
     await boot.page.emulateMedia({ reducedMotion: "reduce" });
     await expect.poll(() => screen.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
     await boot.page.emulateMedia({ reducedMotion: "no-preference" });
 
-    await expect.poll(async () => screen.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return element.getAttribute("data-tape-border") === "data"
-        && style.animationDuration === "0.11s"
-        && style.backgroundImage.includes("rgb(22, 59, 215)")
-        && style.backgroundImage.includes("rgb(230, 219, 0)");
-    }), { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
+    await expect.poll(async () => {
+      await boot.page.clock.runFor(50);
+      return screen.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return element.getAttribute("data-tape-border") === "data"
+          && style.animationDuration === "0.11s"
+          && style.backgroundImage.includes("rgb(22, 59, 215)")
+          && style.backgroundImage.includes("rgb(230, 219, 0)");
+      });
+    }, { intervals: [10, 20, 50], timeout: 20_000 }).toBe(true);
   } finally {
     await boot.close();
   }

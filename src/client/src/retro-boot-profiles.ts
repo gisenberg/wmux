@@ -108,7 +108,8 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       typed('LOAD "$",8\n\n', 90),
       step("SEARCHING FOR $\nLOADING\nREADY.\n", 110),
       typed("LIST\n\n", 70),
-      { ...step('0 "WMUX BOOT DISK  " 64 2A\n'), inverse: true },
+      step("0 ", 0),
+      { ...step('"WMUX BOOT DISK  " 64 2A\n'), inverse: true },
       step('4    "WMUX"             PRG\n', 45),
       step('8    "MACHINES"         SEQ\n', 45),
       step('12   "WORKSPACES"       SEQ\n', 45),
@@ -297,7 +298,7 @@ export const RETRO_BOOT_PROFILES: readonly RetroBootProfile[] = [
       { ...step(" (C) 1982 Sinclair Research Ltd", 650), position: { row: 23, column: 1 } },
       // LOAD is a single J-key token, not four separately typed letters.
       { ...typed('""\n', 110, "LOAD "), clear: true, position: { row: 23, column: 1 } },
-      tapeStep("", 650, "header"),
+      { ...tapeStep("", 650, "header"), position: { row: 23, column: 1 }, overwrite: true },
       tapeStep("", 120, "data"),
       { ...step("Program: WMUX", 220), position: { row: 1, column: 1 } },
       tapeStep("", 400, "header"),

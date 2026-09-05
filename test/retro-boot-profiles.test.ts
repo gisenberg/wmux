@@ -211,6 +211,7 @@ test("Spectrum uses bottom-line keyword entry and both tape blocks with a gap", 
   assert.equal(spectrum.boot[0].position?.row, 23);
   assert.equal(spectrum.boot[1].typedFrom, 5);
   assert.equal(spectrum.boot[1].clear, true);
+  assert.equal(spectrum.boot[2].overwrite, true);
   assert.deepEqual(spectrum.boot.slice(2, 7).map((step) => step.tapeBorder), ["header", "data", undefined, "header", "data"]);
   assert.ok(spectrum.boot.every((step) => !step.text.includes("Bytes:")));
   for (const profile of RETRO_BOOT_PROFILES) {

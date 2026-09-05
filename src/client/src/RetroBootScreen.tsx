@@ -81,6 +81,12 @@ function RetroTerminalBootScreen({
   useRetroFramebuffer(screenRef, profile.id);
 
   useEffect(() => {
+    // Ghostty initializes behind artwork; its textarea must not steal focus
+    // from the Guru acknowledgement button while it is hidden.
+    if (hostRef.current) hostRef.current.inert = visualPhase !== "terminal";
+  }, [visualPhase]);
+
+  useEffect(() => {
     authRequiredRef.current = authRequired;
   }, [authRequired]);
 
@@ -122,7 +128,9 @@ function RetroTerminalBootScreen({
       acknowledgeGuruRef.current = finish;
     });
     const terminalText = (text: string) => text.replaceAll("\n", "\r\n");
-    const write = (text: string) => terminal?.write(terminalText(text));
+    const write = (text: string) => {
+      if (text) terminal?.write(terminalText(text));
+    };
     const writeCommitted = (text: string) =>
       new Promise<void>((resolve) => {
         if (!terminal || !text) {
@@ -364,7 +372,7 @@ function RetroTerminalBootScreen({
     >
       <section className="retro-boot-bezel" aria-label={`${profile.name} wmux loading`}>
         <div className="retro-boot-framebuffer">
-          <div className="retro-boot-terminal-frame">
+          <div className="retro-boot-terminal-frame" aria-hidden={visualPhase !== "terminal" || undefined}>
             {isAmiga ? (
               <div className="retro-amiga-shell-titlebar" aria-hidden="true">
                 <span className="retro-amiga-shell-gadget">0</span>

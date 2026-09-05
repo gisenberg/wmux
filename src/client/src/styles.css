@@ -4648,7 +4648,14 @@ button.active-tool {
 
 .retro-graphical-lisa .retro-graphical-login,
 .retro-graphical-nextstep .retro-graphical-login {
-  font-family: "Retro Lisa Console", monospace;
+  font-family: Helvetica, Arial, sans-serif;
+}
+
+.retro-graphical-nextstep .retro-graphical-login-title {
+  background: #000;
+  color: #fff;
+  font-weight: bold;
+  text-align: left;
 }
 
 .retro-graphical-atari-st .retro-graphical-login {
