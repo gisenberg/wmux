@@ -177,6 +177,7 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.match(extension, /agent_start/);
     assert.match(extension, /WMUX_PRIME_RETRY_GRACE_MS/);
     assert.match(extension, /WMUX_PRIME_LATE_RETRY_WINDOW_MS/);
+    assert.match(extension, /WMUX_PRIME_IDLE_RECONCILE_MS/);
     assert.match(extension, /scheduled-jobs\.json/);
     assert.match(extension, /HeartbeatScheduled/);
     assert.match(extension, /HeartbeatCleared/);
@@ -186,10 +187,19 @@ test("Prime Agent installer writes an idempotent managed extension and preserves
     assert.match(extension, /stopReason === "toolUse"/);
     assert.match(extension, /WMUX_DELEGATED_RUN/);
     assert.match(extension, /identityTupleFromEnvironment\("HERDR"\)/);
+    assert.match(extension, /getSessionClientContext/);
+    assert.match(extension, /session_client_context_changed/);
+    assert.match(extension, /generation: number/);
+    assert.match(extension, /type TurnBinding = Readonly/);
+    assert.match(extension, /wmux\.prime-agent\.client-bindings\.v2/);
+    assert.doesNotMatch(extension, /root\.prompt\s*=/);
     assert.match(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER/);
     assert.doesNotMatch(extension, /daemonDescriptorIdentity/);
     assert.doesNotMatch(extension, /PRIME_AGENT_INTERNAL_DAEMON_WORKER_(?:ACTIVE_SESSION_ID|RECOVERY_JOURNAL)/);
     assert.match(extension, /pi\.on\("tool_call"/);
+    assert.match(extension, /pi\.on\("tool_result"/);
+    assert.match(extension, /hook_event_name: "Question"/);
+    assert.match(extension, /hook_event_name: "Resume"/);
     assert.match(extension, /hasPendingMessages/);
     assert.match(extension, /--prime-agent-hook/);
     assert.match(extension, /wmux-title/);
@@ -246,7 +256,7 @@ test("Prime Agent extension binds each session to its forwarded pane environment
     "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
     "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "WMUX_DELEGATED_RUN", "RLM_DEPTH",
     "PRIME_AGENT_INTERNAL_DAEMON_WORKER", "WMUX_PRIME_RETRY_GRACE_MS",
-    "WMUX_PRIME_LATE_RETRY_WINDOW_MS",
+    "WMUX_PRIME_LATE_RETRY_WINDOW_MS", "WMUX_PRIME_IDLE_RECONCILE_MS",
   ].map((key) => [key, process.env[key]]));
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -268,14 +278,20 @@ test("Prime Agent extension binds each session to its forwarded pane environment
       WMUX_TAB_ID: "tab_aaaaaaaa",
       WMUX_PANE_ID: "pane_aaaaaaaa",
       PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
-      WMUX_PRIME_RETRY_GRACE_MS: "80",
+      WMUX_PRIME_RETRY_GRACE_MS: "240",
       WMUX_PRIME_LATE_RETRY_WINDOW_MS: "500",
+      WMUX_PRIME_IDLE_RECONCILE_MS: "80",
     });
     await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
     const extensionPath = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
-    const context = (rlmDepth = 0, pending = false, sessionId = rlmDepth > 0 ? "child-default" : "root") => ({
+    const context = (
+      rlmDepth = 0,
+      pending = false,
+      sessionId = rlmDepth > 0 ? "child-default" : "root",
+      idle = false,
+    ) => ({
       hasPendingMessages: () => pending,
-      isIdle: () => true,
+      isIdle: () => idle,
       sessionManager: {
         getSessionId: () => sessionId,
         getSessionDir: () => path.join(home, ".prime", "agent", "sessions"),
@@ -537,6 +553,45 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
       ["pane_11111111", "completed", ""],
     ]);
 
+    // The interactive questionnaire is a positive input request. Keep the pane
+    // waiting until every overlapping questionnaire tool has resolved.
+    const questionStart = captured.length;
+    await one.get("before_agent_start")?.({ prompt: "Ask deployment questions" }, context(0, false, "root-questionnaire"));
+    const questionRunId = captured.at(-1)?.runId;
+    await one.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "question-1", input: {} }, context(0, false, "root-questionnaire"));
+    await one.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "question-1", input: {} }, context(0, false, "root-questionnaire"));
+    await one.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "question-2", input: {} }, context(0, false, "root-questionnaire"));
+    assert.deepEqual(captured.slice(questionStart).map((event) => [event.status, event.attentionReason]), [
+      ["running", undefined],
+      ["waiting", "input"],
+    ]);
+    await one.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "question-1" }, context(0, false, "root-questionnaire"));
+    await one.get("tool_result")?.({ toolName: "ipython", toolCallId: "other-tool" }, context(0, false, "root-questionnaire"));
+    assert.equal(captured.at(-1)?.status, "waiting");
+    await one.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "question-2" }, context(0, false, "root-questionnaire"));
+    assert.equal(captured.at(-1)?.status, "running");
+    assert.equal(captured.at(-1)?.runId, questionRunId);
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "questions answered" }] }, context(0, false, "root-questionnaire"));
+    assert.deepEqual(captured.slice(questionStart).map((event) => event.status), [
+      "running", "waiting", "running", "completed",
+    ]);
+    assert.ok(captured.slice(questionStart).every((event) => event.runId === questionRunId));
+
+    // A nested questionnaire updates the pane's published root lifecycle rather
+    // than creating an unrelated child run.
+    const nestedQuestionStart = captured.length;
+    await one.get("before_agent_start")?.({ prompt: "Delegate a question" }, context(0, false, "root-nested-question"));
+    const nestedQuestionRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "ask parent" }, context(1, false, "child-question"));
+    await childOneA.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "child-question-1", input: {} }, context(1, false, "child-question"));
+    await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "root waits for child" }] }, context(0, false, "root-nested-question"));
+    await childOneA.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "child-question-1" }, context(1, false, "child-question"));
+    await childOneA.get("agent_end")?.({ messages: [{ role: "assistant", content: "child answered" }] }, context(1, false, "child-question"));
+    assert.deepEqual(captured.slice(nestedQuestionStart).map((event) => event.status), [
+      "running", "waiting", "running", "completed",
+    ]);
+    assert.ok(captured.slice(nestedQuestionStart).every((event) => event.runId === nestedQuestionRunId));
+
     // A queued continuation remains on one run without a false completion flicker.
     await one.get("before_agent_start")?.({ prompt: "Continue pending work" }, context());
     const pendingRunId = captured.at(-1)?.runId;
@@ -547,6 +602,32 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     await one.get("agent_end")?.({ messages: [{ role: "assistant", content: "finished" }] }, context());
     assert.equal(captured.at(-1)?.status, "completed");
     assert.equal(captured.at(-1)?.runId, pendingRunId);
+    const continuationCount = captured.length;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, continuationCount);
+
+    // Prime can be between streams while queued work still exists. Keep the
+    // binding until the queue drains, then reconcile without another hook.
+    const pendingIdleState = { pending: true, idle: true };
+    const pendingIdleContext = {
+      ...context(0, false, "root-pending-idle"),
+      hasPendingMessages: () => pendingIdleState.pending,
+      isIdle: () => pendingIdleState.idle,
+    };
+    await one.get("before_agent_start")?.({ prompt: "Pending queue settles idle" }, pendingIdleContext);
+    const pendingIdleRunId = captured.at(-1)?.runId;
+    const pendingIdleCount = captured.length;
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "settled after pending queue", stopReason: "stop",
+    }] }, pendingIdleContext);
+    assert.equal(captured.length, pendingIdleCount);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, pendingIdleCount);
+    pendingIdleState.pending = false;
+    await waitUntil(() => captured.length === pendingIdleCount + 1);
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.message, "settled after pending queue");
+    assert.equal(captured.at(-1)?.runId, pendingIdleRunId);
 
     // Prime ends an in-progress tool loop before deciding to auto-compact. The
     // post-compaction continue does not emit another before_agent_start, so the
@@ -624,6 +705,18 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     await unsafe.get("session_start")?.({ reason: "startup" }, context(0, false, "../escape"));
     assert.equal(captured.length, traversalCount);
     await unsafe.get("session_shutdown")?.({ reason: "quit" }, context(0, false, "../escape"));
+
+    // A reload can inherit a binding whose terminal hook was already missed.
+    // The successor module closes it once the retained session is observably idle.
+    await one.get("before_agent_start")?.({ prompt: "Heal stale reload" }, context(0, false, "root-stale-reload"));
+    const staleReloadRunId = captured.at(-1)?.runId;
+    const staleReloadCount = captured.length;
+    await one.get("session_shutdown")?.({ reason: "reload" }, context(0, false, "root-stale-reload"));
+    await childOneReloaded.get("session_start")?.({ reason: "reload" }, context(0, false, "root-stale-reload", true));
+    await waitUntil(() => captured.at(-1)?.runId === staleReloadRunId && captured.at(-1)?.status === "completed");
+    assert.ok(captured.length >= staleReloadCount + 1);
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.runId, staleReloadRunId);
 
     // Missing forwarded identity fails closed even when daemon ambient WMUX_*
     // variables contain another pane. Delegated worker sessions remain silent.
@@ -757,6 +850,39 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     assert.equal(captured.at(-1)?.message, "message root done");
     assert.equal(captured.at(-1)?.runId, messageRootRunId);
 
+    // Pending-message terminal hints on both a root and descendant must settle
+    // exactly once when both sessions become idle, preserving the root outcome.
+    const pendingAggregateState = { root: true, child: true };
+    const pendingAggregateRootContext = {
+      ...context(0, false, "pending-aggregate-root"),
+      hasPendingMessages: () => pendingAggregateState.root,
+      isIdle: () => true,
+    };
+    const pendingAggregateChildContext = {
+      ...context(1, false, "pending-aggregate-child"),
+      hasPendingMessages: () => pendingAggregateState.child,
+      isIdle: () => true,
+    };
+    await one.get("before_agent_start")?.({ prompt: "Pending aggregate settles" }, pendingAggregateRootContext);
+    const pendingAggregateRunId = captured.at(-1)?.runId;
+    await childOneA.get("before_agent_start")?.({ prompt: "pending child" }, pendingAggregateChildContext);
+    const pendingAggregateCount = captured.length;
+    await childOneA.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "pending child done", stopReason: "stop",
+    }] }, pendingAggregateChildContext);
+    await one.get("agent_end")?.({ messages: [{
+      role: "assistant", content: "pending aggregate root done", stopReason: "stop",
+    }] }, pendingAggregateRootContext);
+    assert.equal(captured.length, pendingAggregateCount);
+    pendingAggregateState.root = false;
+    pendingAggregateState.child = false;
+    await waitUntil(() => captured.length === pendingAggregateCount + 1);
+    assert.equal(captured.at(-1)?.status, "completed");
+    assert.equal(captured.at(-1)?.message, "pending aggregate root done");
+    assert.equal(captured.at(-1)?.runId, pendingAggregateRunId);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, pendingAggregateCount + 1);
+
     // If the root grace expires while descendants still hold its Error, that
     // terminal is unsent. A late agent_start restores the original run instead
     // of splitting it, and descendant release cannot flush the stale failure.
@@ -767,7 +893,7 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     await one.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "error", errorMessage: "Root retry delayed." }] }, context(0, false, "root-retry-deferred"));
     await waitUntil(() => {
       const shared = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, any>;
-      return shared.get("pane_11111111")?.pendingRootTerminal?.binding?.runId === deferredRetryRunId;
+      return shared.get("[\"legacy:pane_11111111\",0,\"pane_11111111\"]")?.pendingRootTerminal?.binding?.runId === deferredRetryRunId;
     });
     assert.equal(captured.length, deferredRetryCount);
     await one.get("agent_start")?.({}, context(0, false, "root-retry-deferred"));
@@ -827,7 +953,7 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     assert.equal(captured.at(-1)?.message, "Root provider failed.");
     await waitUntil(() => {
       const shared = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, any>;
-      return shared.get("pane_11111111")?.lateRetryFailures?.has("root-error-deferred") === false;
+      return shared.get("[\"legacy:pane_11111111\",0,\"pane_11111111\"]")?.lateRetryFailures?.has("root-error-deferred") === false;
     });
     await one.get("session_shutdown")?.({ reason: "quit" }, context(0, false, "root-error-deferred"));
 
@@ -854,13 +980,16 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     assert.equal(captured.at(-1)?.runId, retryRunId);
     assert.equal(captured.slice(retryRunningCount).some((event) => event.status === "failed"), false);
 
-    // A reload during retry transfers through the process-shared hold. The
-    // successor module's agent_start cancels the predecessor's timer.
+    // A reload during retry transfers through the process-shared hold. Idle
+    // startup healing must not steal the binding before agent_start resumes it.
     await one.get("before_agent_start")?.({ prompt: "Reload during retry" }, context(0, false, "root-retry-reload"));
     const reloadRetryRunId = captured.at(-1)?.runId;
     const reloadRetryCount = captured.length;
     await one.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "error", errorMessage: "Retry across reload." }] }, context(0, false, "root-retry-reload"));
     await one.get("session_shutdown")?.({ reason: "reload" }, context(0, false, "root-retry-reload"));
+    await childOneReloaded.get("session_start")?.({}, context(0, false, "root-retry-reload", true));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(captured.length, reloadRetryCount);
     await childOneReloaded.get("agent_start")?.({}, context(0, false, "root-retry-reload"));
     await childOneReloaded.get("agent_end")?.({ messages: [{ role: "assistant", content: "Reload retry recovered", stopReason: "stop" }] }, context(0, false, "root-retry-reload"));
     assert.equal(captured.length, reloadRetryCount + 1);
@@ -919,8 +1048,8 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     await one.get("session_shutdown")?.({ reason: "quit" }, context());
     await two.get("session_shutdown")?.({ reason: "quit" }, context());
     const sharedActivity = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, unknown>;
-    assert.equal(sharedActivity.has("pane_11111111"), false);
-    assert.equal(sharedActivity.has("pane_22222222"), false);
+    assert.equal(sharedActivity.has("[\"legacy:pane_11111111\",0,\"pane_11111111\"]"), false);
+    assert.equal(sharedActivity.has("[\"legacy:pane_22222222\",0,\"pane_22222222\"]"), false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {
@@ -930,6 +1059,426 @@ printf '%s|%s\n' "$WMUX_PANE_ID" "$HERDR_PANE_ID"` } };
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("Prime Agent extension rebinds immutable client context generations without reviving stale panes", { skip: process.platform === "win32", concurrency: false }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-client-context-"));
+  const captured: Record<string, unknown>[] = [];
+  const titleCaptured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      (request.url?.endsWith("/auto-title") ? titleCaptured : captured).push(body);
+      response.writeHead(request.url?.endsWith("/auto-title") ? 200 : 201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  const saved = Object.fromEntries([
+    "HOME", "WMUX_URL", "WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_TOKEN", "WMUX_TOKEN_PATH",
+    "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE",
+    "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID",
+    "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "PRIME_AGENT_INTERNAL_DAEMON_WORKER",
+  ].map((key) => [key, process.env[key]]));
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    Object.assign(process.env, {
+      HOME: home,
+      WMUX_URL: `http://127.0.0.1:${address.port}`,
+      WMUX_TOKEN: "",
+      WMUX_TOKEN_PATH: path.join(home, "missing-token"),
+      WMUX_BROWSER_AUTH_MODE: "shared-or-login",
+      HERDR_WORKSPACE_ID: "ws_aaaaaaaa",
+      HERDR_TAB_ID: "tab_aaaaaaaa",
+      HERDR_PANE_ID: "pane_aaaaaaaa",
+      PRIME_AGENT_INTERNAL_DAEMON_WORKER: "1",
+    });
+    delete process.env.WMUX_HELPER_URL;
+    delete process.env.WMUX_PUBLIC_URL;
+    delete process.env.WMUX_HELPER_TOKEN;
+    delete process.env.WMUX_HELPER_TOKEN_PATH;
+    await execFileAsync(path.join(repoRoot, "scripts", "wmux-hooks"), ["install", "prime-agent"], { env: process.env });
+    const installed = path.join(home, ".prime", "agent", "extensions", "wmux.ts");
+    const client = (generation: number, digit: string, complete = true) => ({
+      generation,
+      env: {
+        HERDR_WORKSPACE_ID: `ws_${digit.repeat(8)}`,
+        ...(complete ? { HERDR_TAB_ID: `tab_${digit.repeat(8)}`, HERDR_PANE_ID: `pane_${digit.repeat(8)}` } : {}),
+        // These are intentionally irrelevant to the identity contract.
+        HERDR_ENV: "ignored",
+        WMUX_WORKSPACE_ID: "ws_ffffffff",
+        WMUX_TAB_ID: "tab_ffffffff",
+        WMUX_PANE_ID: "pane_ffffffff",
+      },
+    });
+    let currentClient: unknown = client(1, "a");
+    const sessionDir = path.join(home, ".prime", "agent", "sessions");
+    const rootSessionFile = path.join(sessionDir, "client-root.jsonl");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(rootSessionFile, JSON.stringify({
+      type: "session", id: "client-root", timestamp: new Date().toISOString(), cwd: home, rlmDepth: 0,
+    }) + "\n");
+    const context = (depth = 0, sessionId = depth ? "client-child" : "client-root", malformedDepth: unknown = depth, snapshot: unknown = currentClient) => ({
+      hasPendingMessages: () => false,
+      getSessionClientContext: () => snapshot,
+      sessionManager: {
+        getSessionId: () => sessionId,
+        getSessionDir: () => sessionDir,
+        getSessionFile: () => path.join(sessionDir, sessionId + ".jsonl"),
+        getHeader: () => ({
+          type: "session",
+          id: sessionId,
+          rlmDepth: malformedDepth,
+          ...(depth > 0 ? { parentSession: rootSessionFile } : {}),
+        }),
+      },
+    });
+    const load = async (suffix: string) => {
+      const extensionPath = path.join(home, `.prime-client-context-${suffix}-${Date.now()}-${Math.random()}.ts`);
+      fs.copyFileSync(installed, extensionPath);
+      const module = await import(pathToFileURL(extensionPath).href);
+      const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+      module.default({
+        on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(name, handler),
+        getSessionName: () => "Resumed title",
+        appendEntry: () => {},
+      });
+      return handlers;
+    };
+    const rootHandlers = await load("root");
+    assert.equal(rootHandlers.has("session_client_context_changed"), true);
+    await rootHandlers.get("session_start")?.({}, context());
+    await rootHandlers.get("before_agent_start")?.({ prompt: "First pane" }, context());
+    const firstRun = captured.at(-1)?.runId;
+    await rootHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "done" }] }, context());
+    assert.equal(captured.at(-1)?.paneId, "pane_aaaaaaaa");
+    assert.equal(captured.at(-1)?.runId, firstRun);
+    assert.ok(titleCaptured.some((request) => request.paneId === "pane_aaaaaaaa"));
+
+    currentClient = client(2, "b");
+    await rootHandlers.get("session_client_context_changed")?.({}, context());
+    await waitUntil(() => {
+      const activities = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, unknown>;
+      return activities.has("[\"client-root\",1,\"pane_aaaaaaaa\"]") === false;
+    });
+    assert.ok(titleCaptured.some((request) => request.paneId === "pane_bbbbbbbb" && request.title === "Resumed title"));
+    await rootHandlers.get("before_agent_start")?.({ prompt: "Second pane" }, context());
+    const reboundRun = captured.at(-1)?.runId;
+    assert.equal(captured.at(-1)?.paneId, "pane_bbbbbbbb");
+    const reboundActivities = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, any>;
+    const reboundBinding = reboundActivities.get("[\"client-root\",2,\"pane_bbbbbbbb\"]")?.root?.binding;
+    assert.equal(Object.isFrozen(reboundBinding), true);
+    assert.equal(Object.isFrozen(reboundBinding?.identity), true);
+    const tool = { toolName: "ipython", input: { code: "import os; print(os.environ.get('HERDR_PANE_ID'))" } };
+    await rootHandlers.get("tool_call")?.(tool, context());
+    const toolResult = await execFileAsync("python3", ["-c", tool.input.code], { env: process.env });
+    assert.equal(toolResult.stdout.trim(), "pane_bbbbbbbb");
+    await rootHandlers.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "rebound-question" }, context());
+    assert.equal(captured.at(-1)?.status, "waiting");
+    assert.equal(captured.at(-1)?.runId, reboundRun);
+    assert.equal(captured.at(-1)?.paneId, "pane_bbbbbbbb");
+    // Invalid, stale, and equal-generation conflicting callbacks have no
+    // authority over B. They must not inject a tool binding or mutate/emit any
+    // lifecycle state from the accepted B root.
+    for (const rejected of [
+      client(3, "c", false),
+      { generation: 3, env: { HERDR_WORKSPACE_ID: "bad" } },
+      client(2, "c"),
+      client(1, "a"),
+    ]) {
+      currentClient = rejected;
+      const quiet = captured.length;
+      const untouched = { toolName: "ipython", input: { code: "print('unchanged')" } };
+      await rootHandlers.get("session_client_context_changed")?.({}, context());
+      await rootHandlers.get("before_agent_start")?.({ prompt: "must stay quiet" }, context());
+      await rootHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "stale" }] }, context());
+      await rootHandlers.get("session_shutdown")?.({ reason: "stale" }, context());
+      await rootHandlers.get("tool_call")?.(untouched, context());
+      await rootHandlers.get("tool_call")?.({ toolName: "questionnaire", toolCallId: "rejected-question" }, context());
+      await rootHandlers.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "rebound-question" }, context());
+      assert.equal(captured.length, quiet);
+      assert.equal(untouched.input.code, "print('unchanged')");
+    }
+
+    // A valid snapshot inside an otherwise malformed callback is still a total
+    // no-op: it cannot advance authority, mutate a tool, or tear down B.
+    currentClient = client(3, "c");
+    const malformedContext = context(0, "client-root", "not-a-depth");
+    const malformedQuiet = captured.length;
+    const malformedTitles = titleCaptured.length;
+    const malformedTool = { toolName: "ipython", input: { code: "print('unchanged malformed')" } };
+    await rootHandlers.get("session_client_context_changed")?.({}, malformedContext);
+    await rootHandlers.get("session_start")?.({}, malformedContext);
+    await rootHandlers.get("before_agent_start")?.({ prompt: "malformed" }, malformedContext);
+    await rootHandlers.get("agent_start")?.({}, malformedContext);
+    await rootHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "malformed" }] }, malformedContext);
+    await rootHandlers.get("session_shutdown")?.({ reason: "malformed" }, malformedContext);
+    await rootHandlers.get("tool_call")?.(malformedTool, malformedContext);
+    assert.equal(captured.length, malformedQuiet);
+    assert.equal(titleCaptured.length, malformedTitles);
+    assert.equal(malformedTool.input.code, "print('unchanged malformed')");
+    const clientRegistry = (globalThis as any)[Symbol.for("wmux.prime-agent.client-bindings.v2")] as {
+      entries: Map<string, { highWaterGeneration: number }>;
+    };
+    assert.equal(clientRegistry.entries.get("client-root")?.highWaterGeneration, 2);
+
+    // The exact accepted snapshot may continue the existing logical run. Its
+    // starting prompt and immutable run binding remain unchanged.
+    currentClient = client(2, "b");
+    await rootHandlers.get("tool_result")?.({ toolName: "questionnaire", toolCallId: "rebound-question" }, context());
+    assert.equal(captured.at(-1)?.status, "running");
+    assert.equal(captured.at(-1)?.runId, reboundRun);
+    const continuationCount = captured.length;
+    await rootHandlers.get("before_agent_start")?.({ prompt: "replacement prompt must not mutate B" }, context());
+    assert.equal(captured.length, continuationCount + 1);
+    assert.equal(captured.at(-1)?.runId, reboundRun);
+    await rootHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "done" }] }, context());
+    assert.equal(captured.at(-1)?.runId, reboundRun);
+
+    // A separately evaluated child shares the root session's high-water mark.
+    // It rejects A after root B, then accepts and inherits exact B.
+    currentClient = client(1, "a");
+    const childHandlers = await load("child");
+    const childContext = () => context(1);
+    const quiet = captured.length;
+    await childHandlers.get("session_start")?.({}, childContext());
+    await childHandlers.get("before_agent_start")?.({ prompt: "old child must stay quiet" }, childContext());
+    assert.equal(captured.length, quiet);
+    currentClient = client(2, "b");
+    await childHandlers.get("session_client_context_changed")?.({}, childContext());
+    await childHandlers.get("before_agent_start")?.({ prompt: "child rebound" }, childContext());
+    assert.equal(captured.at(-1)?.paneId, "pane_bbbbbbbb");
+    const familyActivity = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, any>;
+    assert.equal(familyActivity.get("[\"client-root\",2,\"pane_bbbbbbbb\"]")?.descendants?.has("client-child"), true);
+    await childHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "done" }] }, childContext());
+
+    // Independent sessions can legitimately share a pane and generation. Their
+    // activity namespaces and retirement remain isolated by root family.
+    const independentOne = await load("independent-one");
+    const independentTwo = await load("independent-two");
+    const sharedPane = client(1, "d");
+    const independentOneContext = context(0, "independent-one", 0, sharedPane);
+    const independentTwoContext = context(0, "independent-two", 0, sharedPane);
+    await independentOne.get("session_start")?.({}, independentOneContext);
+    await independentTwo.get("session_start")?.({}, independentTwoContext);
+    await independentOne.get("before_agent_start")?.({ prompt: "independent one" }, independentOneContext);
+    const independentOneRun = captured.at(-1)?.runId;
+    await independentTwo.get("before_agent_start")?.({ prompt: "independent two" }, independentTwoContext);
+    const independentTwoRun = captured.at(-1)?.runId;
+    assert.notEqual(independentOneRun, independentTwoRun);
+    const activities = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, any>;
+    assert.equal(activities.get("[\"independent-one\",1,\"pane_dddddddd\"]")?.root?.binding?.runId, independentOneRun);
+    assert.equal(activities.get("[\"independent-two\",1,\"pane_dddddddd\"]")?.root?.binding?.runId, independentTwoRun);
+    const independentOneMoved = context(0, "independent-one", 0, client(2, "e"));
+    await independentOne.get("session_client_context_changed")?.({}, independentOneMoved);
+    assert.equal(activities.get("[\"independent-two\",1,\"pane_dddddddd\"]")?.root?.binding?.runId, independentTwoRun);
+    await independentTwo.get("agent_end")?.({ messages: [{ role: "assistant", content: "two done" }] }, independentTwoContext);
+    assert.equal(captured.at(-1)?.runId, independentTwoRun);
+    await independentOne.get("before_agent_start")?.({ prompt: "one moved" }, independentOneMoved);
+    await independentOne.get("agent_end")?.({ messages: [{ role: "assistant", content: "one done" }] }, independentOneMoved);
+
+    // An idle timer retains its originating generation. Moving the session
+    // while queued work drains must not complete the replacement pane's turn.
+    const idleHandlers = await load("idle-rebind");
+    const idleState = { pending: true };
+    const idleOldContext = {
+      ...context(0, "idle-rebind", 0, client(1, "7")),
+      hasPendingMessages: () => idleState.pending,
+      isIdle: () => true,
+    };
+    await idleHandlers.get("before_agent_start")?.({ prompt: "old queued work" }, idleOldContext);
+    await idleHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "old done" }] }, idleOldContext);
+    const idleNewContext = {
+      ...context(0, "idle-rebind", 0, client(2, "8")),
+      isIdle: () => false,
+    };
+    await idleHandlers.get("session_client_context_changed")?.({}, idleNewContext);
+    await idleHandlers.get("before_agent_start")?.({ prompt: "new live work" }, idleNewContext);
+    const idleNewRun = captured.at(-1)?.runId;
+    idleState.pending = false;
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    assert.equal(captured.at(-1)?.runId, idleNewRun);
+    assert.equal(captured.at(-1)?.status, "running");
+    await idleHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "new done" }] }, idleNewContext);
+    assert.equal(captured.at(-1)?.runId, idleNewRun);
+    assert.equal(captured.at(-1)?.status, "completed");
+
+    // An old before_agent_start can be suspended in title work while a new
+    // client generation becomes current. Releasing it must not recreate A's
+    // activity or enqueue a stale running/title event.
+    let raceClient: unknown = client(1, "e");
+    let raceName: string | undefined;
+    let delayFirstName = true;
+    let releaseName: (() => void) | undefined;
+    const raceExtensionPath = path.join(home, `.prime-client-race-${Date.now()}-${Math.random()}.ts`);
+    fs.copyFileSync(installed, raceExtensionPath);
+    const raceModule = await import(pathToFileURL(raceExtensionPath).href);
+    const raceHandlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+    raceModule.default({
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => raceHandlers.set(name, handler),
+      getSessionName: () => raceName,
+      setSessionName: (name: string) => {
+        if (!delayFirstName) {
+          raceName = name;
+          return;
+        }
+        delayFirstName = false;
+        return new Promise<void>((resolve) => {
+          releaseName = () => { raceName = name; resolve(); };
+        });
+      },
+      appendEntry: () => {},
+    });
+    const raceContext = () => ({
+      hasPendingMessages: () => false,
+      getSessionClientContext: () => raceClient,
+      sessionManager: {
+        getSessionId: () => "client-title-race",
+        getSessionDir: () => path.join(home, ".prime", "agent", "sessions"),
+        getHeader: () => ({ type: "session", id: "client-title-race", rlmDepth: 0 }),
+      },
+    });
+    const oldBefore = raceHandlers.get("before_agent_start")?.({ prompt: "old title race" }, raceContext());
+    await waitUntil(() => Boolean(releaseName));
+    raceClient = client(2, "f");
+    const rebind = raceHandlers.get("session_client_context_changed")?.({}, raceContext());
+    const eventsBeforeRelease = captured.length;
+    releaseName?.();
+    await Promise.all([oldBefore, rebind]);
+    assert.ok(captured.slice(eventsBeforeRelease).every((event) => event.paneId !== "pane_eeeeeeee"));
+    assert.equal(raceName, "");
+    await raceHandlers.get("before_agent_start")?.({ prompt: "new title race" }, raceContext());
+    assert.equal(raceName, "new title race");
+    assert.equal(captured.at(-1)?.paneId, "pane_ffffffff");
+    assert.ok(titleCaptured.every((event) => !(event.paneId === "pane_ffffffff" && event.title === "Old title race")));
+    assert.ok(titleCaptured.some((event) => event.paneId === "pane_ffffffff" && event.title === "new title race"));
+    await raceHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "done" }] }, raceContext());
+
+    // A lifecycle callback consumes one immutable manager/client snapshot;
+    // later manager reads cannot splice another session into its binding.
+    let snapshotContextReads = 0;
+    let snapshotHeaderReads = 0;
+    let snapshotIdReads = 0;
+    let snapshotFileReads = 0;
+    const snapshotContext = {
+      hasPendingMessages: () => false,
+      getSessionClientContext: () => {
+        snapshotContextReads++;
+        return client(2, "b");
+      },
+      sessionManager: {
+        getSessionId: () => {
+          snapshotIdReads++;
+          return "client-root";
+        },
+        getSessionDir: () => sessionDir,
+        getSessionFile: () => {
+          snapshotFileReads++;
+          return rootSessionFile;
+        },
+        getHeader: () => {
+          snapshotHeaderReads++;
+          return { type: "session", id: "client-root", rlmDepth: 0 };
+        },
+      },
+    };
+    const snapshotTool = { toolName: "ipython", input: { code: "print('snapshot')" } };
+    await rootHandlers.get("tool_call")?.(snapshotTool, snapshotContext);
+    assert.equal(snapshotContextReads, 1);
+    assert.equal(snapshotHeaderReads, 1);
+    assert.equal(snapshotIdReads, 1);
+    assert.equal(snapshotFileReads, 1);
+
+    // Once a modern binding has been accepted, an older callback without the
+    // context API must not fall back to the module-load ambient pane.
+    const legacyCallbackContext = {
+      hasPendingMessages: () => false,
+      sessionManager: {
+        getSessionId: () => "client-root",
+        getSessionDir: () => sessionDir,
+        getHeader: () => ({ id: "client-root", rlmDepth: 0 }),
+      },
+    };
+    currentClient = client(2, "b");
+    const legacyCount = captured.length;
+    const legacyTool = { toolName: "ipython", input: { code: "print('legacy unchanged')" } };
+    await rootHandlers.get("before_agent_start")?.({ prompt: "legacy must stay quiet" }, legacyCallbackContext);
+    await rootHandlers.get("tool_call")?.(legacyTool, legacyCallbackContext);
+    assert.equal(captured.length, legacyCount);
+    assert.equal(legacyTool.input.code, "print('legacy unchanged')");
+
+    // An explicitly absent modern snapshot unbinds the old owner. Ordinary
+    // callbacks with that absent snapshot remain no-ops until a new owner is
+    // activated.
+    const heartbeatArtifactDir = path.join(home, ".prime", "agent", "session-artifacts", "client-root");
+    fs.mkdirSync(heartbeatArtifactDir, { recursive: true });
+    fs.writeFileSync(path.join(heartbeatArtifactDir, "scheduled-jobs.json"), JSON.stringify({
+      jobs: [{ sessionId: "client-root", source: "rlm_heartbeat", status: "active" }],
+    }));
+    await rootHandlers.get("before_agent_start")?.({ prompt: "recreate old activity" }, context());
+    const oldActivityKey = "[\"client-root\",2,\"pane_bbbbbbbb\"]";
+    const oldActivities = (globalThis as any)[Symbol.for("wmux.prime-agent.pane-activity.v1")] as Map<string, unknown>;
+    assert.ok(oldActivities.has(oldActivityKey));
+    const absentContext = {
+      hasPendingMessages: () => false,
+      getSessionClientContext: () => undefined,
+      sessionManager: {
+        getSessionId: () => "client-root",
+        getSessionDir: () => sessionDir,
+        getSessionFile: () => rootSessionFile,
+        getHeader: () => ({ type: "session", id: "client-root", rlmDepth: 0 }),
+      },
+    };
+    const absentCount = captured.length;
+    await rootHandlers.get("session_client_context_changed")?.({}, absentContext);
+    await rootHandlers.get("before_agent_start")?.({ prompt: "absent must stay quiet" }, absentContext);
+    const absentTool = { toolName: "ipython", input: { code: "print('absent unchanged')" } };
+    await rootHandlers.get("tool_call")?.(absentTool, absentContext);
+    assert.equal(captured.length, absentCount);
+    assert.equal(absentTool.input.code, "print('absent unchanged')");
+    await waitUntil(() => oldActivities.has(oldActivityKey) === false);
+    assert.ok(captured.slice(absentCount).some((event) =>
+      event.paneId === "pane_bbbbbbbb" && event.heartbeatActive === false,
+    ));
+    const retiredCount = captured.length;
+    await childHandlers.get("agent_start")?.({}, context(1, "client-child", 1, client(2, "b")));
+    await rootHandlers.get("before_agent_start")?.({ prompt: "retired owner" }, context(0, "client-root", 0, client(2, "b")));
+    assert.equal(captured.length, retiredCount);
+    const resumedContext = context(0, "client-root", 0, client(3, "c"));
+    await rootHandlers.get("session_client_context_changed")?.({}, resumedContext);
+    await rootHandlers.get("before_agent_start")?.({ prompt: "new owner after detach" }, resumedContext);
+    assert.equal(captured.at(-1)?.paneId, "pane_cccccccc");
+    assert.equal(captured.at(-1)?.status, "running");
+    await rootHandlers.get("agent_end")?.({ messages: [{ role: "assistant", content: "resumed" }] }, resumedContext);
+
+    // High-water retention is a bounded LRU. Evictions enter a fixed-size
+    // fail-closed tombstone instead of making generation one reclaimable.
+    for (let index = 0; index < 1_040; index += 1) {
+      const boundedContext = context(0, `bounded-${index}`, 0, client(1, "9"));
+      const boundedTool = { toolName: "ipython", input: { code: "print('bounded')" } };
+      await rootHandlers.get("tool_call")?.(boundedTool, boundedContext);
+    }
+    const boundedRegistry = (globalThis as any)[Symbol.for("wmux.prime-agent.client-bindings.v2")] as {
+      entries: Map<string, unknown>;
+      retired: Uint8Array;
+    };
+    assert.ok(boundedRegistry.entries.size <= 1_024);
+    assert.ok(boundedRegistry.retired.some((value) => value !== 0));
+    const evictedTool = { toolName: "ipython", input: { code: "print('evicted unchanged')" } };
+    await rootHandlers.get("tool_call")?.(evictedTool, context(0, "client-root", 0, client(1, "a")));
+    assert.equal(evictedTool.input.code, "print('evicted unchanged')");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 
 test("Prime Agent extension periodically refreshes contextual titles and preserves manual session names", { skip: process.platform === "win32", concurrency: false }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-prime-agent-titles-"));

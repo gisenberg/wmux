@@ -431,9 +431,17 @@ def main():
             heartbeat_active = False
             summary = ""
             message = ""
+        elif hook_event == "Question":
+            status = "waiting"
+            summary = "prime-agent waiting for question"
+            message = ""
         elif hook_event == "InputRequired":
             status = "waiting"
             summary = summary or "prime-agent waiting for input"
+        elif hook_event == "Resume":
+            status = "running"
+            summary = "prime-agent running"
+            message = ""
         elif hook_event == "Error":
             status = "failed"
             summary = summary or "prime-agent failed"
@@ -454,7 +462,7 @@ def main():
         payload["status"] = clean_text(status, 50)
     if heartbeat_active is not None:
         payload["heartbeatActive"] = heartbeat_active
-    if args.prime_agent_hook and hook_event == "InputRequired":
+    if args.prime_agent_hook and hook_event in ("Question", "InputRequired"):
         payload["attentionReason"] = "input"
     if args.run_id:
         payload["runId"] = clean_text(args.run_id, 128)
