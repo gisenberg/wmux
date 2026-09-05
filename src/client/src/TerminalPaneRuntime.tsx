@@ -32,6 +32,7 @@ import {
   extendTerminalPredictionEchoProbe,
   layoutPredictedTerminalInput,
   predictedTerminalInput,
+  settlePredictedTerminalInput,
   terminalPredictionCursorMatches,
   terminalPredictionCellPaint,
   terminalPredictionStyleAtCursor,
@@ -507,7 +508,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         || !metrics
         || !cursor
         || !anchor
-        || !terminalPredictionCursorMatches(cursor, anchor)
+        || !terminalPredictionCursorMatches(cursor, anchor, false)
         || predictionMetricsStale
         || currentDevicePixelRatio !== rendererDevicePixelRatio
         || predictionArmedScreen !== predictionScreen(term)
@@ -515,6 +516,13 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         || term.getViewportY() > 0
       ) {
         disarmPrediction();
+        return;
+      }
+      // ConPTY brackets every frame with cursor hide/show, and a chunk boundary
+      // can land between them. Hold the overlay until the cursor is visible
+      // again; the expiry timers still bound how long predictions may wait.
+      if (!cursor.visible) {
+        clearPredictionLayer();
         return;
       }
       const layout = layoutPredictedTerminalInput(
@@ -568,45 +576,53 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       predictionExpiryTimer = window.setTimeout(disarmPrediction, 2000);
     };
 
-    const settlePredictionsAfterRender = (term: Terminal) => {
+    // Ghostty applies writes to the VT synchronously, so predictions settle
+    // right after each write rather than on the next animation frame. That
+    // keeps keystrokes typed between an echo's write and its render predicted
+    // instead of silently dropping them from the overlay.
+    const settlePredictions = (term: Terminal) => {
       if (clearPredictionsAfterRender) {
         disarmPrediction();
         return;
       }
+      if (predictedInputs.length === 0) return;
       if (predictionAcknowledgedSequence !== undefined) {
-        const acknowledgedSequence = predictionAcknowledgedSequence;
-        predictionAcknowledgedSequence = undefined;
-        const acknowledged = predictedInputs.filter((prediction) => prediction.sequence <= acknowledgedSequence);
         const anchor = predictionArmedCursor;
         const cursor = term.wasmTerm?.getCursor();
-        if (acknowledged.length > 0) {
-          const acknowledgedLayout = anchor
-            ? layoutPredictedTerminalInput(
-              { ...anchor, visible: true },
-              safeCols(term.cols),
-              safeRows(term.rows),
-              acknowledged,
-            )
-            : null;
-          const nextAnchor = acknowledgedLayout
-            ? { x: acknowledgedLayout.cursor.col, y: acknowledgedLayout.cursor.row }
-            : undefined;
-          if (!nextAnchor || !terminalPredictionCursorMatches(cursor, nextAnchor)) {
-            disarmPrediction();
-            return;
-          }
-          predictionArmedCursor = nextAnchor;
+        if (!anchor || !cursor) {
+          disarmPrediction();
+          return;
+        }
+        const settlement = settlePredictedTerminalInput(
+          anchor,
+          safeCols(term.cols),
+          safeRows(term.rows),
+          predictedInputs,
+          predictionAcknowledgedSequence,
+          cursor,
+          (col, row) => terminalCodepoint(term, col, row),
+        );
+        if (!settlement) {
+          disarmPrediction();
+          return;
+        }
+        if (settlement.confirmed > 0) {
+          predictedInputs = predictedInputs.slice(settlement.confirmed);
+          predictionArmedCursor = settlement.anchor;
           if (predictionCanvasRef.current) {
-            predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(nextAnchor);
+            predictionCanvasRef.current.dataset.armedCursor = JSON.stringify(settlement.anchor);
           }
         }
-        predictedInputs = predictedInputs.filter((prediction) => prediction.sequence > acknowledgedSequence);
+        const acknowledgedSequence = predictionAcknowledgedSequence;
+        if (!predictedInputs.some((prediction) => prediction.sequence <= acknowledgedSequence)) {
+          predictionAcknowledgedSequence = undefined;
+        }
         if (predictedInputs.length === 0) {
           clearPredictions();
           return;
         }
       }
-      if (predictedInputs.length > 0) renderPredictions(term);
+      renderPredictions(term);
     };
 
     const copyRectangularSelection = (term: Terminal, selection: string): void => {
@@ -683,13 +699,8 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           if (!replayingTerminalOutput) sendInput(socketRef.current, cursorPositionResponse(term, privateMode), true);
         },
       );
-      if (
-        predictedInputs.length > 0
-        && predictionAcknowledgedSequence === undefined
-        && !clearPredictionsAfterRender
-      ) {
-        renderPredictions(term);
-      }
+      verifyPredictionProbe(term);
+      settlePredictions(term);
     };
 
     const flushQueuedTerminalText = (term: Terminal) => {
@@ -1210,7 +1221,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           predictionMetricsStale = false;
         }
         refreshMetrics(term);
-        settlePredictionsAfterRender(term);
+        settlePredictions(term);
         if (rectangularSelection?.overlay) setRectangleVersion((version) => version + 1);
       });
       bufferDisposable = term.buffer.onBufferChange(() => rectangularSelection?.clear());
@@ -1484,13 +1495,11 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
           const prediction = predictedTerminalInput(sequence, data);
           const screen = predictionScreen(term);
           const cursor = term.wasmTerm?.getCursor();
-          const predictionAnchorMatches = terminalPredictionCursorMatches(cursor, predictionArmedCursor);
+          const predictionAnchorMatches = terminalPredictionCursorMatches(cursor, predictionArmedCursor, false);
           const canPredict = connectedRef.current
             && activeRef.current
             && !replayingTerminalOutput
             && term.getViewportY() <= 0;
-          const awaitingAuthoritativeRender = clearPredictionsAfterRender
-            || predictionAcknowledgedSequence !== undefined;
           if (
             prediction
             && predictionArmedScreen === screen
@@ -1502,8 +1511,8 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             renderPredictions(term);
             terminalLatency.recordPredictionMutation(pane.id, sequence, performance.now());
             requestAnimationFrame((timestamp) => terminalLatency.recordPredictionPaint(pane.id, sequence!, timestamp));
-            schedulePredictionExpiry();
-          } else if (!awaitingAuthoritativeRender) {
+            if (predictionAcknowledgedSequence === undefined) schedulePredictionExpiry();
+          } else if (!clearPredictionsAfterRender) {
             clearPredictions();
             if (prediction && canPredict) {
               if (predictionArmedScreen) disarmPrediction();

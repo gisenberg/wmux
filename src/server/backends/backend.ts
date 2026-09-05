@@ -18,7 +18,7 @@ export interface BackendSession {
   kill(): void;
   pause(): void;
   resume(): void;
-  on(event: "output" | "title" | "cwd", listener: (data: string) => void): this;
+  on(event: "output" | "screen" | "title" | "cwd", listener: (data: string) => void): this;
   on(event: "agentPort", listener: (port: number, agentUrl: string) => void): this;
   on(event: "phase", listener: (phase: PaneStartupPhase, label: string) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;

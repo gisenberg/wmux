@@ -762,6 +762,7 @@ export class SessionManager {
         throttle: true,
       });
     });
+    session.on("screen", (data) => this.broadcastScreen(pane.id, data));
     session.on("title", (title) => {
       this.state.updatePane(pane.id, { title });
       this.broadcast(pane.id, { type: "title", paneId: pane.id, title });
@@ -927,6 +928,19 @@ export class SessionManager {
     }
     for (const socket of this.outputWatchers.get(paneId) ?? []) {
       this.send(socket, payload);
+    }
+  }
+
+  // Repaints are screen-shaped, so only rendering browsers receive them.
+  private broadcastScreen(paneId: string, data: string): void {
+    for (const socket of this.sockets.get(paneId) ?? []) {
+      const inputSequence = this.socketState.get(socket)?.inputSequence;
+      this.send(socket, {
+        type: "output",
+        paneId,
+        data,
+        ...(inputSequence === undefined ? {} : { inputSequence }),
+      });
     }
   }
 
@@ -1287,8 +1301,11 @@ export const parseClientMessage = (raw: string): ClientMessage | null => {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.type === "input" && typeof parsed.data === "string") {
-      const sequence = parsed.sequence;
-      if (sequence !== undefined && (!Number.isSafeInteger(sequence) || Number(sequence) < 1)) return null;
+      // A malformed sequence only forfeits echo acknowledgement; the
+      // keystrokes themselves must still reach the pane.
+      const sequence = Number.isSafeInteger(parsed.sequence) && Number(parsed.sequence) >= 1
+        ? parsed.sequence
+        : undefined;
       return {
         type: "input",
         data: parsed.data,

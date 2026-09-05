@@ -44,5 +44,14 @@ function global:__wmuxInstallPrompt([bool]$PreserveExisting) {
 }
 
 try {
+  # Native tools write UTF-8; without this conhost decodes them with the OEM
+  # code page and the browser sees mojibake. Applies to stdio sessions too.
+  $WmuxUtf8 = [System.Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $WmuxUtf8
+  [Console]::InputEncoding = $WmuxUtf8
+  $global:OutputEncoding = $WmuxUtf8
+} catch {}
+
+try {
   Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue
 } catch {}

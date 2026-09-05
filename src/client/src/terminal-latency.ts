@@ -1,3 +1,4 @@
+import { isPredictableTerminalCodepoint } from "./terminal-input-prediction";
 export type TerminalLatencyInputKind = "printable" | "backspace" | "control" | "multi";
 export type TerminalLatencyScreen = "normal" | "alternate";
 
@@ -89,8 +90,10 @@ const finiteDelta = (end: number, start: number): number => Math.max(0, end - st
 
 export const classifyTerminalLatencyInput = (data: string): TerminalLatencyInputKind => {
   if (data === "\b" || data === "\x7f") return "backspace";
-  if (data.length === 1 && data >= " " && data <= "~") return "printable";
-  if (data.length === 1) return "control";
+  const codepoint = data.codePointAt(0);
+  if (codepoint !== undefined && String.fromCodePoint(codepoint) === data) {
+    return isPredictableTerminalCodepoint(codepoint) ? "printable" : "control";
+  }
   return "multi";
 };
 

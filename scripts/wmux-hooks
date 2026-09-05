@@ -1464,6 +1464,10 @@ const createQuestionBroker = (injectedClient: unknown) => {
         })
       }
     })
+    // A control write can race the broker's exit; the close handler owns the
+    // resulting state change, so an EPIPE on stdin must not become an
+    // uncaught exception inside the OpenCode host.
+    brokerChild.stdin?.on("error", () => {})
     brokerChild.on("error", () => {
       if (brokerChild !== child || retiredChildren.has(brokerChild)) return
       structuredReady = false
@@ -1532,8 +1536,11 @@ const createQuestionBroker = (injectedClient: unknown) => {
     snapshotHandler = undefined
     readyResolve(undefined)
   }
+  // Disable also closes the broker's stdin so its readline ends even if the
+  // shutdown message races its readiness handshake; a later re-enable always
+  // spawns a fresh broker through restart().
   return { send: write, disable: () => { structuredReady = false; restartInProgress = false
-      pendingRestartMessages.length = 0; writeControl({ type: "unsupported" }) },
+      pendingRestartMessages.length = 0; writeControl({ type: "unsupported" }); child?.stdin.end() },
     ready, isReady: () => structuredReady || restartInProgress, structuredClient: () => structuredClient,
     onSnapshotRequest: (handler: () => void) => { snapshotHandler = handler }, restart, close }
 }
@@ -2078,6 +2085,10 @@ const lateRetryRecoveryMs = (() => {
   const parsed = Number.parseInt(process.env.WMUX_PRIME_LATE_RETRY_WINDOW_MS ?? "", 10)
   return Number.isFinite(parsed) && parsed >= 50 && parsed <= 600_000 ? parsed : 120_000
 })()
+const idleReconcileGraceMs = (() => {
+  const parsed = Number.parseInt(process.env.WMUX_PRIME_IDLE_RECONCILE_MS ?? "", 10)
+  return Number.isFinite(parsed) && parsed >= 50 && parsed <= 120_000 ? parsed : 2_000
+})()
 const titleReconcileIntervalMs = (() => {
   const parsed = Number.parseInt(process.env.WMUX_PRIME_TITLE_SYNC_INTERVAL_MS ?? "", 10)
   return Number.isFinite(parsed) && parsed >= 50 && parsed <= 60_000 ? parsed : 1_000
@@ -2586,6 +2597,33 @@ const resumeRetryFailure = async (
   return true
 }
 
+const completeAgentBinding = async (
+  identity: WmuxIdentity,
+  key: string,
+  depth: number,
+  binding: TurnBinding,
+  terminal: PendingTerminal,
+) => {
+  const activity = sharedActivities.get(identity.paneId)
+  if (!activity) return
+  const active = depth > 0
+    ? activity.descendants.get(key)
+    : activity.root?.sessionKey === key ? activity.root.binding : undefined
+  if (active !== binding) return
+  cancelRetryFailure(activity, key)
+  if (depth > 0) {
+    await finishDescendant(identity, key, terminal.input)
+    return
+  }
+  activity.root = undefined
+  if (activity.descendants.size > 0) {
+    activity.pendingRootTerminal = terminal
+    return
+  }
+  await send(terminal.input, terminal.binding)
+  await cleanupActivity(identity, activity)
+}
+
 const scheduledHeartbeatFile = (ctx: any, key: string): string | undefined => {
   if (basename(key) !== key || key === "." || key === "..") return undefined
   try {
@@ -2761,6 +2799,14 @@ export default function (pi: any) {
   let titleContext: any
   let titlePollBusy = false
   let titleClosed = false
+  let idleReconcileTimer: ReturnType<typeof setTimeout> | undefined
+  let idleReconcileClosed = false
+  let idleReconcileCandidate: {
+    key: string
+    depth: number
+    binding: TurnBinding
+    terminal: PendingTerminal
+  } | undefined
   let publishedCanonicalTitle: string | undefined
   let publishingCanonicalTitle: string | undefined
   const canonicalTitleBinding = (identity: WmuxIdentity): TurnBinding => ({
@@ -2891,15 +2937,96 @@ export default function (pi: any) {
     heartbeatPollBusy = true
     void reconcileHeartbeatState(ctx).finally(() => { heartbeatPollBusy = false })
   }
+  const clearIdleReconcile = () => {
+    if (idleReconcileTimer) clearTimeout(idleReconcileTimer)
+    idleReconcileTimer = undefined
+    idleReconcileCandidate = undefined
+  }
+  const scheduleIdleReconcile = (ctx: any) => {
+    if (idleReconcileClosed || idleReconcileTimer) return
+    idleReconcileTimer = setTimeout(() => {
+      idleReconcileTimer = undefined
+      void reconcileIdleActivity(ctx).catch(() => {})
+    }, idleReconcileGraceMs)
+    idleReconcileTimer.unref?.()
+  }
+  const reconcileIdleActivity = async (ctx: any) => {
+    if (idleReconcileClosed || process.env.WMUX_DELEGATED_RUN === "1") return
+    const identity = boundIdentity
+    const depth = sessionDepth(ctx)
+    const key = sessionKey(ctx)
+    if (!identity || depth === undefined || !key) return
+    const activity = sharedActivities.get(identity.paneId)
+    const binding = depth > 0
+      ? activity?.descendants.get(key)
+      : activity?.root?.sessionKey === key ? activity.root.binding : undefined
+    if (!activity || !binding) {
+      idleReconcileCandidate = undefined
+      return
+    }
+    // A provider-error hold owns this binding across extension reloads. Its
+    // retry grace must finish or be resumed before ordinary idle healing.
+    if (activity.retryFailures.has(key)) {
+      idleReconcileCandidate = undefined
+      return
+    }
+    if (
+      idleReconcileCandidate
+      && (
+        idleReconcileCandidate.key !== key
+        || idleReconcileCandidate.depth !== depth
+        || idleReconcileCandidate.binding !== binding
+      )
+    ) {
+      idleReconcileCandidate = undefined
+      return
+    }
+    let idle = false
+    let pending = false
+    try {
+      idle = ctx?.isIdle?.() === true
+    } catch {
+      idle = false
+    }
+    try {
+      pending = ctx?.hasPendingMessages?.() === true
+    } catch {
+      pending = true
+    }
+    if (!idle || pending) {
+      scheduleIdleReconcile(ctx)
+      return
+    }
+    const terminal = idleReconcileCandidate?.terminal ?? {
+      input: { hook_event_name: "Stop" },
+      binding,
+    }
+    idleReconcileCandidate = undefined
+    await completeAgentBinding(identity, key, depth, binding, terminal)
+  }
+  const armIdleReconcile = (
+    ctx: any,
+    candidate?: { key: string; depth: number; binding: TurnBinding; terminal: PendingTerminal },
+  ) => {
+    clearIdleReconcile()
+    idleReconcileCandidate = candidate
+    scheduleIdleReconcile(ctx)
+  }
+  const stopIdleReconcile = () => {
+    idleReconcileClosed = true
+    clearIdleReconcile()
+  }
   pi.on("session_start", async (_event: any, ctx: any) => {
     if (process.env.WMUX_DELEGATED_RUN === "1" || sessionDepth(ctx) === undefined || !boundIdentity) return
     heartbeatClosed = false
     titleClosed = false
+    idleReconcileClosed = false
     titleContext = ctx
     if (heartbeatTimer) clearInterval(heartbeatTimer)
     if (titleTimer) clearInterval(titleTimer)
     await reconcileHeartbeatState(ctx, true)
     await reconcileCanonicalTitle(ctx, true)
+    armIdleReconcile(ctx)
     heartbeatTimer = setInterval(() => pollHeartbeatState(ctx), 1_000)
     heartbeatTimer.unref?.()
     titleTimer = setInterval(() => {
@@ -2925,6 +3052,8 @@ export default function (pi: any) {
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
+    idleReconcileClosed = false
+    clearIdleReconcile()
     const activity = activityFor(identity)
     cancelRetryFailure(activity, key)
     if (depth > 0) {
@@ -3066,6 +3195,8 @@ export default function (pi: any) {
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
     if (!identity || depth === undefined || !key) return
+    idleReconcileClosed = false
+    clearIdleReconcile()
     const activity = activityFor(identity)
     if (await resumeRetryFailure(identity, activity, key, depth)) return
 
@@ -3092,9 +3223,9 @@ export default function (pi: any) {
     const messages = Array.isArray(event.messages) ? event.messages : []
     const assistant = messages.findLast((message: any) => message?.role === "assistant")
     const stopReason = typeof assistant?.stopReason === "string" ? assistant.stopReason : ""
-    // Prime emits intermediate toolUse ends before auto-compaction and retryable
-    // provider errors before it decides to retry. Neither is a terminal run yet.
-    if (ctx.hasPendingMessages?.() || stopReason === "toolUse") return
+    // Prime emits intermediate toolUse ends before auto-compaction. A queued
+    // continuation gets a short idle grace below so it cannot strand a run.
+    if (stopReason === "toolUse") return
     const identity = boundIdentity
     const depth = sessionDepth(ctx)
     const key = sessionKey(ctx)
@@ -3117,26 +3248,22 @@ export default function (pi: any) {
       binding: completed,
     }
     if (stopReason === "error") {
+      clearIdleReconcile()
       holdRetryFailure(identity, activity, key, depth, completed, terminal)
       return
     }
-    cancelRetryFailure(activity, key)
-    if (depth > 0) {
-      await finishDescendant(identity, key)
+    if (ctx.hasPendingMessages?.()) {
+      armIdleReconcile(ctx, { key, depth, binding: completed, terminal })
       return
     }
-    activity.root = undefined
-    if (activity.descendants.size > 0) {
-      activity.pendingRootTerminal = terminal
-      return
-    }
-    await send(terminal.input, terminal.binding)
-    await cleanupActivity(identity, activity)
+    clearIdleReconcile()
+    await completeAgentBinding(identity, key, depth, completed, terminal)
   })
   pi.on("session_shutdown", async (event: any, ctx: any) => {
     heartbeatClosed = true
     stopHeartbeatWatcher()
     stopTitlePolling()
+    stopIdleReconcile()
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer)
       heartbeatTimer = undefined

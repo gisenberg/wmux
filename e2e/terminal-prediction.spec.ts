@@ -421,6 +421,41 @@ test("DPR changes clear stale prediction metrics before repainting", async ({
   }
 });
 
+// A slow echo means output tagged with the newest keystroke can still carry an
+// earlier keystroke's echo. Predictions must settle by what the terminal shows,
+// not by the acknowledgement alone, or every fast burst disarms the overlay.
+test("burst typing stays predicted while echoes trail the acknowledgement", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop Chromium acknowledgement coverage");
+  test.setTimeout(75_000);
+  const { workspace, prediction } = await openDelayedTerminal(page, request, "\"Fira Code\"", 14);
+  try {
+    // A raw-mode echo loop that answers each byte only after a delay, so
+    // several keystrokes are in flight before the first echo returns.
+    await page.keyboard.type(String.raw`python3 -c $'import os,sys,time,tty,termios\nf=sys.stdin.fileno()\no=termios.tcgetattr(f)\ntty.setraw(f)\nwhile True:\n b=os.read(f,1)\n time.sleep(0.4)\n os.write(1,b"\\r\\n" if b==b"\\r" else b)\n if b==b"Z": break\ntermios.tcsetattr(f,termios.TCSADRAIN,o)'`);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(600);
+    await armTerminalPrediction(page, prediction);
+
+    await page.keyboard.type("abcd", { delay: 40 });
+    await expect(prediction).toHaveAttribute("data-active", "true");
+    const cells = await predictionCells(prediction);
+    expect(cells.length).toBeGreaterThanOrEqual(3);
+    // Echoes arrive one per 400 ms; the overlay must shrink as each lands
+    // rather than vanishing on the first over-acknowledged output message.
+    await expect.poll(async () => (await predictionCells(prediction)).length, { timeout: 2_500 })
+      .toBeLessThan(cells.length);
+    await expect(prediction).toHaveAttribute("data-armed-screen", "normal");
+    await expect(prediction).not.toHaveAttribute("data-active", "true", { timeout: 4_000 });
+    await expect(prediction).toHaveAttribute("data-armed-screen", "normal");
+  } finally {
+    await page.keyboard.type("Z");
+    await request.delete(`/api/workspaces/${workspace.id}`);
+  }
+});
+
 test("prediction layout crosses a wrapped row and confirms without residue", async ({
   page,
   request,

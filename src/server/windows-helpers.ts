@@ -140,6 +140,8 @@ export const buildWindowsPowerShellBootstrap = (
   return `
 $WmuxOriginalErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
+$WmuxOriginalProgressPreference = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
 ${envLines}
 
 $LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData\\Local' }
@@ -294,6 +296,7 @@ if ($StartCwd) {
 }
 __wmuxInstallPrompt ${machine.loadPowerShellProfile === true ? "$true" : "$false"}
 __wmuxEmitCwd
+$ProgressPreference = $WmuxOriginalProgressPreference
 $ErrorActionPreference = $WmuxOriginalErrorActionPreference
 `;
 };
