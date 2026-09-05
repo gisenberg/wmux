@@ -21,7 +21,12 @@ export class BootstrapRecovery<T> {
     }
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    this.active = this.run().finally(() => { this.active = undefined; });
+    this.active = this.run().finally(async () => {
+      this.active = undefined;
+      // A request can arrive in the microtask between run() finishing and this
+      // finalizer. Do not drop it after the loop's last pending check.
+      if (this.pending && !this.timer && !this.stopped) await this.request();
+    });
     return this.active;
   }
 

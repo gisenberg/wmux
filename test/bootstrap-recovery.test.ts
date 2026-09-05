@@ -38,6 +38,21 @@ test("disposed recovery never applies a late response or schedules another fetch
   await done;
 });
 
+test("a recovery request queued at fetch finalization is not lost", async () => {
+  let calls = 0;
+  const recovery = new BootstrapRecovery({
+    fetch: async () => ++calls,
+    apply: (value) => {
+      if (value === 1) queueMicrotask(() => { void recovery.request(); });
+      return true;
+    },
+    failed: () => false,
+  });
+  await recovery.request();
+  assert.equal(calls, 2);
+  recovery.stop();
+});
+
 test("transient recovery retries with backoff; auth failure ends pending requests", async () => {
   let calls = 0;
   const attempts: number[] = [];
