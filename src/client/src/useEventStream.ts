@@ -18,7 +18,6 @@ interface UseEventStreamCallbacks {
   onRecoveryRequested: () => void;
   onHealth: (delta: Extract<EventServerMessage, { type: "health" }>) => void;
   onDelta: (delta: Extract<EventServerMessage, { type: "delta" }>) => void;
-  onAuthRequired: () => void;
   enabled?: boolean;
 }
 
@@ -86,6 +85,10 @@ export function useEventStream(callbacks: UseEventStreamCallbacks) {
         if (socketRef.current === ws) socketRef.current = null;
         if (!closed) {
           setServiceConnection("offline");
+          // A revoked cookie may prevent the next WebSocket from opening at
+          // all. Let the single HTTP recovery owner distinguish 401 from a
+          // transient network failure instead of retrying the socket forever.
+          scheduleResync();
           reconnectTimer = window.setTimeout(connect, 1500);
         }
       };

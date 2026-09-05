@@ -136,7 +136,6 @@ export const useStoreLifecycle = ({
       }
       store.update((snapshot) => applyHealthDelta(snapshot, delta) ?? null);
     },
-    onAuthRequired: () => setAuthRequired(true),
   });
 
   return {
