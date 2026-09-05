@@ -4,12 +4,14 @@ import {
   sessionBackendKindForMachine,
 } from "./backends/index.js";
 import type { DoctorReport, MachineConfig, MachineStatus, PersistedState } from "./types.js";
+import type { BackendCapabilities } from "./backends/index.js";
 
 export const buildDoctorReport = (
   state: PersistedState,
   machines: MachineConfig[],
   statuses: MachineStatus[],
   audit: DurableSessionAudit,
+  observed: ReadonlyMap<string, BackendCapabilities> = new Map(),
 ): DoctorReport => {
   const machineById = new Map(machines.map((machine) => [machine.id, machine]));
   const statusById = new Map(statuses.map((status) => [status.id, status]));
@@ -40,7 +42,9 @@ export const buildDoctorReport = (
           };
         }
         const backendKind = sessionBackendKindForMachine(machine);
-        const capabilities = sessionBackendCapabilitiesForMachine(machine);
+        const configuredCapabilities = sessionBackendCapabilitiesForMachine(machine);
+        const liveCapabilities = observed.get(pane.id);
+        const capabilities = liveCapabilities ?? { ...configuredCapabilities, restartDurable: false };
         const issue = pane.status === "exited"
           ? `process exited${pane.exitCode === undefined ? "" : ` with code ${pane.exitCode}`}`
           : missingPaneIds.has(pane.id)
@@ -49,7 +53,9 @@ export const buildDoctorReport = (
               ? "duplicate durable session"
               : machineStatus && !machineStatus.reachable
                 ? machineStatus.reason ?? "machine unreachable"
-                : undefined;
+                : liveCapabilities && configuredCapabilities.restartDurable && !liveCapabilities.restartDurable
+                  ? "durability not confirmed: startup pending or raw shell fallback"
+                  : undefined;
         return {
           paneId: pane.id,
           title: pane.title,
@@ -57,9 +63,10 @@ export const buildDoctorReport = (
           machineName: machineStatus?.name ?? machine.name,
           status: pane.status,
           exitCode: pane.exitCode,
-          driver: (backendKind === "windows-agent" ? "windows-agent" : "pty") as "windows-agent" | "pty",
+          driver: (backendKind === "windows-agent" ? "session-agent" : "pty") as "session-agent" | "pty",
           transport: capabilities.transport,
           restartDurable: capabilities.restartDurable,
+          capabilitySource: liveCapabilities ? "live" as const : "unconfirmed" as const,
           replay: capabilities.replay,
           cwd: capabilities.cwd,
           machineReachable: machineStatus?.reachable ?? false,

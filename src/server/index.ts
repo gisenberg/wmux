@@ -94,6 +94,9 @@ const main = async (): Promise<void> => {
     );
   }
   const state = new StateStore(currentMachines());
+  state.on("persistence-failed", (health: { errorCode?: string }) => {
+    console.error(`wmux: state persistence failed (${health.errorCode ?? "WRITE_FAILED"}); live state remains dirty and background writes retry`);
+  });
   stateStore = state;
   hostRegistry.sweep();
   state.updateMachines(currentMachines());
@@ -174,13 +177,19 @@ const main = async (): Promise<void> => {
     console.log(`wmux: received ${signal}, shutting down`);
     // Persist pending state and reap non-durable child processes so a restart
     // doesn't orphan raw PTYs / ssh clients or lose debounced writes.
-    state.flush();
+    let exitCode = 0;
+    try {
+      state.flush();
+    } catch {
+      exitCode = 1;
+      console.error("wmux: shutdown could not persist the latest state; continuing session detachment and exiting unsuccessfully");
+    }
     hostRegistry.dispose();
     sessionManager.disposeAll();
     server.emit("wmux-shutdown");
-    server.close(() => process.exit(0));
+    server.close(() => process.exit(exitCode));
     // Backstop if connections keep the server open past the grace period.
-    setTimeout(() => process.exit(0), 3000).unref();
+    setTimeout(() => process.exit(exitCode), 3000).unref();
   };
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => shutdown(signal));

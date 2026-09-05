@@ -71,7 +71,10 @@ Stop the external fixture when Chromium finishes and close successful or superse
 `verify:remote` automates a single exclusive checkout lane, not the multi-host fixture/token coordination above.
 Its `server`, `webkit`, and `auth` suite selectors support focused reruns.
 Concurrent lanes require the skill workflow or separate runner checkouts; the controller deliberately refuses simultaneous checkout leases.
-Do not use its Windows browser selector without an already provisioned external fixture environment in the runner pane.
+For its Windows browser selector, provision an owner-only JSON environment file on the runner and set that runner's `environmentFile` configuration to its absolute path.
+The file must contain the ephemeral `WMUX_E2E_BASE_URL` and `WMUX_E2E_TOKEN`; its contents are not embedded in terminal input or controller reports.
+Only the four documented `WMUX_E2E_BASE_URL`, `WMUX_E2E_TOKEN`, `WMUX_E2E_SERVER_HOST`, and `WMUX_E2E_SERVER_PORT` fields are accepted.
+Delete the task-owned environment file after the fixture has stopped.
 
 If Windows is unavailable, or split infrastructure fails independently of the product, run the complete authoritative fallback on the POSIX runner:
 

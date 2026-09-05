@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import runnerModule from "./verification-runner.cjs";
-const { remoteMain } = runnerModule;
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +8,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 
+const { remoteMain } = runnerModule;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { values } = parseArgs({ options: {
   config: { type: "string", default: process.env.WMUX_VERIFICATION_CONFIG || path.join(os.homedir(), ".wmux/verification.json") },
@@ -51,15 +51,11 @@ const machines = JSON.parse(await invoke(["machines", "--json"]));
 if (!machines.some((machine) => machine.id === runner.machine && machine.reachable)) {
   throw new Error(`Runner ${runner.machine} is unreachable. Use the documented fallback and report its reason.`);
 }
-// This program runs inside a visible terminal. The lease covers checkout
-// preparation and execution, so concurrent controllers cannot change HEAD.
-// It uses only Node built-ins and can therefore prepare an older checkout.
-
-
+// The built-in-only runner can prepare older checkouts inside a visible pane.
 const id = randomBytes(8).toString("hex");
 const quote = (value) => runner.shell === "windows"
   ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`;
-const program = `(${remoteMain.toString()})(${JSON.stringify({ checkout: runner.checkout, commit, id, script: suites[values.suite] })})`;
+const program = `(${remoteMain.toString()})(${JSON.stringify({ checkout: runner.checkout, commit, id, script: suites[values.suite], environmentFile: runner.environmentFile })})`;
 // Do not forward any controller credentials or private environment to runners.
 const line = `node -e ${quote(`eval(${JSON.stringify(program)})`)}`;
 const reportDir = path.join(root, "test-results", "remote", id);
@@ -68,7 +64,13 @@ const report = { id, commit, runner: values.runner, machine: runner.machine, che
 const save = () => fs.writeFileSync(path.join(reportDir, "result.json"), JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });
 save();
 try {
-  Object.assign(report, JSON.parse(await invoke(["run", runner.machine, "--title", `wmux verify ${values.suite} ${commit.slice(0, 8)} ${id}`, "--new", "--line", line])));
+  const title = `wmux verify ${values.suite} ${commit.slice(0, 8)} ${id}`;
+  Object.assign(report, JSON.parse(await invoke(["open", runner.machine, "--title", title, "--new"])));
+  report.status = "waiting-for-shell";
+  save();
+  console.log(`Workspace: ${report.url}`);
+  await invoke(["wait", report.paneId, "--pattern", "(?m)^.*(?:[$#%❯])\\s*$", "--timeout", "30"]);
+  await invoke(["send", report.paneId, "--line", line]);
   report.status = "running";
   save();
   console.log(`${report.command} on ${runner.machine} at ${commit}\n${report.url}\nEvidence: ${reportDir}`);

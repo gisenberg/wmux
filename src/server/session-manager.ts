@@ -19,6 +19,7 @@ import type {
 import {
   createSessionBackend,
   type BackendRuntimeFile,
+  type BackendCapabilities,
   type BackendSession,
   type SessionBackend,
 } from "./backends/index.js";
@@ -192,6 +193,9 @@ const AGENT_WORKSPACE_CLEANUP_SWEEP_MS = 5_000;
 const STRANDED_ENDPOINT_CLEANUP_SWEEP_MS = 60_000;
 
 export class SessionManager {
+  observedCapabilities(): ReadonlyMap<string, BackendCapabilities> {
+    return new Map([...this.backends].map(([paneId, backend]) => [paneId, { ...backend.capabilities }]));
+  }
   private sessions = new Map<string, BackendSession>();
   private backends = new Map<string, SessionBackend>();
   private sockets = new Map<string, Set<WebSocket>>();

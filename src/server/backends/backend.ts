@@ -25,7 +25,7 @@ export interface BackendSession {
 }
 
 export interface BackendCapabilities {
-  readonly transport: "pty" | "local-multiplexer" | "ssh-multiplexer" | "windows-agent";
+  readonly transport: "pty" | "local-multiplexer" | "ssh-multiplexer" | "session-agent";
   readonly restartDurable: boolean;
   readonly supportsFileStaging: boolean;
   readonly supportsCwdReport: boolean;

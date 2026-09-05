@@ -700,7 +700,7 @@ export const durableShellScript = ({
   helperPathExport,
 }: DurableShellInput): string => {
   const exports = Object.entries(extraEnv)
-    .filter(([key, value]) => value && key !== "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY")
+    .filter(([key, value]) => value && key !== "WMUX_AGENT_INPUT_REGISTRATION_CAPABILITY" && key !== "WMUX_BACKEND_NONCE")
     .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
     .join(" ");
   // Persist the wmux URL/helper credential to ~/.wmux on the target at every (re)attach.
@@ -758,6 +758,9 @@ unset -f __wmux_stage_agent_input_v1;`
     ? `export WMUX_AGENT_INPUT_CAPABILITY_PATH=${agentInputCapabilityPath}; export WMUX_AGENT_INPUT_CREDENTIAL_PATH=${agentInputCredentialPath};`
     : "";
   const pathExport = helperPathExport ?? "";
+  const reportBackend = (mode: "raw" | "tmux" | "screen") => /^[a-f0-9]{32}$/.test(extraEnv.WMUX_BACKEND_NONCE ?? "")
+    ? `printf '\\033]777;wmux-backend;${extraEnv.WMUX_BACKEND_NONCE};${mode}\\007';`
+    : "";
   const startDir = cwd ? `cd ${shellQuote(cwd)} 2>/dev/null || true;` : "";
   const paneCommand = `${startDir} ${agentInputPathExports} ${exports} ${pathExport} ${shellCommand}`;
   const tmuxCreateCommand = [
@@ -785,7 +788,7 @@ unset -f __wmux_stage_agent_input_v1;`
     `tmux set-option -t ${tmuxTarget} allow-passthrough on >/dev/null 2>&1 || true`,
     `tmux set-option -s user-keys[99] ${shellQuote("\\033[9000\\;")} >/dev/null 2>&1 || true`,
     `tmux bind-key -n User99 send-keys Escape ${shellQuote("[9000\\;")} >/dev/null 2>&1 || true`,
-    `exec ${tmuxAttachCommand}`,
+    `tmux has-session -t ${tmuxTarget} 2>/dev/null && { ${reportBackend("tmux")} exec ${tmuxAttachCommand}; }`,
   ].join("; ");
   const screenRc = [
     "defscrollback 100000",
@@ -799,8 +802,8 @@ unset -f __wmux_stage_agent_input_v1;`
   const screenConfigScript = `${runtimeStageDirScript} wmux_screenrc="$wmux_run_base/wmux-screen-${sessionName}.rc"; printf '%s\\n' ${shellQuote(screenRc)} > "$wmux_screenrc";`;
   const screenAttach = `screen -c "$wmux_screenrc" -S ${shellQuote(sessionName)} -x`;
   const screenCreate = `screen -c "$wmux_screenrc" -dmS ${shellQuote(sessionName)} -U -h 100000 /bin/sh -lc ${shellQuote(paneCommand)}`;
-  const screenCommand = `${screenConfigScript} ${screenAttach} || { ${screenCreate} && exec ${screenAttach}; }`;
-  const fallbackShell = `${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
+  const screenCommand = `${screenConfigScript} ${reportBackend("screen")} ${screenAttach} || { ${screenCreate} && exec ${screenAttach}; }`;
+  const fallbackShell = `${reportBackend("raw")} ${startDir} ${exports} ${pathExport} echo '[wmux] tmux/screen not found; session will not survive wmux restart.' >&2; ${shellCommand}`;
 
   if (backend === "tmux") {
     return `${persistCredentials} ${agentInputStage} ${pathExport} if command -v tmux >/dev/null 2>&1; then ${tmuxCommand}; fi; echo '[wmux] tmux is required for this machine sessionBackend.' >&2; ${fallbackShell}`;

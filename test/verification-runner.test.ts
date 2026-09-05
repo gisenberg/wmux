@@ -26,7 +26,7 @@ test("external verification guards checkout ownership, cleanliness, leases and e
     fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nif [ "$1" = fetch ]; then exec '${realGit}' fetch "$WMUX_FIXTURE_SOURCE" "$3"; fi\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
     fs.mkdirSync(path.join(checkout, "node_modules"));
     fs.writeFileSync(path.join(bin, "npm"), '#!/bin/sh\nprintf "fixture npm %s %s\\n" "$1" "$2"\nexit "${FIXTURE_EXIT:-0}"\n', { mode: 0o755 });
-    const execute = (extraEnv: Record<string, string> = {}) => spawnSync(process.execPath, ["-e", `(${runnerModule.remoteMain.toString()})(${JSON.stringify({ checkout, commit, id: "fixture", script: "check" })})`], {
+    const execute = (extraEnv: Record<string, string> = {}, options: Record<string, string> = {}) => spawnSync(process.execPath, ["-e", `(${runnerModule.remoteMain.toString()})(${JSON.stringify({ checkout, commit, id: "fixture", script: "check", ...options })})`], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, WMUX_FIXTURE_SOURCE: checkout, ...extraEnv },
     });
@@ -56,6 +56,16 @@ test("external verification guards checkout ownership, cleanliness, leases and e
     assert.equal(failed.status, 1);
     assert.match(failed.stdout, new RegExp(`WMUX:VERIFY:fixture:${commit}:1:\\d+`));
     assert.equal(fs.existsSync(lock), false);
+
+    const environmentFile = path.join(temp, "environment.json");
+    fs.writeFileSync(environmentFile, "invalid sensitive fixture data");
+    const invalidEnvironment = execute({}, { environmentFile });
+    assert.equal(invalidEnvironment.status, 1);
+    assert.match(invalidEnvironment.stderr, /environment file is missing or invalid/);
+    assert.doesNotMatch(invalidEnvironment.stderr, /sensitive fixture data/);
+    const missingFixture = execute({ WMUX_E2E_BASE_URL: "", WMUX_E2E_TOKEN: "" }, { script: "test:e2e:browser:chromium" });
+    assert.equal(missingFixture.status, 1);
+    assert.match(missingFixture.stderr, /provisioned external fixture/);
 
     git("remote", "set-url", "owner", "https://github.com/unrelated/wmux.git");
     const wrongOwner = execute();

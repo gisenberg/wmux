@@ -30,14 +30,12 @@ export const rawPtyCapabilities = (machine: MachineConfig): BackendCapabilities 
 
 export class RawPtyBackend implements SessionBackend {
   readonly id: SessionBackend["id"] = "raw-pty";
-  readonly capabilities: BackendCapabilities;
+  get capabilities(): BackendCapabilities { return rawPtyCapabilities(this.machine); }
 
   constructor(
     readonly machine: MachineConfig,
     protected readonly pasteImages: PasteImageStager,
-  ) {
-    this.capabilities = rawPtyCapabilities(machine);
-  }
+  ) {}
 
   spawn(spec: BackendSpawnSpec): BackendSession {
     return new PtySession(

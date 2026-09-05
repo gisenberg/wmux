@@ -138,6 +138,9 @@ export class StateStore extends EventEmitter {
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
   private replaceBackupOnFlush = false;
+  private persistenceFailures = 0;
+  private persistenceErrorCode?: string;
+  private lastPersistedAt?: string;
 
   constructor(
     machines: MachineConfig[],
@@ -154,6 +157,15 @@ export class StateStore extends EventEmitter {
 
   storageDirectory(): string {
     return path.dirname(this.filePath);
+  }
+
+  persistenceHealth(): { dirty: boolean; failureCount: number; lastSuccessAt?: string; errorCode?: string } {
+    return {
+      dirty: this.dirty,
+      failureCount: this.persistenceFailures,
+      lastSuccessAt: this.lastPersistedAt,
+      errorCode: this.persistenceErrorCode,
+    };
   }
 
   commitMutation<T>(
@@ -190,11 +202,22 @@ export class StateStore extends EventEmitter {
     this.state.revision = Math.max(0, Math.floor(this.state.revision || 0)) + 1;
     this.dirty = true;
     this.emit("change");
+    this.scheduleWrite(WRITE_DEBOUNCE_MS);
+  }
+
+  private scheduleWrite(delay: number, unref = false): void {
     if (this.writeTimer) return;
     this.writeTimer = setTimeout(() => {
       this.writeTimer = null;
-      this.flush();
-    }, WRITE_DEBOUNCE_MS);
+      try {
+        this.flush();
+      } catch {
+        // An unavailable disk must not kill live terminals from a timer callback.
+        // Keep the newest in-memory state dirty and retry without busy-looping.
+        this.scheduleWrite(Math.min(30_000, 1000 * 2 ** Math.min(this.persistenceFailures - 1, 5)), true);
+      }
+    }, delay);
+    if (unref) this.writeTimer.unref();
   }
 
   /** Persist any pending changes synchronously, cancelling the debounce timer. */
@@ -204,8 +227,21 @@ export class StateStore extends EventEmitter {
       this.writeTimer = null;
     }
     if (!this.dirty && fs.existsSync(this.filePath)) return;
-    this.writeToDisk();
-    this.dirty = false;
+    try {
+      this.writeToDisk();
+      this.dirty = false;
+      this.persistenceFailures = 0;
+      this.persistenceErrorCode = undefined;
+      this.lastPersistedAt = now();
+    } catch (error) {
+      this.dirty = true;
+      this.persistenceFailures += 1;
+      const code = (error as NodeJS.ErrnoException)?.code;
+      this.persistenceErrorCode = typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? code : "WRITE_FAILED";
+      // Never publish filesystem paths, serialized state, or credentials.
+      this.emit("persistence-failed", this.persistenceHealth());
+      throw error;
+    }
   }
 
   private writeToDisk(): void {

@@ -1540,12 +1540,14 @@ test(
       const ready = await readyPromise;
       assert.equal(ready.outputOnly, true);
       assert.equal(ready.replay, "");
-      assert.equal(ready.waitForRefresh, true);
+      assert.equal(ready.waitForRefresh, undefined, "startup must not promise durable refresh before the backend reports its mode");
       const refreshed = await waitForWebSocketMessage(
         output,
         (message) => message.type === "output" && message.data.length > 0,
       );
       assert.notEqual(refreshed.data, "", "controller should receive the refreshed tmux display");
+      assert.equal(manager.observedCapabilities().get(pane.id)?.restartDurable, true);
+      assert.doesNotMatch(refreshed.data, /wmux-backend;/, "startup reports are not textual terminal output");
 
       const marker = `wmux-controller-live-${process.pid}`;
       const liveOutput = waitForWebSocketMessage(
