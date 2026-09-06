@@ -241,7 +241,7 @@ const drawPalette = (
     const shortcut = command.shortcut ?? "";
     const shortcutCol = Math.max(18, cols - 16);
     write(row, 2, command.section.toUpperCase(), command.disabled ? rgba.faint : rgba.gold, 700);
-    write(row, 16, command.title, command.disabled ? rgba.faint : selected ? rgba.gold : rgba.text, selected ? 700 : 600);
+    write(row, 16, fitText(command.title, Math.max(0, (shortcut ? shortcutCol - 1 : cols - 2) - 16)), command.disabled ? rgba.faint : selected ? rgba.gold : rgba.text, selected ? 700 : 600);
     if (command.subtitle) write(row + 1, 16, command.subtitle, rgba.muted, 400);
     if (shortcut) write(row, shortcutCol, shortcut, command.disabled ? rgba.faint : rgba.muted, 700);
     if (!command.disabled) hits.push({ index, row, col: 1, width: rowWidth, height: rowHeight });
