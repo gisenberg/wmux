@@ -47,6 +47,7 @@ import {
   sessionAgentOriginAtPort,
   sessionAgentOriginForEndpoint,
 } from "./session-agent-origin.js";
+import { CodexMarkerParser, CodexTerminalBindingRegistry } from "./codex-terminal-binding.js";
 
 export type ClientMessage = PaneClientMessage;
 
@@ -193,6 +194,7 @@ const AGENT_WORKSPACE_CLEANUP_SWEEP_MS = 5_000;
 const STRANDED_ENDPOINT_CLEANUP_SWEEP_MS = 60_000;
 
 export class SessionManager {
+  readonly codexTerminalBindings: CodexTerminalBindingRegistry;
   observedCapabilities(): ReadonlyMap<string, BackendCapabilities> {
     return new Map([...this.backends].map(([paneId, backend]) => [paneId, { ...backend.capabilities }]));
   }
@@ -242,6 +244,20 @@ export class SessionManager {
     terminalCheckpoints?: TerminalCheckpointStore,
     durableEndpoints?: DurableEndpointStore,
   ) {
+    this.codexTerminalBindings = new CodexTerminalBindingRegistry(
+      (paneId) => {
+        const context = this.state.findPaneContext(paneId);
+        return context ? {
+          workspaceId: context.workspace.id,
+          tabId: context.tab.id,
+          paneId,
+        } : undefined;
+      },
+      (paneId) => {
+        const session = this.sessions.get(paneId);
+        return Boolean(session && !session.isExited && this.state.findPane(paneId)?.status === "running");
+      },
+    );
     this.currentMachines = typeof machines === "function" ? machines : () => machines;
     this.terminalCheckpoints = terminalCheckpoints
       ?? new TerminalCheckpointStore(
@@ -677,6 +693,7 @@ export class SessionManager {
       removeLocalAgentInputCapability(pane.id);
     }
     const processReplacementRuntimeFiles = (): BackendRuntimeFile[] => {
+      this.codexTerminalBindings.invalidatePane(pane.id);
       const previousBinding = this.agentInputSessionBindings.get(pane.id);
       if (previousBinding) this.agentInputSourceRetirer?.(pane.id, previousBinding);
       const replacementBinding = createAgentInputSessionBinding(pane.id, backend, machine);
@@ -751,9 +768,15 @@ export class SessionManager {
     this.cancelPaneCwdRefresh(pane.id);
     this.schedulePaneCwdRefresh(pane, machine, session);
     const colorQueryParser = new OscColorQueryParser();
+    const codexMarkerParser = new CodexMarkerParser();
     const currentTerminalTheme = () => terminalThemeFromEnvironment(this.terminalEnvironment());
 
     session.on("output", (data) => {
+      // An old durable client can drain bytes after its replacement is live.
+      // Such output must never establish authority for the new incarnation.
+      if (this.sessions.get(pane.id) === session && !session.isExited) {
+        codexMarkerParser.push(data, (marker) => this.codexTerminalBindings.observe(pane.id, marker));
+      }
       for (const response of colorQueryParser.push(data, currentTerminalTheme).responses) {
         backend.write(session, response, true);
       }
@@ -789,6 +812,7 @@ export class SessionManager {
     });
     session.on("exit", (code) => {
       if (this.ignoredSessionExits.has(session)) return;
+      this.codexTerminalBindings.invalidatePane(pane.id);
       this.cancelPaneCwdRefresh(pane.id);
       this.broadcast(pane.id, { type: "exit", paneId: pane.id, code });
       const uptimeMs = Date.now() - startedAt;
@@ -982,6 +1006,7 @@ export class SessionManager {
     for (const timer of this.consumerCloseTimers) clearTimeout(timer);
     this.consumerCloseTimers.clear();
     for (const [paneId, session] of this.sessions) {
+      this.codexTerminalBindings.invalidatePane(paneId);
       const binding = this.agentInputSessionBindings.get(paneId);
       if (binding) this.agentInputSourceRetirer?.(paneId, binding);
       this.ignoredSessionExits.add(session);
@@ -1041,6 +1066,7 @@ export class SessionManager {
     const existing = this.sessions.get(pane.id);
     if (!existing || existing.isExited) return false;
     this.ignoredSessionExits.add(existing);
+    this.codexTerminalBindings.invalidatePane(pane.id);
     this.cancelPaneCwdRefresh(pane.id);
     this.sessions.delete(pane.id);
     this.resizeOwners.delete(pane.id);
@@ -1153,6 +1179,7 @@ export class SessionManager {
   }
 
   private disposePaneProcess(paneId: string, machineId?: string): void {
+    this.codexTerminalBindings.invalidatePane(paneId);
     const session = this.sessions.get(paneId);
     const backend = this.backends.get(paneId);
     const sessionMachine = this.sessionMachines.get(paneId);

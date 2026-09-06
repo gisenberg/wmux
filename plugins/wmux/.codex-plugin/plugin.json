@@ -1,8 +1,8 @@
 {
   "name": "wmux",
-  "version": "0.2.0+codex.20260905224159",
+  "version": "0.2.0+codex.20260906011825",
   "license": "MIT",
-  "description": "Let ordinary Codex agents inspect and name their bound wmux session.",
+  "description": "Name ordinary Codex sessions and mirror their saved task names to wmux.",
   "author": {
     "name": "wmux contributors"
   },
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Wmux",
     "shortDescription": "Name the current wmux session.",
-    "longDescription": "MCP tools for a normal Codex agent to inspect and name its own wmux workspace and tab. It does not replace, wrap, or modify Codex.",
+    "longDescription": "MCP tools and trusted hooks keep a normal Codex saved session name aligned with its wmux sidebar workspace and tab. No replacement launcher or Codex source changes.",
     "developerName": "wmux contributors",
     "category": "Productivity",
     "capabilities": [],

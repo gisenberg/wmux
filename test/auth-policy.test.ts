@@ -34,6 +34,9 @@ const routeCases: Array<[string, string, string]> = [
   ["auth-credentials", "GET", "/api/auth/credentials"],
   ["auth-credential-rotate", "POST", "/api/auth/credentials/helper/rotate"],
   ["bootstrap", "GET", "/api/bootstrap"],
+  ["codex-binding-issue", "POST", "/api/codex-bindings"],
+  ["codex-binding-resolve", "POST", "/api/codex-bindings/resolve"],
+  ["codex-binding-title", "POST", "/api/codex-bindings/title"],
   ["agent-session-timeline", "GET", "/api/agent-sessions/session"],
   ["agent-session-follow-up", "POST", "/api/agent-sessions/session/turns"],
   ["agent-input-registration-challenge", "POST", "/api/agent-input/sources/challenge"],
@@ -112,6 +115,11 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("GET", "/api/delegations/run")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/notifications")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/notifications")), true);
+  for (const route of ["/api/codex-bindings", "/api/codex-bindings/resolve", "/api/codex-bindings/title"]) {
+    assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", route)), true);
+    assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", route)), false);
+    assert.equal(authorizeHttpPrincipal(auth, principal("registration"), policy("POST", route)), false);
+  }
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("GET", "/api/streams/host/request")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/streams/host/request")), true);
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("DELETE", "/api/streams/host/request/request")), true);

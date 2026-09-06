@@ -1,34 +1,36 @@
 ---
 name: wmux
-description: Inspect or name the current wmux workspace and tab from a normal Codex session. Use whenever working in a wmux-bound Codex session; automatically title a new substantive task.
+description: Keep a normal Codex session's saved semantic name and its bound wmux title aligned through the trusted prompt binding.
 ---
 
-Use the `wmux` MCP tools when the current Codex session has a complete pane
-binding. `get_current_wmux_session` reports only the current workspace, tab, and
-pane; it deliberately does not request broader wmux read access merely to fetch
-titles. `name_current_wmux_session` changes that exact bound session through
-wmux's title API.
+Use the `wmux` MCP tools only when the trusted prompt hook supplies both
+`sessionId` and `bindingId`. They identify one short-lived binding and cannot
+list or infer any other wmux session. The private receipt is deliberately not
+available to the model or tool arguments.
 
-At the start of a new substantive user task, derive a compact, descriptive
-title from that task and immediately call `name_current_wmux_session` with
-`mode: "auto"`. This is the default behavior; do not wait for the user to ask
-for a title. Do not name a greeting, an acknowledgement, a request to clarify
-the task, or an otherwise non-substantive turn. If the binding is unavailable,
-continue the task without a title unless the user explicitly asked to name it.
-Retitle only when the user clearly switches to a different substantive task.
-Choose a semantic 3–7 word summary of the overall objective using the conversation
-and your understanding of the work. Never copy or truncate the latest prompt.
-Keep the title stable through follow-up tests, status questions, and refinements
-of the same task. Only the root agent names its sidebar workspace; subagents do
-not rename their parent's workspace. Check `workspaceTitle` and `workspaceApplied`
-in the result; a changed tab alone is not proof that the sidebar changed.
+For the first substantive objective, choose a semantic 3–7 word name and call
+`name_current_wmux_session` with the exact supplied IDs and `mode: "auto"`.
+It resolves the binding first, sets the local Codex saved conversation name,
+reads back Codex's canonical value, and then mirrors that value to wmux. Keep
+the name through normal follow-ups, tests, clarifications, and status work.
+Rename only for a material objective shift or substantially corrected
+understanding. Do not name greetings or non-substantive turns. Preserve explicit
+user names. These tools support only automatic naming and cannot override a
+manual wmux title; use the wmux UI for manual title ownership.
 
-Use automatic naming by default. It respects manual wmux workspace and tab
-names, and associates the update with the bound pane so split panes cannot name
-the wrong session. Use manual naming only when the user explicitly asks for a
-manual/persistent wmux title. Never infer the current session from browser focus
-or another workspace, and report the unavailable binding if the tool fails.
+On an ordinary follow-up or resume, call `sync_current_wmux_session` using the
+NEW current prompt binding instead of naming again. This also mirrors a native
+`/rename` without inventing another title. Check `workspaceTitle` and
+`workspaceApplied`: `tabApplied` alone is not proof of a sidebar rename.
 
-This plugin works with the ordinary `codex` command. It does not launch a
-replacement TUI or change Codex's own conversation name. Its bundled prompt hook
-reminds the agent of the naming policy, including when this skill is not selected.
+If Codex was named but mirroring failed, call
+`sync_current_wmux_session` with the same IDs. It reads and mirrors the saved
+name without setting a new one. A stale, pending, expired, or restarted daemon
+binding is nonblocking: continue the task and wait for a later prompt hook to
+provide fresh IDs. Root-agent guidance is instructional; hooks reject an
+`agent_id`, but this plugin does not claim a hard subagent sandbox.
+
+This works with ordinary `codex`, without wrappers, launch flags, Codex source
+edits, or Codex configuration changes. Native `/rename` is reconciled from the
+actual saved thread name at the next eligible prompt binding; previews are not
+used as names.

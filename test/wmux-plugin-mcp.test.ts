@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -7,127 +7,33 @@ import path from "node:path";
 import readline from "node:readline";
 import { test } from "node:test";
 
-const plugin = path.resolve("plugins/wmux/scripts/wmux-mcp.mjs");
-const pluginConfig = path.resolve("plugins/wmux/.mcp.json");
+const plugin = path.resolve("plugins/wmux/scripts/wmux-mcp.mjs"), hook = path.resolve("plugins/wmux/scripts/wmux-context.mjs"), config = path.resolve("plugins/wmux/.mcp.json");
+const sessionId = "session_one", bindingId = "B".repeat(22), receipt = "R".repeat(43);
+function fakeCodex(home: string) { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-fake-codex-")); fs.writeFileSync(path.join(directory, "codex"), `#!${process.execPath}\nconst fs=require('node:fs'),path=require('node:path'),home=process.env.CODEX_HOME,state=path.join(home,'name'),log=path.join(home,'calls');function o(id,result){process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\\n')}process.stdin.on('data',d=>d.toString().split('\\n').filter(Boolean).forEach(l=>{const m=JSON.parse(l);fs.appendFileSync(log,m.method+'\\n');if(m.method==='initialize')o(m.id,{});else if(m.method==='thread/read')o(m.id,{thread:{id:m.params.threadId,name:fs.existsSync(state)?fs.readFileSync(state,'utf8'):null}});else if(m.method==='thread/name/set'){fs.writeFileSync(state,process.env.FAKE_CANONICAL||m.params.name);o(m.id,{})}}));`); fs.chmodSync(path.join(directory, "codex"), 0o755); return { directory, dispose: () => fs.rmSync(directory, { recursive: true, force: true }) }; }
+function cleanEnv(home: string, fake: string) { const result = { ...process.env, HOME: home, CODEX_HOME: home, PATH: `${fake}:${process.env.PATH}` }; for (const key of Object.keys(result)) if (key.startsWith("WMUX_")) delete result[key]; return result; }
+async function server(handler: http.RequestListener) { const value = http.createServer(handler); await new Promise<void>(resolve => value.listen(0, "127.0.0.1", resolve)); const address = value.address(); assert.ok(address && typeof address !== "string"); return { value, url: `http://127.0.0.1:${address.port}` }; }
+function wire(home: string, url: string) { fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(home, ".wmux", "url"), url); fs.writeFileSync(path.join(home, ".wmux", "helper-token"), "a".repeat(32), { mode: 0o600 }); }
+function mcp(environment: NodeJS.ProcessEnv) { const child = spawn(process.execPath, [plugin], { env: environment, stdio: ["pipe", "pipe", "pipe"] }); const pending = new Map<number, (v: any) => void>(); readline.createInterface({ input: child.stdout }).on("line", line => { const message = JSON.parse(line); pending.get(message.id)?.(message); pending.delete(message.id); }); let id = 0; return { child, request(method: string, params = {}) { return new Promise<any>(resolve => { const requestId = ++id; pending.set(requestId, resolve); child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`); }); } }; }
+async function runHook(environment: NodeJS.ProcessEnv) { return new Promise<any>((resolve, reject) => { const child = spawn(process.execPath, [hook], { env: environment, stdio: ["pipe", "pipe", "pipe"] }); let output = "", error = ""; child.stdout.on("data", chunk => output += chunk); child.stderr.on("data", chunk => error += chunk); child.once("exit", code => code === 0 ? resolve(JSON.parse(output || "{}")) : reject(new Error(error))); child.stdin.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: sessionId, prompt: "private prompt" })); }); }
+function json(response: http.ServerResponse, body: object, status = 200) { response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body)); }
 
-test("plugin prompt hook supplies bounded instructions only inside a complete wmux binding", () => {
-  const script = path.resolve("plugins/wmux/scripts/wmux-context.mjs");
-  const env = { ...process.env, WMUX_WORKSPACE_ID: "ws_test", WMUX_TAB_ID: "tab_test", WMUX_PANE_ID: "pane_test", WMUX_TOKEN: "never-output-this-secret" };
-  const invoke = () => execFileSync(process.execPath, [script], { env, encoding: "utf8", input: '{"prompt":"private user prompt"}' });
-  const output = invoke();
-  const context = JSON.parse(output).hookSpecificOutput;
-  assert.equal(context.hookEventName, "UserPromptSubmit");
-  assert.match(context.additionalContext, /overall objective materially changes/);
-  assert.match(context.additionalContext, /workspaceApplied/);
-  assert.ok(output.length < 2400);
-  assert.doesNotMatch(output, /never-output-this-secret|private user prompt/);
-  delete env.WMUX_PANE_ID;
-  assert.equal(invoke(), "");
+test("plugin MCP supports private wmux connection files and optional embedded credentials", () => { const parsed = JSON.parse(fs.readFileSync(config, "utf8")); assert.ok(parsed.mcpServers.wmux.env_vars.includes("CODEX_HOME")); assert.ok(parsed.mcpServers.wmux.env_vars.includes("WMUX_HELPER_TOKEN_PATH")); assert.equal(parsed.mcpServers.wmux.env_vars.includes("WMUX_WORKSPACE_ID"), false); });
+
+test("issue marker keeps receipt private; explicit binding reads, saves canonical Codex name, then mirrors", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-plugin-")), fake = fakeCodex(home); let title: any;
+  const fixture = await server(async (request, response) => { let body = ""; for await (const chunk of request) body += chunk; const parsed = body ? JSON.parse(body) : {}; assert.equal(request.headers.authorization, `Bearer ${"a".repeat(32)}`); if (request.url === "/api/codex-bindings") return json(response, { receipt, marker: `[[WMUX:${bindingId}]]`, expiresAt: "2030-01-01T00:00:00.000Z" }); if (request.url === "/api/codex-bindings/resolve") { assert.deepEqual(parsed, { sessionId, receipt }); return json(response, { workspaceId: "workspace", tabId: "tab", paneId: "pane", sessionId, expiresAt: "2030-01-01T00:00:00.000Z" }); } if (request.url === "/api/codex-bindings/title") { title = parsed; return json(response, { sessionId, workspaceId: "workspace", tabId: "tab", paneId: "pane", workspace: { id: "workspace", name: "User title", nameSource: "manual", tabs: [{ id: "tab", title: "User tab", titleSource: "manual", panes: [{ id: "pane" }] }] }, workspaceApplied: false, tabApplied: false }); } return json(response, {}, 404); });
+  wire(home, fixture.url); const environment = cleanEnv(home, fake.directory); try { const output = await runHook(environment); assert.equal(output.systemMessage, `[[WMUX:${bindingId}]]`); assert.match(output.hookSpecificOutput.additionalContext, new RegExp(`sessionId=${sessionId} bindingId=${bindingId}`)); assert.doesNotMatch(JSON.stringify(output), new RegExp(receipt)); const files = fs.readdirSync(path.join(home, ".wmux", "codex-plugin")); assert.equal(files.length, 1); assert.equal(JSON.parse(fs.readFileSync(path.join(home, ".wmux", "codex-plugin", files[0]), "utf8")).receipt, receipt); const client = mcp({ ...environment, FAKE_CANONICAL: "Canonical" }); try { const named = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { sessionId, bindingId, title: "Semantic task" } }); assert.equal(named.result.structuredContent.codexName, "Canonical"); assert.equal(named.result.structuredContent.codexNameSet, true); assert.equal(named.result.structuredContent.workspaceApplied, false); assert.equal(title.title, "Canonical"); assert.equal(title.receipt, receipt); assert.deepEqual(fs.readFileSync(path.join(home, "calls"), "utf8").trim().split("\n"), ["initialize", "initialized", "thread/read", "thread/name/set", "thread/read"]); } finally { client.child.kill(); } } finally { fixture.value.close(); fake.dispose(); fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-async function server(handler: http.RequestListener) {
-  const value = http.createServer(handler);
-  await new Promise<void>((resolve) => value.listen(0, "127.0.0.1", resolve));
-  const address = value.address();
-  assert.ok(address && typeof address !== "string");
-  return { value, url: `http://127.0.0.1:${address.port}` };
-}
-
-function mcp(env: NodeJS.ProcessEnv) {
-  const child = spawn(process.execPath, [plugin], { env, stdio: ["pipe", "pipe", "pipe"] });
-  const pending = new Map<number, (value: any) => void>();
-  readline.createInterface({ input: child.stdout }).on("line", (line) => {
-    const message = JSON.parse(line);
-    pending.get(message.id)?.(message);
-    pending.delete(message.id);
-  });
-  let id = 0;
-  return { child, request(method: string, params = {}) {
-    return new Promise<any>((resolve) => {
-      const current = ++id;
-      pending.set(current, resolve);
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: current, method, params })}\n`);
-    });
-  } };
-}
-
-test("wmux plugin forwards only the pane binding and wmux connection inputs its MCP server needs", () => {
-  const config = JSON.parse(fs.readFileSync(pluginConfig, "utf8"));
-  const server = config.mcpServers.wmux;
-  assert.equal(server.cwd, ".");
-  assert.deepEqual(server.env_vars, [
-    "WMUX_WORKSPACE_ID", "WMUX_TAB_ID", "WMUX_PANE_ID", "WMUX_URL", "WMUX_HELPER_URL", "WMUX_PUBLIC_URL",
-    "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_TOKEN", "WMUX_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE", "WMUX_ALLOWED_HOSTS",
-  ]);
+test("stale bindings fail before Codex naming and manual protection is reported from wmux", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-stale-")), fake = fakeCodex(home); let resolveCalls = 0;
+  const fixture = await server((request, response) => { if (request.url === "/api/codex-bindings") return json(response, { receipt, marker: `[[WMUX:${bindingId}]]`, expiresAt: "2030-01-01T00:00:00.000Z" }); if (request.url === "/api/codex-bindings/resolve") { resolveCalls++; return json(response, { code: "binding_pending" }, 409); } return json(response, {}, 500); }); wire(home, fixture.url); const environment = cleanEnv(home, fake.directory); try { await runHook(environment); const client = mcp(environment); try { const named = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { sessionId, bindingId, title: "No stale name" } }); assert.equal(named.result.isError, true); assert.match(named.result.structuredContent.error, /stale or pending/); assert.equal(resolveCalls, 1); assert.equal(fs.existsSync(path.join(home, "calls")), false); } finally { client.child.kill(); } } finally { fixture.value.close(); fake.dispose(); fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test("wmux MCP names only its complete current pane and preserves server auto-title ownership", async () => {
-  const calls: Array<{ url?: string; body?: any; auth?: string }> = [];
-  const fixture = await server((request, response) => {
-    let text = "";
-    request.on("data", (chunk) => { text += chunk; });
-    request.on("end", () => {
-      calls.push({ url: request.url, body: text ? JSON.parse(text) : undefined, auth: request.headers.authorization });
-      const workspace = { id: "workspace", name: "Original", nameSource: "default", tabs: [{ id: "tab", title: "Shell", titleSource: "default", panes: [{ id: "pane" }] }] };
-      const body = { workspace: { ...workspace, name: "Agent title", nameSource: "auto", tabs: [{ ...workspace.tabs[0], title: "Agent title", titleSource: "auto" }] }, workspaceApplied: true, tabApplied: true };
-      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
-    });
-  });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-mcp-test-"));
-  const token = "a".repeat(32);
-  const env = { ...process.env, HOME: home, WMUX_URL: fixture.url, WMUX_TOKEN: token, WMUX_WORKSPACE_ID: "workspace", WMUX_TAB_ID: "tab", WMUX_PANE_ID: "pane", WMUX_DELEGATED_RUN: "1" };
-  for (const key of ["WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH"]) delete env[key];
-  const client = mcp(env);
-  try {
-    const init = await client.request("initialize", { protocolVersion: "2025-11-25" });
-    assert.equal(init.result.capabilities.tools.constructor, Object);
-    assert.equal(init.result.protocolVersion, "2025-11-25");
-    const olderInit = await client.request("initialize", { protocolVersion: "2025-06-18" });
-    assert.equal(olderInit.result.protocolVersion, "2025-06-18");
-    const unsupportedInit = await client.request("initialize", { protocolVersion: "2099-01-01" });
-    assert.equal(unsupportedInit.result.protocolVersion, "2025-11-25");
-    const missingVersion = await client.request("initialize");
-    assert.equal(missingVersion.error.code, -32602);
-    const listed = await client.request("tools/list");
-    assert.deepEqual(listed.result.tools.map((tool: { name: string }) => tool.name), ["get_current_wmux_session", "name_current_wmux_session"]);
-    const context = await client.request("tools/call", { name: "get_current_wmux_session", arguments: {} });
-    assert.equal(context.result.structuredContent.workspaceId, "workspace");
-    assert.equal(context.result.structuredContent.titleRead, false);
-    const renamed = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { title: "Agent title" } });
-    assert.equal(renamed.result.structuredContent.tabApplied, true);
-    assert.deepEqual(calls.map((call) => call.url), ["/api/workspaces/workspace/auto-title"]);
-    assert.deepEqual(calls[0]?.body, { title: "Agent title", tabId: "tab", paneId: "pane", tabOnlyIfMultiple: false });
-    assert.equal(calls[0]?.auth, `Bearer ${token}`);
-  } finally { client.child.kill(); fixture.value.close(); fs.rmSync(home, { recursive: true, force: true }); }
-});
-
-test("wmux MCP fails closed without a complete bound pane and never makes a request", async () => {
-  const env = { ...process.env, WMUX_WORKSPACE_ID: "workspace", WMUX_TAB_ID: "tab" };
-  delete env.WMUX_PANE_ID; delete env.WMUX_DELEGATED_RUN;
-  const client = mcp(env);
-  try {
-    const outcome = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { title: "No target" } });
-    assert.equal(outcome.result.isError, true);
-    assert.match(outcome.result.structuredContent.error, /complete usable wmux pane binding/);
-  } finally { client.child.kill(); }
-});
-
-test("wmux MCP refuses an external helper URL before reading or sending its credential", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-mcp-test-"));
-  const env = {
-    ...process.env,
-    HOME: home,
-    WMUX_URL: "https://example.com",
-    WMUX_HELPER_TOKEN: "a".repeat(32),
-    WMUX_WORKSPACE_ID: "workspace",
-    WMUX_TAB_ID: "tab",
-    WMUX_PANE_ID: "pane",
-  };
-  for (const key of ["WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_DELEGATED_RUN", "WMUX_HELPER_TOKEN_PATH", "WMUX_ALLOWED_HOSTS"]) delete env[key];
-  const client = mcp(env);
-  try {
-    const outcome = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { title: "No egress" } });
-    assert.equal(outcome.result.isError, true);
-    assert.match(outcome.result.structuredContent.error, /loopback, private, Tailscale, or explicitly allowed host/);
-  } finally { client.child.kill(); fs.rmSync(home, { recursive: true, force: true }); }
+test("a configured empty helper file never falls back to the broad token", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-helper-")), fake = fakeCodex(home); let calls = 0;
+  const fixture = await server((_request, response) => { calls++; json(response, {}); });
+  wire(home, fixture.url); fs.writeFileSync(path.join(home, ".wmux", "helper-token"), "", { mode: 0o600 }); fs.writeFileSync(path.join(home, ".wmux", "token"), "b".repeat(32), { mode: 0o600 });
+  try { const output = await runHook(cleanEnv(home, fake.directory)); assert.match(output.systemMessage, /unavailable/); assert.equal(calls, 0); }
+  finally { fixture.value.close(); fake.dispose(); fs.rmSync(home, { recursive: true, force: true }); }
 });
