@@ -3302,6 +3302,7 @@ button.active-tool {
 .agent-fleet-dock .agent-fleet-header { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 10px; }
 .agent-fleet-dock .agent-fleet-columns { display: none; }
 .agent-fleet-dock .agent-fleet-row { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.agent-fleet-dock .agent-fleet-entry { grid-column: 1 / -1; }
 .agent-fleet-dock .agent-fleet-summary button { width: auto; padding-inline: 6px; }
 .console-host-inspector button { min-height: 44px; border: 1px solid var(--line); border-radius: 0; background: var(--panel); color: var(--ivory); font: inherit; }
 .console-empty button:disabled { opacity: .5; }

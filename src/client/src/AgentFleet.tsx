@@ -118,7 +118,7 @@ export function AgentFleet({
                 <span>{row.title}</span>
                 <small>{row.workspaceName} / {row.source.toUpperCase()}</small>
               </span>
-              <span className="agent-fleet-machine">
+              <span className="agent-fleet-machine" title={row.machineName}>
                 {row.machineName} {!row.reachable ? "[OFFLINE]" : ""}
               </span>
               <span className="agent-fleet-elapsed">
