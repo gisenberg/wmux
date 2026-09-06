@@ -5,6 +5,7 @@ import type { KeybindingMap, LayoutNode, MachineStatus, PaneState, SplitDirectio
 interface Props {
   tab: SurfaceTab;
   viewActive: boolean;
+  zoomed?: boolean;
   inactiveTabStreaming: "suspend" | "live";
   tuiFrameRate: 15 | 30 | 60;
   terminalScrollMode: TerminalScrollMode;
@@ -33,6 +34,7 @@ interface Props {
 export const LayoutView = memo(function LayoutView({
   tab,
   viewActive,
+  zoomed = false,
   inactiveTabStreaming,
   tuiFrameRate,
   terminalScrollMode,
@@ -121,7 +123,7 @@ export const LayoutView = memo(function LayoutView({
           pane={pane}
           tabId={tab.id}
           active={viewActive && tab.activePaneId === pane.id}
-          tabVisible={viewActive}
+          tabVisible={viewActive && (!zoomed || tab.activePaneId === pane.id)}
           inactiveTabStreaming={inactiveTabStreaming}
           tuiFrameRate={tuiFrameRate}
           terminalScrollMode={terminalScrollMode}
@@ -148,10 +150,10 @@ export const LayoutView = memo(function LayoutView({
     const ratio = draftRatios[path] ?? node.ratio;
     return (
       <div
-        className={`split ${node.direction} ${dragRef.current?.path === path ? "resizing" : ""}`}
+        className={`split ${node.direction} ${zoomed ? "split-zoomed" : ""} ${dragRef.current?.path === path ? "resizing" : ""}`}
         style={{ "--ratio": ratio } as CSSProperties}
       >
-        <div className="split-child">{renderNode(node.first, `${path}0`)}</div>
+        <div className="split-child" hidden={zoomed && !containsPane(node.first, tab.activePaneId)}>{renderNode(node.first, `${path}0`)}</div>
         <div
           className="split-handle"
           role="separator"
@@ -165,13 +167,16 @@ export const LayoutView = memo(function LayoutView({
           onPointerUp={endResize}
           onPointerCancel={endResize}
         />
-        <div className="split-child">{renderNode(node.second, `${path}1`)}</div>
+        <div className="split-child" hidden={zoomed && !containsPane(node.second, tab.activePaneId)}>{renderNode(node.second, `${path}1`)}</div>
       </div>
     );
   };
 
   return <div className="layout-view">{renderNode(tab.layout)}</div>;
 });
+
+const containsPane = (node: LayoutNode, paneId: string): boolean => node.type === "pane"
+  ? node.paneId === paneId : containsPane(node.first, paneId) || containsPane(node.second, paneId);
 
 interface LayoutPaneProps {
   pane: PaneState;

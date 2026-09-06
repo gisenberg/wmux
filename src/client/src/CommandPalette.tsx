@@ -9,6 +9,7 @@ export interface PaletteCommand {
   section: string;
   shortcut?: string;
   keywords?: string[];
+  filters?: import("./command-filter").FilterableCommand["filters"];
   disabled?: boolean;
   run: () => void | Promise<void>;
 }

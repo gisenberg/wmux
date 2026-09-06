@@ -9,11 +9,14 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { GripVertical, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { api, modalSettingsUpdate, UnauthorizedError, WorkspaceReorderConflictError } from "./api";
 import { DiagnosticsModal } from "./DiagnosticsModal";
 import { ActivityPanel, buildActivityItems } from "./ActivityPanel";
 import { AgentFleet, type AgentFleetRow } from "./AgentFleet";
+import { buildSessionRows, sessionActivities } from "./session-inventory";
+import { HostInspector } from "./HostInspector";
+import { directionalPane, type PaneDirection } from "./pane-navigation";
 import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
 import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
@@ -210,6 +213,9 @@ export function AppShell() {
   const [previewSettings, setPreviewSettings] = useState<WmuxSettings | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
   const [agentFleetOpen, setAgentFleetOpen] = useState(false);
+  const [fleetDocked, setFleetDocked] = useState(false);
+  const [zoomedTabId, setZoomedTabId] = useState<string | null>(null);
+  const [inspectedHostId, setInspectedHostId] = useState<string | null>(null);
   const [streamOpen, setStreamOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
@@ -399,7 +405,8 @@ export function AppShell() {
   const unreadByWorkspaceId = useMemo(() => countUnreadBy(notifications, "workspaceId"), [notifications]);
   const latestUnreadByWorkspaceId = useMemo(() => latestUnreadByWorkspace(notifications), [notifications]);
   const mediaByPaneId = useMemo(() => groupMediaByPane(mediaItems), [mediaItems]);
-  const agentEvents = state?.agentEvents ?? [];
+  const sessionRows = useMemo(() => state ? buildSessionRows(state, displayMachines) : [], [state, displayMachines]);
+  const agentEvents = useMemo(() => sessionActivities(sessionRows), [sessionRows]);
   const runs = state?.runs ?? [];
   const streams = state?.streams ?? [];
   const bellByWorkspaceId = useMemo(() => bellWorkspaces(state, bellPaneIds), [bellPaneIds, state]);
@@ -1659,6 +1666,12 @@ export function AppShell() {
 
     const hostCommands = displayMachines.flatMap((machine): PaletteCommand[] => [
       {
+        id: `inspect-host:${machine.id}`, title: `Inspect host: ${machine.name}`,
+        subtitle: `${machine.host ?? machine.id} / ${machine.reachable ? "online" : "offline"}`,
+        section: "Hosts", keywords: [machine.id, machine.host ?? ""],
+        run: () => setInspectedHostId(machine.id),
+      },
+      {
         id: `target-host:${machine.id}`,
         title: `Set target host: ${machine.name}`,
         subtitle: machine.reachable ? machine.kind : machine.reason ?? "Offline",
@@ -1710,11 +1723,46 @@ export function AppShell() {
         return [...workspaceCommand, ...tabCommands];
       }) ?? [];
 
+    for (const direction of ["left", "right", "up", "down"] as PaneDirection[]) {
+      const next = activeTab ? directionalPane(activeTab.layout, activeTab.activePaneId, direction) : undefined;
+      base.push({ id: `focus-pane-${direction}`, title: `Focus pane ${direction}`, section: "Navigate", disabled: !next,
+        run: () => { if (next && activeTab) void activatePaneInTab(activeTab.id, next); } });
+    }
+    base.push({
+      id: "pane-zoom", title: zoomedTabId === activeTab?.id ? "Restore split layout" : "Zoom active pane",
+      section: "Pane", disabled: !activeTab || activeTab.panes.length < 2,
+      run: () => setZoomedTabId(zoomedTabId === activeTab?.id ? null : activeTab?.id ?? null),
+      keywords: ["maximize", "restore", "zoom"],
+    });
     const orderedBase = mobileViewport.isMobile
       ? [...base].sort((first, second) => mobileCommandSectionPriority(first.section) - mobileCommandSectionPriority(second.section))
       : base;
-    return [...orderedBase, ...hostCommands, ...workspaceCommands];
+    const sessions = state ? buildSessionRows(state, displayMachines) : [];
+    const openSession = (row: AgentFleetRow) => {
+      activateWorkspaceTab(row.workspaceId, row.tabId);
+      void activatePaneInTab(row.tabId, row.paneId);
+    };
+    const sessionCommands: PaletteCommand[] = sessions.map((row) => ({
+      id: `session:${row.id}`,
+      title: `Open session: ${row.title}`,
+      subtitle: `${row.workspaceName} / ${row.machineName} / [${row.state.toUpperCase()}] / ${row.source}`,
+      section: "Sessions", disabled: !row.available,
+      keywords: [row.runtime, row.cwd ?? "", row.machineName],
+      filters: { host: [row.machineId, row.machineName], state: [row.state, row.attentionReason ?? ""], runtime: [row.runtime] },
+      run: () => openSession(row),
+    }));
+    const attention = sessions.filter((row) => row.available && (row.attentionReason || row.state === "waiting"));
+    const completions = sessions.filter((row) => row.available && row.state === "completed" && row.unread);
+    for (const [id, title, candidates] of [
+      ["next-attention", "Next session needing attention", attention],
+      ["next-completion", "Next unseen completion", completions],
+    ] as const) {
+      const next = candidates[(candidates.findIndex((row) => row.paneId === activeTab?.activePaneId) + 1) % candidates.length];
+      sessionCommands.unshift({ id, title, section: "Navigate", disabled: !next, run: () => { if (next) openSession(next); } });
+    }
+    return [...orderedBase, ...sessionCommands, ...hostCommands, ...workspaceCommands];
   }, [
+    zoomedTabId,
     activeTab,
     activeWorkspace,
     requestTerminalFocus,
@@ -1751,6 +1799,7 @@ export function AppShell() {
   }
   const appClassName = [
     "app-shell",
+    agentFleetOpen && fleetDocked && !mobileViewport.isMobile ? "fleet-docked" : "",
     sidebarCollapsed ? "sidebar-collapsed" : "",
     "open-tui-mode",
     mobileViewport.isMobile ? "mobile-viewport" : "",
@@ -1776,7 +1825,7 @@ export function AppShell() {
       <Toasts toasts={toasts} dismissToast={dismissToast} />
       {pendingActions.length > 0 ? (
         <div className="mutation-status" role="status" aria-live="polite">
-          <LoaderCircle size={15} aria-hidden="true" />
+          <span aria-hidden="true">[BUSY]</span>
           <span>{pendingActions[pendingActions.length - 1].label}</span>
           {pendingActions.length > 1 ? <span className="mutation-status-count">+{pendingActions.length - 1}</span> : null}
         </div>
@@ -1976,6 +2025,7 @@ export function AppShell() {
             tabs={
               activeWorkspace?.tabs.map((tab) => ({
                 id: tab.id,
+                href: workspaceTabPath(activeWorkspace.id, tab.id),
                 title: tab.title,
                 active: tab.id === activeTab?.id,
                 unreadCount: unreadByTabId.get(tab.id) ?? 0,
@@ -2042,6 +2092,7 @@ export function AppShell() {
                   aria-hidden={!isActive}
                 >
                   <LayoutView
+                    zoomed={zoomedTabId === view.tab.id}
                     tab={view.tab}
                     viewActive={isActive}
                     inactiveTabStreaming={settings.inactiveTabStreaming}
@@ -2071,7 +2122,14 @@ export function AppShell() {
             </Suspense>
           </div>
         ) : (
-          <EmptyWorkspaceView />
+          <EmptyWorkspaceView
+            machines={displayMachines}
+            targetId={targetMachineId}
+            onTarget={setNewMachineId}
+            onCreate={() => createWorkspace(targetMachineId)}
+            onNavigate={openCommandPalette}
+            onManage={openMachineManager}
+          />
         )}
       </section>
       {activityOpen ? (
@@ -2111,15 +2169,23 @@ export function AppShell() {
       ) : null}
       {agentFleetOpen ? (
         <AgentFleet
+          docked={fleetDocked && !mobileViewport.isMobile}
+          onToggleDock={!mobileViewport.isMobile ? () => setFleetDocked((value) => !value) : undefined}
           state={state}
           machines={displayMachines}
           onClose={() => setAgentFleetOpen(false)}
           onOpenSession={(row: AgentFleetRow) => {
-            setAgentFleetOpen(false);
+            if (!fleetDocked || mobileViewport.isMobile) setAgentFleetOpen(false);
             activateWorkspaceTab(row.workspaceId, row.tabId);
             void activatePaneInTab(row.tabId, row.paneId);
           }}
         />
+      ) : null}
+      {displayMachines.find((machine) => machine.id === inspectedHostId) ? (
+        <HostInspector machine={displayMachines.find((machine) => machine.id === inspectedHostId)!} sessions={sessionRows}
+          onClose={() => setInspectedHostId(null)}
+          onManage={() => { setInspectedHostId(null); openMachineManager(); }}
+          onCreate={() => { if (inspectedHostId) void createWorkspace(inspectedHostId); setInspectedHostId(null); }} />
       ) : null}
       {settingsOpen ? (
         <SettingsModal

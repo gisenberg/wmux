@@ -219,6 +219,15 @@ export function OpenTuiSidebar({
   const [moveWorkspace, setMoveWorkspace] = useState<{ workspaceId: string; returnFocus: HTMLElement | null } | null>(null);
   const [semanticRows, setSemanticRows] = useState<SemanticWorkspaceRow[]>([]);
   const [semanticSpaces, setSemanticSpaces] = useState<SemanticSpaceRow[]>([]);
+  const [focusedWorkspaceId, setFocusedWorkspaceId] = useState<string | null>(null);
+  const pendingTreeFocus = useRef<string | null>(null);
+  const treeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pendingTreeFocus.current) return;
+    const item = Array.from(treeRef.current?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])
+      .find((element) => element.dataset.workspaceId === pendingTreeFocus.current);
+    if (item) { pendingTreeFocus.current = null; item.focus(); }
+  }, [semanticRows]);
   const [contextMenu, setContextMenu] = useState<SidebarContextMenuState | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -575,7 +584,7 @@ export function OpenTuiSidebar({
           }}
         />
         <div className="open-tui-sidebar-semantics">
-          {groupSidebarSessionsByHost ? <nav aria-label="Spaces">
+          {groupSidebarSessionsByHost ? <nav aria-label="Hosts">
             {semanticSpaces.map(({ machine, row, rowCount }) => (
               <button
                 key={machine.id}
@@ -629,8 +638,9 @@ export function OpenTuiSidebar({
             </nav>
           )}
           <div
+            ref={treeRef}
             role="tree"
-            aria-label="Agents"
+            aria-label="Workspaces"
             data-grouping={groupSidebarSessionsByHost ? "space" : "global"}
             data-target-space-id={targetMachineId}
           >
@@ -643,6 +653,9 @@ export function OpenTuiSidebar({
               <a
                 href={workspaceTabPath(workspace.id, workspace.tabId)}
                 role="treeitem"
+                tabIndex={workspace.id === (semanticRows.some((item) => item.workspace.id === focusedWorkspaceId)
+                  ? focusedWorkspaceId : semanticRows.find((item) => item.workspace.active)?.workspace.id ?? semanticRows[0]?.workspace.id) ? 0 : -1}
+                onFocus={() => setFocusedWorkspaceId(workspace.id)}
                 aria-level={workspace.depth + 1}
                 aria-current={workspace.active ? "page" : undefined}
                 aria-expanded={workspace.hasChildren ? workspace.expanded : undefined}
@@ -673,6 +686,29 @@ export function OpenTuiSidebar({
                   openWorkspaceContextMenu(workspace.id, event.clientX, event.clientY, event.currentTarget);
                 }}
                 onKeyDown={(event) => {
+                  const ordered = groupSidebarWorkspaceRows(workspaces, machines.map((machine) => machine.id), groupSidebarSessionsByHost).flatMap((group) => group.rows);
+                  const index = ordered.findIndex((item) => item.id === workspace.id);
+                  let next: OpenTuiSidebarWorkspace | undefined;
+                  if (event.key === "ArrowDown") next = ordered[Math.min(ordered.length - 1, index + 1)];
+                  if (event.key === "ArrowUp") next = ordered[Math.max(0, index - 1)];
+                  if (event.key === "Home") next = ordered[0];
+                  if (event.key === "End") next = ordered.at(-1);
+                  if (event.key === "ArrowRight") {
+                    if (workspace.hasChildren && !workspace.expanded) { event.preventDefault(); void onToggleWorkspace(workspace.id); return; }
+                    if (ordered[index + 1]?.parentId === workspace.id) next = ordered[index + 1];
+                  }
+                  if (event.key === "ArrowLeft") {
+                    if (workspace.hasChildren && workspace.expanded) { event.preventDefault(); void onToggleWorkspace(workspace.id); return; }
+                    next = ordered.find((item) => item.id === workspace.parentId);
+                  }
+                  if (next) {
+                    event.preventDefault();
+                    setFocusedWorkspaceId(next.id);
+                    const visible = Array.from(treeRef.current?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? []).find((element) => element.dataset.workspaceId === next.id);
+                    if (visible) visible.focus();
+                    else { pendingTreeFocus.current = next.id; setWorkspaceScrollOffset(ordered.indexOf(next)); }
+                    return;
+                  }
                   if (!contextMenuEnabled || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
                   event.preventDefault();
                   const rect = event.currentTarget.getBoundingClientRect();
@@ -1029,7 +1065,7 @@ const drawSidebarGrid = (
   row += 2;
 
   if (model.groupSidebarSessionsByHost) {
-    section(row, "spaces");
+    section(row, "hosts");
     const spaceCount = String(model.machines.length);
     write(row, Math.max(10, cols - spaceCount.length - 1), spaceCount, rgba.faint, 700);
     if (model.targetMachineReachable) {
@@ -1044,7 +1080,8 @@ const drawSidebarGrid = (
     for (const machine of visibleSpaces) {
     const itemStart = row;
     const activeTarget = machine.id === model.targetMachineId;
-    for (let offset = 0; offset < 2; offset += 1) {
+    const hostRows = activeTarget || !machine.reachable ? 2 : 1;
+    for (let offset = 0; offset < hostRows; offset += 1) {
       fillRow(row + offset, activeTarget ? (offset === 0 ? rgba.active : rgba.activeSoft) : rgba.black);
       if (activeTarget) write(row + offset, 0, "▌", rgba.gold, 700);
     }
@@ -1064,6 +1101,7 @@ const drawSidebarGrid = (
       activeTarget ? 700 : 600,
     );
     row++;
+    if (hostRows > 1) {
     const versionLabel = machine.version ?? (machine.reachable ? "online" : "offline");
     const spaceContext = activeTarget ? `target · ${versionLabel}` : versionLabel;
     write(row, 6, spaceContext, activeTarget ? rgba.goldDim : rgba.faint, 700);
@@ -1072,9 +1110,10 @@ const drawSidebarGrid = (
       write(row, 6 + spaceContext.length, " · ", rgba.faint);
       write(row, detailCol, machine.detail, machine.reachable ? rgba.faint : rgba.red);
     }
-    actionRows(itemStart, 2, `Select ${machine.name} space`, { type: "select-space", machineId: machine.id });
-    semanticSpaces.push({ machine, row: itemStart, rowCount: 2 });
     row++;
+    }
+    actionRows(itemStart, hostRows, `Select ${machine.name} host`, { type: "select-space", machineId: machine.id });
+    semanticSpaces.push({ machine, row: itemStart, rowCount: hostRows });
     }
     const hiddenSpaceCount = model.machines.length - visibleSpaces.length;
     if (hiddenSpaceCount > 0) {
@@ -1089,7 +1128,7 @@ const drawSidebarGrid = (
 
   write(row, 0, "─".repeat(cols), rgba.panel);
   row++;
-  section(row, model.groupSidebarSessionsByHost ? "agents" : "agent sessions");
+  section(row, "workspaces");
   const activeAgentCount = model.workspaces.filter((workspace) =>
     workspace.agentStatus === "running"
     || workspace.agentStatus === "waiting").length;
@@ -1107,7 +1146,7 @@ const drawSidebarGrid = (
   const workspaceEndRow = rows - 1;
   let visibleWorkspaceCount = 0;
   if (model.workspaces.length === 0) {
-    write(row, 3, "NO AGENT SESSIONS", rgba.faint, 700);
+    write(row, 3, "NO WORKSPACES", rgba.faint, 700);
     row += 2;
   } else {
     const allGroups = groupSidebarWorkspaceRows(model.workspaces, model.machines.map((machine) => machine.id), model.groupSidebarSessionsByHost);

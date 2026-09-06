@@ -165,7 +165,8 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
 - Treat the console/TUI aesthetic as wmux's project-wide design language wherever the interaction permits it. Prefer monospaced cell rhythm, flat rectangular regions, one-pixel rules, compact uppercase labels, tabular values, explicit status tokens such as `[OK]`/`[WARN]`, and bracketed text actions such as `[R] REFRESH`. Avoid generic dashboard cards, pill-shaped controls, soft rounded surfaces, ornamental gradients, and icon-only actions unless the platform interaction or content materially benefits from them.
 - DOM surfaces that remain necessary for accessibility, editable controls, semantic links, or browser APIs should still visually align with the cell-grid chrome. Keep their hierarchy text-first and console-like, preserve visible keyboard/focus behavior, and use the shared terminal/chrome palette and `--wmux-mono-font` rather than introducing a separate application style.
 - Do not reintroduce the former unlicensed `opentui-browser` vendor snapshot. Keep the local renderer limited to the cell-grid surface wmux actually uses.
-- The empty-workspace view is a sibling WebGL shader, not a ghostty-web shader. It renders a Game-of-Life/metal light-panel cube field with mobile-adjusted projection and click-to-toggle cells.
+- The empty-workspace view is a DOM-backed console session launcher with explicit host selection, session search, and machine management.
+  Keep it idle without animation loops or GPU rendering.
 - Settings remains a DOM modal because it contains editable controls and destructive session-audit actions.
 - Machine aliases are user-facing labels only. Underlying machine IDs and hosts must remain stable for links, state, and helper environment.
 - Host status should show useful network identity. Respect the current alias/IP display convention when adjusting host labels.

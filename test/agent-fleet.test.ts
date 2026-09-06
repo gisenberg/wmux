@@ -54,6 +54,7 @@ test("fleet rows prioritize attention and resolve pane-local machines and timeli
   assert.deepEqual(rows.map((row) => row.id), [
     "run-remote",
     "run-local",
+    "run-done",
   ]);
   assert.equal(rows[0].machineName, "Remote node");
   assert.equal(rows[0].lastEntry?.text, "Approval is required before editing.");

@@ -12,7 +12,7 @@ Editable controls, accessible semantic overlays, mobile navigation, and browser-
 - [x] The desktop command palette, activity panel, and default settings surface use the cell-grid renderer.
 - [x] The mobile header exposes navigation, fleet, chat, terminal, and actions through the cell-grid renderer with semantic buttons.
 - [x] The mobile drawer, editable settings controls, dialogs, and terminal textarea remain accessible DOM surfaces styled in the same console language.
-- [x] Empty-workspace Game of Life rendering stays bounded, pauses while hidden, and resumes when visible.
+- [x] Empty workspaces provide a keyboard-accessible host-aware console launcher without animated rendering.
 - [x] Mobile safe-area colors and boot completion timing remain independent of the retired desktop fallback.
 - [x] A `legacy` query parameter is removed from the address without changing the rendered interface.
 
