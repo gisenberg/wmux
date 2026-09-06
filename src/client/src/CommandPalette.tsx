@@ -32,7 +32,7 @@ export function CommandPalette({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
+  const filteredCommands = useMemo(() => filterCommands(commands, query), [commands, query]);
 
   useEffect(() => {
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -98,7 +98,7 @@ export function CommandPalette({
           if (event.key === "Enter") {
             event.preventDefault();
             const inputQuery = liveQueryRef.current || inputRef.current?.value || "";
-            const submittedCommands = filterCommands(commands, inputQuery).slice(0, 40);
+            const submittedCommands = filterCommands(commands, inputQuery);
             const submittedIndex = inputQuery === query ? selectedIndex : 0;
             const selectedCommand = submittedCommands[submittedIndex];
             void runCommand(

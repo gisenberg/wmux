@@ -52,7 +52,7 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
+  const filteredCommands = useMemo(() => filterCommands(commands, query), [commands, query]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -125,7 +125,7 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
     if (event.key === "Enter") {
       event.preventDefault();
       const inputQuery = liveQueryRef.current || inputRef.current?.value || "";
-      const submittedCommands = filterCommands(commands, inputQuery).slice(0, 40);
+      const submittedCommands = filterCommands(commands, inputQuery);
       const submittedIndex = inputQuery === query ? selectedIndex : 0;
       const selectedCommand = submittedCommands[submittedIndex];
       void runCommand(

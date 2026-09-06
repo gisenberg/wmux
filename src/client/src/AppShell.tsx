@@ -1383,7 +1383,8 @@ export function AppShell() {
   useKeyboardShortcuts({
     keybindings,
     apple: appleKeybindings,
-    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || diagnosticsOpen || agentFleetOpen,
+    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || diagnosticsOpen
+      || Boolean(inspectedHostId) || (agentFleetOpen && (!fleetDocked || mobileViewport.isMobile)),
     openCommandPalette,
     openSettings,
     toggleSidebar,
