@@ -33,7 +33,7 @@ export function AgentFleet({
   );
   const attentionCount = rows.filter((row) => row.attentionReason || row.state === "waiting").length;
   const activeCount = rows.filter(
-    (row) => row.state === "running" || row.state === "waiting",
+    (row) => row.state === "running",
   ).length;
   const dialogRef = useConsoleDialog<HTMLElement>(onClose, !docked);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -145,6 +145,7 @@ export function AgentFleet({
 }
 
 const fleetStateToken = (row: AgentFleetRow): string => {
+  if (row.state === "completed") return row.unread ? "[DONE]" : "[IDLE]";
   if (row.attentionReason) {
     return `[${row.attentionReason.toUpperCase()}]`;
   }

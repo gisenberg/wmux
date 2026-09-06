@@ -39,6 +39,7 @@ test("observed work does not erase an independently active managed delegation", 
   assert.equal(rows[0].id, "event-2");
   assert.equal(rows[0].source, "hook");
   assert.equal(rows[1].source, "delegation");
+  assert.equal(sessionActivities(rows)[0].status, "waiting");
 });
 
 test("unread completion remains available to navigation, without implying a running agent", () => {

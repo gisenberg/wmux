@@ -19,7 +19,7 @@ export const filterCommands = <Command extends FilterableCommand>(commands: Comm
       .join(" ")
       .toLowerCase();
     return tokens.every((token) => {
-      const match = /^(host|state|runtime):(.*)$/.exec(token);
+      const match = /^(host|state|runtime):(.+)$/.exec(token);
       if (!match) return haystack.includes(token);
       const values = command.filters?.[match[1] as "host" | "state" | "runtime"];
       return Boolean(values?.some((value) => value.toLowerCase().includes(match[2])));

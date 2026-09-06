@@ -58,4 +58,6 @@ test("typed session filters match structured metadata, not incidental titles", (
   assert.deepEqual(filterCommands(rows, "host:remote state:approval runtime:CLAUDE"), [rows[1]]);
   assert.deepEqual(filterCommands(rows, "host:remote runtime:codex"), []);
   assert.deepEqual(filterCommands(rows, "host:local fix"), [rows[0]]);
+  const inspector = { title: "Inspect host: Local", section: "Hosts" };
+  assert.deepEqual(filterCommands([inspector], "Inspect host: Local"), [inspector]);
 });

@@ -85,7 +85,14 @@ export function buildSessionRows(state: BootstrapPayload, machines: MachineStatu
 }
 
 export function sessionActivities(rows: SessionRow[]): AgentActivity[] {
-  return rows.filter((row) => row.available && row.source !== "shell").map((row) => ({
+  const representatives = new Map<string, SessionRow>();
+  for (const row of rows) {
+    if (!row.available || row.source === "shell") continue;
+    const current = representatives.get(row.paneId);
+    if (!current || sessionPriority(row) < sessionPriority(current)
+      || (sessionPriority(row) === sessionPriority(current) && row.updatedAt > current.updatedAt)) representatives.set(row.paneId, row);
+  }
+  return [...representatives.values()].map((row) => ({
     id: row.id, runId: row.runId, workspaceId: row.workspaceId, tabId: row.tabId, paneId: row.paneId,
     agent: row.runtime, status: row.attentionReason ? "waiting" : row.state,
     heartbeatActive: row.heartbeatActive, title: row.title, summary: row.lastEntry?.text ?? "",
