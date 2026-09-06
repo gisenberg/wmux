@@ -361,10 +361,10 @@ export function MachineManagerModal({
                   disabled={busy || !(registrationNames[host.id] ?? "").trim() || registrationNames[host.id] === host.machine.name}
                   onClick={() => void updateRegistered(host.id, { name: registrationNames[host.id]?.trim() })}
                 >
-                  [S] SAVE
+                  [SAVE]
                 </button>
                 <button type="button" disabled={busy} onClick={() => void updateRegistered(host.id, { disabled: !host.disabled })}>
-                  {host.disabled ? "[A] ENABLE" : "[D] DISABLE"}
+                  {host.disabled ? "[ENABLE]" : "[DISABLE]"}
                 </button>
                 <button
                   type="button"
@@ -387,7 +387,7 @@ export function MachineManagerModal({
             aria-label={selectedId ? "Save machine" : "Add machine"}
             disabled={!catalog || busy || !draft.id || !draft.name}
           >
-            {busy ? "[WAIT] SAVING" : selectedId ? "[S] SAVE MACHINE" : "[+] ADD MACHINE"}
+            {busy ? "[WAIT] SAVING" : selectedId ? "[SAVE MACHINE]" : "[+] ADD MACHINE"}
           </button>
         </div>
       </form>
