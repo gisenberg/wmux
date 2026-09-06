@@ -1626,7 +1626,14 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,
                  "promptSubmitted": False, "activityVerified": False})
     try:
-        client.set_workspace_title(info["workspaceId"], args.title or f"{runtime_label(args.runtime)} TUI")
+        # An omitted --title must leave the fresh workspace default-owned so a
+        # runtime's automatic lifecycle title can replace it. In particular,
+        # Prime publishes its canonical session name through wmux-title and
+        # Codex/OpenCode publish their prompt-derived title through agent
+        # events. Marking the generated "<runtime> TUI" placeholder as user
+        # owned would correctly, but unintentionally, reject those updates.
+        if args.title:
+            client.set_workspace_title(info["workspaceId"], args.title)
         wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows)
         # Recheck after pane creation so a dynamic registration cannot drift.
         current_machine = require_posix_machine(client, args.machine)

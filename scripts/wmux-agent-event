@@ -277,7 +277,8 @@ def reconcile_codex_stop(data):
         time.sleep(0.05)
     if payload.get("status") == "completed":
         title, summary, message = transcript_summary(transcript)
-        payload["title"] = payload.get("title") or title
+        if not data.get("noTitle"):
+            payload["title"] = payload.get("title") or title
         payload["summary"] = payload.get("summary") or summary or "codex completed"
         if not payload.get("message") and message:
             payload["message"] = message
@@ -289,7 +290,7 @@ def reconcile_codex_stop(data):
     return 0
 
 
-def launch_codex_reconciler(url, transcript, turn_id, payload):
+def launch_codex_reconciler(url, transcript, turn_id, payload, no_title=False):
     if not transcript or not turn_id:
         return False
     try:
@@ -302,6 +303,7 @@ def launch_codex_reconciler(url, transcript, turn_id, payload):
         "transcriptOffset": transcript_offset,
         "turnId": turn_id,
         "payload": payload,
+        "noTitle": no_title,
     }).encode("utf-8")
     try:
         process = subprocess.Popen(
@@ -338,6 +340,7 @@ def main():
     parser.add_argument("--transcript", default="")
     parser.add_argument("--claude-hook", action="store_true")
     parser.add_argument("--codex-hook", action="store_true")
+    parser.add_argument("--no-title", action="store_true", help="report lifecycle only; let the agent name wmux through its plugin")
     parser.add_argument("--codex-reconcile", action="store_true")
     parser.add_argument("--opencode-hook", action="store_true")
     parser.add_argument("--prime-agent-hook", action="store_true")
@@ -454,7 +457,7 @@ def main():
 
     payload = {
         "agent": clean_text(args.agent, 50),
-        "title": clean_text(title, 80),
+        "title": "" if args.no_title else clean_text(title, 80),
         "summary": clean_text(summary, 500),
         "body": clean_text(args.body, 500),
     }
@@ -487,6 +490,7 @@ def main():
             transcript,
             turn_id,
             payload,
+            args.no_title,
         )
     ):
         return 0

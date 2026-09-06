@@ -41,6 +41,7 @@ import type { BrowserSessionStore } from "./browser-session-store.js";
 import type { ScopedCredentialStore } from "./scoped-credential-store.js";
 import type { AgentInputCredentialStore } from "./agent-input-credential-store.js";
 import { mapAgentInputRouteError } from "./routes/agent-input-routes.js";
+import { CodexBindingError } from "./codex-terminal-binding.js";
 import {
   expiredBrowserSessionCookie,
   requestBrowserSessionCookie,
@@ -323,6 +324,7 @@ export const createRequestHandler = (
       || error instanceof KittyGraphicsSourceError
       || error instanceof RepositoryReviewError
       || error instanceof AgentFollowUpError
+      || error instanceof CodexBindingError
     ) {
       sendJson(response, error.status, { error: error.code }, errorHeaders);
       return;

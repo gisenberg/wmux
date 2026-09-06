@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node \"$PLUGIN_ROOT/scripts/wmux-context.mjs\"",
+        "timeout": 15,
+        "statusMessage": "Considering wmux task title",
+        "additionalContextLimit": 600
+      }]
+    }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"$PLUGIN_ROOT/scripts/wmux-context.mjs\"", "timeout": 15, "statusMessage": "Syncing Codex name to wmux" }] }]
+  }
+}

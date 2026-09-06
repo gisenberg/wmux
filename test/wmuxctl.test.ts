@@ -2388,6 +2388,27 @@ test("wmuxctl tui nests fresh workspaces from its invoking pane and otherwise cr
   }
 });
 
+test("wmuxctl tui leaves its generated workspace title automatic unless --title is explicit", async () => {
+  const args = ["tui", "codex", "linux-box", "--directory", "/srv/project", "--no-prompt", ...fastTuiGate];
+  const automatic = await startTuiFixture();
+  try {
+    const completed = await cliProcess(automatic.url, args);
+    assert.equal(completed.code, 0, completed.stderr);
+    assert.equal(automatic.methods.some((value) => value === "POST /api/workspaces/ws_tui_fixture/title"), false);
+  } finally {
+    await automatic.stop();
+  }
+
+  const manual = await startTuiFixture();
+  try {
+    const completed = await cliProcess(manual.url, [...args, "--title", "Keep this workspace"]);
+    assert.equal(completed.code, 0, completed.stderr);
+    assert.equal(manual.methods.filter((value) => value === "POST /api/workspaces/ws_tui_fixture/title").length, 1);
+  } finally {
+    await manual.stop();
+  }
+});
+
 const establishedFields = [
   "machineId", "workspaceId", "tabId", "paneId", "runId", "runtime", "state", "closed",
   "promptSubmitted", "activityVerified", "url", "localUrl", "publicUrl",

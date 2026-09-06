@@ -400,6 +400,49 @@ test("Codex stop reconciliation emits one completion when no continuation starts
   }
 });
 
+test("agent-selected Codex titles survive prompt, tool, stop, and deferred stop telemetry", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-semantic-title-"));
+  const transcript = path.join(dir, "transcript.jsonl");
+  fs.writeFileSync(transcript, [
+    { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "ok now test it" }] } },
+    { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Tests pass." }] } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: "turn-done" } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const captured: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      captured.push(JSON.parse(Buffer.concat(chunks).toString()));
+      response.writeHead(201).end();
+    });
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    for (const input of [
+      { hook_event_name: "UserPromptSubmit", prompt: "ok now test it" },
+      { hook_event_name: "PreToolUse" },
+      { hook_event_name: "Stop" },
+      { hook_event_name: "Stop", turn_id: "turn-done" },
+    ]) {
+      const count = captured.length;
+      await runAgentEvent(["--url", `http://127.0.0.1:${address.port}`, "--agent", "codex", "--codex-hook", "--no-title", "--pane", "pane-test"], agentEventEnv(dir, {
+        WMUX_CODEX_RECONCILE_GRACE_MS: "10", WMUX_CODEX_RECONCILE_TIMEOUT_MS: "100",
+        HOOK_INPUT: JSON.stringify({ ...input, transcript_path: transcript }),
+      }));
+      await waitFor(() => captured.length > count);
+    }
+    assert.deepEqual(captured.map((item) => item.title), ["", "", "", ""]);
+    assert.deepEqual(captured.map((item) => item.status), ["running", "running", "completed", "completed"]);
+    assert.equal(captured[3].message, "Tests pass.");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("OpenCode hooks report running, waiting, failed, and completed lifecycles", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-event-"));
   const captured: Record<string, unknown>[] = [];

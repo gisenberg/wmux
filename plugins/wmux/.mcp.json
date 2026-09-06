@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "wmux": {
+      "command": "node",
+      "args": ["./scripts/wmux-mcp.mjs"],
+      "cwd": ".",
+      "env_vars": ["CODEX_HOME", "WMUX_HELPER_URL", "WMUX_PUBLIC_URL", "WMUX_URL", "WMUX_HELPER_TOKEN", "WMUX_HELPER_TOKEN_PATH", "WMUX_TOKEN", "WMUX_TOKEN_PATH", "WMUX_BROWSER_AUTH_MODE", "WMUX_ALLOWED_HOSTS", "WMUX_CODEX_PLUGIN_RUNTIME_DIR"]
+    }
+  }
+}

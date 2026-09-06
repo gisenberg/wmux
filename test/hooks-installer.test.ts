@@ -1734,6 +1734,26 @@ test("Codex installer covers prompt, tool, and stop lifecycle hooks idempotently
     assert.equal(fs.statSync(settingsPath).mtimeMs, before);
     const status = JSON.parse((await execFileAsync(hooks, ["status"], { env })).stdout) as Record<string, unknown>;
     assert.equal(status.codex, "installed");
+    await execFileAsync(hooks, ["install", "codex", "--agent-titles"], { env });
+    const agentMode = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    for (const eventName of ["UserPromptSubmit", "PreToolUse", "Stop"]) {
+      assert.equal(agentMode.hooks[eventName].length, 1);
+      assert.match(agentMode.hooks[eventName][0].hooks[0].command, /--codex-hook --no-title$/);
+    }
+    const optedIn = fs.readFileSync(settingsPath, "utf8");
+    await execFileAsync(hooks, ["install", "codex"], { env });
+    assert.equal(fs.readFileSync(settingsPath, "utf8"), optedIn, "routine reinstall must not reactivate prompt titles");
+    const mixed = JSON.parse(optedIn);
+    mixed.hooks.Stop[0].hooks[0].command = "/old/install/wmux-agent-event --agent codex --codex-hook";
+    mixed.hooks.PreToolUse[0].hooks[0].command = "/old/install/wmux-agent-event --agent codex --codex-hook";
+    mixed.hooks.Stop.push({ hooks: [{ type: "command", command: "echo unrelated" }] });
+    fs.writeFileSync(settingsPath, JSON.stringify(mixed));
+    await execFileAsync(hooks, ["install", "codex"], { env });
+    const repaired = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    for (const eventName of ["UserPromptSubmit", "PreToolUse", "Stop"]) {
+      assert.match(repaired.hooks[eventName][0].hooks[0].command, /--codex-hook --no-title$/);
+    }
+    assert.equal(repaired.hooks.Stop[1].hooks[0].command, "echo unrelated");
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
