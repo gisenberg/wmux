@@ -134,6 +134,37 @@ status-label correction changes display text only, not the tested executable.
 PR #121 was already merged when publication was checked; this work therefore
 requires a follow-up PR against current `main`, not rewriting the merged PR.
 
+### Current-main integration gate
+
+The implementation was rebased onto `main` at `4849e88`. The first post-rebase
+browser run failed in both layouts: the server published `observer_stale`, but
+the new session-inventory projection replaced it with the delegation's last
+known `waiting` state. A separate API assertion confirmed publication before
+the browser assertion failed. A new unit regression reproduced the defect for
+both running and waiting delegations.
+
+The corrected projection presents a current same-run stale observation without
+rewriting native outcome history. It suppresses obsolete aggregate attention,
+preserves an actual pending input request, and lets newer authoritative state
+or terminal outcomes win. An independent fresh-context reviewer checked both
+the complete profile and this integration fix; no outstanding findings remained
+in that reviewed scope.
+
+Final gates on the corrected current-main source:
+
+- `npm run check`: 1,081 passing, four skipped, zero failing (1,085 total),
+  including TypeScript, script/generated checks, and production build.
+  Local log: `test-results/codex-wmux-profile-final-check.log`.
+- `e2e/codex-sidebar-lifecycle.spec.ts`, Chromium and mobile Chromium: **2/2**
+  passed, including live marker animation, input attention, API-confirmed stale
+  withdrawal, recovery, completion, and current-state retention after history
+  churn. Local log: `test-results/codex-wmux-profile-final-browser.log`.
+- The focused inventory regression passed after its recorded red run.
+
+These browser fixtures are separate from the real native acceptance above.
+The original conformance matrix remains deliberately partial; this gate verifies
+the approved capability profile, not full harness parity or a deployment.
+
 ## Implementation inventory
 
 The naming binding is implemented by the source plugin and wmux server together:
@@ -201,8 +232,9 @@ are not in the deployed baseline:
   The new browser spec is assigned to the browser-only capability group.
   A separate fresh-context review and focused 36-test lifecycle/binding/observer
   run found no remaining blocking defect in the implemented prompt-turn path.
-  Plugin manifest validation and whitespace checks passed. These changes remain
-  uncommitted and undeployed pending native acceptance and remaining goal work.
+  Plugin manifest validation and whitespace checks passed. At this earlier
+  checkpoint the changes were uncommitted and undeployed; the later native
+  evidence and publication checkpoint above supersede that work status.
 - [`codex-observer-integration.test.ts`](../test/codex-observer-integration.test.ts)
   exercises the production hook's automatic detached observer, private Unix
   WebSocket transport, live PTY marker binding, real wmux HTTP/state/timeline,
@@ -392,8 +424,8 @@ indistinguishable through these supported interfaces. Do not solve this by
 silently treating an unknown name as automatically owned. A safe canonical-name
 implementation needs native title provenance or a supported automatic-title
 disable. The user instead selected the wmux-owned-name fallback: it leaves those
-native names untouched, while its own NAM-01/NAM-03 evidence remains pending
-rerun rather than passed.
+native names untouched. Its subsequent scoped NAM-01/NAM-03 evidence is recorded
+in the fresh wmux-owned native acceptance section above.
 
 ### Native lifetime-hook probe, 2026-09-06
 

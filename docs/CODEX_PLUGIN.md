@@ -109,7 +109,7 @@ UI action. Results report `namingMode: "wmux-owned-name"`, `wmuxName`,
 `workspaceApplied`, and `tabApplied`. A successful tab update alone is not proof
 of a sidebar update. There is deliberately no `codexName` or `codexNameSet`
 result because no native name operation occurred. If the server rejects the
-title (including a `409` pin/binding race), `wmuxNameSaved` is false and the
+title (including a `409` binding race), `wmuxNameSaved` is false and the
 user/model must retry `name_current_wmux_session`, not sync. If the server
 accepted the title but the subsequent store write failed, report the actual
 `workspaceApplied`/`tabApplied` values with `wmuxNameSaved: false` and retry
@@ -158,12 +158,26 @@ native-canonical design had naming failures. The fresh wmux-owned daemon fixture
 now verifies first-task, follow-up, objective-shift, child, manual-pin, and
 native-`/rename` independence with native names untouched. Its static local
 captures are not publishable or proof of animation; the separate browser fixture
-has the dynamic assertion. The isolated profile is not acceptance for resume,
-the ordinary installed profile, other platforms, uninterrupted animation timing,
+has the dynamic assertion. Same-pane native resume and a blocking Plan-mode
+question were also verified, including distinct input attention and return to
+running/completed after a native TUI answer. The isolated profile is not
+acceptance for cross-pane handoff, the ordinary installed profile, other platforms, uninterrupted animation timing,
 or restart/reconnect behavior. Nothing has been deployed. Missing
 prompt `turn_id` produces a capability diagnostic, not a guessed turn. Embedded
 mode, automatic continuations without a new prompt hook, and exact native
 pending-request identities remain unresolved; see the conformance matrix.
+
+### Capability profile (Codex 0.153.4)
+
+| Environment or capability | Evidence and supported boundary |
+| --- | --- |
+| Linux, Node 22, existing local Unix App Server, matching wmux server/plugin | Isolated native first-task/follow-up/shift/child/manual-pin naming, same-pane resume, approval/input attention, and completion verified. |
+| Native Codex names | Intentionally independent; plugin naming never reads or writes them. |
+| Embedded mode or absent/inaccessible local observer socket | Naming has no native socket dependency. Lifecycle falls back to unknown; current wmux-owned embedded native acceptance is not claimed. |
+| Missing native prompt turn ID or unknown native flags | Fail-closed diagnostic/unknown behavior has fixture coverage; never infer a turn or completed state. |
+| Automatic continuations without a new prompt binding | Not tracked; the last observed turn's outcome is not proof that the entire native session is idle. |
+| Windows, macOS, remote App Server, ordinary deployed profile | No new native acceptance claim; Windows private-file mode checks are not ACL verification. |
+| Native schedules, exact pending-request identity, browser question answers | Not provided by this profile. No native control/resume call is used as an observation substitute. |
 
 The plugin uses existing wmux URL and helper credentials. Refreshed credential
 files take precedence over inherited values; a configured but missing or invalid

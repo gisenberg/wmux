@@ -21,6 +21,7 @@ const lifecycle = async (
 ): Promise<void> => {
   const response = await request.post("/api/codex-bindings/lifecycle", { data: input });
   expect(response.ok()).toBeTruthy();
+  expect(await response.json()).toMatchObject({ accepted: true });
 };
 
 const openWorkspaceSidebar = async (page: Page, mobile: boolean): Promise<void> => {
@@ -132,6 +133,11 @@ test("renders receipt-bound Codex lifecycle states in the desktop and mobile sid
 
     // The fixture waits for the real server publisher's 30-second stale clock.
     // It is not a native Codex observer acceptance run.
+    await expect.poll(async () => {
+      const response = await request.get("/api/bootstrap");
+      const snapshot = await response.json();
+      return snapshot.agentEvents.find((event: { paneId: string }) => event.paneId === paneId)?.status;
+    }, { timeout: 40_000 }).toBe("observer_stale");
     await expect(sidebarRow).toHaveAttribute("data-agent-status", "stale", { timeout: 40_000 });
     await expect(sidebarRow).toHaveAttribute("data-agent-marker", "!");
     await expect(sidebarRow).toHaveAccessibleName(/codex status unknown/);

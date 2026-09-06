@@ -44,8 +44,14 @@ export function buildSessionRows(state: BootstrapPayload, machines: MachineStatu
     delegations.delete(pane.id);
     const pending = state.agentInputRequests?.some((request) => request.paneId === pane.id && request.state === "pending");
     const source = delegation ? "delegation" : hook || pending ? "hook" : "shell";
-    const status = pending ? "waiting" : delegation?.state ?? (hook ? agentLifecycleStatus(hook.status) : pane.status === "exited" ? "exited" : "idle");
-    let stateChangedAt = delegation?.stateChangedAt ?? hook?.createdAt ?? pane.createdAt;
+    // Observer loss withdraws confidence, not the last known native outcome.
+    // Keep that history on the delegation, but show the current same-run gap.
+    // A newer authoritative delegation or an actual pending request wins.
+    const stale = hook && agentLifecycleStatus(hook.status) === "stale"
+      && (!delegation || (hook.runId === delegation.runId && hook.createdAt >= delegation.updatedAt
+        && (delegation.state === "running" || delegation.state === "waiting")));
+    const status = pending ? "waiting" : stale ? "stale" : delegation?.state ?? (hook ? agentLifecycleStatus(hook.status) : pane.status === "exited" ? "exited" : "idle");
+    let stateChangedAt = stale ? hook.createdAt : delegation?.stateChangedAt ?? hook?.createdAt ?? pane.createdAt;
     if (!delegation && hook) {
       const history = (state.agentEvents ?? []).filter((event) => event.paneId === pane.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       for (const event of history) {
@@ -61,8 +67,8 @@ export function buildSessionRows(state: BootstrapPayload, machines: MachineStatu
       title: delegation?.title || hook?.title || tab.title || pane.title || workspace.name,
       workspaceId: workspace.id, workspaceName: workspace.name, tabId: tab.id, paneId: pane.id,
       machineId: pane.machineId, machineName: host?.name ?? pane.machineId,
-      state: status, attentionReason: pending ? "input" : delegation?.attentionReason,
-      stateChangedAt, updatedAt: delegation?.updatedAt ?? hook?.createdAt ?? pane.createdAt,
+      state: status, attentionReason: pending ? "input" : stale ? undefined : delegation?.attentionReason,
+      stateChangedAt, updatedAt: stale ? hook.createdAt : delegation?.updatedAt ?? hook?.createdAt ?? pane.createdAt,
       available: true, reachable: host?.reachable ?? false, cwd: pane.cwd,
       unread: (state.notifications ?? []).some((item) => item.paneId === pane.id && !item.read && item.createdAt >= stateChangedAt),
       lastEntry: delegation ? state.agentTimelines.find((timeline) => timeline.id === delegation.sessionId)?.entries.at(-1) : undefined,
