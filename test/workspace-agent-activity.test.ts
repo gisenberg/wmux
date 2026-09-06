@@ -3,6 +3,7 @@ import test from "node:test";
 import type { AgentActivity } from "../src/shared/protocol.ts";
 import {
   aggregateAgentActivityByWorkspace,
+  agentLifecycleStatus,
   latestAgentActivityByPane,
 } from "../src/client/src/workspace-agent-activity.ts";
 import { sidebarWorkspaceAgentContext } from "../src/client/src/sidebar-agent-status.ts";
@@ -62,6 +63,23 @@ test("attention lifecycle outranks settled pane results", () => {
   ]).get("workspace");
   assert.equal(aggregate?.representative.id, "approval");
   assert.equal(aggregate?.activePaneCount, 1);
+});
+
+test("observer stale is unknown, suppresses its heartbeat, and ranks below live work", () => {
+  assert.equal(agentLifecycleStatus("observer_stale"), "stale");
+  const staleOnly = aggregateAgentActivityByWorkspace([
+    { ...event("stale", "stale", "observer_stale", "2026-03-01T12:03:00.000Z"), heartbeatActive: true },
+    event("completed", "settled", "completed", "2026-03-01T12:02:00.000Z"),
+  ]).get("workspace");
+  assert.equal(staleOnly?.representative.id, "stale");
+  assert.equal(staleOnly?.heartbeatPaneCount, 0);
+
+  const liveWork = aggregateAgentActivityByWorkspace([
+    event("stale", "stale", "observer_stale", "2026-03-01T12:03:00.000Z"),
+    event("running", "working", "running", "2026-03-01T12:01:00.000Z"),
+    event("waiting", "waiting", "waiting", "2026-03-01T12:00:00.000Z"),
+  ]).get("workspace");
+  assert.equal(liveWork?.representative.id, "waiting");
 });
 
 test("all-settled workspace presents the newest pane result", () => {

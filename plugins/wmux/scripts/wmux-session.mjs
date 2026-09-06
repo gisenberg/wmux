@@ -1,42 +1,49 @@
-import { api, loadBinding, saveBinding, withBinding } from "./wmux-binding.mjs";
-import { withCodexName } from "./codex-name.mjs";
+import { api, loadBinding, withBinding } from "./wmux-binding.mjs";
 import { mirrorTitle, validTitle } from "./wmux-title.mjs";
+import { wmuxSessionName, rememberWmuxSessionName } from "./wmux-name-ownership.mjs";
 
 async function resolve(record) { return api("/api/codex-bindings/resolve", { sessionId: record.sessionId, receipt: record.receipt }); }
-async function mirror(record, canonical, codexNameSet, mode) {
-  const outcome = { sessionId: record.sessionId, bindingId: record.bindingId, codexName: canonical.name, codexNameSet, workspaceApplied: false, tabApplied: false };
-  if (!canonical.name) return { ...outcome, skipped: "Codex has no saved name yet." };
-  try { return { ...outcome, ...await mirrorTitle(record, canonical.name, mode) }; }
-  catch (error) { return { ...outcome, error: error.message, retry: "sync_current_wmux_session" }; }
+function outcome(record, name = null) {
+  return { sessionId: record.sessionId, bindingId: record.bindingId, namingMode: "wmux-owned-name", wmuxName: name,
+    nativeNameRead: false, nativeNameSet: false, wmuxNameSaved: false, workspaceApplied: false, tabApplied: false };
 }
-function binding(sessionId, bindingId) { return loadBinding(sessionId, bindingId); }
+async function mirror(record, name) {
+  const result = { ...outcome(record, name), wmuxNameSaved: true };
+  // The endpoint revalidates the receipt and enforces manual ownership atomically.
+  // A saved semantic name is not evidence of a sidebar change.
+  try { return { ...result, ...await mirrorTitle(record, name, "auto") }; }
+  catch (error) { return { ...result, error: error.message, retry: "sync_current_wmux_session" }; }
+}
 export async function getSession(sessionId, bindingId) {
-  const record = binding(sessionId, bindingId), tuple = await resolve(record);
+  const record = loadBinding(sessionId, bindingId), tuple = await resolve(record);
   return { sessionId, bindingId, workspaceId: tuple.workspaceId, tabId: tuple.tabId, paneId: tuple.paneId, expiresAt: tuple.expiresAt, titleRead: false };
 }
 export async function nameSession(sessionId, bindingId, title, mode = "auto") {
-  const initial = binding(sessionId, bindingId);
-  validTitle(title);
+  const initial = loadBinding(sessionId, bindingId), name = validTitle(title);
   if (mode !== "auto") throw new Error("The Codex naming plugin supports auto mode only; manual titles belong to the wmux UI.");
   return withBinding(initial, async record => {
     await resolve(record);
-    let canonical;
-    try { canonical = await withCodexName(sessionId, title); }
-    catch (error) { return { sessionId, bindingId, codexNameSet: error.codexNameSet ?? false, workspaceApplied: false, tabApplied: false, error: error.message, retry: "sync_current_wmux_session" }; }
-    record.lastName = canonical.name;
-    try { saveBinding(record); }
-    catch { return { sessionId, bindingId, codexName: canonical.name, codexNameSet: true, workspaceApplied: false, tabApplied: false, error: "Codex was named, but wmux binding state could not be saved.", retry: "sync_current_wmux_session" }; }
-    return mirror(record, canonical, canonical.codexNameSet, mode);
+    // Refuse an unsafe store before any title side effect. The write rechecks it.
+    try { wmuxSessionName(sessionId); }
+    catch (error) { return { ...outcome(record), error: error.message }; }
+    let applied;
+    // Only /title validates and applies atomically on the server. Never save a
+    // rejected title that a later valid prompt could otherwise inherit.
+    try { applied = await mirrorTitle(record, name, "auto"); }
+    catch (error) { return { ...outcome(record, name), error: error.message, retry: "name_current_wmux_session" }; }
+    try { await rememberWmuxSessionName(sessionId, name); }
+    catch (error) { return { ...outcome(record, name), ...applied, error: error.message, retry: "name_current_wmux_session" }; }
+    return { ...outcome(record, name), ...applied, wmuxNameSaved: true };
   });
 }
 export async function synchronize(sessionId, bindingId) {
-  const initial = binding(sessionId, bindingId);
+  const initial = loadBinding(sessionId, bindingId);
   return withBinding(initial, async record => {
     await resolve(record);
-    const canonical = await withCodexName(sessionId);
-    record.lastName = canonical.name;
-    try { saveBinding(record); }
-    catch { return { sessionId, bindingId, codexName: canonical.name, codexNameSet: false, workspaceApplied: false, tabApplied: false, error: "Codex name was read, but wmux binding state could not be saved.", retry: "sync_current_wmux_session" }; }
-    return mirror(record, canonical, false, "auto");
+    let saved;
+    try { saved = wmuxSessionName(sessionId); }
+    catch (error) { return { ...outcome(record), error: error.message }; }
+    if (!saved) return { ...outcome(record), skipped: "No wmux semantic name is saved for this session. Choose one for the substantive task with name_current_wmux_session." };
+    return mirror(record, saved.name);
   });
 }

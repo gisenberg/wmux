@@ -18,6 +18,7 @@ const documentedRoutes = [
   ["bootstrap", "GET", "/api/bootstrap"],
   ["codex-binding-issue", "POST", "/api/codex-bindings"],
   ["codex-binding-resolve", "POST", "/api/codex-bindings/resolve"],
+  ["codex-binding-lifecycle", "POST", "/api/codex-bindings/lifecycle"],
   ["codex-binding-title", "POST", "/api/codex-bindings/title"],
   ["registry-list", "GET", "/api/registry/hosts"],
   ["registry-register", "POST", "/api/registry/hosts"],

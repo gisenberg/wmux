@@ -1,8 +1,8 @@
 {
   "name": "wmux",
-  "version": "0.2.0+codex.20260906011825",
+  "version": "0.2.0+codex.20260906222906",
   "license": "MIT",
-  "description": "Name ordinary Codex sessions and mirror their saved task names to wmux.",
+  "description": "Give ordinary Codex tasks semantic wmux titles and report supported activity.",
   "author": {
     "name": "wmux contributors"
   },
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Wmux",
     "shortDescription": "Name the current wmux session.",
-    "longDescription": "MCP tools and trusted hooks keep a normal Codex saved session name aligned with its wmux sidebar workspace and tab. No replacement launcher or Codex source changes.",
+    "longDescription": "MCP tools and trusted hooks give normal Codex tasks wmux-owned sidebar and tab titles while leaving native names untouched. Reports supported prompt-bound lifecycle and attention without a replacement launcher or Codex source changes.",
     "developerName": "wmux contributors",
     "category": "Productivity",
     "capabilities": [],

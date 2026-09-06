@@ -21,6 +21,7 @@ export const browserOnlyE2eSpecs = [
   "direct-links.spec.ts",
   "machine-management.spec.ts",
   "prime-agent-sidebar.spec.ts",
+  "codex-sidebar-lifecycle.spec.ts",
   "smoke.spec.ts",
   "terminal-graphics.spec.ts",
   "workspace-navigation.spec.ts",

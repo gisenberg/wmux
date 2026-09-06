@@ -11,6 +11,7 @@ import {
 } from "../src/server/agent-sessions.js";
 import { StateStore } from "../src/server/state.js";
 import type { DelegationState, MachineConfig } from "../src/server/types.js";
+import { latestAgentActivityByPane } from "../src/client/src/workspace-agent-activity.js";
 
 const machines: MachineConfig[] = [
   { id: "local", name: "Local", kind: "local" },
@@ -84,6 +85,49 @@ test("agent sessions own lifecycle, title, and notification updates", () => {
       state.snapshot().workspaces[0].name,
       "Review architecture",
     );
+  });
+});
+
+test("activity retention keeps every layout pane's current state beyond the recent-history limit", () => {
+  withAgentSessions((state, agents) => {
+    const statuses = ["running", "waiting", "completed", "observer_stale", "updated"];
+    const expected = new Map<string, ReturnType<AgentSessionService["recordAgentEvent"]>["agentEvent"]>();
+    for (let i = 0; i < 301; i++) {
+      const workspace = i === 0 ? state.snapshot().workspaces[0] : state.createWorkspace("local");
+      const paneId = workspace.tabs[0].panes[0].id;
+      const event = agents.recordAgentEvent({ paneId, agent: i % 2 ? "prime-agent" : "opencode", status: statuses[i % statuses.length] }).agentEvent;
+      expected.set(paneId, event);
+    }
+    const busyPaneId = expected.keys().next().value!;
+    for (let i = 0; i < 610; i++) {
+      const event = agents.recordAgentEvent({ paneId: busyPaneId, agent: "opencode", status: "updated", summary: `activity ${i}` }).agentEvent;
+      expected.set(busyPaneId, event);
+    }
+    const events = state.snapshot().agentEvents;
+    assert.equal(events.length, 600, "300 recent events and one older current event for each other layout pane");
+    assert.ok(events.length <= 300 + expected.size);
+    assert.equal(new Set(events.map(event => event.id)).size, events.length);
+    for (const [paneId, event] of expected) {
+      assert.deepEqual(events.find(candidate => candidate.paneId === paneId), event);
+    }
+    assert.ok(events.slice(0, 300).every(event => event.paneId === busyPaneId));
+
+    const otherWorkspace = state.snapshot().workspaces[1];
+    const otherPane = otherWorkspace.tabs[0].panes[0].id;
+    state.removeWorkspace(otherWorkspace.id);
+    assert.equal(state.snapshot().agentEvents.some(event => event.paneId === otherPane), false);
+  });
+});
+
+test("a replacement harness advances the pane clock before becoming its retained current state", t => {
+  t.mock.method(Date, "now", () => Date.parse("2026-09-06T00:00:00Z"));
+  withAgentSessions((state, agents) => {
+    const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
+    agents.recordAgentEvent({ paneId, agent: "prime-agent", status: "running" });
+    const old = agents.recordAgentEvent({ paneId, agent: "prime-agent", status: "waiting" }).agentEvent;
+    const replacement = agents.recordAgentEvent({ paneId, agent: "codex", status: "observer_stale" }).agentEvent;
+    assert.ok(Date.parse(replacement.createdAt) > Date.parse(old.createdAt));
+    assert.deepEqual(latestAgentActivityByPane(state.snapshot().agentEvents).get(paneId), replacement);
   });
 });
 

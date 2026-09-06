@@ -2,7 +2,7 @@ import type { Workspace, WorkspaceReorderPosition } from "./types";
 
 export const MAX_WORKSPACE_TREE_DEPTH = 4;
 
-export type WorkspaceAgentStatus = "running" | "heartbeat" | "waiting" | "completed" | "failed" | "updated";
+export type WorkspaceAgentStatus = "running" | "heartbeat" | "waiting" | "stale" | "completed" | "failed" | "updated";
 
 export interface WorkspaceActivityAggregate {
   unreadCount: number;
@@ -52,9 +52,10 @@ const statusPriority: Record<WorkspaceAgentStatus, number> = {
   completed: 1,
   updated: 2,
   heartbeat: 3,
-  running: 4,
-  waiting: 5,
-  failed: 6,
+  stale: 4,
+  running: 5,
+  waiting: 6,
+  failed: 7,
 };
 
 const mergeActivity = (

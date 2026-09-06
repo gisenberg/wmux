@@ -70,8 +70,8 @@ export function saveBinding(record) {
   finally { try { fs.unlinkSync(temp); } catch {} }
 }
 export async function withBinding(record, action) {
-  // Codex owns one name per thread, even when two terminal clients have distinct
-  // receipts. Serialize the complete read/set/read/mirror operation per thread.
+  // wmux stores one semantic name per thread, even across prompt receipts.
+  // Serialize the complete store/read/mirror operation per thread.
   const key = createHash("sha256").update(record.sessionId).digest("hex");
   const lock = path.join(runtimeDirectory(), `${key}.session.lock`), owner = randomUUID();
   for (let attempt = 0; attempt < 30; attempt++) {
@@ -122,15 +122,20 @@ export async function api(endpoint, body) {
   const token = credential();
   const response = await fetch(new URL(endpoint, serviceUrl()), { method: "POST", redirect: "error", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
   let json; try { json = await response.json(); } catch { json = null; }
-  if (!response.ok) throw new Error(response.status === 409 ? "wmux binding is stale or pending; submit another prompt." : `wmux returned ${response.status}.`);
+  if (!response.ok) {
+    const error = new Error(response.status === 409 ? "wmux binding is stale or pending; submit another prompt." : `wmux returned ${response.status}.`);
+    error.status = response.status; // Structured local control flow; never surface server error bodies.
+    throw error;
+  }
   return json;
 }
 export async function issue(sessionId, promptTurnId = null) {
   if (!ID.test(sessionId || "")) throw new Error("Codex session id is invalid.");
-  const answer = await api("/api/codex-bindings", { sessionId });
+  const turnId = typeof promptTurnId === "string" && ID.test(promptTurnId) ? promptTurnId : undefined;
+  const answer = await api("/api/codex-bindings", { sessionId, ...(turnId ? { turnId } : {}) });
   const matched = /^\[\[WMUX:([A-Za-z0-9_-]{22})\]\]$/.exec(answer?.marker || "");
   if (!RECEIPT.test(answer?.receipt || "") || !matched) throw new Error("wmux returned an invalid binding challenge.");
-  const record = { schemaVersion: 2, sessionId, bindingId: matched[1], receipt: answer.receipt, expiresAt: answer.expiresAt, createdAt: Date.now(), promptTurnId: typeof promptTurnId === "string" && promptTurnId.length <= 128 ? promptTurnId : null, lastName: null };
+  const record = { schemaVersion: 2, sessionId, bindingId: matched[1], receipt: answer.receipt, expiresAt: answer.expiresAt, createdAt: Date.now(), promptTurnId: typeof promptTurnId === "string" && promptTurnId.length <= 128 ? promptTurnId : null };
   saveBinding(record);
   return { bindingId: record.bindingId, marker: answer.marker, expiresAt: answer.expiresAt };
 }

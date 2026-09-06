@@ -62,3 +62,30 @@ test("directional navigation follows geometry rather than traversal order", () =
   assert.equal(directionalPane(layout, "left", "left"), undefined);
   assert.equal(directionalPane(layout, "missing", "right"), undefined);
 });
+
+test("same-run observation loss withdraws working and attention without inventing a terminal outcome", () => {
+  for (const previousState of ["running", "waiting"] as const) {
+    const state = fixture();
+    state.agentEvents = [{ ...state.agentEvents[1], agent: "codex", status: "observer_stale", createdAt: timestamp(3) }];
+    state.delegations = [{
+      runId: "observed", sessionId: "session", runtime: "codex", paneId: "remote-pane", workspaceId: "ws", tabId: "tab",
+      state: previousState, attentionReason: previousState === "waiting" ? "input" : undefined,
+      stateChangedAt: timestamp(1), updatedAt: timestamp(3), observerError: "observer_stale",
+    }] as BootstrapPayload["delegations"];
+    const row = buildSessionRows(state, machines).find(item => item.paneId === "remote-pane")!;
+    assert.equal(row.source, "delegation");
+    assert.equal(row.state, "stale");
+    assert.equal(row.attentionReason, undefined);
+    assert.equal(row.stateChangedAt, timestamp(3));
+    assert.equal(sessionActivities([row])[0].status, "stale");
+    assert.equal(state.delegations[0].state, previousState, "presentation must not mutate native outcome history");
+
+    state.agentInputRequests = [{ paneId: "remote-pane", state: "pending" }] as BootstrapPayload["agentInputRequests"];
+    assert.equal(sessionActivities(buildSessionRows(state, machines))[0].status, "waiting", "real pending input remains actionable");
+    state.agentInputRequests = [];
+    for (const next of ["running", "completed"] as const) {
+      state.delegations[0] = { ...state.delegations[0], state: next, attentionReason: undefined, observerError: undefined, updatedAt: timestamp(4) };
+      assert.equal(sessionActivities(buildSessionRows(state, machines))[0].status, next, "older stale activity cannot override newer authoritative state");
+    }
+  }
+});

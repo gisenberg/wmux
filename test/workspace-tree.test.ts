@@ -68,6 +68,31 @@ test("idle heartbeat activity stays below working and attention states", () => {
   assert.equal(attention.byId.get("root")?.subtreeActivity.agentStatus, "waiting");
 });
 
+test("stale status stays below live work, above settled results, and remains visible when collapsed", () => {
+  const model = deriveWorkspaceTree({
+    workspaces,
+    collapsedWorkspaceIds: ["root"],
+    activityByWorkspaceId: new Map([
+      ["root", { unreadCount: 0, bell: false, agentStatus: "completed" as const }],
+      ["child", { unreadCount: 0, bell: false, agentStatus: "stale" as const }],
+      ["grandchild", { unreadCount: 0, bell: false, agentStatus: "running" as const }],
+    ]),
+  });
+  assert.equal(model.byId.get("root")?.subtreeActivity.agentStatus, "running");
+  assert.equal(model.byId.get("root")?.hiddenActivity.agentStatus, "running");
+
+  const staleOverSettled = deriveWorkspaceTree({
+    workspaces,
+    collapsedWorkspaceIds: ["root"],
+    activityByWorkspaceId: new Map([
+      ["root", { unreadCount: 0, bell: false, agentStatus: "completed" as const }],
+      ["child", { unreadCount: 0, bell: false, agentStatus: "stale" as const }],
+    ]),
+  });
+  assert.equal(staleOverSettled.byId.get("root")?.subtreeActivity.agentStatus, "stale");
+  assert.equal(staleOverSettled.byId.get("root")?.hiddenActivity.agentStatus, "stale");
+});
+
 test("host filtering includes matches, ancestors, and the active path while forcing context open", () => {
   const model = deriveWorkspaceTree({
     workspaces,

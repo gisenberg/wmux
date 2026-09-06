@@ -14,6 +14,7 @@ export interface CodexBindingTuple {
   tabId: string;
   paneId: string;
   sessionId: string;
+  turnId?: string;
   expiresAt: string;
 }
 
@@ -25,6 +26,7 @@ interface Binding extends CodexBindingTuple {
   expiresAtMs: number;
   observedPaneId?: string;
   invalid: boolean;
+  lastLifecycleSequence?: number;
 }
 
 export class CodexMarkerParser {
@@ -67,8 +69,9 @@ export class CodexTerminalBindingRegistry {
     private readonly isPaneLive: (paneId: string) => boolean,
   ) {}
 
-  issue(sessionId: unknown): { receipt: string; marker: string; expiresAt: string } {
+  issue(sessionId: unknown, turnId?: unknown): { receipt: string; marker: string; expiresAt: string } {
     if (typeof sessionId !== "string" || !sessionIdPattern.test(sessionId)) throw new CodexBindingError(400, "invalid_session_id");
+    if (turnId !== undefined && (typeof turnId !== "string" || !sessionIdPattern.test(turnId))) throw new CodexBindingError(400, "invalid_turn_id");
     this.prune();
     const now = Date.now();
     const marker = `${MARKER_PREFIX}${randomBase64Url(16)}]]`;
@@ -78,6 +81,7 @@ export class CodexTerminalBindingRegistry {
       tabId: "",
       paneId: "",
       sessionId,
+      ...(turnId === undefined ? {} : { turnId }),
       marker,
       receiptHash: receiptDigest(receipt),
       issuedAt: ++this.issueSequence,
@@ -167,8 +171,21 @@ export class CodexTerminalBindingRegistry {
       tabId: binding.tabId,
       paneId: binding.paneId,
       sessionId: binding.sessionId,
+      ...(binding.turnId ? { turnId: binding.turnId } : {}),
       expiresAt: binding.expiresAt,
     };
+  }
+
+  acceptLifecycle(sessionId: unknown, receipt: unknown, turnId: unknown, sequence: unknown): CodexBindingTuple | undefined {
+    const tuple = this.resolve(sessionId, receipt);
+    if (!tuple.turnId || tuple.turnId !== turnId) throw new CodexBindingError(409, "binding_turn_mismatch");
+    if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence <= 0) throw new CodexBindingError(400, "invalid_lifecycle_sequence");
+    const lifecycleSequence = sequence;
+    const binding = this.byReceipt.get(receiptDigest(receipt as string));
+    if (!binding) throw new CodexBindingError(404, "binding_not_found");
+    if ((binding.lastLifecycleSequence ?? 0) >= lifecycleSequence) return undefined;
+    binding.lastLifecycleSequence = lifecycleSequence;
+    return tuple;
   }
 
   private prune(now = Date.now()): void {

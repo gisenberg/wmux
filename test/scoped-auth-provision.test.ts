@@ -42,6 +42,7 @@ test("scoped auth provisioning hardens the standard state directory but rejects 
   const unsafeHome = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-provision-unsafe-"));
   try {
     fs.mkdirSync(path.join(unsafeHome, ".wmux"), { mode: 0o755 });
+    fs.chmodSync(path.join(unsafeHome, ".wmux"), 0o755);
     await execFileAsync(process.execPath, [provisioner], {
       cwd: repoRoot,
       env: { ...process.env, HOME: unsafeHome, WMUX_CONFIG_PATH: "" },
@@ -55,6 +56,7 @@ test("scoped auth provisioning hardens the standard state directory but rejects 
   try {
     const customParent = path.join(customHome, "tokens");
     fs.mkdirSync(customParent, { mode: 0o755 });
+    fs.chmodSync(customParent, 0o755); // mkdir's mode is filtered by the caller's umask.
     await assert.rejects(execFileAsync(process.execPath, [provisioner], {
       cwd: repoRoot,
       env: {

@@ -1,6 +1,6 @@
 import type { AgentActivity } from "./types";
 
-export type AgentLifecycleStatus = "running" | "waiting" | "completed" | "failed" | "updated";
+export type AgentLifecycleStatus = "running" | "waiting" | "stale" | "completed" | "failed" | "updated";
 
 export interface WorkspaceAgentActivity {
   representative: AgentActivity;
@@ -19,6 +19,7 @@ export const agentLifecycleStatus = (status: string): AgentLifecycleStatus => {
   if (["waiting", "needs_input", "input_required", "approval_required", "login_required", "blocked"].includes(normalized)) {
     return "waiting";
   }
+  if (["observer_stale", "stale"].includes(normalized)) return "stale";
   if (["failed", "error", "cancelled", "stopped", "timed_out", "interrupted"].includes(normalized)) return "failed";
   if (["completed", "done", "success"].includes(normalized)) return "completed";
   if (["running", "started", "working"].includes(normalized)) return "running";
@@ -36,8 +37,9 @@ export const latestAgentActivityByPane = (events: readonly AgentActivity[]): Map
 
 const activePriority = (event: AgentActivity): number => {
   const lifecycle = agentLifecycleStatus(event.status);
-  if (lifecycle === "waiting") return 3;
-  if (lifecycle === "running") return 2;
+  if (lifecycle === "waiting") return 4;
+  if (lifecycle === "running") return 3;
+  if (lifecycle === "stale") return 2;
   if (event.heartbeatActive && (lifecycle === "completed" || lifecycle === "updated")) return 1;
   return 0;
 };
