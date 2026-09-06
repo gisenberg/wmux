@@ -3282,170 +3282,42 @@ button.active-tool {
   font: 10px/1.4 var(--wmux-mono-font);
 }
 
-.empty-workspace-view {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  background:
-    linear-gradient(to right, #050505 0%, rgba(5, 5, 5, 0) 18%, rgba(5, 5, 5, 0) 82%, #050505 100%),
-    linear-gradient(to bottom, #050505 0%, rgba(5, 5, 5, 0) 18%, rgba(5, 5, 5, 0) 82%, #050505 100%),
-    #111216;
+.empty-workspace-view { min-width: 0; min-height: 0; height: 100%; overflow: auto; background: var(--black); }
+.console-empty { padding: clamp(20px, 5vw, 64px); font: 13px/1.6 var(--wmux-mono-font); color: var(--ivory); }
+.console-empty h1 { font: inherit; font-weight: 700; color: var(--gold); }
+.console-empty label { display: grid; gap: 8px; max-width: 480px; margin: 24px 0; }
+.console-empty select, .console-empty button {
+  border: 1px solid var(--line); border-radius: 0; color: inherit; background: var(--panel);
+  font: inherit; min-height: 44px; padding: 8px 12px;
+}
+.console-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-fleet.console-host-inspector { display: block; height: auto; max-height: calc(100dvh - 40px); overflow: auto; padding: 16px; font: 12px/1.6 var(--wmux-mono-font); }
+.console-host-inspector dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; }
+.console-host-inspector dd { margin: 0; overflow-wrap: anywhere; }
+.console-host-inspector dt { color: var(--muted); }
+.app-shell.fleet-docked { grid-template-columns: var(--wmux-sidebar-width, 288px) 10px minmax(0, 1fr) minmax(280px, 30vw); }
+.app-shell.fleet-docked.sidebar-collapsed { grid-template-columns: 0 12px minmax(0, 1fr) minmax(280px, 30vw); }
+.agent-fleet-dock { grid-column: 4; grid-row: 1; min-width: 0; overflow: auto; border-left: 1px solid var(--line); }
+.agent-fleet-dock .agent-fleet { grid-template-rows: auto minmax(0, 1fr); width: 100%; max-height: 100%; height: 100%; border: 0; box-shadow: none; }
+.agent-fleet-dock .agent-fleet-header { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 10px; }
+.agent-fleet-dock .agent-fleet-columns { display: none; }
+.agent-fleet-dock .agent-fleet-row { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.agent-fleet-dock .agent-fleet-entry { grid-column: 1 / -1; }
+.agent-fleet-dock .agent-fleet-summary button { width: auto; padding-inline: 6px; }
+.console-host-inspector button { min-height: 44px; border: 1px solid var(--line); border-radius: 0; background: var(--panel); color: var(--ivory); font: inherit; }
+.console-empty button:disabled { opacity: .5; }
+.console-empty :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.console-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 
-.empty-shader-canvas {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  background: #050505;
-  cursor: pointer;
+.open-tui-topbar { position: relative; }
+.console-canvas-action {
+  position: absolute; padding: 0; margin: 0; min-width: 0; min-height: 0;
+  border: 0; border-radius: 0; background: transparent; color: transparent;
 }
-
-.empty-shader-canvas.shader-unavailable {
-  opacity: 0;
-}
-
-.life-field-legend {
-  position: absolute;
-  left: 14px;
-  bottom: 12px;
-  z-index: 2;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  color: rgba(220, 191, 105, 0.34);
-  font: 700 9px/1 var(--wmux-mono-font);
-  letter-spacing: 0.12em;
-  pointer-events: none;
-  text-shadow: 0 0 16px rgba(244, 190, 62, 0.18);
-}
-
-.life-field-legend span + span::before {
-  content: "//";
-  margin-right: 10px;
-  color: rgba(126, 143, 163, 0.28);
-}
-
-@media (max-width: 700px) {
-  .life-field-legend {
-    left: 10px;
-    bottom: 10px;
-    font-size: 8px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .life-field-legend span:last-child {
-    display: none;
-  }
-}
-
-.life-settings-toggle {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  z-index: 4;
-  width: 26px;
-  height: 22px;
-  border: 1px solid color-mix(in srgb, var(--gold) 18%, transparent);
-  background: rgba(3, 3, 3, 0.28);
-  color: color-mix(in srgb, var(--gold) 32%, transparent);
-  font-family: var(--wmux-mono-font);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
-  opacity: 0.42;
-}
-
-.life-settings-toggle:hover,
-.life-settings-toggle[aria-expanded="true"] {
-  border-color: color-mix(in srgb, var(--gold) 58%, transparent);
-  background: rgba(3, 3, 3, 0.72);
-  color: color-mix(in srgb, var(--gold) 90%, transparent);
-  opacity: 1;
-}
-
-.life-settings-panel {
-  position: absolute;
-  right: 12px;
-  bottom: 42px;
-  z-index: 3;
-  display: grid;
-  gap: 8px;
-  width: min(360px, calc(100% - 24px));
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--gold) 42%, transparent);
-  background: rgba(3, 3, 3, 0.78);
-  color: var(--ivory);
-  font-family: var(--wmux-mono-font);
-  font-size: 11px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(8px);
-}
-
-.life-settings-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.life-settings-actions button {
-  height: 24px;
-  border: 1px solid color-mix(in srgb, var(--gold) 42%, transparent);
-  background: #090907;
-  color: var(--gold-hot);
-  font: inherit;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.life-settings-actions button:hover {
-  border-color: color-mix(in srgb, var(--gold) 82%, transparent);
-  color: #fff3ba;
-}
-
-.life-settings-slider {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr) 58px;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: #a8a194;
-}
-
-.life-settings-slider span {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: #bdb4a3;
-  font-weight: 700;
-}
-
-.life-settings-slider input {
-  width: 100%;
-  min-width: 0;
-  accent-color: #f4d35e;
-}
-
-.life-settings-slider output {
-  color: #f3eee1;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.life-settings-status {
-  max-height: 80px;
-  overflow: auto;
-  border-top: 1px solid color-mix(in srgb, var(--gold) 20%, transparent);
-  padding-top: 6px;
-  color: #8f887a;
-  white-space: pre-wrap;
-}
+.console-canvas-action:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; background: transparent; }
 
 .split {
   position: relative;
@@ -3458,6 +3330,10 @@ button.active-tool {
 .split.vertical {
   grid-template-columns: minmax(0, calc(var(--ratio) * 100%)) 1px minmax(0, 1fr);
 }
+
+.split.split-zoomed { display: block; }
+.split-zoomed > .split-handle, .split-zoomed > .split-child[hidden] { display: none; }
+.split-zoomed > .split-child:not([hidden]) { width: 100%; height: 100%; }
 
 .split.horizontal {
   grid-template-rows: minmax(0, calc(var(--ratio) * 100%)) 1px minmax(0, 1fr);
@@ -5009,7 +4885,7 @@ button.active-tool {
 }
 
 .agent-fleet-summary button {
-  width: 30px;
+  width: auto;
   min-width: 30px;
   height: 30px;
   border-radius: 0;
@@ -6869,9 +6745,7 @@ button.active-tool {
   }
 
   .mobile-keyboard-open .pane-toolbar > *,
-  .mobile-keyboard-open .media-shelf,
-  .mobile-keyboard-open .life-settings-toggle,
-  .mobile-keyboard-open .life-settings-panel {
+  .mobile-keyboard-open .media-shelf {
     display: none;
   }
 
@@ -7264,21 +7138,6 @@ button.active-tool {
     height: 44px;
   }
 
-  .life-settings-toggle {
-    right: calc(8px + var(--wmux-mobile-right-inset));
-    bottom: calc(8px + env(safe-area-inset-bottom));
-    width: 44px;
-    height: 44px;
-    opacity: 0.72;
-  }
-
-  .life-settings-panel {
-    right: calc(8px + var(--wmux-mobile-right-inset));
-    bottom: calc(60px + env(safe-area-inset-bottom));
-    max-height: calc(var(--wmux-viewport-height, 100dvh) - 84px - var(--wmux-mobile-top-inset));
-    overflow-y: auto;
-  }
-
   .settings-row,
   .settings-row:has(.settings-number) {
     grid-template-columns: minmax(0, 1fr);
@@ -7453,9 +7312,9 @@ button.active-tool {
   width: min(360px, 100%);
   padding: 28px 26px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--panel-2);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  font-family: var(--wmux-mono-font);
 }
 
 .wmux-login-title {
@@ -7489,7 +7348,7 @@ button.active-tool {
 .wmux-login-field input {
   padding: 9px 11px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 0;
   background: var(--panel);
   color: var(--ivory);
   font-size: 14px;
@@ -7510,7 +7369,7 @@ button.active-tool {
   margin-top: 4px;
   padding: 10px 12px;
   border: 1px solid var(--line-bright);
-  border-radius: 7px;
+  border-radius: 0;
   background: var(--gold);
   color: var(--black);
   font-size: 14px;
@@ -7533,11 +7392,11 @@ button.active-tool {
   min-height: 32px;
   max-width: min(360px, calc(100vw - 24px));
   padding: 6px 10px;
-  border: 1px solid #665a31;
-  border-radius: 4px;
-  background: #11100c;
-  color: #f4d35e;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 38%);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--gold);
+  font-family: var(--wmux-mono-font);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
@@ -7665,4 +7524,21 @@ button.active-tool {
 .agent-input-card label small { display: block; opacity: 0.7; }
 .agent-input-custom { width: 100%; margin-top: 6px; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); padding: 6px; }
 .agent-input-card button { border: 0; background: transparent; color: var(--gold); font: inherit; padding: 8px 0; cursor: pointer; }
+
+/* DOM interaction surfaces share the flat console chrome, not terminal styling. */
+.open-tui-command-panel,
+.agent-fleet,
+.settings-panel,
+.open-tui-settings-panel,
+.load-state-card {
+  border-radius: 0;
+  box-shadow: none;
+}
+.command-backdrop,
+.agent-fleet-backdrop,
+.settings-backdrop,
+.open-tui-settings-backdrop {
+  background: color-mix(in srgb, var(--black) 85%, transparent);
+  backdrop-filter: none;
+}
 .agent-input-card button:disabled { opacity: 0.45; cursor: default; }

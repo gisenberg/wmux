@@ -401,7 +401,7 @@ test("persists a color scheme and applies it to the shared chrome palette", asyn
     await awaitAppShell(page);
     await page.keyboard.press("Control+K");
     const palette = page.getByRole("dialog", { name: "Command palette" });
-    await palette.getByRole("textbox").fill("Open settings");
+    await palette.getByRole("combobox").fill("Open settings");
     await page.keyboard.press("Enter");
     const settings = page.getByRole("dialog", { name: "Settings" });
     await expect(settings).toBeVisible();

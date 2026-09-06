@@ -13,6 +13,7 @@ import {
 } from "./opentui-grid";
 import { WMUX_MONO_FONT_FAMILY } from "./fonts";
 import { filterCommands } from "./command-filter";
+import { useConsoleDialog } from "./useConsoleDialog";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 export interface OpenTuiCommand {
@@ -22,6 +23,7 @@ export interface OpenTuiCommand {
   section: string;
   shortcut?: string;
   keywords?: string[];
+  filters?: import("./command-filter").FilterableCommand["filters"];
   disabled?: boolean;
   run: () => void | Promise<void>;
 }
@@ -43,13 +45,14 @@ interface HitZone {
 
 export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose }: OpenTuiCommandPaletteProps) {
   const theme = useOpenTuiTheme();
+  const dialogRef = useConsoleDialog<HTMLDivElement>(onClose);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const liveQueryRef = useRef(query);
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const filteredCommands = useMemo(() => filterCommands(commands, query).slice(0, 40), [commands, query]);
+  const filteredCommands = useMemo(() => filterCommands(commands, query), [commands, query]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -122,7 +125,7 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
     if (event.key === "Enter") {
       event.preventDefault();
       const inputQuery = liveQueryRef.current || inputRef.current?.value || "";
-      const submittedCommands = filterCommands(commands, inputQuery).slice(0, 40);
+      const submittedCommands = filterCommands(commands, inputQuery);
       const submittedIndex = inputQuery === query ? selectedIndex : 0;
       const selectedCommand = submittedCommands[submittedIndex];
       void runCommand(
@@ -168,11 +171,17 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
 
   return (
     <div className="command-backdrop open-tui-command-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
-      <div className="open-tui-command-panel" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
+      <div ref={dialogRef} className="open-tui-command-panel" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
         <div className="open-tui-command-input-row">
           <span>cmd</span>
           <input
             ref={inputRef}
+            role="combobox"
+            aria-label="Search commands and sessions"
+            aria-expanded="true"
+            aria-controls="console-command-results"
+            aria-autocomplete="list"
+            aria-activedescendant={filteredCommands[selectedIndex] ? `console-command-${selectedIndex}` : undefined}
             value={query}
             placeholder="Search commands, workspaces, tabs, hosts"
             onInputCapture={(event) => {
@@ -184,7 +193,11 @@ export function OpenTuiCommandPalette({ commands, query, onQueryChange, onClose 
             }}
           />
         </div>
-        <canvas ref={canvasRef} className="open-tui-command-canvas" onClick={onCanvasClick} onPointerMove={onPointerMove} />
+        <canvas aria-hidden="true" ref={canvasRef} className="open-tui-command-canvas" onClick={onCanvasClick} onPointerMove={onPointerMove} />
+        <div id="console-command-results" role="listbox" aria-label="Commands" className="console-sr-only">
+          {filteredCommands.map((command, index) => <div key={command.id} id={`console-command-${index}`} role="option" aria-selected={index === selectedIndex} aria-disabled={command.disabled}>{command.title}. {command.subtitle}</div>)}
+        </div>
+        <p className="console-sr-only" role="status">{filteredCommands.length} results. Filters: host:, state:, runtime:.</p>
       </div>
     </div>
   );
@@ -215,9 +228,11 @@ const drawPalette = (
   const rowHeight = 3;
   const rowTop = 1;
   const rowWidth = Math.max(1, cols - 2);
-  for (let index = 0; index < commands.length; index += 1) {
+  const visibleCount = Math.max(1, Math.floor((rows - rowTop) / rowHeight));
+  const firstVisible = Math.max(0, Math.min(selectedIndex - visibleCount + 1, commands.length - visibleCount));
+  for (let index = firstVisible; index < commands.length; index += 1) {
     const command = commands[index];
-    const row = rowTop + index * rowHeight;
+    const row = rowTop + (index - firstVisible) * rowHeight;
     if (row + rowHeight > rows) break;
     const selected = index === selectedIndex;
     for (let offset = 0; offset < rowHeight; offset += 1) {
@@ -226,7 +241,7 @@ const drawPalette = (
     const shortcut = command.shortcut ?? "";
     const shortcutCol = Math.max(18, cols - 16);
     write(row, 2, command.section.toUpperCase(), command.disabled ? rgba.faint : rgba.gold, 700);
-    write(row, 16, command.title, command.disabled ? rgba.faint : selected ? rgba.gold : rgba.text, selected ? 700 : 600);
+    write(row, 16, fitText(command.title, Math.max(0, (shortcut ? shortcutCol - 1 : cols - 2) - 16)), command.disabled ? rgba.faint : selected ? rgba.gold : rgba.text, selected ? 700 : 600);
     if (command.subtitle) write(row + 1, 16, command.subtitle, rgba.muted, 400);
     if (shortcut) write(row, shortcutCol, shortcut, command.disabled ? rgba.faint : rgba.muted, 700);
     if (!command.disabled) hits.push({ index, row, col: 1, width: rowWidth, height: rowHeight });

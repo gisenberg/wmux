@@ -107,8 +107,8 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
     await expect(childItem()).toHaveAttribute("aria-level", "1");
 
     await expect(page.getByRole("button", { name: childActionName })).toBeVisible();
-    const spaces = page.getByRole("navigation", { name: "Spaces" });
-    const agents = page.getByRole("tree", { name: "Agents" });
+    const spaces = page.getByRole("navigation", { name: "Hosts" });
+    const agents = page.getByRole("tree", { name: "Workspaces" });
     await expect(spaces.getByRole("button", { name: /^Local,/ })).toHaveAttribute("aria-current", "true");
     await expect(agents).toHaveAttribute("data-grouping", "space");
     await expect(agents).toHaveAttribute("data-target-space-id", "local");
@@ -342,10 +342,10 @@ test("mobile sidebar opens and activates workspaces by touch", async ({ page, re
     await navigationToggle.tap();
     await expect(navigation).toBeVisible();
     await expect(
-      navigation.getByRole("navigation", { name: "Spaces" }).getByRole("button").first(),
+      navigation.getByRole("navigation", { name: "Hosts" }).getByRole("button").first(),
     ).toBeVisible();
     await expect(
-      navigation.getByRole("tree", { name: "Agents" }).getByRole("treeitem").first(),
+      navigation.getByRole("tree", { name: "Workspaces" }).getByRole("treeitem").first(),
     ).toBeVisible();
     await expect(navigation.getByText("Host status", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("dialog", { name: "Agent fleet" })).toHaveCount(0);
@@ -456,7 +456,7 @@ test("desktop agent group menu closes every workspace on its host", async ({ pag
     // Keyboard focus on the chrome needs the asynchronously initialized
     // terminal, not just the mounted shell.
     await expect(page.locator(".terminal-pane.active")).toHaveClass(/terminal-ready/, { timeout: 10_000 });
-    const group = page.getByRole("navigation", { name: "Spaces" })
+    const group = page.getByRole("navigation", { name: "Hosts" })
       .getByRole("button", { name: new RegExp(`^${machineName},`) });
     await group.focus();
     await page.keyboard.press("Shift+F10");
@@ -789,10 +789,10 @@ test("mobile chrome keeps navigation, chat, and terminal reachable", async ({ pa
     return { width: Math.round(rect.width), height: Math.round(rect.height) };
   })).toEqual({ width: 44, height: 44 });
   await expect(
-    navigation.getByRole("navigation", { name: "Spaces" }).getByRole("button").first(),
+    navigation.getByRole("navigation", { name: "Hosts" }).getByRole("button").first(),
   ).toBeVisible();
   await expect(
-    navigation.getByRole("tree", { name: "Agents" }).getByRole("treeitem").first(),
+    navigation.getByRole("tree", { name: "Workspaces" }).getByRole("treeitem").first(),
   ).toBeVisible();
   await expect(navigation.getByText("Host status", { exact: true })).toHaveCount(0);
   await expect(
@@ -920,6 +920,11 @@ test("mobile chat retains focus and bottom anchoring across viewport changes", a
   await expect(composer).toBeFocused();
   await page.setViewportSize({ width: 390, height: 520 });
   const appShell = page.locator("main.app-shell");
+  // Keyboard-opening also collapses chrome before a viewport event arrives.
+  // Confirm the measured occlusion before testing focus handoff to Send.
+  await expect.poll(() => page.evaluate(() =>
+    document.documentElement.style.getPropertyValue("--wmux-viewport-height"),
+  )).toBe("520px");
   await expect(appShell).toHaveClass(/mobile-keyboard-open/);
   await expect.poll(() => composer.evaluate((element) => window.getComputedStyle(element).paddingLeft)).toBe("28px");
 

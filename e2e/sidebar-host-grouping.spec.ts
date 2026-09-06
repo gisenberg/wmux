@@ -90,8 +90,8 @@ test("switches sidebar host grouping without reloading on desktop and mobile Chr
     await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
     await openNavigation(page, mobile);
     const navigation = page.locator("#wmux-sidebar");
-    const tree = navigation.locator('[role="tree"][aria-label="Agents"]');
-    const spaces = navigation.getByRole("navigation", { name: "Spaces" });
+    const tree = navigation.locator('[role="tree"][aria-label="Workspaces"]');
+    const spaces = navigation.getByRole("navigation", { name: "Hosts" });
     await expect(tree).toHaveAttribute("data-grouping", "space");
     await expect(spaces.getByRole("button", { name: /^Local,/ })).toHaveCount(1);
     await expect(spaces.getByRole("button", { name: /^Sidebar Host B,/ })).toHaveCount(1);
@@ -141,7 +141,7 @@ test("switches sidebar host grouping without reloading on desktop and mobile Chr
     }).toBe(false);
     await openNavigation(page, mobile);
     await expect(tree).toHaveAttribute("data-grouping", "global");
-    await expect(navigation.getByRole("navigation", { name: "Spaces" })).toHaveCount(0);
+    await expect(navigation.getByRole("navigation", { name: "Hosts" })).toHaveCount(0);
     const targetHost = navigation.getByRole("navigation", { name: "Target host" });
     const targetSelect = targetHost.getByRole("combobox", { name: "Target host" });
     await expect(targetSelect).toHaveValue("local");
@@ -218,7 +218,7 @@ test("switches sidebar host grouping without reloading on desktop and mobile Chr
     await page.reload();
     await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 20_000 });
     await openNavigation(page, mobile);
-    await expect(page.getByRole("tree", { name: "Agents" })).toHaveAttribute("data-grouping", "global");
+    await expect(page.getByRole("tree", { name: "Workspaces" })).toHaveAttribute("data-grouping", "global");
     await expect(page.getByRole("navigation", { name: "Target host" })
       .getByRole("combobox", { name: "Target host" })).toHaveValue(machineId);
     if (mobile) await expect(page.getByRole("complementary", { name: "Workspace navigation" })).toBeVisible();

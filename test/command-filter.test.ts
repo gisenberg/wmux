@@ -49,3 +49,15 @@ test("command filtering retains explicit metadata matches", () => {
   assert.deepEqual(filterCommands(commands, "share").map((command) => command.title), ["Copy active session link"]);
   assert.deepEqual(filterCommands(commands, "close").map((command) => command.title), ["Close current workspace"]);
 });
+
+test("typed session filters match structured metadata, not incidental titles", () => {
+  const rows = [
+    { title: "Fix host:remote", section: "Sessions", filters: { host: ["local"], state: ["running"], runtime: ["codex"] } },
+    { title: "Review", section: "Sessions", filters: { host: ["remote"], state: ["waiting", "approval"], runtime: ["claude"] } },
+  ];
+  assert.deepEqual(filterCommands(rows, "host:remote state:approval runtime:CLAUDE"), [rows[1]]);
+  assert.deepEqual(filterCommands(rows, "host:remote runtime:codex"), []);
+  assert.deepEqual(filterCommands(rows, "host:local fix"), [rows[0]]);
+  const inspector = { title: "Inspect host: Local", section: "Hosts" };
+  assert.deepEqual(filterCommands([inspector], "Inspect host: Local"), [inspector]);
+});

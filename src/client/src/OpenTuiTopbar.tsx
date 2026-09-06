@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createGrid,
   createGridPainter,
@@ -19,6 +19,7 @@ export interface OpenTuiTabItem {
   title: string;
   active: boolean;
   unreadCount: number;
+  href?: string;
 }
 
 interface OpenTuiTopbarProps {
@@ -71,6 +72,7 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
   const hitsRef = useRef<HitZone[]>([]);
   const metricsRef = useRef<CellMetrics>({ width: 8, height: 16, cols: 1, rows: 1 });
   const renderModel = useMemo(() => props, [props]);
+  const [semantics, setSemantics] = useState<{ hits: HitZone[]; width: number; height: number }>({ hits: [], width: 8, height: 16 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -87,6 +89,8 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
       const metrics = syncPainterViewport(painter, canvas, entry);
       metricsRef.current = metrics;
       painter.paint(drawTopbar(metrics, renderModel, hitsRef.current, theme));
+      const next = { hits: [...hitsRef.current], width: metrics.width, height: metrics.height };
+      setSemantics((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
     };
 
     paint();
@@ -144,7 +148,15 @@ export function OpenTuiTopbar(props: OpenTuiTopbarProps) {
 
   return (
     <header className="topbar open-tui-topbar" aria-label="Session toolbar">
-      <canvas ref={canvasRef} className="open-tui-canvas" onClick={onClick} onPointerMove={onPointerMove} />
+      <canvas aria-hidden="true" ref={canvasRef} className="open-tui-canvas" onClick={onClick} onPointerMove={onPointerMove} />
+      {semantics.hits.map((hit, index) => {
+        const tab = hit.action.type === "tab" ? props.tabs.find((tab) => hit.action.type === "tab" && tab.id === hit.action.tabId) : undefined;
+        const style = { left: hit.col * semantics.width, top: hit.row * semantics.height, width: hit.width * semantics.width, height: semantics.height };
+        return tab?.href ? <a key={index} className="console-canvas-action" style={style} href={tab.href} aria-label={hit.title} aria-current={tab.active ? "page" : undefined} onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault(); runAction(hit.action);
+        }} /> : <button key={index} type="button" className="console-canvas-action" style={style} aria-label={hit.title} title={hit.title} disabled={hit.disabled} onClick={() => runAction(hit.action)} />;
+      })}
     </header>
   );
 }

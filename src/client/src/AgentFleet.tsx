@@ -1,138 +1,63 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import type {
-  AgentTimelineEntry,
   BootstrapPayload,
   DelegationAttentionReason,
-  DelegationRecord,
   MachineStatus,
 } from "./types";
 import { workspaceTabPath } from "./route-state";
+import { buildSessionRows, type SessionRow } from "./session-inventory";
+import { useConsoleDialog } from "./useConsoleDialog";
 
-export interface AgentFleetRow {
-  id: string;
-  runtime: string;
-  title: string;
-  workspaceId: string;
-  workspaceName: string;
-  tabId: string;
-  paneId: string;
-  machineId: string;
-  machineName: string;
-  state: DelegationRecord["state"];
-  attentionReason?: DelegationAttentionReason;
-  stateChangedAt: string;
-  updatedAt: string;
-  lastEntry?: AgentTimelineEntry;
-}
-
-export const buildAgentFleetRows = (
-  state: BootstrapPayload,
-  machines: MachineStatus[],
-): AgentFleetRow[] => {
-  const timelines = new Map(
-    state.agentTimelines.map((timeline) => [timeline.id, timeline]),
-  );
-  const machineNames = new Map(
-    machines.map((machine) => [machine.id, machine.name]),
-  );
-  return state.delegations
-    .filter(
-      (delegation) =>
-        delegation.state === "running"
-        || delegation.state === "waiting"
-        || Boolean(delegation.attentionReason),
-    )
-    .map((delegation): AgentFleetRow => {
-      const workspace = state.workspaces.find(
-        (candidate) => candidate.id === delegation.workspaceId,
-      );
-      const tab = workspace?.tabs.find(
-        (candidate) => candidate.id === delegation.tabId,
-      );
-      const pane = tab?.panes.find(
-        (candidate) => candidate.id === delegation.paneId,
-      );
-      const machineId =
-        delegation.machineId
-        ?? pane?.machineId
-        ?? workspace?.machineId
-        ?? "unknown";
-      const timeline = timelines.get(delegation.sessionId);
-      return {
-        id: delegation.runId,
-        runtime: delegation.runtime,
-        title: delegation.title || delegation.summary || delegation.runtime,
-        workspaceId: delegation.workspaceId,
-        workspaceName: workspace?.name ?? "workspace removed",
-        tabId: delegation.tabId,
-        paneId: delegation.paneId,
-        machineId,
-        machineName: machineNames.get(machineId) ?? machineId,
-        state: delegation.state,
-        ...(delegation.attentionReason
-          ? { attentionReason: delegation.attentionReason }
-          : {}),
-        stateChangedAt: delegation.stateChangedAt,
-        updatedAt: delegation.updatedAt,
-        lastEntry: timeline?.entries.at(-1),
-      };
-    })
-    .sort((first, second) => {
-      const priorityDifference =
-        fleetRowPriority(first) - fleetRowPriority(second);
-      if (priorityDifference !== 0) return priorityDifference;
-      return Date.parse(second.updatedAt) - Date.parse(first.updatedAt);
-    });
-};
+export type AgentFleetRow = SessionRow;
+export const buildAgentFleetRows = buildSessionRows;
 
 export function AgentFleet({
   state,
   machines,
   onClose,
   onOpenSession,
+  docked = false,
+  onToggleDock,
 }: {
   state: BootstrapPayload;
   machines: MachineStatus[];
   onClose: () => void;
   onOpenSession: (row: AgentFleetRow) => void;
+  docked?: boolean;
+  onToggleDock?: () => void;
 }) {
   const rows = useMemo(
     () => buildAgentFleetRows(state, machines),
     [machines, state],
   );
-  const attentionCount = rows.filter((row) => row.attentionReason).length;
+  const attentionCount = rows.filter((row) => row.attentionReason || row.state === "waiting").length;
   const activeCount = rows.filter(
-    (row) => row.state === "running" || row.state === "waiting",
+    (row) => row.state === "running",
   ).length;
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useConsoleDialog<HTMLElement>(onClose, !docked);
   const [nowMs, setNowMs] = useState(Date.now());
 
   useEffect(() => {
-    returnFocusRef.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    closeRef.current?.focus();
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => {
       window.clearInterval(timer);
-      returnFocusRef.current?.focus();
     };
   }, []);
 
   return (
     <div
-      className="agent-fleet-backdrop"
+      className={docked ? "agent-fleet-dock" : "agent-fleet-backdrop"}
       onMouseDown={(event) => {
-        if (event.currentTarget === event.target) onClose();
+        if (!docked && event.currentTarget === event.target) onClose();
       }}
     >
       <section
+        ref={dialogRef}
+        tabIndex={-1}
         className="agent-fleet"
-        role="dialog"
-        aria-modal="true"
+        role={docked ? "region" : "dialog"}
+        aria-modal={docked ? undefined : "true"}
         aria-label="Agent fleet"
         data-event-revision={state.eventRevision}
         onKeyDown={(event) => {
@@ -147,12 +72,12 @@ export function AgentFleet({
             <strong>{rows.length} SESSIONS</strong>
           </div>
           <div className="agent-fleet-summary">
+            {onToggleDock ? <button type="button" onClick={onToggleDock}>{docked ? "[FLOAT]" : "[DOCK]"}</button> : null}
             <span>[RUN {activeCount}]</span>
             <span className={attentionCount > 0 ? "attention" : ""}>
               [WAIT {attentionCount}]
             </span>
             <button
-              ref={closeRef}
               type="button"
               aria-label="Close agent fleet"
               title="Close agent fleet"
@@ -173,14 +98,16 @@ export function AgentFleet({
             <a
               key={row.id}
               className={`agent-fleet-row ${row.attentionReason ? "attention" : ""}`}
-              href={workspaceTabPath(row.workspaceId, row.tabId)}
+              href={row.available ? workspaceTabPath(row.workspaceId, row.tabId) : undefined}
+              aria-disabled={!row.available}
               role="listitem"
               data-agent-run-id={row.id}
               data-agent-state={row.state}
               data-agent-machine={row.machineId}
               onClick={(event) => {
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                 event.preventDefault();
-                onOpenSession(row);
+                if (row.available) onOpenSession(row);
               }}
             >
               <span className="agent-fleet-state">
@@ -189,10 +116,10 @@ export function AgentFleet({
               <span className="agent-fleet-identity">
                 <strong>{row.runtime}</strong>
                 <span>{row.title}</span>
-                <small>{row.workspaceName}</small>
+                <small>{row.workspaceName} / {row.source.toUpperCase()}</small>
               </span>
-              <span className="agent-fleet-machine">
-                {row.machineName}
+              <span className="agent-fleet-machine" title={row.machineName}>
+                {row.machineName} {!row.reachable ? "[OFFLINE]" : ""}
               </span>
               <span className="agent-fleet-elapsed">
                 {formatFleetElapsed(row.stateChangedAt, nowMs)}
@@ -208,7 +135,7 @@ export function AgentFleet({
             </a>
           )) : (
             <div className="agent-fleet-empty">
-              [IDLE] No agent sessions have reported yet.
+              [IDLE] No sessions. Create a workspace to begin.
             </div>
           )}
         </div>
@@ -217,14 +144,8 @@ export function AgentFleet({
   );
 }
 
-const fleetRowPriority = (row: AgentFleetRow): number => {
-  if (row.attentionReason) return 0;
-  if (row.state === "waiting") return 1;
-  if (row.state === "running") return 2;
-  return 3;
-};
-
 const fleetStateToken = (row: AgentFleetRow): string => {
+  if (row.state === "completed") return row.unread ? "[DONE]" : "[IDLE]";
   if (row.attentionReason) {
     return `[${row.attentionReason.toUpperCase()}]`;
   }

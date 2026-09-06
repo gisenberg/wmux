@@ -9,13 +9,6 @@ const profileRandom = (id: string) => {
   return (weightBefore + (RETRO_BOOT_PROFILES[index].weight ?? 1) / 2) / total;
 };
 
-const waitForLifeFrameWindow = async (
-  page: import("@playwright/test").Page,
-  milliseconds: number,
-): Promise<void> => {
-  // The fixed interval spans the external animation clock so the test can prove that hidden rendering stays paused.
-  await page.waitForTimeout(milliseconds);
-};
 
 const openDelayedRetroBoot = async ({
   browser,
@@ -104,53 +97,29 @@ test("canvas workspace tree exposes nested depth and agent origin", async ({ pag
   }
 });
 
-test("idle Life field stays bounded and pauses when it leaves the viewport", async ({ page, request }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "desktop WebGL lifecycle coverage");
-  test.setTimeout(60_000);
-
+test("empty workspace offers a host-aware console launcher", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop empty-state coverage");
   const response = await request.get("/api/bootstrap");
   expect(response.ok()).toBeTruthy();
   const bootstrap = await response.json() as { workspaces: Array<{ id: string }> };
-
   try {
     for (const workspace of bootstrap.workspaces) {
-      const removed = await request.delete(`/api/workspaces/${workspace.id}`);
-      expect(removed.ok()).toBeTruthy();
+      expect((await request.delete(`/api/workspaces/${workspace.id}`)).ok()).toBeTruthy();
     }
     await page.reload();
-
-    const canvas = page.getByLabel("Interactive Game of Life field; click a column to toggle a cell");
-    await expect(canvas).toBeVisible({ timeout: 20_000 });
-    await expect.poll(
-      async () => Number(await canvas.getAttribute("data-render-frame") ?? 0),
-      { timeout: 20_000 },
-    ).toBeGreaterThan(2);
-
-    const renderSize = await canvas.evaluate((element: HTMLCanvasElement) => ({
-      pixels: element.width * element.height,
-      fps: Number(element.dataset.renderFps),
-    }));
-    expect(renderSize.pixels).toBeLessThanOrEqual(520_000);
-    expect(renderSize.fps).toBeGreaterThanOrEqual(8);
-    expect(renderSize.fps).toBeLessThanOrEqual(12);
-
-    await canvas.evaluate((element) => {
-      element.closest<HTMLElement>(".empty-workspace-view")!.style.display = "none";
-    });
-    await waitForLifeFrameWindow(page, 180);
-    const pausedAt = Number(await canvas.getAttribute("data-render-frame"));
-    await waitForLifeFrameWindow(page, 300);
-    expect(Number(await canvas.getAttribute("data-render-frame"))).toBe(pausedAt);
-
-    await canvas.evaluate((element) => {
-      element.closest<HTMLElement>(".empty-workspace-view")!.style.display = "";
-    });
-    await expect.poll(async () => Number(await canvas.getAttribute("data-render-frame"))).toBeGreaterThan(pausedAt);
-    await canvas.click({ position: { x: 80, y: 80 } });
+    const launcher = page.getByRole("region", { name: "Session launcher" });
+    await expect(launcher).toBeVisible({ timeout: 20_000 });
+    await expect(launcher.locator("canvas")).toHaveCount(0);
+    await launcher.getByRole("combobox", { name: "New session target" }).selectOption("local");
+    await expect(launcher.getByRole("button", { name: "[+] NEW WORKSPACE", exact: true })).toBeEnabled();
+    await launcher.getByRole("button", { name: "[MANAGE HOSTS]", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: /machine management/i })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: /machine management/i })).toHaveCount(0);
+    await expect(launcher.getByRole("button", { name: "[MANAGE HOSTS]", exact: true })).toBeFocused();
   } finally {
     if (bootstrap.workspaces.length > 0) {
-      const restored = await request.post("/api/workspaces", { data: { machineId: "local" } });
-      expect(restored.ok()).toBeTruthy();
+      expect((await request.post("/api/workspaces", { data: { machineId: "local" } })).ok()).toBeTruthy();
     }
   }
 });

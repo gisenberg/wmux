@@ -1,5 +1,42 @@
 import { awaitAppShell, expect, test } from "./fixtures";
 
+test("console navigation exposes session filters, host inspection and mounted-pane zoom", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop console navigation coverage");
+  const command = async (query: string) => {
+    await page.keyboard.press("Control+K");
+    const search = page.getByRole("combobox", { name: "Search commands and sessions" });
+    await search.fill(query);
+    await search.press("Enter");
+  };
+  await page.keyboard.press("Control+K");
+  const search = page.getByRole("combobox", { name: "Search commands and sessions" });
+  await search.fill("host:local runtime:shell");
+  await expect(page.getByRole("option").first()).toContainText("Open session:");
+  await expect(search).toHaveAttribute("aria-activedescendant", /console-command-/);
+  await page.keyboard.press("Escape");
+  await command("Inspect host: Local");
+  const inspector = page.getByRole("dialog", { name: "Host Local", exact: true });
+  await expect(inspector).toContainText("REACHABILITY");
+  await expect(inspector).toContainText("BACKEND");
+  await page.keyboard.press("Escape");
+  await command("Split right");
+  const terminals = page.locator(".layout-cache-item.active .terminal-pane");
+  await expect(terminals).toHaveCount(2);
+  await terminals.evaluateAll((elements) => elements.forEach((element, index) => element.setAttribute("data-zoom-identity", String(index))));
+  await command("Zoom active pane");
+  await expect(terminals.filter({ visible: true })).toHaveCount(1);
+  await expect(terminals).toHaveCount(2);
+  await command("Restore split layout");
+  await expect(terminals.filter({ visible: true })).toHaveCount(2);
+  expect(await terminals.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-zoom-identity")))).toEqual(["0", "1"]);
+  await command("Open agent fleet");
+  await page.getByRole("button", { name: "[DOCK]", exact: true }).click();
+  const fleet = page.getByRole("region", { name: "Agent fleet" });
+  await expect(fleet).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("console-fleet-docked.png") });
+  await fleet.getByRole("button", { name: "Close agent fleet" }).click();
+});
+
 test("creates a workspace through the command palette and preserves its direct link", async ({ page, request }, testInfo) => {
   if (testInfo.project.name.startsWith("mobile-")) {
     await page.getByRole("banner", { name: "Mobile session controls" })

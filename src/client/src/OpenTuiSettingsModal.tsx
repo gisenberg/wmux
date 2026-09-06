@@ -790,7 +790,7 @@ const buildLayout = (
   push({
     kind: "choice",
     id: "sidebar-host-grouping",
-    label: "group sidebar sessions by host",
+    label: "sidebar grouping",
     value: draft.groupSidebarSessionsByHost ? "Grouped" : "Global tree",
     height: 2,
   });
@@ -1053,8 +1053,8 @@ const drawChoice = (
   const { rgba } = theme;
   const selected = focusId === item.id;
   fillCells(grid, row, 1, Math.max(0, cols - 2), selected ? rgba.active : rgba.panel);
-  writeText(grid, row, 2, item.label.toUpperCase(), selected ? rgba.gold : rgba.muted, 1);
   const valueCol = Math.min(24, Math.max(16, Math.floor(cols * 0.34)));
+  writeText(grid, row, 2, fitText(item.label.toUpperCase(), valueCol - 3), selected ? rgba.gold : rgba.muted, 1);
   writeText(grid, row, valueCol, fitText(item.value, Math.max(0, cols - valueCol - 15)), rgba.text, selected ? 1 : 0);
   drawButton(grid, row, Math.max(valueCol + 12, cols - 13), "<", false, hits, item.id, "decrement", theme);
   drawButton(grid, row, Math.max(valueCol + 17, cols - 7), ">", false, hits, item.id, "increment", theme);

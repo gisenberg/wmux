@@ -51,10 +51,10 @@ test("adds a machine, creates a workspace on it, and removes it without shell ac
   await manager.getByRole("button", { name: "Close", exact: true }).click();
 
   if (testInfo.project.name === "chromium") {
-    const agents = page.getByRole("tree", { name: "Agents" });
+    const agents = page.getByRole("tree", { name: "Workspaces" });
     const existingAgent = agents.getByRole("treeitem").first();
     await expect(existingAgent).toBeVisible();
-    const space = page.getByRole("navigation", { name: "Spaces" })
+    const space = page.getByRole("navigation", { name: "Hosts" })
       .getByRole("button", { name: new RegExp(`^${machineName},`) });
     await space.focus();
     await page.keyboard.press("Enter");

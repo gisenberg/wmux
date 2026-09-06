@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useConsoleDialog } from "./useConsoleDialog";
 import {
   api,
   type MachineManagementCatalog,
@@ -43,6 +44,14 @@ export function MachineManagerModal({
   const [registrationNames, setRegistrationNames] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const close = () => {
+    if (busy) return;
+    const original = catalog?.staticMachines.find((machine) => machine.id === selectedId);
+    const dirty = JSON.stringify(draft) !== JSON.stringify(original ? editableMachine(original) : blankMachine())
+      || Boolean(catalog?.registeredHosts.some((host) => registrationNames[host.id] !== host.machine.name));
+    if (!dirty || window.confirm("Discard unsaved machine changes?")) onClose();
+  };
+  const dialogRef = useConsoleDialog<HTMLFormElement>(close);
 
   const load = useCallback(async () => {
     setError("");
@@ -161,9 +170,11 @@ export function MachineManagerModal({
   return (
     <div
       className="settings-backdrop machine-manager-backdrop"
-      onMouseDown={(event) => event.currentTarget === event.target && onClose()}
+      onMouseDown={(event) => event.currentTarget === event.target && close()}
     >
       <form
+        ref={dialogRef}
+        tabIndex={-1}
         className="settings-panel machine-manager-panel machine-manager-console"
         role="dialog"
         aria-modal="true"
@@ -187,7 +198,7 @@ export function MachineManagerModal({
             </span>
             <button
               type="button"
-              onClick={onClose}
+              onClick={close}
               title="Close machine management"
               aria-label="Close machine management"
             >
@@ -350,10 +361,10 @@ export function MachineManagerModal({
                   disabled={busy || !(registrationNames[host.id] ?? "").trim() || registrationNames[host.id] === host.machine.name}
                   onClick={() => void updateRegistered(host.id, { name: registrationNames[host.id]?.trim() })}
                 >
-                  [S] SAVE
+                  [SAVE]
                 </button>
                 <button type="button" disabled={busy} onClick={() => void updateRegistered(host.id, { disabled: !host.disabled })}>
-                  {host.disabled ? "[A] ENABLE" : "[D] DISABLE"}
+                  {host.disabled ? "[ENABLE]" : "[DISABLE]"}
                 </button>
                 <button
                   type="button"
@@ -370,13 +381,13 @@ export function MachineManagerModal({
         </div>
         {error ? <div className="settings-error machine-manager-error">{error}</div> : null}
         <div className="settings-actions">
-          <button type="button" aria-label="Close" onClick={onClose}>[ESC] CLOSE</button>
+          <button type="button" aria-label="Close" onClick={close}>[ESC] CLOSE</button>
           <button
             type="submit"
             aria-label={selectedId ? "Save machine" : "Add machine"}
             disabled={!catalog || busy || !draft.id || !draft.name}
           >
-            {busy ? "[WAIT] SAVING" : selectedId ? "[S] SAVE MACHINE" : "[+] ADD MACHINE"}
+            {busy ? "[WAIT] SAVING" : selectedId ? "[SAVE MACHINE]" : "[+] ADD MACHINE"}
           </button>
         </div>
       </form>
