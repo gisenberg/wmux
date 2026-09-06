@@ -1,120 +1,98 @@
-# Codex plain-start integration: design and acceptance evidence
+# Codex plain-start integration: approved scope and historical evidence
 
-Status: implemented and tested locally on Linux with Codex 0.153.4 on
-2026-09-06. This is not a claim that the user's normal installation or live wmux
-service has been updated. The plugin requires the matching wmux server changes.
+The ordinary interactive command remains exactly `codex`; wmux supplies no
+wrapper, replacement binary, startup flag, native source change, database edit,
+or transcript edit. This document records the selected scope as of 2026-09-06.
+It is not a deployment or full-conformance claim.
 
-## Constraints and implementation
+## Approved wmux-owned naming mode
 
-- The interactive startup command is exactly `codex`, without a wrapper,
-  replacement binary, extra flags, or a special startup sequence.
-- All authored implementation changes belong to wmux. Codex source, its normal
-  installation, and the user's normal profile are untouched.
-- The root agent chooses a semantic task name. Follow-ups preserve that name;
-  a material task change can replace it. A hook supplies the naming instruction,
-  not a title copied from the user's prompt.
-- Codex's saved name is canonical. The plugin calls supported `thread/name/set`
-  and `thread/read` APIs, then mirrors the read-back value to the automatic
-  **sidebar workspace** title. User-owned wmux titles are preserved.
+wmux owns the automatic semantic task title. A trusted prompt binding identifies
+the exact live wmux pane; the plugin preflights its private store and asks the
+server to atomically accept the automatic workspace/tab title before persisting
+the agent-selected title. Follow-ups reuse that stored title; a material
+objective change replaces it. Manual wmux workspace/tab titles remain user-owned.
 
-Daemon-backed Codex does not reliably forward the launching pane's identity to
-plugins. A trusted prompt hook therefore issues a challenge and displays a short
-public marker. wmux observes it on the current live backend, binds it to its own
-pane tuple, and requires a separate private receipt for resolution and title
-writes. Neither browser focus nor process timing selects the target. The marker
-is visible; there is no silent environment-forwarding dependency.
+Codex saved conversation names are intentionally untouched. Naming and sync do
+not call `thread/read` or `thread/name/set`, and native `/rename` is neither
+imported into wmux nor overwritten. Tool results use the wmux-owned fields
+`namingMode: "wmux-owned-name"`, `wmuxName`, `nativeNameRead: false`,
+`nativeNameSet: false`, `wmuxNameSaved`, `workspaceApplied`, and `tabApplied`.
+There is no `codexName` or `codexNameSet` result in this mode.
 
-The plugin's short-lived `codex app-server --stdio` subprocess only reads/sets
-the explicit saved name. It does not replace the user's TUI or start a model turn.
-Normal plugin installation, hook trust, and tool approval are still required.
-See [installation and behavior](CODEX_PLUGIN.md) for operational details.
+If title acceptance is rejected, `wmuxNameSaved` is false and only a fresh
+`name_current_wmux_session` retry may establish the title; sync cannot invent a
+stored semantic name. If the server accepted the title but title persistence
+failed, report the actual workspace/tab application with `wmuxNameSaved: false`
+and retry `name_current_wmux_session`. A retry of a mirror for an already stored
+title remains `sync_current_wmux_session`.
 
-## Real plugin acceptance tests
+The retained focused fixture log records 19 passing checks, covering `409`
+rejection, `503` title-delivery/acceptance uncertainty, and injected
+post-acceptance local-store write failure. That is fixture evidence, not native
+CLI acceptance.
 
-Disposable, authenticated loopback wmux services and private Codex profiles were
-created inside ignored repository test directories. The actual source plugin was
-installed with `codex plugin add` through a local marketplace. Repository trust,
-hook trust, and MCP approvals used Codex's normal UI. These tests did not patch
-Codex, manually supply a pane tuple, or invoke the naming modules in place of the
-agent's real MCP calls.
+The visible hook marker remains the binding transport for daemon-backed Codex
+where pane environment variables are unavailable. A private receipt, never the
+marker alone, authorizes the store/mirror operation. Markers must be redacted
+before terminal output is shown in another live pane.
 
-Two runtime modes were exercised. `/status` confirmed embedded mode in the first
-fixture and a local Unix-socket App Server in the second. The second fixture's
-harness provisioned a daemon to reproduce an already-running daemon environment;
-this is test setup, **not** an additional product startup requirement. The command
-typed into both interactive wmux panes was simply `codex`.
+## Prompt-bound lifecycle is separate
 
-| Scenario | Observed result |
-| --- | --- |
-| Embedded: first substantive task, no request to name wmux | Agent chose “Binary Search Ordering Requirement”; saved name and automatic workspace title matched; `workspaceApplied: true`. |
-| Embedded: ordinary follow-up | Semantic title remained unchanged. |
-| Embedded: major shift to transaction atomicity | Agent chose “Database Transaction Atomicity Rationale”; saved name and sidebar matched. |
-| Embedded: manually pinned workspace, then cache/database task | Saved name and tab changed to “Cache and Database Roles”; sidebar stayed “Pinned By User” with user ownership. |
-| Daemon: first task and ordinary follow-up | Same binary-search semantic title; follow-up preserved it. |
-| Daemon: major task shift | Saved name and sidebar became “Database Transaction Atomicity Explained”. |
-| Daemon: native `/rename Atomic Transaction Notes`, then follow-up | Next prompt synced “Atomic Transaction Notes” from Codex's saved name to the workspace. |
-| Daemon: pinned sidebar, then different task | Agent selected “Cache and Database Roles”; sidebar stayed user-owned “Pinned By User”; result reported `workspaceApplied: false`. |
-| Daemon: exit, plain `codex`, native `/resume`, follow-up | Agent called sync with the resumed thread and fresh binding; read “Cache and Database Roles”, reported `codexNameSet: false`, and preserved the pinned sidebar. |
+The plugin's read-only observer may use the local supported App Server surface
+to report an exact bound turn's generic active/attention/terminal state. It does
+not start or resume a native turn, answer requests, or control the TUI. A lack of
+authoritative observation becomes wmux `status unknown`, not success, failure,
+or a scheduled heartbeat. Native request identities, non-prompt continuations,
+platform coverage, and full recovery/animation acceptance remain bounded gaps;
+see [CODEX_CONFORMANCE.md](CODEX_CONFORMANCE.md).
 
-Evidence was the live terminal's actual MCP calls/results, explicit saved-name
-reads, and the fixture server's authoritative workspace title/ownership fields.
-No browser screenshot or visual UI acceptance claim is made. Model-generated
-wording is an observation, not a deterministic expected test string.
+## Historical native-canonical evidence
 
-## Automated and fresh-context verification
+Earlier local Linux tests used a different design: the plugin set a Codex saved
+name through `thread/name/set`, read it back, and mirrored it to wmux. They
+included embedded/daemon naming, follow-up, task-shift, pinned-surface, native
+`/rename`, and resume scenarios. That design is superseded and its observed
+native writes/mirroring are not current behavior or acceptance evidence for the
+wmux-owned mode.
 
-The focused suite covers the supported name adapter, plugin MCP, private binding
-records, terminal parser/registry, backend lifecycle, and a real authenticated
-wmux HTTP + SessionManager + PTY + plugin integration. Only the Codex name API is
-faked in that automated end-to-end integration; the separate live tests above use
-the actual Codex executable and saved names.
+Its later native acceptance also failed when Codex-generated names could not be
+distinguished from manual names. Those failures remain historical failures of
+the superseded design; changing scope does not convert them into passes.
 
-Checks include chunked markers, unknown/expired receipts, delayed human approval,
-idempotent redraw, cross-pane conflicts (including separate receipts for the same
-session), stale backend output, pane invalidation, supersession, exact-session
-locking, partial failures, canonical read-back, and preservation of manual titles.
-Route inventory and authorization tests include all three binding endpoints.
+## Fresh wmux-owned native acceptance
 
-Final local results: 26/26 focused tests passed. `npm run check` passed with
-1,029 tests passing, four skipped, and no failures, followed by successful
-TypeScript, script/contract validation, and production builds. Plugin and skill
-validators also passed. The final fresh-context review found no blocking issues.
+An ignored, local-only record at
+`test-results/codex-wmux-owned-native-evidence.json` captures a plain-`codex`,
+isolated-HOME, Codex 0.153.4 daemon fixture. Its companion local-only resumed
+and input records verify a same-pane native `/resume` and aggregate input
+attention. The fixture verified first-task semantic naming, a fresh-binding follow-up
+sync, material objective shift, a nested child workspace, manual workspace pin
+with automatic tab update, and independence from native UI `/rename`. Native
+names remained untouched throughout; the child did not alter its parent.
 
-Fresh-context implementation reviews resulted in per-session serialization,
-auto-only naming, lifecycle regression tests, cross-pane ambiguity rejection,
-and narrower title responses. The acceptance commands are:
+The initial four parent turns, same-pane resumed follow-up, and final input
+question all completed. The final local record
+`test-results/codex-wmux-owned-native-final.json` contains six parent completion,
+six approval, and one input notifications; the child has one approval and one
+completion notification. The native question answer returned input-waiting to
+running and then completed. Local desktop/mobile captures show the waiting, working, and completed
+indicators; they are not publishable or animation proof because they contain a
+fixture host label. A separate browser fixture supplies the dynamic-animation
+assertion. This native slice verifies same-pane resume only; it does not certify
+restart/reconnect, deployment, other platforms, cross-pane handoff, request identities, a browser
+answer bridge, or full conformance.
 
-```sh
-node --import tsx --test test/codex-name.test.ts test/wmux-plugin-mcp.test.ts \
-  test/wmux-binding-store.test.ts test/codex-terminal-binding.test.ts \
-  test/codex-binding-lifecycle.test.ts test/codex-plugin-terminal-integration.test.ts
-npm run check
-```
+The final pre-base-integration full check passed (1,075 passing tests, four
+skipped), and the desktop/mobile lifecycle browser fixture passed 2/2.
+The temporary native fixture and copied test credentials were removed afterward;
+the normal services were not deployed or restarted.
 
-## Boundaries and limitations
+## Remaining boundaries
 
-- The visible hook marker is the cost of reliable pane binding without changing
-  Codex or its startup command. Unobserved challenges expire after 60 seconds;
-  observed leases have a fixed 24-hour ceiling. A server restart requires a new
-  prompt to bind again.
-- Use one TUI per saved conversation. Known cross-pane ambiguity invalidates
-  both bindings rather than guessing; moving to a new pane while the old pane
-  remains live may require closing it and submitting a new prompt.
-- Agent instructions govern semantic naming and task-shift detection; this is
-  not a deterministic classifier. Native Codex name ownership is not exposed by
-  the API. Manual **wmux** title ownership is enforced by the server.
-- Native `/rename` is mirrored on the next eligible prompt/tool sync, not
-  necessarily while idle. Stop reconciliation runs only with an exact matching
-  turn ID; absent or ambiguous metadata is ignored.
-- Linux/POSIX runtime and privacy checks were tested. Native Windows execution,
-  Windows ACL confidentiality, remote App Servers with a different thread store,
-  and a full macOS/SSH deployment matrix are not verified by these tests.
-- This is a trusted single-user integration, not an isolation boundary against
-  another process with that user's file access or terminal-output authority.
-
-## References
-
-- [Codex hooks](https://learn.chatgpt.com/docs/hooks): explicit session metadata,
-  visible hook messages, additional context, and hook-specific timeouts.
-- [Codex App Server](https://learn.chatgpt.com/docs/app-server): explicit
-  `thread/read` and `thread/name/set` APIs.
+- Native Codex name synchronization and ownership provenance are intentionally
+  unsupported in this selected mode; see [CODEX_NATIVE_API_GAPS.md](CODEX_NATIVE_API_GAPS.md).
+- Linux/POSIX evidence does not certify Windows ACLs/native plugin execution,
+  remote App Servers with another thread store, macOS/SSH, or a deployed service.
+- This is a trusted single-user integration, not isolation from another process
+  with the same user's terminal or file access.

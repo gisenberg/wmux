@@ -23,4 +23,8 @@ test("sidebar agent indicators distinguish work, idle heartbeat, and attention",
     sidebarAgentStatusPresentation("completed", true, 3),
     { label: "done", marker: "✓" },
   );
+  assert.deepEqual(
+    sidebarAgentStatusPresentation("stale", true, 3),
+    { label: "status unknown", marker: "!" },
+  );
 });

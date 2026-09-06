@@ -14,6 +14,13 @@ under [`vendor/ghostty-web-pr169`](vendor/ghostty-web-pr169); its exact source,
 build details, and checksum are recorded in that directory's `UPSTREAM.md`.
 Package metadata and installed license files are authoritative.
 
+The Codex plugin includes a generated pure-JavaScript `ws` bundle under
+[`plugins/wmux/scripts/vendor/ws.cjs`](plugins/wmux/scripts/vendor/ws.cjs) so a
+plugin installation does not depend on a wmux checkout or ambient packages.
+Its MIT copyright and permission notice and exact version are embedded in the
+bundle. `scripts/build-codex-plugin-deps.mjs` reproduces it from the locked npm
+dependency; `npm run check:scripts` verifies that it is current.
+
 ## MesloLGM Nerd Font
 
 The WOFF2 files under `src/client/public/fonts/meslo/` are format conversions of the MesloLGM Nerd Font Mono faces from the official Nerd Fonts v3.4.0 Meslo release.

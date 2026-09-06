@@ -26,6 +26,7 @@ const ACTIVE_AGENT_STATUSES = new Set([
   "working",
   "waiting",
 ]);
+const isObserverStatus = (status: string): boolean => status === "observer_error" || status === "observer_stale";
 
 export const TERMINAL_DELEGATION_STATES = new Set<DelegationState>([
   "completed",
@@ -74,6 +75,25 @@ export const DELEGATION_TRANSITIONS: Record<
 
 const MAX_DELEGATIONS = 1_000;
 const DELEGATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const RECENT_AGENT_EVENT_LIMIT = 300;
+
+/** The event collection also supplies the sidebar's current pane state.
+ * Bound historical entries independently of that projection: unrelated event
+ * churn must not erase an extant pane's Working, attention, or unknown state.
+ * This retains at most 300 historical entries plus one entry per layout pane,
+ * in the original newest-first order. Replacement and pane disposal release
+ * old protected entries without fabricating a new event or timestamp.
+ */
+const retainAgentActivity = (state: PersistedState): AgentActivity[] => {
+  const layoutPanes = new Set(state.workspaces.flatMap(workspace =>
+    workspace.tabs.flatMap(tab => tab.panes.map(pane => pane.id))));
+  const seen = new Set<string>();
+  return state.agentEvents.filter((event, index) => {
+    const current = layoutPanes.has(event.paneId) && !seen.has(event.paneId);
+    seen.add(event.paneId);
+    return index < RECENT_AGENT_EVENT_LIMIT || current;
+  });
+};
 
 interface PaneContext {
   workspace: Workspace;
@@ -160,7 +180,11 @@ export class AgentSessionService {
         || runId;
       const createdAt = monotonicAgentTimestamp([
         existingDelegation?.updatedAt,
-        latestAgentEvent?.createdAt,
+        // The sidebar selects the newest event across harnesses in a pane.
+        // Preserve that ordering on harness replacement and after clock skew,
+        // including older persisted events written before pane-wide clocks.
+        ...persisted.agentEvents.filter(event => event.paneId === target.paneId)
+          .map(event => event.createdAt),
       ]);
       if (ACTIVE_AGENT_STATUSES.has(status)) {
         const interruptedEvent = latestAgentEvent
@@ -231,7 +255,7 @@ export class AgentSessionService {
           };
       if (delegationDisposition.accepted) {
         persisted.agentEvents.unshift(agentEvent);
-        persisted.agentEvents = persisted.agentEvents.slice(0, 300);
+        persisted.agentEvents = retainAgentActivity(persisted);
       }
 
       let workspaceChanged = false;
@@ -273,6 +297,7 @@ export class AgentSessionService {
         "error",
         "cancelled",
         "stopped",
+        "interrupted",
       ].includes(status);
       if (
         (
@@ -304,7 +329,7 @@ export class AgentSessionService {
       if (workspaceChanged) target.workspace.updatedAt = createdAt;
       if (
         sessionId
-        && (delegationDisposition.accepted || status === "observer_error")
+        && (delegationDisposition.accepted || isObserverStatus(status))
       ) {
         timelineInputs.push({
           sessionId,
@@ -320,7 +345,7 @@ export class AgentSessionService {
             : {}),
           text: delegationMessage || summary || title || `${agent} ${status}`,
           createdAt,
-          ...(status === "observer_error" ? { observerError: true } : {}),
+          ...(isObserverStatus(status) ? { observerError: true } : {}),
         });
       }
       return {
@@ -374,6 +399,33 @@ export class AgentSessionService {
         },
         changed: true,
       };
+    });
+  }
+
+  /** A process-local Codex observer cannot survive a wmux restart. */
+  markCodexObserversStale(): void {
+    const latestByPane = new Map<string, AgentActivity>();
+    for (const event of this.state.snapshot().agentEvents) {
+      if (!latestByPane.has(event.paneId)) latestByPane.set(event.paneId, event);
+    }
+    for (const event of latestByPane.values()) {
+      if (event.runId) this.markCodexObserverStale(event.paneId, event.runId);
+    }
+  }
+
+  /** Withdraw only this plugin's latest confidence, never a newer pane run.
+   * This also handles revoked receipts: loss of authority must not leave an
+   * old Working glyph permanent, or overwrite replacement activity.
+   */
+  markCodexObserverStale(paneId: string, runId: string): void {
+    const event = this.state.snapshot().agentEvents.find((candidate) => candidate.paneId === paneId);
+    const context = this.state.findPaneContext(paneId);
+    if (!context || event?.agent !== "codex" || event.runId !== runId
+      || !/^codex_[A-Za-z0-9_-]{43}$/.test(runId) || !ACTIVE_AGENT_STATUSES.has(event.status)) return;
+    this.recordAgentEvent({
+      workspaceId: context.workspace.id, tabId: context.tab.id, paneId,
+      agent: "codex", runId, status: "observer_stale",
+      summary: "Codex status unknown: observation lost", message: "observer_stale",
     });
   }
 
@@ -807,11 +859,22 @@ const recordDelegationEvent = (
   const existing = state.delegations.find(
     (candidate) => candidate.runId === event.runId,
   );
-  if (event.status === "observer_error") {
+  if (isObserverStatus(event.status)) {
     const terminalExisting = Boolean(
       existing && TERMINAL_DELEGATION_STATES.has(existing.state),
     );
     const observerError = message || event.summary;
+    // Codex may report a receipt-bound initial observation gap before any
+    // native state is authoritative. Keep that diagnostic in activity/timeline
+    // without inventing a running delegation; other observer producers retain
+    // their historical placeholder behavior.
+    if (!existing && event.agent === "codex" && /^codex_[A-Za-z0-9_-]{43}$/.test(event.runId)) {
+      return {
+        accepted: true,
+        terminalTransition: false,
+        attentionTransition: false,
+      };
+    }
     const machineId = targetMachineId(state, event);
     if (existing) {
       existing.observerError = observerError;
@@ -909,6 +972,9 @@ const recordDelegationEvent = (
     delete delegation.budgetNotifiedAt;
   }
   delegation.updatedAt = event.createdAt;
+  if (reportedState && event.agent === "codex" && /^codex_[A-Za-z0-9_-]{43}$/.test(event.runId)) {
+    delete delegation.observerError;
+  }
   if (nextAttentionReason) delegation.attentionReason = nextAttentionReason;
   else delete delegation.attentionReason;
   if (terminal) {

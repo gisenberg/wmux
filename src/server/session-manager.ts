@@ -48,6 +48,7 @@ import {
   sessionAgentOriginForEndpoint,
 } from "./session-agent-origin.js";
 import { CodexMarkerParser, CodexTerminalBindingRegistry } from "./codex-terminal-binding.js";
+import { CodexLifecyclePublisher } from "./codex-lifecycle.js";
 
 export type ClientMessage = PaneClientMessage;
 
@@ -195,6 +196,7 @@ const STRANDED_ENDPOINT_CLEANUP_SWEEP_MS = 60_000;
 
 export class SessionManager {
   readonly codexTerminalBindings: CodexTerminalBindingRegistry;
+  readonly codexLifecycle: CodexLifecyclePublisher;
   observedCapabilities(): ReadonlyMap<string, BackendCapabilities> {
     return new Map([...this.backends].map(([paneId, backend]) => [paneId, { ...backend.capabilities }]));
   }
@@ -258,6 +260,7 @@ export class SessionManager {
         return Boolean(session && !session.isExited && this.state.findPane(paneId)?.status === "running");
       },
     );
+    this.codexLifecycle = new CodexLifecyclePublisher(this.codexTerminalBindings, this.agentSessions);
     this.currentMachines = typeof machines === "function" ? machines : () => machines;
     this.terminalCheckpoints = terminalCheckpoints
       ?? new TerminalCheckpointStore(
@@ -987,6 +990,7 @@ export class SessionManager {
 
   /** Detach every live client and clear timers. Called on process shutdown. */
   disposeAll(): void {
+    this.codexLifecycle.dispose();
     clearInterval(this.agentWorkspaceCleanupTimer);
     clearInterval(this.strandedEndpointCleanupTimer);
     try {

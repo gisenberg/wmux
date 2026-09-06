@@ -71,17 +71,11 @@ test("plugin handshake crosses real HTTP and live PTY output without inherited p
   const bin = path.join(directory, "bin");
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 });
   fs.mkdirSync(bin);
-  // Only the native name API is a fixture. The plugin, HTTP routes, state store,
-  // SessionManager, marker parser, and PTY backend below are production code.
+  // All naming paths are production code. This sentinel fails if the plugin
+  // attempts the removed native-name subprocess path.
   fs.writeFileSync(path.join(bin, "codex"), `#!${process.execPath}
-const fs=require('node:fs'),path=require('node:path'),rl=require('node:readline');
-rl.createInterface({input:process.stdin}).on('line',line=>{
-  const m=JSON.parse(line),p=m.params||{},f=path.join(process.env.CODEX_HOME,'name-'+p.threadId);
-  let result={};
-  if(m.method==='thread/read')result={thread:{id:p.threadId,name:fs.existsSync(f)?fs.readFileSync(f,'utf8'):null}};
-  if(m.method==='thread/name/set')fs.writeFileSync(f,p.name+' canonical');
-  if(m.id)process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');
-});
+require("node:fs").writeFileSync(require("node:path").join(process.env.CODEX_HOME, "native-called"), "unexpected");
+process.exit(99);
 `, { mode: 0o700 });
   const machines: MachineConfig[] = [{
     id: "local", name: "Fixture", kind: "local", sessionBackend: "pty", cwd: directory,
@@ -130,10 +124,10 @@ rl.createInterface({input:process.stdin}).on('line',line=>{
     await observe(secondPane, "thread_two", two);
     const named = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { sessionId: "thread_one", bindingId: one.bindingId, title: "Semantic Task Objective" } });
     assert.equal(named.isError, undefined, JSON.stringify(named));
-    assert.equal(named.structuredContent.codexName, "Semantic Task Objective canonical");
+    assert.equal(named.structuredContent.wmuxName, "Semantic Task Objective");
     assert.equal(named.structuredContent.workspaceApplied, true);
-    assert.equal(state.findPaneContext(firstPane)?.workspace.name, "Semantic Task Objective canonical");
-    assert.notEqual(state.findPaneContext(secondPane)?.workspace.name, "Semantic Task Objective canonical");
+    assert.equal(state.findPaneContext(firstPane)?.workspace.name, "Semantic Task Objective");
+    assert.notEqual(state.findPaneContext(secondPane)?.workspace.name, "Semantic Task Objective");
 
     state.setWorkspaceTitle(first.id, "User Owned Workspace");
     const synced = await client.request("tools/call", { name: "sync_current_wmux_session", arguments: { sessionId: "thread_one", bindingId: one.bindingId } });
@@ -144,7 +138,9 @@ rl.createInterface({input:process.stdin}).on('line',line=>{
     await observe(firstPane, "thread_replacement", replacement);
     const stale = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { sessionId: "thread_one", bindingId: one.bindingId, title: "Must Not Apply" } });
     assert.equal(stale.isError, true);
-    assert.equal(fs.readFileSync(path.join(home, "name-thread_one"), "utf8"), "Semantic Task Objective canonical");
+    assert.equal(fs.existsSync(path.join(home, "native-called")), false);
+    const stored = JSON.parse(fs.readFileSync(path.join(home, ".wmux", "codex-plugin", "wmux-session-names-v1.json"), "utf8"));
+    assert.equal(stored.sessions.find((entry: any) => entry.sessionId === "thread_one").name, "Semantic Task Objective");
     // A replayed old marker must not regain authority over the newer root.
     sessions.writePane(firstPane, one.marker);
     await delay(100);

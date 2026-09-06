@@ -15,6 +15,7 @@ const labels: Record<WorkspaceAgentStatus, string> = {
   running: "working",
   heartbeat: "heartbeat",
   waiting: "waiting",
+  stale: "status unknown",
   completed: "done",
   failed: "failed",
   updated: "updated",
@@ -42,6 +43,7 @@ export const sidebarAgentStatusPresentation = (
     };
   }
   if (status === "waiting") return { label: labels.waiting, marker: "?" };
+  if (status === "stale") return { label: labels.stale, marker: "!" };
   if (status === "completed") return { label: labels.completed, marker: "✓" };
   if (status === "failed") return { label: labels.failed, marker: "×" };
   return {

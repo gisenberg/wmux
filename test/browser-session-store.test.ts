@@ -139,6 +139,7 @@ test("browser session storage rejects unsafe parents and record files", () => {
   try {
     const unsafeParent = path.join(directory, "shared");
     fs.mkdirSync(unsafeParent, { mode: 0o755 });
+    fs.chmodSync(unsafeParent, 0o755); // Exercise unsafe permissions even under umask 077.
     assert.throws(
       () => new BrowserSessionStore(
         "session-secret",

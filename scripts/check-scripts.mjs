@@ -23,6 +23,7 @@ run(process.execPath, [
   "--check",
 ]);
 run(process.execPath, ["scripts/generate-hooks.mjs", "--check"]);
+run(process.execPath, ["scripts/build-codex-plugin-deps.mjs", "--check"]);
 
 const python = [
   { command: "python3", args: [] },
@@ -68,7 +69,11 @@ for (const script of [
   "plugins/wmux/scripts/wmux-binding.mjs",
   "plugins/wmux/scripts/wmux-session.mjs",
   "plugins/wmux/scripts/wmux-title.mjs",
-  "plugins/wmux/scripts/codex-name.mjs",
+  "plugins/wmux/scripts/wmux-name-ownership.mjs",
+  "plugins/wmux/scripts/codex-lifecycle.mjs",
+  "plugins/wmux/scripts/codex-rpc.mjs",
+  "plugins/wmux/scripts/wmux-observer.mjs",
+  "scripts/build-codex-plugin-deps.mjs",
 ]) {
   run(process.execPath, ["--check", script]);
 }

@@ -16,7 +16,7 @@ import type { MachineVersionStatus } from "./types";
 import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 
 type MobileSurfaceMode = "agent" | "terminal";
-type MobileStatus = "running" | "heartbeat" | "waiting" | "completed" | "failed" | "updated";
+type MobileStatus = "running" | "heartbeat" | "waiting" | "stale" | "completed" | "failed" | "updated";
 
 interface OpenTuiMobileChromeProps {
   workspaceName: string;
@@ -165,6 +165,7 @@ const drawMobileChrome = (
     failed: rgba.red,
     running: rgba.blue,
     heartbeat: rgba.red,
+    stale: rgba.gold,
     updated: rgba.muted,
     waiting: rgba.gold,
   };
@@ -191,7 +192,7 @@ const drawMobileChrome = (
     ? runningFrames[model.animationTick]
     : model.status === "heartbeat"
       ? SIDEBAR_AGENT_HEARTBEAT_FRAMES[model.animationTick % SIDEBAR_AGENT_HEARTBEAT_FRAMES.length]
-      : model.status === "waiting" ? "?" : "●";
+      : model.status === "waiting" ? "?" : model.status === "stale" ? "!" : "●";
   const versionColor = model.versionStatus === "current"
     ? rgba.green
     : model.versionStatus === "outdated"

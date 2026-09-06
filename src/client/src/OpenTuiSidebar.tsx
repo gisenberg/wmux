@@ -996,6 +996,7 @@ const drawSidebarGrid = (
     failed: rgba.red,
     running: rgba.blue,
     heartbeat: rgba.red,
+    stale: rgba.gold,
     updated: rgba.gold,
     waiting: rgba.gold,
   };
@@ -1004,6 +1005,7 @@ const drawSidebarGrid = (
     failed: rgba.failedSoft,
     running: rgba.runningSoft,
     heartbeat: rgba.activeSoft,
+    stale: rgba.activeSoft,
     updated: rgba.black,
     waiting: rgba.activeSoft,
   };
@@ -1326,6 +1328,7 @@ const drawSidebarGrid = (
 const agentStatusAbbreviation: Record<WorkspaceAgentStatus, string> = {
   running: "R",
   heartbeat: "H",
+  stale: "!",
   waiting: "W",
   completed: "C",
   failed: "F",

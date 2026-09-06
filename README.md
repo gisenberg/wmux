@@ -48,7 +48,7 @@ See [retro boot fidelity](docs/RETRO_BOOT_FIDELITY.md) for historical references
 | HTTP transport | Declarative route table with stable route ids, exact method/path matching, body limits, authorization policy, request dispatch, static delivery, event publication, and WebSocket upgrades |
 | Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
 | Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; the versioned timeline store retains prompts, outcomes, touched files, and archived working-tree snapshots; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
-| Optional Codex wmux plugin | A trusted prompt hook emits a short-lived marker; wmux's live backend binds it to the pane, including daemon-backed Codex without inherited pane variables. MCP resolves a private receipt, uses a bounded local Codex App Server subprocess to set/read the saved name, then mirrors it through ownership-safe wmux title logic. Binding leases are memory-only; restart requires a new prompt. |
+| Optional Codex wmux plugin | A trusted prompt hook emits a short-lived marker; wmux's live backend binds its private receipt and native turn to the pane without inherited pane variables. MCP atomically validates the automatic wmux title target before persisting a wmux-owned semantic title, and never synchronizes Codex saved names. A plugin-owned observer reads the existing local daemon over its private Unix socket and sends receipt-bound activity to `AgentSessionService`; it never drives Codex or answers requests. A server watchdog withdraws stale activity. Binding leases are memory-only; restart requires a new prompt. See the conformance matrix for unverified and missing capabilities. |
 | Session manager | One live client per pane, persisted registered-host disposal snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Raw PTY, durable `tmux`/`screen`, and native session-agent adapters; POSIX and Windows agents own pane processes, replay, dynamic-registration heartbeat, and view-only capture supervision |
@@ -527,6 +527,13 @@ Browser- or OS-reserved shortcuts may not reach wmux on every platform.
 
 ## Helpers and Integrations
 
+The [harness integration behavior contract](docs/HARNESS_INTEGRATION_SPEC.md)
+defines plain startup, semantic naming, title ownership, lifecycle/attention,
+gold input-needed indicators, scheduled-heartbeat modes, child-session isolation,
+and recovery expectations across harnesses. It includes
+stable regression case IDs, a porting checklist, and explicit current gaps;
+implementation-specific guides below do not imply complete conformance.
+
 Local panes receive the repository's `scripts/` directory on `PATH`. SSH and
 Windows panes stage matching helpers when a new pane starts.
 
@@ -580,16 +587,30 @@ The optional [`wmux` Codex plugin](docs/CODEX_PLUGIN.md) adds MCP tools to
 ordinary Codex sessions for inspecting and naming their bound wmux workspace and
 tab. It never wraps or replaces the `codex` command, and it uses the existing
 helper credential boundary and server-enforced title ownership.
-Its prompt hook asks Codex to choose a semantic saved session name and preserve
-it through follow-ups. The plugin sets Codex first, reads back the accepted name,
-and mirrors it to the sidebar. Each prompt emits a small visible binding marker;
-no terminal focus, cwd, latest prompt, or recent-session search determines the
-target. Follow-up turns synchronize the saved name using their fresh binding.
+Its selected naming mode is **wmux-owned**: after the server atomically accepts
+the bound automatic workspace/tab write, the plugin persists the agent's
+semantic title privately in wmux. It intentionally does not read, set, or synchronize Codex's
+saved conversation name; native `/rename` remains independent. Each prompt emits
+a small visible binding marker; no terminal focus, cwd, latest prompt, or
+recent-session search determines the target. Follow-ups reuse the wmux-stored
+title through their fresh binding, and a material objective change replaces that
+stored semantic title.
 The plugin requires the matching wmux server-side binding routes, not just an
 updated plugin package. See the plugin guide for verification and limitations.
+An isolated local plain-`codex` daemon fixture on Codex 0.153.4 verified
+wmux-owned first-task/follow-up/shift naming, child isolation, manual-pin
+protection, independent native `/rename`, same-pane native resume, and aggregate
+native input attention; native saved names were left untouched. It also recorded
+receipt-bound running/approval/completed states. This is not deployment,
+restart/reconnect, cross-platform, cross-pane handoff, browser answers, pending
+request identity, or native-name-parity acceptance; the local screenshots are
+deliberately not published.
 With this plugin, opt existing Codex lifecycle hooks into
 `wmux-hooks install codex --agent-titles` so prompt/stop telemetry does not
 overwrite that title. Review and trust the plugin hooks with `/hooks`.
+This opt-in prevents title collisions only. Receipt-bound lifecycle observation
+is a separate capability with documented platform/runtime limits; see the
+[Codex conformance matrix](docs/CODEX_CONFORMANCE.md).
 
 The Codex installer merges commands into `~/.codex/hooks.json`; start a new
 Codex session, run `/hooks`, and review and trust the wmux command before
