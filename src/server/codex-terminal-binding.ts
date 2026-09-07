@@ -152,6 +152,19 @@ export class CodexTerminalBindingRegistry {
     }
   }
 
+  /** Retain the existing terminal client, never transfer authority to a new one. */
+  hasLiveBinding(paneId: string): boolean {
+    this.prune();
+    if (!this.isPaneLive(paneId)) return false;
+    const tuple = this.findTuple(paneId);
+    if (!tuple) return false;
+    for (const binding of this.byMarker.values()) {
+      if (!binding.invalid && binding.observedPaneId === paneId
+        && binding.workspaceId === tuple.workspaceId && binding.tabId === tuple.tabId) return true;
+    }
+    return false;
+  }
+
   resolve(sessionId: unknown, receipt: unknown): CodexBindingTuple {
     this.prune();
     if (typeof sessionId !== "string" || !sessionIdPattern.test(sessionId)) throw new CodexBindingError(400, "invalid_session_id");

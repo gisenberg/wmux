@@ -177,6 +177,18 @@ test("idle durable-client recycle detaches only the transient client and keeps t
   internals.shouldUseDurableClientRefresh = () => true;
   internals.hasPaneConnections = () => false;
   try {
+    state.updatePane(pane.id, { status: "running" });
+    const codex = manager.codexTerminalBindings.issue("retained-thread", "retained-turn");
+    manager.codexTerminalBindings.observe(pane.id, codex.marker);
+    assert.equal(internals.recycleIdleDurableClient(pane), false);
+    assert.equal(internals.sessions.get(pane.id), session);
+    assert.equal(internals.agentInputSessionBindings.get(pane.id), binding);
+    assert.equal(detached, false);
+    assert.equal(killed, false);
+    assert.deepEqual(retired, []);
+    assert.equal(manager.codexTerminalBindings.resolve("retained-thread", codex.receipt).paneId, pane.id);
+
+    manager.codexTerminalBindings.invalidatePane(pane.id);
     assert.equal(internals.recycleIdleDurableClient(pane), true);
     assert.equal(detached, true);
     assert.equal(killed, false);
@@ -201,6 +213,84 @@ test("idle durable-client recycle detaches only the transient client and keeps t
     assert.equal(internals.sessionMachines.has(pane.id), false);
   } finally {
     manager.disposeAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bound durable browser reconnect restores its live checkpoint without refresh and retains raw watcher replay", async () => {
+  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-codex-checkpoint-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", sessionBackend: "tmux" };
+  const state = new StateStore([machine], path.join(dir, "state.json"));
+  const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+  const manager = new SessionManager(state, [machine]);
+  const session = { pane, pid: 42, isExited: false, replayOutput: "raw watcher history" };
+  const internals = manager as unknown as {
+    sessions: Map<string, typeof session>;
+    backends: Map<string, unknown>;
+    scheduleDurableClientRefresh(): void;
+  };
+  let detached = false, refreshes = 0;
+  let checkpoint: { data: string; kind: "checkpoint" } | undefined = { data: "live screen", kind: "checkpoint" };
+  internals.sessions.set(pane.id, session);
+  internals.backends.set(pane.id, {
+    id: "durable-multiplexer",
+    capabilities: { refreshClient: true },
+    attach: () => Promise.resolve(),
+    resize: () => undefined,
+    checkpoint: (candidate: unknown) => {
+      assert.equal(candidate, session);
+      return checkpoint;
+    },
+    readReplay: (_candidate: unknown, outputOnly: boolean) => ({ data: outputOnly ? session.replayOutput : "", kind: "raw" }),
+    detach: () => { detached = true; },
+  });
+  internals.scheduleDurableClientRefresh = () => { refreshes += 1; };
+  state.updatePane(pane.id, { status: "running" });
+  const codex = manager.codexTerminalBindings.issue("checkpoint-thread", "checkpoint-turn");
+  manager.codexTerminalBindings.observe(pane.id, codex.marker);
+  const clients: WebSocket[] = [];
+  try {
+    for (const [cols, rows] of [[80, 24], [100, 32]]) {
+      const client = socket(); clients.push(client);
+      manager.attach(pane.id, client, cols, rows);
+      const ready = await waitForMessage(client, message => message.type === "ready");
+      assert.equal(ready.replay, "live screen");
+      assert.equal(ready.replayKind, "checkpoint");
+      assert.equal(ready.waitForRefresh, undefined);
+      assert.equal(ready.cols, cols);
+      assert.equal(ready.rows, rows);
+      assert.equal(refreshes, 0);
+      assert.equal(detached, false);
+      fake(client).close();
+    }
+    const watcher = socket(); clients.push(watcher);
+    manager.watchOutput(pane.id, watcher);
+    const watched = await waitForMessage(watcher, message => message.type === "ready");
+    assert.equal(watched.replayKind, "raw");
+    assert.equal(watched.replay, session.replayOutput);
+    fake(watcher).close();
+
+    // Missing VT support may request the ordinary redraw, but must not revoke
+    // authority or replace the client just to recover its display.
+    checkpoint = undefined;
+    refreshes = 0;
+    const fallback = socket(); clients.push(fallback);
+    manager.attach(pane.id, fallback, 80, 24);
+    const ready = await waitForMessage(fallback, message => message.type === "ready");
+    assert.equal(ready.replayKind, "raw");
+    assert.equal(ready.waitForRefresh, true);
+    assert.equal(refreshes, 1);
+    assert.equal(detached, false);
+    assert.equal(internals.sessions.get(pane.id), session);
+    assert.equal(manager.codexTerminalBindings.resolve("checkpoint-thread", codex.receipt).paneId, pane.id);
+
+    manager.disposeAll();
+    assert.equal(detached, true);
+    assert.throws(() => manager.codexTerminalBindings.resolve("checkpoint-thread", codex.receipt), /binding_not_found/);
+  } finally {
+    for (const client of clients) fake(client).close();
+    manager.disposeAll();
+    state.flush();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

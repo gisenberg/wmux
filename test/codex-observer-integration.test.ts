@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
@@ -7,10 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { AgentSessionService } from "../src/server/agent-sessions.js";
 import { AgentTimelineStore } from "../src/server/agent-timeline.js";
 import { createHttpServer } from "../src/server/http.js";
+import { disposeDurableSession } from "../src/server/durable-session.js";
+import type { BackendSession } from "../src/server/backends/backend.js";
 import { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
@@ -35,7 +37,10 @@ async function hook(env: NodeJS.ProcessEnv) {
   return value.systemMessage as string;
 }
 
-test("production hook automatically observes a bound root through the private Unix App Server socket", { timeout: 20_000 }, async () => {
+for (const backend of ["pty", "tmux"] as const) test(`production hook observes a bound root through the private Unix socket (${backend})`, {
+  timeout: 40_000,
+  skip: backend === "tmux" && spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 ? "tmux is unavailable" : false,
+}, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-observer-integration-"));
   const home = path.join(directory, "home"), socketDirectory = path.join(home, "app-server-control"), socketPath = path.join(socketDirectory, "app-server-control.sock");
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 }); fs.mkdirSync(socketDirectory, { recursive: true, mode: 0o700 });
@@ -56,7 +61,9 @@ test("production hook automatically observes a bound root through the private Un
   }));
   await new Promise<void>(resolve => nativeServer.listen(socketPath, resolve)); fs.chmodSync(socketPath, 0o600);
 
-  const machines: MachineConfig[] = [{ id: "local", name: "Fixture", kind: "local", sessionBackend: "pty", cwd: directory, command: [process.execPath, "-e", "process.stdin.setRawMode(true);process.stdin.on('data',data=>process.stdout.write(data))"] }];
+  const machines: MachineConfig[] = [{ id: "local", name: "Fixture", kind: "local", sessionBackend: backend, cwd: directory,
+    ...(backend === "tmux" ? { shell: "/bin/sh" } : { command: [process.execPath, "-e", "process.stdin.setRawMode(true);process.stdin.on('data',data=>process.stdout.write(data))"] }),
+  }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
   const agents = new AgentSessionService(state, AgentTimelineStore.persistent(path.join(directory, "timeline.json")));
@@ -69,11 +76,39 @@ test("production hook automatically observes a bound root through the private Un
   for (const key of Object.keys(env)) if (key.startsWith("WMUX_")) delete env[key as keyof typeof env];
   const first = state.createWorkspace("local"), second = state.createWorkspace("local");
   const paneId = first.tabs[0].panes[0].id, otherPane = second.tabs[0].panes[0].id;
+  const internals = sessions as unknown as { sessions: Map<string, BackendSession>; hasPaneConnections(paneId: string): boolean };
+  const browsers = new Set<WebSocket>();
+  let originalSession: BackendSession | undefined;
+  const reconnect = async (receipt: string, cols: number, rows: number) => {
+    assert.equal(internals.hasPaneConnections(paneId), false, "the previous viewer must be fully detached");
+    const browser = new WebSocket(`ws://127.0.0.1:${address.port}/ws/panes/${paneId}?cols=${cols}&rows=${rows}`, {
+      headers: { authorization: `Bearer ${"B".repeat(43)}` },
+    });
+    browsers.add(browser);
+    const messages: Array<{ type: string; replay?: string; replayKind?: string; waitForRefresh?: boolean }> = [];
+    browser.on("message", raw => messages.push(JSON.parse(raw.toString())));
+    await once(browser, "open");
+    const ready = await until(() => messages.find(message => message.type === "ready"), "browser ready");
+    assert.equal(internals.sessions.get(paneId) === originalSession, true, "browser reconnect must retain the exact live client");
+    assert.equal(sessions.codexTerminalBindings.resolve(sessionId, receipt).turnId, turnId);
+    assert.equal(ready.replayKind, "checkpoint");
+    assert.equal(ready.replay?.includes("OBSERVER_SCREEN"), true, "reattach must restore the authoritative screen");
+    assert.equal(ready.waitForRefresh, undefined);
+    const closed = once(browser, "close"); browser.close(); await closed;
+    browsers.delete(browser);
+    await until(() => !internals.hasPaneConnections(paneId) ? true : undefined, "last viewer detach");
+  };
   try {
+    if (backend === "tmux") {
+      sessions.writePane(paneId, "stty -echo\r", 80, 24);
+      await until(() => sessions.observedCapabilities().get(paneId)?.refreshClient ? true : undefined, "actual tmux startup report");
+    }
     const marker = await hook(env);
-    // This is terminal output, not hook stdout: the production marker parser
-    // establishes the exact live raw-PTY binding before the observer resolves.
-    sessions.writePane(paneId, `${marker}\n`, 80, 24);
+    // The real PTY output path establishes authority, not hook stdout. Split
+    // the marker in shell input so only printf output can bind a tmux pane.
+    sessions.writePane(paneId, backend === "tmux"
+      ? `printf '%s%s\\n' '${marker.slice(0, 7)}' '${marker.slice(7)}'; printf '\\033[?1049h\\033[2J\\033[HOBSERVER_SCREEN'\r`
+      : `${marker}\n`, 80, 24);
     const runtime = path.join(home, ".wmux", "codex-plugin");
     const recordName = fs.readdirSync(runtime).find(name => /^[a-f0-9]{64}\.json$/.test(name)); assert.ok(recordName);
     const receipt = JSON.parse(fs.readFileSync(path.join(runtime, recordName), "utf8")).receipt;
@@ -81,9 +116,17 @@ test("production hook automatically observes a bound root through the private Un
     assert.equal(tuple.turnId, turnId);
     const running = await until(() => state.snapshot().delegations.find(item => item.paneId === paneId && item.state === "running"), "running lifecycle");
     assert.equal(running.attentionReason, undefined);
+    originalSession = internals.sessions.get(paneId);
+    if (backend === "tmux") await reconnect(receipt, 80, 24);
     phase = "attention";
     const waiting = await until(() => state.snapshot().delegations.find(item => item.paneId === paneId && item.state === "waiting"), "approval lifecycle");
     assert.equal(waiting.attentionReason, "approval");
+    if (backend === "tmux") {
+      await reconnect(receipt, 100, 32);
+      phase = "active";
+      await until(() => state.snapshot().delegations.find(item => item.paneId === paneId && item.state === "running"), "working after attention dismissal and reconnect");
+      await reconnect(receipt, 80, 24);
+    }
     phase = "completed";
     const completed = await until(() => state.snapshot().delegations.find(item => item.paneId === paneId && item.state === "completed"), "completed lifecycle");
     assert.equal(completed.state, "completed");
@@ -94,9 +137,17 @@ test("production hook automatically observes a bound root through the private Un
     assert.equal(nativeMethods.includes("thread/name/set"), false);
     assert.equal(nativeMethods.includes("thread/start"), false);
     assert.equal(nativeMethods.includes("turn/start"), false);
+    if (backend === "tmux") {
+      await reconnect(receipt, 80, 24);
+      assert.equal(sessions.closePane(paneId), true);
+      assert.throws(() => sessions.codexTerminalBindings.resolve(sessionId, receipt), /binding_not_found/);
+    }
   } finally {
+    for (const browser of browsers) browser.terminate();
     sessions.disposeAll();
-    const closed = once(server, "close"); server.close(); await closed;
+    if (backend === "tmux") await disposeDurableSession(machines[0], paneId);
+    const closed = once(server, "close"); server.close(); server.closeAllConnections(); await closed;
+    for (const client of native.clients) client.terminate();
     native.close(); const nativeClosed = once(nativeServer, "close"); nativeServer.close(); await nativeClosed;
     state.flush(); fs.rmSync(directory, { recursive: true, force: true });
   }

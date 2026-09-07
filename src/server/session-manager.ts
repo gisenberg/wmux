@@ -487,7 +487,12 @@ export class SessionManager {
 
     const sendReady = () => {
       if (socket.readyState !== socket.OPEN || !this.socketState.has(socket)) return;
-      const attachReplay = this.replayOutputFor(pane, session);
+      const backend = this.backends.get(paneId);
+      // A bound Codex client stays attached across browser reconnects. Restore
+      // its live VT screen without recycling it or forcing a second redraw.
+      const codexCheckpoint = this.sessions.get(paneId) === session && backend?.capabilities.refreshClient
+        && this.codexTerminalBindings.hasLiveBinding(paneId) ? backend.checkpoint(session) : undefined;
+      const attachReplay = codexCheckpoint ?? this.replayOutputFor(pane, session);
       const size = this.paneSizes.get(paneId) ?? initialSize;
       this.send(socket, {
         type: "ready",
@@ -503,7 +508,7 @@ export class SessionManager {
           ? { waitForRefresh: true as const }
           : {}),
       });
-      this.scheduleDurableClientRefresh(pane, socket);
+      if (!codexCheckpoint) this.scheduleDurableClientRefresh(pane, socket);
     };
     void (this.backends.get(paneId)?.attach(session) ?? Promise.resolve()).then(sendReady);
   }
@@ -1069,6 +1074,9 @@ export class SessionManager {
     if (!this.shouldUseDurableClientRefresh(pane) || this.hasPaneConnections(pane.id)) return false;
     const existing = this.sessions.get(pane.id);
     if (!existing || existing.isExited) return false;
+    // Browser lifetime is not the lifetime of the bound Codex process. Keep
+    // this exact client; real exits/replacements/closure still revoke below.
+    if (this.codexTerminalBindings.hasLiveBinding(pane.id)) return false;
     this.ignoredSessionExits.add(existing);
     this.codexTerminalBindings.invalidatePane(pane.id);
     this.cancelPaneCwdRefresh(pane.id);

@@ -20,8 +20,50 @@ const makeRegistry = () => {
   const panes = new Map([["pane-a", { workspaceId: "workspace-a", tabId: "tab-a", paneId: "pane-a" }], ["pane-b", { workspaceId: "workspace-b", tabId: "tab-b", paneId: "pane-b" }]]);
   const live = new Set(panes.keys());
   const registry = new CodexTerminalBindingRegistry((paneId) => panes.get(paneId), (paneId) => live.has(paneId));
-  return { registry, live };
+  return { registry, live, panes };
 };
+
+test("client retention requires a live observed binding to the unchanged pane tuple", () => {
+  const { registry, live, panes } = makeRegistry();
+  const issued = registry.issue("thread_retained", "turn_retained");
+  assert.equal(registry.hasLiveBinding("pane-a"), false);
+  registry.observe("pane-a", issued.marker);
+  assert.equal(registry.hasLiveBinding("pane-a"), true);
+  assert.equal(registry.hasLiveBinding("pane-b"), false);
+  live.delete("pane-a");
+  assert.equal(registry.hasLiveBinding("pane-a"), false);
+  live.add("pane-a");
+  const tuple = panes.get("pane-a")!;
+  panes.set("pane-a", { ...tuple, tabId: "replacement-tab" });
+  assert.equal(registry.hasLiveBinding("pane-a"), false);
+  panes.set("pane-a", tuple);
+  assert.equal(registry.hasLiveBinding("pane-a"), true);
+  registry.invalidatePane("pane-a");
+  assert.equal(registry.hasLiveBinding("pane-a"), false);
+  registry.observe("pane-a", issued.marker);
+  assert.equal(registry.hasLiveBinding("pane-a"), false);
+});
+
+test("client retention neither renews an observed lease nor retains ambiguous bindings", () => {
+  const { registry } = makeRegistry();
+  const issued = registry.issue("thread_expiring");
+  registry.observe("pane-a", issued.marker);
+  const expiresAt = registry.resolve("thread_expiring", issued.receipt).expiresAt;
+  assert.equal(registry.hasLiveBinding("pane-a"), true);
+  assert.equal(registry.resolve("thread_expiring", issued.receipt).expiresAt, expiresAt);
+  const realNow = Date.now;
+  Date.now = () => Date.parse(expiresAt);
+  try {
+    assert.equal(registry.hasLiveBinding("pane-a"), false);
+  } finally {
+    Date.now = realNow;
+  }
+  const first = registry.issue("thread_ambiguous"), second = registry.issue("thread_ambiguous");
+  registry.observe("pane-a", first.marker);
+  registry.observe("pane-b", second.marker);
+  assert.equal(registry.hasLiveBinding("pane-a"), false);
+  assert.equal(registry.hasLiveBinding("pane-b"), false);
+});
 
 test("Codex marker parser accepts only a contiguous marker across output chunks", () => {
   const parser = new CodexMarkerParser();
