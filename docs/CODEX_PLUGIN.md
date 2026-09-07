@@ -144,6 +144,20 @@ observer. This is integration liveness, **not** a scheduled-heartbeat feature.
 Exact-turn recovery reads at most four pages of eight metadata-only turns;
 an older turn beyond that bound or inconsistent pagination remains unknown.
 
+Browser reconnects do not revoke a live observed binding merely to refresh a
+local tmux display. wmux retains that exact live terminal client and restores
+the browser from its VT checkpoint, without an additional forced tmux redraw.
+Output-only watchers still receive raw replay. If checkpoint support is
+unavailable, the existing display-refresh fallback runs without replacing the
+bound client. Pending, revoked, expired, or target-mismatched bindings do not
+retain clients; checking a binding never extends its 24-hour lease. An eligible
+client can be recycled on the next browser attach after its binding expires.
+Actual client exit, process replacement, pane closure, and wmux server restart
+still revoke authority. This repair does not resurrect already-revoked receipts
+or provide cross-process/server-restart recovery; a fresh prompt must establish
+new authority in those cases. The ordinary `codex` command and plugin observer
+are unchanged.
+
 Unrelated activity cannot age a pane's current status out of the sidebar. wmux
 retains its recent 300 activity events plus one current event per extant layout
 pane, without re-emitting diagnostics or renewing observation confidence. A new

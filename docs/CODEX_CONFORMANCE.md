@@ -165,6 +165,35 @@ These browser fixtures are separate from the real native acceptance above.
 The original conformance matrix remains deliberately partial; this gate verifies
 the approved capability profile, not full harness parity or a deployment.
 
+### Durable browser reconnect repair, 2026-09-07
+
+Post-deployment testing found that the first browser viewer after all viewers
+disconnected recycled the live local tmux client and revoked its Codex receipt.
+The durable process survived, but the plugin observer stopped on the revoked
+receipt and wmux subsequently displayed stale observation. A native
+delayed-response menu was present in one reported incident; it was not proven
+to trigger the reconnect. This is a wmux connection-lifetime defect, not a
+native request classification claim.
+
+wmux now keeps the exact live client while a currently resolvable observed
+binding belongs to that pane, and restores the browser from that client's VT
+checkpoint without an extra forced refresh. It neither transfers the receipt
+to a replacement client nor extends its lease. Actual exits, replacements,
+closure, and server restart retain their existing revocation behavior.
+
+The real tmux/HTTP/Unix-socket observer fixture in
+`test/codex-observer-integration.test.ts` failed on client identity before the
+repair and passes repeated viewer reconnects during active/attention/completed
+states, including resize and a restored screen. Its native metadata source is
+a fixture, not a new Codex CLI acceptance run. The independent server-coupled
+`e2e/codex-durable-reconnect.spec.ts` failed with receipt 404 before the repair
+and passes in desktop/mobile Chromium after it: receipt continuity, moving
+working glyph, input-to-working-to-completed transitions, and closure revocation.
+Registry and session-manager tests cover retention eligibility, unchanged
+agent-input authority, checkpoint/refresh fallback, raw output watchers, and
+shutdown revocation. This does not claim cross-process or server-restart
+recovery, and already-revoked receipts still need a fresh prompt binding.
+
 ## Implementation inventory
 
 The naming binding is implemented by the source plugin and wmux server together:
