@@ -146,6 +146,9 @@ for (const backend of ["pty", "tmux"] as const) test(`production hook observes a
     for (const browser of browsers) browser.terminate();
     sessions.disposeAll();
     if (backend === "tmux") await disposeDurableSession(machines[0], paneId);
+    // Keep the binding endpoint alive long enough for a failed test's detached
+    // observer to see revocation and stop, rather than retry a closed server.
+    await until(() => native.clients.size === 0 ? true : undefined, "observer teardown").catch(() => undefined);
     const closed = once(server, "close"); server.close(); server.closeAllConnections(); await closed;
     for (const client of native.clients) client.terminate();
     native.close(); const nativeClosed = once(nativeServer, "close"); nativeServer.close(); await nativeClosed;
