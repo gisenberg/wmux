@@ -52,6 +52,7 @@ export const bootstrapRoutes: readonly ApiRoute[] = [
             deps.sessions.observedCapabilities(),
           ),
           persistence: deps.state.persistenceHealth(),
+          codex: deps.sessions.codexTerminalBindings.diagnostics(deps.state.snapshot().workspaces),
         },
       );
     },

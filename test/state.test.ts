@@ -389,6 +389,42 @@ test("newer state schemas refuse downgrade without moving or overwriting the fil
   });
 });
 
+test("version 9 state migrates to the long-native-title schema without rewriting titles", () => {
+  withTempState((filePath) => {
+    const previous = new StateStore(machines, filePath).snapshot() as unknown as Record<string, unknown>;
+    previous.schemaVersion = 9;
+    const workspace = (previous.workspaces as Array<Record<string, unknown>>)[0];
+    workspace.name = "Existing v9 title";
+    const tab = (workspace.tabs as Array<Record<string, unknown>>)[0];
+    tab.title = "Existing v9 tab";
+    fs.writeFileSync(filePath, JSON.stringify(previous));
+
+    const migrated = new StateStore(machines, filePath).snapshot();
+    assert.equal(migrated.schemaVersion, 10);
+    assert.equal(migrated.workspaces[0]?.name, "Existing v9 title");
+    assert.equal(migrated.workspaces[0]?.tabs[0]?.title, "Existing v9 tab");
+  });
+});
+
+test("trusted native auto titles retain their exact bounded text", () => {
+  withTempState((filePath) => {
+    const store = new StateStore(machines, filePath);
+    const workspace = store.snapshot().workspaces[0];
+    const tab = workspace.tabs[0];
+    const nativeTitle = "  Native  name?!  ";
+    const result = store.setAutoTitle({
+      workspaceId: workspace.id,
+      tabId: tab.id,
+      sourcePaneId: tab.panes[0].id,
+      title: nativeTitle,
+      exact: true,
+      tabOnlyIfMultiple: false,
+    });
+    assert.equal(result.workspace.name, nativeTitle);
+    assert.equal(result.tab?.title, nativeTitle);
+  });
+});
+
 test("current state truncates an oversized notification body without losing workspace metadata", () => {
   withTempState((filePath, dir) => {
     const seeded = new StateStore(machines, filePath).snapshot();

@@ -599,7 +599,39 @@ export interface DoctorPaneReport {
   issue?: string;
 }
 
+export interface CodexObservation {
+  status: "starting" | "active" | "unknown" | "backing_off" | "stopped";
+  reason?: string;
+  receivedAt: number;
+  sampledAt?: number;
+  lastSuccessAt?: number;
+  counters: Record<string, number>;
+  pluginVersion?: string;
+  stale: boolean;
+}
+
+export interface CodexBindingDiagnostic {
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  sessionId: string;
+  expiresAt: string;
+  binding: "live" | "unavailable" | "expired";
+  workspaceOwnership: "user" | "auto" | "default";
+  tabOwnership: "user" | "auto" | "default";
+  naming?: CodexObservation;
+  activity?: CodexObservation;
+}
+
+export interface CodexDiagnosticReport {
+  bindings: CodexBindingDiagnostic[];
+  pendingCount: number;
+  expiredCount: number;
+  compatibility: { cli: "unverified"; server: "unverified"; pluginVersions: string[] };
+}
+
 export interface DoctorReport {
+  codex?: CodexDiagnosticReport;
   checkedAt: string;
   persistence?: {
     dirty: boolean;

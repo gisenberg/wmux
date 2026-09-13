@@ -59,13 +59,13 @@ function attention(flags) {
  * read-only pending-request snapshot, so attention is generic and never
  * carries a request/item id or answerable question.
  */
-export async function observeCodexLifecycle({ request, threadId, sessionId, turnId }) {
+export async function observeCodexLifecycle({ request, threadId, sessionId, turnId, initialThread }) {
   if (typeof request !== "function") throw new Error("A Codex lifecycle request function is required.");
   if (!validId(threadId) || !validId(sessionId) || !validId(turnId)) throw new Error("Explicit valid Codex thread, session, and turn ids are required.");
 
   let first, turn, second;
   try {
-    first = await request("thread/read", { threadId, includeTurns: false });
+    first = initialThread === undefined ? await request("thread/read", { threadId, includeTurns: false }) : { thread: initialThread };
     const firstThread = first?.thread;
     if (!validThread(firstThread, threadId, sessionId)) return unknown(threadId, sessionId, turnId, firstThread?.parentThreadId ? "child_thread" : "identity_mismatch");
 

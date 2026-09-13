@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { createId } from "./id.js";
+import { boundTitle } from "../shared/title.js";
 import {
   CURRENT_STATE_SCHEMA_VERSION,
   parsePersistedState,
@@ -106,6 +107,8 @@ interface RecordRunEventInput extends TargetInput {
 interface SetAutoTitleInput {
   workspaceId: string;
   title: string;
+  /** Trusted native names were already validated at the binding boundary. */
+  exact?: boolean;
   tabId?: string;
   sourcePaneId?: string;
   descriptor?: string;
@@ -605,10 +608,13 @@ export class StateStore extends EventEmitter {
 
   clearWorkspaceTitle(workspaceId: string): Workspace {
     const workspace = this.requireWorkspace(workspaceId);
-    workspace.name = this.nextWorkspaceName(workspace.machineId);
-    workspace.nameSource = "default";
-    workspace.updatedAt = now();
-    this.save();
+    const name = this.nextWorkspaceName(workspace.machineId);
+    if (workspace.name !== name || workspace.nameSource !== "default") {
+      workspace.name = name;
+      workspace.nameSource = "default";
+      workspace.updatedAt = now();
+      this.save();
+    }
     return structuredClone(workspace);
   }
 
@@ -623,9 +629,22 @@ export class StateStore extends EventEmitter {
     return structuredClone(tab);
   }
 
+  clearTabTitle(workspaceId: string, tabId: string): SurfaceTab {
+    const workspace = this.requireWorkspace(workspaceId);
+    const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) throw new Error("tab not found");
+    if (tab.title !== "Shell" || tab.titleSource !== "default") {
+      tab.title = "Shell";
+      tab.titleSource = "default";
+      workspace.updatedAt = now();
+      this.save();
+    }
+    return structuredClone(tab);
+  }
+
   setAutoTitle(input: SetAutoTitleInput): { workspace: Workspace; tab?: SurfaceTab; workspaceApplied: boolean; tabApplied: boolean } {
     const workspace = this.requireWorkspace(input.workspaceId);
-    const title = cleanTitle(input.title, "");
+    const title = input.exact ? boundTitle(input.title) : cleanTitle(input.title, "");
     if (!title) throw new Error("title is required");
 
     let sourceTab: SurfaceTab | undefined;
@@ -1160,7 +1179,7 @@ const cleanText = (value: string, fallback: string): string => {
 
 const cleanTitle = (value: string, fallback: string): string => {
   const cleaned = stripMarkup(value).replace(/\s+/g, " ").replace(/[.!?。]+$/u, "").trim();
-  return (cleaned || fallback).slice(0, 50);
+  return boundTitle(cleaned || fallback);
 };
 
 const cleanDescriptor = (value: string, fallback: string): string => {

@@ -17,6 +17,8 @@ const documentedRoutes = [
   ["login", "POST", "/api/login"],
   ["bootstrap", "GET", "/api/bootstrap"],
   ["codex-binding-issue", "POST", "/api/codex-bindings"],
+  ["codex-binding-observation", "POST", "/api/codex-bindings/observation"],
+  ["codex-binding-revoke", "POST", "/api/codex-bindings/revoke"],
   ["codex-binding-resolve", "POST", "/api/codex-bindings/resolve"],
   ["codex-binding-lifecycle", "POST", "/api/codex-bindings/lifecycle"],
   ["codex-binding-title", "POST", "/api/codex-bindings/title"],

@@ -423,6 +423,54 @@ test("desktop workspace menu renames the sidebar entry", async ({ page, request 
   }
 });
 
+test("automatic workspace and tab name controls clear pins independently", async ({ page, request }, testInfo) => {
+  let workspaceId: string | undefined;
+  try {
+    const created = await request.post("/api/workspaces", { data: { machineId: "local" } });
+    expect(created.ok()).toBeTruthy();
+    const workspace = (await created.json() as { workspace: E2eWorkspace }).workspace;
+    workspaceId = workspace.id;
+    await request.post(`/api/workspaces/${workspace.id}/title`, { data: { title: "Pinned workspace" } });
+    await request.post(`/api/workspaces/${workspace.id}/tabs/${workspace.activeTabId}/title`, { data: { title: "Pinned tab" } });
+
+    await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+    await awaitAppShell(page);
+    const runCommand = async (title: string) => {
+      await page.keyboard.press("Control+K");
+      const palette = page.getByRole("dialog", { name: "Command palette" });
+      const context = title.includes("workspace")
+        ? "Current: Pinned workspace — a custom name pinned by you"
+        : "Current: Pinned tab — a custom name pinned by you";
+      await expect(palette).toContainText(context);
+      if (testInfo.project.name.startsWith("mobile-")) {
+        await palette.getByRole("button", { name: new RegExp(`${title}.*${context}`), exact: false }).click();
+      } else {
+        const search = palette.getByPlaceholder("Search commands, workspaces, tabs, hosts");
+        await search.fill(title);
+        await search.press("Enter");
+      }
+    };
+
+    await runCommand("Use automatic workspace name");
+    await expect(page.getByText("Workspace name now follows the automatic native name when available.")).toBeVisible();
+    await expect.poll(async () => {
+      const state = await (await request.get("/api/bootstrap")).json() as { workspaces: Array<{ id: string; nameSource: string; tabs: Array<{ title: string; titleSource: string }> }> };
+      const current = state.workspaces.find((candidate) => candidate.id === workspace.id);
+      return [current?.nameSource, current?.tabs[0]?.title, current?.tabs[0]?.titleSource];
+    }).toEqual(["default", "Pinned tab", "user"]);
+
+    await runCommand("Use automatic tab name");
+    await expect(page.getByText("Tab name now follows the automatic native name when available.")).toBeVisible();
+    await expect.poll(async () => {
+      const state = await (await request.get("/api/bootstrap")).json() as { workspaces: Array<{ id: string; nameSource: string; tabs: Array<{ title: string; titleSource: string }> }> };
+      const current = state.workspaces.find((candidate) => candidate.id === workspace.id);
+      return [current?.nameSource, current?.tabs[0]?.title, current?.tabs[0]?.titleSource];
+    }).toEqual(["default", "Shell", "default"]);
+  } finally {
+    if (workspaceId) await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);
+  }
+});
+
 test("desktop agent group menu closes every workspace on its host", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name.startsWith("mobile-"), "desktop-only context menu coverage");
   const suffix = testInfo.project.name.replaceAll(/[^a-z0-9]+/gi, "-").toLowerCase();

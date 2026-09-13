@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
+import { CodexDiagnostics, type CodexDiagnosticsReport } from "./CodexDiagnostics";
 import type {
   BootstrapPayload,
   DelegationAttentionReason,
@@ -19,6 +20,9 @@ export function AgentFleet({
   onOpenSession,
   docked = false,
   onToggleDock,
+  codexReport,
+  codexLoading = false,
+  onRefreshCodex,
 }: {
   state: BootstrapPayload;
   machines: MachineStatus[];
@@ -26,6 +30,10 @@ export function AgentFleet({
   onOpenSession: (row: AgentFleetRow) => void;
   docked?: boolean;
   onToggleDock?: () => void;
+  /** Supplied only after an explicit doctor fetch; this component never polls it. */
+  codexReport?: CodexDiagnosticsReport;
+  codexLoading?: boolean;
+  onRefreshCodex?: () => void;
 }) {
   const rows = useMemo(
     () => buildAgentFleetRows(state, machines),
@@ -37,6 +45,12 @@ export function AgentFleet({
   ).length;
   const dialogRef = useConsoleDialog<HTMLElement>(onClose, !docked);
   const [nowMs, setNowMs] = useState(Date.now());
+  const [inspectedPaneId, setInspectedPaneId] = useState("");
+  const codexPaneOptions = useMemo(
+    () => rows.filter((row) => codexReport?.bindings.some((binding) => binding.paneId === row.paneId)),
+    [codexReport?.bindings, rows],
+  );
+  const selectedPaneId = inspectedPaneId || codexPaneOptions[0]?.paneId;
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
@@ -138,6 +152,31 @@ export function AgentFleet({
               [IDLE] No sessions. Create a workspace to begin.
             </div>
           )}
+        {codexReport || onRefreshCodex ? <section className="latency-diagnostics" aria-label="Codex session inspector">
+          <div className="diagnostics-section-heading">
+            <span>CODEX::SESSION_INSPECTOR</span>
+            <span>{codexLoading ? "REFRESHING" : "ON DEMAND"}</span>
+          </div>
+          <div className="latency-diagnostics-header">
+            <label>
+              <span className="diagnostics-kicker">SESSION</span>{" "}
+              <select
+                aria-label="Codex session to inspect"
+                value={selectedPaneId ?? ""}
+                onChange={(event) => setInspectedPaneId(event.target.value)}
+                disabled={!codexPaneOptions.length}
+              >
+                {!codexPaneOptions.length ? <option value="">No bound pane observed</option> : codexPaneOptions.map((row) => (
+                  <option value={row.paneId} key={row.paneId}>{row.title} / {row.workspaceName}</option>
+                ))}
+              </select>
+            </label>
+            {onRefreshCodex ? <div className="diagnostics-actions"><button type="button" onClick={onRefreshCodex} disabled={codexLoading}>[R] REFRESH INSPECTOR</button></div> : null}
+          </div>
+          {codexReport ? <CodexDiagnostics report={codexReport} paneId={selectedPaneId} now={nowMs} /> : (
+            <div className="diagnostics-loading"><span>[IDLE]</span> Refresh to inspect Codex binding state. This does not send a native prompt.</div>
+          )}
+        </section> : null}
         </div>
       </section>
     </div>

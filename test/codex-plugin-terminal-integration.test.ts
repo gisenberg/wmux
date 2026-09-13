@@ -12,6 +12,7 @@ import { SessionManager } from "../src/server/session-manager.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
+import { codexNameFixture } from "./helpers/codex-name-fixture.js";
 
 const scripts = path.resolve("plugins/wmux/scripts");
 
@@ -70,6 +71,7 @@ test("plugin handshake crosses real HTTP and live PTY output without inherited p
   const home = path.join(directory, "home");
   const bin = path.join(directory, "bin");
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 });
+  const native = await codexNameFixture(home, "Native Task Objective");
   fs.mkdirSync(bin);
   // All naming paths are production code. This sentinel fails if the plugin
   // attempts the removed native-name subprocess path.
@@ -96,8 +98,9 @@ process.exit(99);
   const base = `http://127.0.0.1:${address.port}`;
   fs.writeFileSync(path.join(home, ".wmux", "url"), base, { mode: 0o600 });
   fs.writeFileSync(path.join(home, ".wmux", "helper-token"), helperToken, { mode: 0o600 });
-  const env = { ...process.env, HOME: home, CODEX_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, CODEX_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
   for (const key of Object.keys(env)) if (key.startsWith("WMUX_")) delete env[key as keyof typeof env];
+  env.WMUX_CODEX_SOCKET_PATH = native.socketPath;
   const client = mcp(env);
   const first = state.createWorkspace("local");
   const second = state.createWorkspace("local");
@@ -124,10 +127,9 @@ process.exit(99);
     await observe(secondPane, "thread_two", two);
     const named = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { sessionId: "thread_one", bindingId: one.bindingId, title: "Semantic Task Objective" } });
     assert.equal(named.isError, undefined, JSON.stringify(named));
-    assert.equal(named.structuredContent.wmuxName, "Semantic Task Objective");
-    assert.equal(named.structuredContent.workspaceApplied, true);
-    assert.equal(state.findPaneContext(firstPane)?.workspace.name, "Semantic Task Objective");
-    assert.notEqual(state.findPaneContext(secondPane)?.workspace.name, "Semantic Task Objective");
+    assert.equal(named.structuredContent.nativeName, "Native Task Objective");
+    assert.equal(state.findPaneContext(firstPane)?.workspace.name, "Native Task Objective");
+    assert.equal(named.structuredContent.workspaceId, first.id);
 
     state.setWorkspaceTitle(first.id, "User Owned Workspace");
     const synced = await client.request("tools/call", { name: "sync_current_wmux_session", arguments: { sessionId: "thread_one", bindingId: one.bindingId } });
@@ -139,8 +141,7 @@ process.exit(99);
     const stale = await client.request("tools/call", { name: "name_current_wmux_session", arguments: { sessionId: "thread_one", bindingId: one.bindingId, title: "Must Not Apply" } });
     assert.equal(stale.isError, true);
     assert.equal(fs.existsSync(path.join(home, "native-called")), false);
-    const stored = JSON.parse(fs.readFileSync(path.join(home, ".wmux", "codex-plugin", "wmux-session-names-v1.json"), "utf8"));
-    assert.equal(stored.sessions.find((entry: any) => entry.sessionId === "thread_one").name, "Semantic Task Objective");
+    assert.equal(fs.existsSync(path.join(home, ".wmux", "codex-plugin", "wmux-session-names-v1.json")), false);
     // A replayed old marker must not regain authority over the newer root.
     sessions.writePane(firstPane, one.marker);
     await delay(100);
@@ -148,6 +149,9 @@ process.exit(99);
   } finally {
     await stop(client.child);
     sessions.disposeAll();
+    // Let detached name observers see the revoked receipts while HTTP is live.
+    await delay(2300);
+    await native.close();
     const closed = once(server, "close");
     server.close();
     await closed;

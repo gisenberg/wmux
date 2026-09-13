@@ -1759,6 +1759,30 @@ test("Codex installer covers prompt, tool, and stop lifecycle hooks idempotently
   }
 });
 
+test("Codex plugin migration removes only legacy wmux handlers and is idempotent", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-migration-"));
+  const hooks = path.join(repoRoot, "scripts", "wmux-hooks");
+  const env = { ...process.env, HOME: home };
+  const settingsPath = path.join(home, ".codex", "hooks.json");
+  try {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const unrelated = { type: "command", command: "echo unrelated" };
+    const plugin = { type: "command", command: 'node "$PLUGIN_ROOT/scripts/wmux-context.mjs"' };
+    fs.writeFileSync(settingsPath, JSON.stringify({ custom: true, hooks: {
+      UserPromptSubmit: [{ matcher: "keep-me", hooks: [unrelated, { type: "command", command: "/old/wmux-agent-event --agent codex --codex-hook" }] }],
+      PreToolUse: [{ hooks: [{ type: "command", command: "/new/wmux-agent-event --agent codex --codex-hook --no-title" }] }],
+      Stop: [{ hooks: [plugin] }],
+    } }));
+    await execFileAsync(hooks, ["uninstall", "codex"], { env });
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), { custom: true, hooks: {
+      UserPromptSubmit: [{ matcher: "keep-me", hooks: [unrelated] }], Stop: [{ hooks: [plugin] }],
+    } });
+    const once = fs.readFileSync(settingsPath, "utf8");
+    await execFileAsync(hooks, ["uninstall", "codex"], { env });
+    assert.equal(fs.readFileSync(settingsPath, "utf8"), once);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip: process.platform === "win32" }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-opencode-plugin-"));
   const configHome = path.join(home, "config");

@@ -6,6 +6,7 @@ import {
   type WorkspaceCreationIds,
 } from "../state.js";
 import type { WorkspaceReorderPosition } from "../types.js";
+import { isValidTitle } from "../../shared/title.js";
 import {
   HttpError,
   type ApiRoute,
@@ -53,6 +54,27 @@ const parseWorkspaceCreationCleanup = (
     );
   }
   return parseWorkspaceCleanup(policy, ttlSeconds);
+};
+
+const parseTitleMutation = (body: unknown): { clear: true } | { title: string } => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "invalid_title");
+  }
+  const record = body as Record<string, unknown>;
+  if (record.clear === true) {
+    if (record.title !== undefined || Object.keys(record).some((key) => key !== "clear")) {
+      throw new HttpError(400, "ambiguous_title_reset");
+    }
+    return { clear: true };
+  }
+  if (
+    record.clear !== undefined
+    || Object.keys(record).length !== 1
+    || !isValidTitle(record.title)
+  ) {
+    throw new HttpError(400, "invalid_title");
+  }
+  return { title: record.title };
 };
 
 const parseClientCreationIds = (
@@ -397,10 +419,10 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("workspace title route matched without captures");
-      const body = (await readJsonBody()) as { title?: string; clear?: boolean };
-      const workspace = body.clear
+      const body = parseTitleMutation(await readJsonBody());
+      const workspace = "clear" in body
         ? deps.state.clearWorkspaceTitle(match[1])
-        : deps.state.setWorkspaceTitle(match[1], body.title ?? "");
+        : deps.state.setWorkspaceTitle(match[1], body.title);
       sendJson(200, { workspace, state: deps.currentPayload() });
     },
   },
@@ -534,8 +556,10 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     ),
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("tab title route matched without captures");
-      const body = (await readJsonBody()) as { title?: string };
-      const tab = deps.state.setTabTitle(match[1], match[2], body.title ?? "");
+      const body = parseTitleMutation(await readJsonBody());
+      const tab = "clear" in body
+        ? deps.state.clearTabTitle(match[1], match[2])
+        : deps.state.setTabTitle(match[1], match[2], body.title);
       sendJson(200, { tab, state: deps.currentPayload() });
     },
   },

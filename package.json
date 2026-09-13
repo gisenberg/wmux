@@ -21,6 +21,8 @@
     "start": "node dist/server/index.js",
     "audit:sessions": "node scripts/wmux-session-audit",
     "test": "node --import tsx --test test/*.test.ts test/backend-conformance/*.test.ts",
+    "test:codex:m0": "node --import tsx --test test/codex-*.test.ts test/wmux-binding-store.test.ts test/wmux-plugin-mcp.test.ts test/wmux-lock.test.ts test/hooks-installer.test.ts",
+    "codex:baseline": "node scripts/codex-baseline.mjs",
     "test:e2e": "playwright test && playwright test --config=playwright.auth.config.ts",
     "test:e2e:chromium": "playwright test --project=chromium --project=mobile-chromium",
     "test:e2e:auth": "playwright test --config=playwright.auth.config.ts",

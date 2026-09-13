@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { ID, BINDING_ID, api, loadBinding } from "./wmux-binding.mjs";
+import { ID, BINDING_ID, api, loadBinding, runtimeDirectory } from "./wmux-binding.mjs";
 import { connectCodexObserver } from "./codex-rpc.mjs";
 import { observeCodexLifecycle } from "./codex-lifecycle.mjs";
+import { runCodexNameObserver } from "./wmux-name-observer.mjs";
+import { acquireObservationSupervisorLock, runCodexObservationSupervisor } from "./wmux-observation-supervisor.mjs";
+import { acquireWmuxLock } from "./wmux-lock.mjs";
 
 export const CODEX_OBSERVER_INTERVAL_MS = 2000;
 const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -13,13 +17,30 @@ const filename = fileURLToPath(import.meta.url);
 
 // This starts a plugin-owned *observer*, never a Codex process. Its stdin/out
 // cannot hold a native hook open or leak a binding receipt into another pane.
-export function startCodexObserver(sessionId, bindingId) {
+export async function startCodexObserver(sessionId, bindingId, { load = loadBinding, spawnChild = spawn, acquire = acquireWmuxLock, probe = acquireObservationSupervisorLock } = {}) {
   if (!ID.test(sessionId || "") || !BINDING_ID.test(bindingId || "")) return;
-  const record = loadBinding(sessionId, bindingId);
-  if (!ID.test(record.promptTurnId || "")) return;
-  const child = spawn(process.execPath, [filename, sessionId, bindingId], { detached: true, stdio: "ignore", windowsHide: true });
-  child.on("error", () => {}); // Optional integration failure never blocks native Codex.
-  child.unref();
+  load(sessionId, bindingId);
+  let launcher;
+  try { launcher = await acquire(path.join(runtimeDirectory(), "observation-launch.lock"), { timeoutMs: 1_000 }); }
+  catch { return; }
+  try {
+    // A live service owns the kernel supervisor lock. Do not create a second
+    // detached Node process for every native prompt in that case.
+    const release = await probe();
+    if (!release) return;
+    await release();
+    // Scan trusted receipts using one bounded sampler.
+    const child = spawnChild(process.execPath, [filename, "--supervisor"], { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true });
+    child.on?.("error", () => {});
+    await new Promise(resolve => {
+      const done = () => { child.off?.("message", received); child.off?.("error", done); clearTimeout(timer); resolve(); };
+      const received = message => { if (message?.wmuxObserver === "acquired" || message?.wmuxObserver === "busy") done(); };
+      const timer = setTimeout(done, 1_000);
+      child.once?.("error", done); child.on?.("message", received);
+    });
+    if (child.connected) child.disconnect?.();
+    child.unref?.();
+  } finally { await launcher.release(); }
 }
 
 /** Observe exactly the prompt-bound root turn; injected dependencies keep tests
@@ -39,6 +60,8 @@ export async function runCodexObserver({ sessionId, bindingId }, {
   signal?.addEventListener("abort", aborted, { once: true });
   try {
     while (!signal?.aborted && now() < deadline) {
+      try { load(sessionId, bindingId); }
+      catch { return { reason: "binding_unavailable" }; }
       // Every iteration resolves the exact receipt. New prompts, another pane,
       // replacement backends, and server restarts cannot inherit this authority.
       let tuple;
@@ -53,7 +76,7 @@ export async function runCodexObserver({ sessionId, bindingId }, {
       bound = true;
       let snapshot = { state: "unknown", attention: null };
       try {
-        connected ??= await connect({ threadId: sessionId });
+        connected ??= await connect({ threadId: sessionId, ...(record.schemaVersion === 3 ? { socketPath: record.socketPath } : {}) });
         const { thread } = await connected.request("thread/read", { threadId: sessionId, includeTurns: false });
         if (thread?.id !== sessionId || thread.parentThreadId !== null || !ID.test(thread.sessionId || "")) return { reason: "native_root_mismatch" };
         snapshot = await observeCodexLifecycle({ request: connected.request, threadId: sessionId, sessionId: thread.sessionId, turnId });
@@ -78,9 +101,22 @@ export async function runCodexObserver({ sessionId, bindingId }, {
 }
 
 if (process.argv[1] === filename) {
-  const [sessionId, bindingId] = process.argv.slice(2);
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());
   process.once("SIGINT", () => controller.abort());
-  runCodexObserver({ sessionId, bindingId }, { signal: controller.signal }).catch(() => {});
+  if (process.argv[2] === "--supervisor" || process.argv[2] === "--service") {
+    acquireObservationSupervisorLock().then(release => {
+      if (process.send && process.connected) process.send({ wmuxObserver: release ? "acquired" : "busy" }, () => {
+        if (process.connected) process.disconnect();
+      });
+      if (release) runCodexObservationSupervisor({ signal: controller.signal, stayAlive: process.argv[2] === "--service" }).catch(() => {}).finally(release);
+    }).catch(() => {});
+  } else {
+    // Compatibility entrypoint for focused fixtures and older staged helpers.
+    const [sessionId, bindingId] = process.argv.slice(2);
+    Promise.allSettled([
+      runCodexObserver({ sessionId, bindingId }, { signal: controller.signal }),
+      runCodexNameObserver({ sessionId, bindingId }, { signal: controller.signal }),
+    ]).catch(() => {});
+  }
 }

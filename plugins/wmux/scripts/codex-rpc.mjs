@@ -6,14 +6,15 @@ import WebSocket from "./vendor/ws.cjs";
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_MESSAGE = 1024 * 1024;
 const REQUEST_TIMEOUT = 4000;
-const unavailable = () => new Error("Codex read-only observation is unavailable.");
+const unavailable = (reason = "socket_unavailable") => Object.assign(new Error("Codex read-only observation is unavailable."), { reason });
 
 function privateSocket(socketPath) {
   if (process.platform === "win32" || !path.isAbsolute(socketPath) || /[\x00-\x1f\x7f:?#]/.test(socketPath)) throw unavailable();
-  const directory = fs.lstatSync(path.dirname(socketPath));
+  const parent = path.dirname(socketPath);
+  const directory = fs.lstatSync(parent);
   const socket = fs.lstatSync(socketPath);
   const privateOwned = stat => !process.getuid || (stat.uid === process.getuid() && !(stat.mode & 0o077));
-  if (!directory.isDirectory() || directory.isSymbolicLink() || !privateOwned(directory)
+  if (fs.realpathSync.native(parent) !== path.normalize(parent) || !directory.isDirectory() || directory.isSymbolicLink() || !privateOwned(directory)
     || !socket.isSocket() || socket.isSymbolicLink() || !privateOwned(socket)) throw unavailable();
 }
 
@@ -21,8 +22,9 @@ function privateSocket(socketPath) {
  * No process is spawned, thread resumed, or request/notification answered.
  * This is an observation transport, NOT a general App Server client.
  */
-export async function connectCodexObserver({ threadId, socketPath = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "app-server-control", "app-server-control.sock") }) {
-  if (typeof threadId !== "string" || !ID.test(threadId)) throw unavailable();
+async function connectReadonly({ threadIds, socketPath }) {
+  const allowedThreadIds = new Set(threadIds);
+  if (!allowedThreadIds.size || allowedThreadIds.size > 20 || [...allowedThreadIds].some(threadId => !ID.test(threadId))) throw unavailable();
   try { privateSocket(socketPath); } catch { throw unavailable(); }
   const pending = new Map();
   let sequence = 0, ended = false;
@@ -50,7 +52,7 @@ export async function connectCodexObserver({ threadId, socketPath = path.join(pr
     if (!waiter) return;
     pending.delete(message.id);
     clearTimeout(waiter.timer);
-    if (Object.hasOwn(message, "error") || !Object.hasOwn(message, "result")) waiter.reject(unavailable());
+    if (Object.hasOwn(message, "error") || !Object.hasOwn(message, "result")) waiter.reject(unavailable(message?.error?.code === -32601 ? "unsupported_endpoint" : "socket_unavailable"));
     else waiter.resolve(message.result);
   });
   const send = (method, params) => new Promise((resolve, reject) => {
@@ -67,21 +69,34 @@ export async function connectCodexObserver({ threadId, socketPath = path.join(pr
       const failed = () => { cleanup(); reject(unavailable()); };
       socket.once("open", opened); socket.once("error", failed); socket.once("close", failed);
     });
-    await send("initialize", { clientInfo: { name: "wmux_readonly_observer", version: "0.3.0" }, capabilities: { experimentalApi: true } });
+    await send("initialize", { clientInfo: { name: "wmux_readonly_observer", version: "0.4.0" }, capabilities: { experimentalApi: true } });
     socket.send(JSON.stringify({ jsonrpc: "2.0", method: "initialized" }));
     return {
       close: shutdown,
       request: async (method, params) => {
-        if (!params || params.threadId !== threadId) throw unavailable();
+        if (!params || !allowedThreadIds.has(params.threadId)) throw unavailable();
         // Construct parameters from an allowlist instead of forwarding caller
         // data: bounded metadata only, never turns/items/transcript contents.
-        if (method === "thread/read") return send(method, { threadId, includeTurns: false });
+        if (method === "thread/read") return send(method, { threadId: params.threadId, includeTurns: false });
         if (method === "thread/turns/list") {
           if (params.cursor !== undefined && params.cursor !== null && (typeof params.cursor !== "string" || params.cursor.length > 4096)) throw unavailable();
-          return send(method, { threadId, cursor: params.cursor ?? null, limit: 8, sortDirection: "desc", itemsView: "notLoaded" });
+          return send(method, { threadId: params.threadId, cursor: params.cursor ?? null, limit: 8, sortDirection: "desc", itemsView: "notLoaded" });
         }
         throw unavailable();
       },
     };
-  } catch { shutdown(); throw unavailable(); }
+  } catch (error) { shutdown(); throw error?.reason === "unsupported_endpoint" ? error : unavailable(); }
+}
+
+/** One exact-thread client for normal plugin/MCP reads. */
+export function connectCodexObserver({ threadId, socketPath = process.env.WMUX_CODEX_SOCKET_PATH || path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "app-server-control", "app-server-control.sock") }) {
+  if (typeof threadId !== "string" || !ID.test(threadId)) return Promise.reject(unavailable());
+  return connectReadonly({ threadIds: [threadId], socketPath });
+}
+
+/** Supervisor-only batch client for the bounded receipt roots selected during
+ * this sampling cycle. There is no null or all-thread mode. */
+export function connectCodexObservationBatch({ threadIds, socketPath = process.env.WMUX_CODEX_SOCKET_PATH || path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "app-server-control", "app-server-control.sock") }) {
+  if (!Array.isArray(threadIds)) return Promise.reject(unavailable());
+  return connectReadonly({ threadIds, socketPath });
 }

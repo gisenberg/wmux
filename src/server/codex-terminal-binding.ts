@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import type { CodexDiagnosticReport, CodexObservation, Workspace } from "../shared/protocol.js";
+import { parseCodexObservation } from "./codex-observation.js";
 
 const MAX_BINDINGS = 512;
 const ISSUED_TTL_MS = 60_000;
@@ -27,6 +29,7 @@ interface Binding extends CodexBindingTuple {
   observedPaneId?: string;
   invalid: boolean;
   lastLifecycleSequence?: number;
+  observations?: Partial<Record<"naming" | "activity", CodexObservation>>;
 }
 
 export class CodexMarkerParser {
@@ -63,6 +66,7 @@ export class CodexTerminalBindingRegistry {
   private readonly byMarker = new Map<string, Binding>();
   private readonly byReceipt = new Map<string, Binding>();
   private issueSequence = 0;
+  private readonly diagnosticByPane = new Map<string, Binding>();
 
   constructor(
     private readonly findTuple: (paneId: string) => Omit<CodexBindingTuple, "sessionId" | "expiresAt"> | undefined,
@@ -142,6 +146,56 @@ export class CodexTerminalBindingRegistry {
     // tool is approved. A normal human approval can take longer than a minute.
     binding.expiresAtMs = binding.issuedAtMs + RESOLVED_TTL_MS;
     binding.expiresAt = new Date(binding.expiresAtMs).toISOString();
+    this.diagnosticByPane.delete(paneId);
+    this.diagnosticByPane.set(paneId, binding);
+    while (this.diagnosticByPane.size > MAX_BINDINGS) {
+      this.diagnosticByPane.delete(this.diagnosticByPane.keys().next().value!);
+    }
+  }
+
+  recordObservation(body: Record<string, unknown>): void {
+    const { channel, observation } = parseCodexObservation(body);
+    this.resolve(body.sessionId, body.receipt);
+    const binding = this.byReceipt.get(receiptDigest(body.receipt as string))!;
+    const previous = binding.observations?.[channel];
+    if (previous?.sampledAt !== undefined && observation.sampledAt !== undefined
+      && observation.sampledAt < previous.sampledAt) return;
+    binding.observations ??= {};
+    binding.observations[channel] = observation;
+  }
+
+  diagnostics(workspaces: Workspace[], now = Date.now()): CodexDiagnosticReport {
+    const bindings: CodexDiagnosticReport["bindings"] = [];
+    const versions = new Set<string>();
+    for (const [paneId, binding] of this.diagnosticByPane) {
+      const workspace = workspaces.find(item => item.id === binding.workspaceId);
+      const tab = workspace?.tabs.find(item => item.id === binding.tabId);
+      if (!workspace || !tab?.panes.some(pane => pane.id === paneId)) {
+        this.diagnosticByPane.delete(paneId);
+        continue;
+      }
+      const state = binding.expiresAtMs <= now ? "expired" : binding.invalid || !this.isPaneLive(paneId) ? "unavailable" : "live";
+      const channels: Partial<Record<"naming" | "activity", CodexObservation>> = {};
+      for (const channel of ["naming", "activity"] as const) {
+        const sample = binding.observations?.[channel];
+        if (sample) {
+          if (sample.pluginVersion) versions.add(sample.pluginVersion);
+          channels[channel] = { ...sample, counters: { ...sample.counters },
+            stale: state !== "live" || (sample.reason !== "terminal_observed" && now - sample.receivedAt > 30_000) };
+        } else if (channel === "activity" && !binding.turnId) {
+          channels.activity = { status: "unknown", reason: "missing_turn_id", receivedAt: binding.issuedAtMs,
+            counters: {}, stale: state !== "live" };
+        }
+      }
+      bindings.push({ workspaceId: workspace.id, tabId: tab.id, paneId, sessionId: binding.sessionId,
+        expiresAt: binding.expiresAt, binding: state, workspaceOwnership: workspace.nameSource ?? "default",
+        tabOwnership: tab.titleSource ?? "default", ...channels });
+    }
+    return { bindings,
+      pendingCount: [...this.byMarker.values()].filter(binding => !binding.observedPaneId && !binding.invalid && binding.expiresAtMs > now).length,
+      expiredCount: bindings.filter(binding => binding.binding === "expired").length,
+      compatibility: { cli: "unverified", server: "unverified", pluginVersions: [...versions].sort() },
+    };
   }
 
   /** A pane id can be reused by a replacement backend process. */
@@ -199,6 +253,18 @@ export class CodexTerminalBindingRegistry {
     if ((binding.lastLifecycleSequence ?? 0) >= lifecycleSequence) return undefined;
     binding.lastLifecycleSequence = lifecycleSequence;
     return tuple;
+  }
+
+  revoke(sessionId: unknown, receipts: unknown): void {
+    if (typeof sessionId !== "string" || !sessionIdPattern.test(sessionId)) throw new CodexBindingError(400, "invalid_session_id");
+    if (!Array.isArray(receipts) || receipts.length > MAX_BINDINGS
+      || !receipts.every((receipt) => typeof receipt === "string" && receiptPattern.test(receipt))) {
+      throw new CodexBindingError(400, "invalid_receipts");
+    }
+    for (const receipt of receipts) {
+      const binding = this.byReceipt.get(receiptDigest(receipt));
+      if (binding?.sessionId === sessionId) binding.invalid = true;
+    }
   }
 
   private prune(now = Date.now()): void {

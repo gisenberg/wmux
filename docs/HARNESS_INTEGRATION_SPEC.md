@@ -103,6 +103,16 @@ Existing contracts remain in `src/shared/protocol.ts` and server-owned services.
 
 ## Naming and ownership
 
+**Declared Codex read-only profile (2026-09-11):** `native-name-mirror` delegates
+name generation and native automatic/manual arbitration to Codex. It reads and
+mirrors the accepted native name without setting it. NAM-01/NAM-03 semantic
+quality is not an adapter guarantee in this explicitly selected profile; NAM-02
+uses the native read as its oracle, while native-write provenance/conditional
+updates are inapplicable because there are no native writes. Manual wmux pins,
+exact binding, faithful read results and rename recovery remain required.
+Idle polling is the declared NAM-05/EXT-01 capability, not a subscription.
+
+
 - **NAM-01 — Semantic naming.** On the first substantive objective, the agent
   MUST choose a concise, task-level title, normally 3–7 words and no more than
   80 characters. It must describe the objective rather than mechanically copy
@@ -481,6 +491,21 @@ This is a starting ledger, not certification of other harnesses by association.
 No adapter has a complete applicable R01–R38 report under this contract yet.
 
 ### Codex plain-start plugin
+
+Current source profile (2026-09-11, base `20480f6`): one-way native-name mirroring
+through a verified private metadata endpoint and live terminal receipt. Real
+PTY/tmux/socket fixtures cover idle renames and pin clearing. Bounded Linux test
+deployment on 2026-09-12 verified idle native rename mirroring, workspace-pin
+preservation, blocking input/completion, browser refresh and image clipboard paste.
+A desktop-only task without an observed wmux marker has no target. Immediate
+shared-client `/quit` cleanup and user-facing unpin controls are outside this PR.
+Native semantic generation, arbitrary desktop pairing and full parity are not
+claimed. See the
+[current Codex conformance record](CODEX_CONFORMANCE.md) and
+[plugin guide](CODEX_PLUGIN.md).
+
+The following 2026-09-06 observations are historical evidence of superseded
+naming designs, not current implementation instructions:
 
 Implementation baseline: wmux PR #121 commit `23eb15d`; deployed integration
 branch baseline `d91883a`; Codex `0.153.4`; plugin

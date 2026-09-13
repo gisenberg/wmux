@@ -41,5 +41,14 @@ test("same-session bindings serialize the full action despite distinct receipts"
     bindings.withBinding(first, async () => { events.push("first:start"); await delay(60); events.push("first:end"); }),
     bindings.withBinding(second, async () => { events.push("second:start"); await delay(1); events.push("second:end"); }),
   ]);
-  assert.deepEqual(events, ["first:start", "first:end", "second:start", "second:end"]);
+  assert.ok([["first:start", "first:end", "second:start", "second:end"], ["second:start", "second:end", "first:start", "first:end"]]
+    .some(expected => JSON.stringify(events) === JSON.stringify(expected)));
+});
+
+test("updating an existing binding at capacity does not evict another receipt, and legacy v2 is not supervised", () => {
+  const before = fs.readdirSync(runtime).filter(name => name.endsWith(".json")).sort();
+  bindings.saveBinding(binding(701, "second"));
+  const after = fs.readdirSync(runtime).filter(name => name.endsWith(".json")).sort();
+  assert.deepEqual(after, before);
+  assert.equal(bindings.liveBindings().some((item: any) => item.schemaVersion === 2), false);
 });

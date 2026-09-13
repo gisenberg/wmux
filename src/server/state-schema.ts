@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { machineSchema } from "./config.js";
 import { normalizeSessionAgentOrigin } from "./session-agent-origin.js";
+import { MAX_TITLE_UTF16_LENGTH } from "../shared/title.js";
 import type {
   DelegationAttentionReason,
   DelegationRecord,
@@ -8,7 +9,7 @@ import type {
   PersistedState,
 } from "./types.js";
 
-export const CURRENT_STATE_SCHEMA_VERSION = 9;
+export const CURRENT_STATE_SCHEMA_VERSION = 10;
 
 export class UnsupportedStateVersionError extends Error {
   constructor(readonly version: number) {
@@ -50,7 +51,7 @@ const layoutSchema: z.ZodType<LayoutNode> = z.lazy(() => z.discriminatedUnion("t
 
 const tabSchema = z.object({
   id: idSchema,
-  title: z.string().max(500),
+  title: z.string().max(MAX_TITLE_UTF16_LENGTH),
   titleSource: titleSourceSchema.optional(),
   activePaneId: idSchema,
   layout: layoutSchema,
@@ -60,7 +61,7 @@ const tabSchema = z.object({
 
 const workspaceSchema = z.object({
   id: idSchema,
-  name: z.string().max(500),
+  name: z.string().max(MAX_TITLE_UTF16_LENGTH),
   createdBy: z.enum(["user", "agent"]).optional(),
   cleanupPolicy: z.literal("on-success").optional(),
   cleanupAt: timestampSchema.optional(),
@@ -464,6 +465,12 @@ export const migrateV8ToV9State = (record: Record<string, unknown>): Record<stri
   schemaVersion: 9,
 });
 
+/** v10 widens persisted workspace and tab title bounds for native-name mirroring. */
+export const migrateV9ToV10State = (record: Record<string, unknown>): Record<string, unknown> => ({
+  ...record,
+  schemaVersion: 10,
+});
+
 export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("state must be a JSON object");
@@ -484,6 +491,7 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
     && rawVersion !== 6
     && rawVersion !== 7
     && rawVersion !== 8
+    && rawVersion !== 9
     && rawVersion !== CURRENT_STATE_SCHEMA_VERSION
   ) {
     throw new Error("state schemaVersion must be a supported integer");
@@ -510,9 +518,12 @@ export const parsePersistedState = (input: unknown): ParsedPersistedState => {
   const v8Candidate = rawVersion !== undefined && rawVersion >= 8
     ? record
     : migrateV7ToV8State(v7Candidate);
-  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+  const v9Candidate = rawVersion !== undefined && rawVersion >= 9
     ? record
     : migrateV8ToV9State(v8Candidate);
+  const candidate = rawVersion === CURRENT_STATE_SCHEMA_VERSION
+    ? record
+    : migrateV9ToV10State(v9Candidate);
   const normalized = normalizeNotificationBodies(candidate);
   return {
     state: persistedStateSchema.parse(normalized.record),

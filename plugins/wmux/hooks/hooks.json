@@ -5,10 +5,11 @@
         "type": "command",
         "command": "node \"$PLUGIN_ROOT/scripts/wmux-context.mjs\"",
         "timeout": 15,
-        "statusMessage": "Considering wmux task title",
+        "statusMessage": "Binding wmux name mirror",
         "additionalContextLimit": 600
       }]
     }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"$PLUGIN_ROOT/scripts/wmux-context.mjs\"", "timeout": 15, "statusMessage": "Syncing wmux task title" }] }]
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"$PLUGIN_ROOT/scripts/wmux-context.mjs\"", "timeout": 15, "statusMessage": "Syncing wmux task title" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"$PLUGIN_ROOT/scripts/wmux-context.mjs\"", "timeout": 3, "statusMessage": "Releasing wmux name binding" }] }]
   }
 }

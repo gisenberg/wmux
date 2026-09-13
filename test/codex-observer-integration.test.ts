@@ -37,6 +37,13 @@ async function hook(env: NodeJS.ProcessEnv) {
   return value.systemMessage as string;
 }
 
+async function endHook(env: NodeJS.ProcessEnv) {
+  const child = spawn(process.execPath, [path.join(scripts, "wmux-context.mjs")], { env, stdio: ["pipe", "pipe", "pipe"] });
+  child.stdout.resume(); child.stderr.resume();
+  child.stdin.end(JSON.stringify({ hook_event_name: "SessionEnd", session_id: sessionId, reason: "other" }));
+  const [code] = await once(child, "exit"); assert.equal(code, 0);
+}
+
 for (const backend of ["pty", "tmux"] as const) test(`production hook observes a bound root through the private Unix socket (${backend})`, {
   timeout: 40_000,
   skip: backend === "tmux" && spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 ? "tmux is unavailable" : false,
@@ -46,13 +53,14 @@ for (const backend of ["pty", "tmux"] as const) test(`production hook observes a
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 }); fs.mkdirSync(socketDirectory, { recursive: true, mode: 0o700 });
   const nativeServer = http.createServer(), native = new WebSocketServer({ server: nativeServer });
   const nativeMethods: string[] = []; let phase: "active" | "attention" | "completed" = "active";
+  let nativeName = "Native Initial Name";
   native.on("connection", socket => socket.on("message", raw => {
     const request = JSON.parse(raw.toString()); nativeMethods.push(request.method);
     if (!Object.hasOwn(request, "id")) return;
     const status = phase === "completed" ? { type: "idle" } : { type: "active", activeFlags: phase === "attention" ? ["waitingOnApproval"] : [] };
     let result: any = {};
     if (request.method === "initialize") result = { protocolVersion: "0.153.4" };
-    else if (request.method === "thread/read") result = { thread: { id: sessionId, sessionId, parentThreadId: null, status } };
+    else if (request.method === "thread/read") result = { thread: { id: sessionId, sessionId, parentThreadId: null, name: nativeName, status } };
     else if (request.method === "thread/turns/list") {
       const turnStatus = phase === "completed" ? "completed" : "inProgress";
       result = { data: [{ id: turnId, status: turnStatus, startedAt: 1, completedAt: phase === "completed" ? 2 : null, durationMs: phase === "completed" ? 1 : null }], nextCursor: null, backwardsCursor: null };
@@ -130,7 +138,16 @@ for (const backend of ["pty", "tmux"] as const) test(`production hook observes a
     phase = "completed";
     const completed = await until(() => state.snapshot().delegations.find(item => item.paneId === paneId && item.state === "completed"), "completed lifecycle");
     assert.equal(completed.state, "completed");
-    await until(() => native.clients.size === 0 ? true : undefined, "observer self-exit");
+    await until(() => state.findPaneContext(paneId)?.workspace.name === nativeName ? true : undefined, "automatic native name");
+    nativeName = "Native Idle Rename";
+    await until(() => state.findPaneContext(paneId)?.workspace.name === nativeName ? true : undefined, "idle native rename after terminal outcome");
+    state.setWorkspaceTitle(first.id, "Pinned Workspace");
+    nativeName = "Renamed While Pinned";
+    await until(() => state.findPaneContext(paneId)?.tab.title === nativeName ? true : undefined, "independent tab rename while workspace pinned");
+    assert.equal(state.findPaneContext(paneId)?.workspace.name, "Pinned Workspace");
+    state.clearWorkspaceTitle(first.id);
+    await until(() => state.findPaneContext(paneId)?.workspace.name === nativeName ? true : undefined, "unpin recovery without another rename");
+    assert.notEqual(state.findPaneContext(otherPane)?.workspace.name, nativeName);
     assert.equal(state.snapshot().delegations.some(item => item.paneId === otherPane), false);
     assert.equal(state.snapshot().delegations.filter(item => item.paneId === paneId && item.state === "completed").length, 1);
     assert.ok(nativeMethods.includes("thread/read") && nativeMethods.includes("thread/turns/list"));
@@ -139,9 +156,17 @@ for (const backend of ["pty", "tmux"] as const) test(`production hook observes a
     assert.equal(nativeMethods.includes("turn/start"), false);
     if (backend === "tmux") {
       await reconnect(receipt, 80, 24);
-      assert.equal(sessions.closePane(paneId), true);
-      assert.throws(() => sessions.codexTerminalBindings.resolve(sessionId, receipt), /binding_not_found/);
     }
+    await endHook(env);
+    assert.throws(() => sessions.codexTerminalBindings.resolve(sessionId, receipt), /binding_not_found/);
+    await until(() => native.clients.size === 0 ? true : undefined, "name observer stops when Codex ends");
+    assert.ok(internals.sessions.get(paneId), "the shell backend remains alive after Codex ends");
+    nativeName = "Name After Session Exit";
+    await delay(2200);
+    assert.notEqual(state.findPaneContext(paneId)?.workspace.name, nativeName);
+    assert.equal(sessions.closePane(paneId), true);
+    assert.throws(() => sessions.codexTerminalBindings.resolve(sessionId, receipt), /binding_not_found/);
+    await until(() => native.clients.size === 0 ? true : undefined, "name observer stops on pane closure");
   } finally {
     for (const browser of browsers) browser.terminate();
     sessions.disposeAll();

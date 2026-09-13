@@ -110,6 +110,8 @@ test("renames the current workspace through the command palette", async ({ page,
     const nameInput = dialog.getByRole("textbox", { name: "Workspace name" });
     await expect(nameInput).toBeFocused();
     await expect(nameInput).toHaveValue(workspace.name);
+    await expect(dialog).toContainText("Current workspace name is an automatic name awaiting a native title.");
+    await expect(dialog.getByRole("button", { name: /Use automatic workspace name for/ })).toBeVisible();
     await nameInput.fill(renamedTitle);
     await nameInput.press("Enter");
 

@@ -1,51 +1,26 @@
-# Codex plain-start integration: approved scope and historical evidence
+# Codex plain-start integration: current scope and historical evidence
 
-The ordinary interactive command remains exactly `codex`; wmux supplies no
-wrapper, replacement binary, startup flag, native source change, database edit,
-or transcript edit. This document records the selected scope as of 2026-09-06.
-It is not a deployment or full-conformance claim.
+The ordinary interactive command remains `codex`. The approved 2026-09-11
+profile is **native-name-mirror**: poll the exact native conversation name through
+a supported existing private App Server, then mirror it to its live receipt-bound
+wmux tab/workspace. No native write, separate wmux semantic title, database patch,
+transcript edit, wrapper or replacement server participates.
 
-## Approved wmux-owned naming mode
+See [CODEX_PLUGIN.md](CODEX_PLUGIN.md) for the maintained implementation contract,
+socket selection, desktop binding boundary, manual pins, failure handling and
+tests. [CODEX_NATIVE_API_GAPS.md](CODEX_NATIVE_API_GAPS.md) records the read-only
+native audit. Bounded Linux test deployment and live acceptance are recorded in
+[CODEX_CONFORMANCE.md](CODEX_CONFORMANCE.md). Immediate shared-client `/quit`
+cleanup and user-facing unpin controls are outside this PR's scope.
 
-wmux owns the automatic semantic task title. A trusted prompt binding identifies
-the exact live wmux pane; the plugin preflights its private store and asks the
-server to atomically accept the automatic workspace/tab title before persisting
-the agent-selected title. Follow-ups reuse that stored title; a material
-objective change replaces it. Manual wmux workspace/tab titles remain user-owned.
+Name polling continues while idle within the terminal binding lease. Missing
+names and inaccessible endpoints leave wmux unchanged. Native turn ID is needed
+for lifecycle observation, not for reading a name. A desktop-only task with no
+marker observed on a wmux backend is unbound; readable metadata alone cannot
+identify a pane.
 
-Codex saved conversation names are intentionally untouched. Naming and sync do
-not call `thread/read` or `thread/name/set`, and native `/rename` is neither
-imported into wmux nor overwritten. Tool results use the wmux-owned fields
-`namingMode: "wmux-owned-name"`, `wmuxName`, `nativeNameRead: false`,
-`nativeNameSet: false`, `wmuxNameSaved`, `workspaceApplied`, and `tabApplied`.
-There is no `codexName` or `codexNameSet` result in this mode.
-
-If title acceptance is rejected, `wmuxNameSaved` is false and only a fresh
-`name_current_wmux_session` retry may establish the title; sync cannot invent a
-stored semantic name. If the server accepted the title but title persistence
-failed, report the actual workspace/tab application with `wmuxNameSaved: false`
-and retry `name_current_wmux_session`. A retry of a mirror for an already stored
-title remains `sync_current_wmux_session`.
-
-The retained focused fixture log records 19 passing checks, covering `409`
-rejection, `503` title-delivery/acceptance uncertainty, and injected
-post-acceptance local-store write failure. That is fixture evidence, not native
-CLI acceptance.
-
-The visible hook marker remains the binding transport for daemon-backed Codex
-where pane environment variables are unavailable. A private receipt, never the
-marker alone, authorizes the store/mirror operation. Markers must be redacted
-before terminal output is shown in another live pane.
-
-## Prompt-bound lifecycle is separate
-
-The plugin's read-only observer may use the local supported App Server surface
-to report an exact bound turn's generic active/attention/terminal state. It does
-not start or resume a native turn, answer requests, or control the TUI. A lack of
-authoritative observation becomes wmux `status unknown`, not success, failure,
-or a scheduled heartbeat. Native request identities, non-prompt continuations,
-platform coverage, and full recovery/animation acceptance remain bounded gaps;
-see [CODEX_CONFORMANCE.md](CODEX_CONFORMANCE.md).
+The experiments below used superseded naming designs. They preserve historical
+evidence and must not be read as acceptance tests of today's mirror.
 
 ## Historical native-canonical evidence
 
@@ -54,13 +29,13 @@ name through `thread/name/set`, read it back, and mirrored it to wmux. They
 included embedded/daemon naming, follow-up, task-shift, pinned-surface, native
 `/rename`, and resume scenarios. That design is superseded and its observed
 native writes/mirroring are not current behavior or acceptance evidence for the
-wmux-owned mode.
+current read-only mirror.
 
 Its later native acceptance also failed when Codex-generated names could not be
 distinguished from manual names. Those failures remain historical failures of
 the superseded design; changing scope does not convert them into passes.
 
-## Fresh wmux-owned native acceptance
+## Historical wmux-owned native acceptance
 
 An ignored, local-only record at
 `test-results/codex-wmux-owned-native-evidence.json` captures a plain-`codex`,
@@ -90,8 +65,8 @@ the normal services were not deployed or restarted.
 
 ## Remaining boundaries
 
-- Native Codex name synchronization and ownership provenance are intentionally
-  unsupported in this selected mode; see [CODEX_NATIVE_API_GAPS.md](CODEX_NATIVE_API_GAPS.md).
+- Native name writes and ownership provenance remain unsupported; read-only
+  mirroring is described in [CODEX_NATIVE_API_GAPS.md](CODEX_NATIVE_API_GAPS.md).
 - Linux/POSIX evidence does not certify Windows ACLs/native plugin execution,
   remote App Servers with another thread store, macOS/SSH, or a deployed service.
 - This is a trusted single-user integration, not isolation from another process

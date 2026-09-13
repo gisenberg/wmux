@@ -94,4 +94,39 @@ for (const pane of report.panes) {
   const state = pane.issue ? "issue" : pane.status;
   console.log(`${state.padEnd(8)} ${pane.transport.padEnd(18)} ${pane.machineName.padEnd(14)} ${pane.title}${pane.issue ? ` - ${pane.issue}` : ""}`);
 }
-process.exit(summary.exitedPaneCount || summary.sessionIssueCount || persistenceFailed ? 1 : 0);
+const age = (value) => {
+  if (!Number.isFinite(value)) return "not sampled";
+  const seconds = Math.max(0, Math.floor((Date.now() - value) / 1_000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
+};
+const expiry = (value) => {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "expiry unknown";
+  const seconds = Math.floor((timestamp - Date.now()) / 1_000);
+  if (seconds <= 0) return `expired ${age(timestamp)}`;
+  return seconds < 60 ? `expires in ${seconds}s` : `expires in ${Math.floor(seconds / 60)}m`;
+};
+const observation = (label, value) => {
+  if (!value) return `${label} unknown (not sampled)`;
+  const reason = value.reason ? ` - ${value.reason}` : "";
+  return `${label} ${value.status}${value.stale ? " / stale" : ""}; sample ${age(value.sampledAt)}; success ${age(value.lastSuccessAt)}${reason}`;
+};
+const codex = report.codex;
+if (codex) {
+  console.log(`codex: ${codex.bindings.length} bindings, ${codex.pendingCount} pending, ${codex.expiredCount} expired`);
+  console.log(`codex compatibility: cli ${codex.compatibility.cli}, server ${codex.compatibility.server}, plugins ${codex.compatibility.pluginVersions.join(", ") || "unverified"}`);
+  for (const binding of codex.bindings) {
+    console.log(`codex ${binding.binding.padEnd(11)} workspace=${binding.workspaceId} tab=${binding.tabId} pane=${binding.paneId} session=${binding.sessionId} ${expiry(binding.expiresAt)}`);
+    console.log(`  pins workspace=${binding.workspaceOwnership} tab=${binding.tabOwnership}; ${observation("naming", binding.naming)}; ${observation("activity", binding.activity)}`);
+    if (binding.binding === "expired") {
+      console.log("  recovery: establish fresh terminal proof before automatic naming can resume");
+    } else if (binding.binding === "unavailable") {
+      console.log("  recovery: establish fresh terminal proof; socket recovery alone does not restore title authority");
+    }
+  }
+}
+process.exit(summary.exitedPaneCount || summary.sessionIssueCount || persistenceFailed || codex?.expiredCount ? 1 : 0);

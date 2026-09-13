@@ -54,6 +54,17 @@ test("doctor CLI exposes persistence failure and exits unsuccessfully", async ()
       summary: { paneCount: 0, restartDurablePaneCount: 0, exitedPaneCount: 0, sessionIssueCount: 0 },
       panes: [],
       persistence: { dirty: true, failureCount: 1, errorCode: "ENOSPC" },
+      codex: {
+        pendingCount: 1,
+        expiredCount: 1,
+        compatibility: { cli: "unverified", server: "unverified", pluginVersions: ["wmux-0.1"] },
+        bindings: [{
+          workspaceId: "workspace-1", tabId: "tab-1", paneId: "pane-1", sessionId: "session-1",
+          expiresAt: "2000-01-01T00:00:00.000Z", binding: "expired",
+          workspaceOwnership: "auto", tabOwnership: "user",
+          naming: { status: "unknown", reason: "socket_unavailable", receivedAt: 1, counters: { reconnects: 2 }, stale: true },
+        }],
+      },
     }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -67,6 +78,8 @@ test("doctor CLI exposes persistence failure and exits unsuccessfully", async ()
     });
     assert.equal(result.code, 1);
     assert.match(result.stdout, /\[WARN\] state persistence: pending \(ENOSPC; retrying\)/);
+    assert.match(result.stdout, /codex: 1 bindings, 1 pending, 1 expired/);
+    assert.match(result.stdout, /recovery: establish fresh terminal proof/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(directory, { recursive: true, force: true });

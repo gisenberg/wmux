@@ -74,6 +74,54 @@ test("workspace creation rejects an explicit unknown machine", async () => {
   });
 });
 
+test("workspace and tab title resets are independent, strict, and idempotent", async () => {
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  await withServer(machines, async (baseUrl) => {
+    const created = await postWorkspace(baseUrl, { machineId: "local" });
+    const payload = await created.json() as {
+      workspace: { id: string; activeTabId: string };
+      state: { revision: number };
+    };
+    const workspaceUrl = `${baseUrl}/api/workspaces/${payload.workspace.id}/title`;
+    const tabUrl = `${baseUrl}/api/workspaces/${payload.workspace.id}/tabs/${payload.workspace.activeTabId}/title`;
+    const post = (url: string, body: unknown) => fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    assert.equal((await post(workspaceUrl, { title: "Pinned workspace" })).status, 200);
+    assert.equal((await post(tabUrl, { title: "Pinned tab" })).status, 200);
+    const workspaceReset = await post(workspaceUrl, { clear: true });
+    const workspaceState = await workspaceReset.json() as {
+      workspace: { nameSource: string; tabs: Array<{ title: string; titleSource: string }> };
+      state: { revision: number };
+    };
+    assert.equal(workspaceReset.status, 200);
+    assert.equal(workspaceState.workspace.nameSource, "default");
+    assert.deepEqual(workspaceState.workspace.tabs[0] && {
+      title: workspaceState.workspace.tabs[0].title,
+      titleSource: workspaceState.workspace.tabs[0].titleSource,
+    }, { title: "Pinned tab", titleSource: "user" });
+
+    const tabReset = await post(tabUrl, { clear: true });
+    const tabState = await tabReset.json() as { tab: { title: string; titleSource: string }; state: { revision: number } };
+    assert.equal(tabReset.status, 200);
+    assert.equal(tabState.tab.title, "Shell");
+    assert.equal(tabState.tab.titleSource, "default");
+    const repeat = await post(tabUrl, { clear: true });
+    const repeatState = await repeat.json() as { state: { revision: number } };
+    assert.equal(repeat.status, 200);
+    assert.equal(repeatState.state.revision, tabState.state.revision);
+
+    assert.equal((await post(workspaceUrl, { clear: true, title: "ambiguous" })).status, 400);
+    assert.equal((await post(tabUrl, { clear: false, title: "invalid" })).status, 400);
+    assert.equal((await post(tabUrl, { title: "\u0000invalid" })).status, 400);
+    assert.equal((await post(workspaceUrl, { title: "🧪".repeat(512) })).status, 200);
+    assert.equal((await post(workspaceUrl, { title: "x".repeat(4097) })).status, 400);
+  });
+});
+
 test("workspace creation accepts idempotent validated client ids", async () => {
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   await withServer(machines, async (baseUrl) => {

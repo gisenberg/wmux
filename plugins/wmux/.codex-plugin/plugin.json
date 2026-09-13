@@ -1,8 +1,8 @@
 {
   "name": "wmux",
-  "version": "0.2.0+codex.20260906222906",
+  "version": "0.4.0",
   "license": "MIT",
-  "description": "Give ordinary Codex tasks semantic wmux titles and report supported activity.",
+  "description": "Mirror native Codex conversation names to bound wmux titles and report supported activity.",
   "author": {
     "name": "wmux contributors"
   },
@@ -10,8 +10,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Wmux",
-    "shortDescription": "Name the current wmux session.",
-    "longDescription": "MCP tools and trusted hooks give normal Codex tasks wmux-owned sidebar and tab titles while leaving native names untouched. Reports supported prompt-bound lifecycle and attention without a replacement launcher or Codex source changes.",
+    "shortDescription": "Mirror the current Codex name.",
+    "longDescription": "MCP tools and trusted hooks mirror native Codex names one way into bound wmux sidebar and tab titles, preserving manual wmux pins. Reports supported prompt-bound lifecycle and attention without a replacement launcher or Codex source changes.",
     "developerName": "wmux contributors",
     "category": "Productivity",
     "capabilities": [],

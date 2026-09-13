@@ -344,6 +344,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
+  clearWorkspaceTitle: (workspaceId: string) =>
+    json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/title`, {
+      method: "POST",
+      body: JSON.stringify({ clear: true }),
+    }),
   setWorkspaceAutoTitle: (workspaceId: string, title: string, descriptor?: string, tabId?: string) =>
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/auto-title`, {
       method: "POST",
@@ -362,6 +367,11 @@ export const api = {
     json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/tabs/${tabId}/title`, {
       method: "POST",
       body: JSON.stringify({ title }),
+    }),
+  clearTabTitle: (workspaceId: string, tabId: string) =>
+    json<{ state: BootstrapPayload }>(`/api/workspaces/${workspaceId}/tabs/${tabId}/title`, {
+      method: "POST",
+      body: JSON.stringify({ clear: true }),
     }),
   splitPane: (
     tabId: string,
