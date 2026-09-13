@@ -74,20 +74,15 @@ Consequently pane-bound SSH image paste and Kitty file transfers are unavailable
 they fail closed instead of reconnecting to an unpinned target. Native local
 image paste is also disabled. Session-agent file staging is separate.
 
-Git Bash cwd prompt integration, automatic Windows service startup, and broad
-helper/agent integration parity remain incomplete. Node-pty can emit
-`AttachConsole failed` from its cleanup helper after an exited console; this
-diagnostic remains unresolved. The scoped-auth provisioning CLI still requires
-POSIX permissions and cannot provision native Windows credentials. This remains
-a local trial path, not release parity.
+Git Bash cwd prompt integration, automatic Windows service startup, and broad helper/agent integration parity remain incomplete.
+Node-pty can emit `AttachConsole failed` from its cleanup helper after an exited console; this diagnostic remains unresolved.
+The scoped-auth provisioning CLI still requires POSIX permissions and cannot provision native Windows credentials.
+This remains a local trial path, not release parity.
 
-The Codex native-name-mirror plugin also requires POSIX Unix sockets and `flock`
-with directory fsync. Its systemd observer installer, native metadata transport,
-and binding serialization are not supported on a native Windows executing host.
-Their integration tests run in the POSIX lane; Windows still tests the portable
-binding store and server-side receipt validation. An `AttachConsole failed`
-message from node-pty's cleanup subprocess can appear beside a passing or skipped
-test due to delayed process output; consult the file's final test result.
+The Codex native-name-mirror plugin also requires POSIX Unix sockets and `flock` with directory fsync.
+Its systemd observer installer, native metadata transport, and binding serialization are not supported on a native Windows executing host.
+Their integration tests run in the POSIX lane; Windows still tests the portable binding store and server-side receipt validation.
+An `AttachConsole failed` message from node-pty's cleanup subprocess can appear beside a passing or skipped test due to delayed process output; consult the file's final test result.
 
 ## Verification
 
@@ -97,15 +92,13 @@ npm run check
 npm test -- test/private-permissions.test.ts test/windows-host.test.ts test/windows-host-smoke.test.ts
 ```
 
-On Windows, the test runner runs four files concurrently with a private temporary
-home per file, Git tools on PATH, and UTF-8 Python output. It fails and terminates
-the owned process tree if a file exceeds 120 seconds. Set
-`WMUX_TEST_FILE_TIMEOUT_MS` to adjust that deadline for diagnostics. It never
-uses the running host's state or credentials. POSIX-only sockets, multiplexer
-shell fixtures, provisioning, and byte-exact PTY tests are explicitly skipped;
-they still require the POSIX verification lane. Native ConPTY resize and replay
-have their own backend conformance checks. The Playwright suites are separate
-from `npm run check`.
+On Windows, the test runner runs four files concurrently with a private temporary home per file, Git tools on PATH, and UTF-8 Python output.
+It fails and terminates the owned process tree if a file exceeds 120 seconds.
+Set `WMUX_TEST_FILE_TIMEOUT_MS` to adjust that deadline for diagnostics.
+It never uses the running host's state or credentials.
+POSIX-only sockets, multiplexer shell fixtures, provisioning, and byte-exact PTY tests are explicitly skipped; they still require the POSIX verification lane.
+Native ConPTY resize and replay have their own backend conformance checks.
+The Playwright suites are separate from `npm run check`.
 
 The ACL test checks private inheritance and detects a later Everyone grant.
 The server smoke test uses isolated state and checks authentication, app

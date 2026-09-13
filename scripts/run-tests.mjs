@@ -5,15 +5,17 @@ import path from "node:path";
 
 const files = ["test", "test/backend-conformance"].flatMap((directory) =>
   fs.readdirSync(directory).filter((file) => file.endsWith(".test.ts")).sort().map((file) => `${directory}/${file}`));
+const requested = process.argv.slice(2);
+const selected = requested.length ? requested : files;
+for (const file of selected) {
+  if (!files.includes(file)) throw new Error(`Unknown test file: ${file}`);
+}
 
 if (process.platform !== "win32") {
-  const child = spawn(process.execPath, ["--import", "tsx", "--test", ...files, ...process.argv.slice(2)], { stdio: "inherit" });
+  const child = spawn(process.execPath, ["--import", "tsx", "--test", ...selected], { stdio: "inherit" });
   child.on("exit", (code) => { process.exitCode = code ?? 1; });
   child.on("error", (error) => { console.error(error); process.exitCode = 1; });
 } else {
-  const requested = process.argv.slice(2);
-  const selected = requested.length ? files.filter((file) => requested.includes(file)) : files;
-  if (!selected.length) throw new Error("No matching test files");
   const timeoutMs = Number(process.env.WMUX_TEST_FILE_TIMEOUT_MS ?? 120000);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1000) throw new Error("Invalid WMUX_TEST_FILE_TIMEOUT_MS");
   let next = 0, failed = 0, timedOut = 0;
