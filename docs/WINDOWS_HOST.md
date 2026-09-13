@@ -81,6 +81,14 @@ diagnostic remains unresolved. The scoped-auth provisioning CLI still requires
 POSIX permissions and cannot provision native Windows credentials. This remains
 a local trial path, not release parity.
 
+The Codex native-name-mirror plugin also requires POSIX Unix sockets and `flock`
+with directory fsync. Its systemd observer installer, native metadata transport,
+and binding serialization are not supported on a native Windows executing host.
+Their integration tests run in the POSIX lane; Windows still tests the portable
+binding store and server-side receipt validation. An `AttachConsole failed`
+message from node-pty's cleanup subprocess can appear beside a passing or skipped
+test due to delayed process output; consult the file's final test result.
+
 ## Verification
 
 ```powershell

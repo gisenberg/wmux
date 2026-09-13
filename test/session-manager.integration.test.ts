@@ -850,26 +850,34 @@ test("agent interrupt input scopes bare escape fallback to Codex", () => {
 });
 
 test("Prime Agent escape UI actions do not interrupt active pane lifecycle", async () => {
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [process.execPath, "-e",
+    "process.stdin.setRawMode(true);process.stdin.on('data',d=>process.stdout.write('INPUT:'+d.toString('hex')+'\\n'));process.stdout.write('input-ready\\n');",
+  ] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
     const manager = new SessionManager(state, [machine]);
     const client = socket();
-    manager.attach(pane.id, client, 80, 24);
-    await waitForMessage(client, (message) => message.type === "ready");
-    manager.agentSessions.recordAgentEvent({
-      paneId: pane.id,
-      agent: "prime-agent",
-      status: "running",
-      summary: "Main turn and subagents active",
-    });
+    try {
+      manager.attach(pane.id, client, 80, 24);
+      await waitForMessage(client, (message) => message.type === "ready");
+      await waitForMessage(client, (message) => message.type === "output" && message.data.includes("input-ready"));
+      manager.agentSessions.recordAgentEvent({
+        paneId: pane.id,
+        agent: "prime-agent",
+        status: "running",
+        summary: "Main turn and subagents active",
+      });
 
-    fake(client).message({ type: "input", data: "\x1b" });
-    assert.equal(state.snapshot().agentEvents[0]?.status, "running");
+      fake(client).message({ type: "input", data: "\x1b" });
+      assert.equal(state.snapshot().agentEvents[0]?.status, "running");
+      await waitForMessage(client, (message) => message.type === "output" && message.data.includes("INPUT:1b"));
 
-    fake(client).message({ type: "input", data: "\x03" });
-    assert.equal(state.snapshot().agentEvents[0]?.status, "interrupted");
-    manager.disposeAll();
+      fake(client).message({ type: "input", data: "\x03" });
+      assert.equal(state.snapshot().agentEvents[0]?.status, "interrupted");
+      await waitForMessage(client, (message) => message.type === "output" && message.data.includes("INPUT:03"));
+    } finally {
+      manager.disposeAll();
+    }
   });
 });
 

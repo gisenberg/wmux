@@ -31,7 +31,7 @@ const acquired = (child: ReturnType<typeof owner>) => new Promise<void>((resolve
   child.once("exit", (code) => reject(new Error(`owner exited ${code}`)));
 });
 
-test("a killed owner releases the kernel lock for a successor", async () => {
+test("a killed owner releases the kernel lock for a successor", { skip: process.platform === "win32" ? "requires POSIX flock and directory fsync" : false }, async () => {
   const dir = directory(), lock = path.join(dir, "binding.flock"), child = owner(lock);
   try {
     await acquired(child);
@@ -42,7 +42,7 @@ test("a killed owner releases the kernel lock for a successor", async () => {
   } finally { child.kill("SIGKILL"); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("slow live owner is never stolen and bounded acquisition never enters action", async () => {
+test("slow live owner is never stolen and bounded acquisition never enters action", { skip: process.platform === "win32" ? "requires POSIX flock and directory fsync" : false }, async () => {
   const dir = directory(), lock = path.join(dir, "binding.flock"); let entered = false;
   try {
     const held = await acquireWmuxLock(lock);
@@ -52,7 +52,7 @@ test("slow live owner is never stolen and bounded acquisition never enters actio
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("100 bare Node subprocess contenders cannot enter one filesystem sentinel together", async () => {
+test("100 bare Node subprocess contenders cannot enter one filesystem sentinel together", { skip: process.platform === "win32" ? "requires POSIX flock and directory fsync" : false }, async () => {
   const dir = directory(), lock = path.join(dir, "binding.flock"), sentinel = path.join(dir, "critical");
   try {
     await Promise.all(Array.from({ length: 100 }, () => new Promise<void>((resolve, reject) => {
@@ -65,7 +65,7 @@ test("100 bare Node subprocess contenders cannot enter one filesystem sentinel t
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("cancelled acquisition never enters action", async () => {
+test("cancelled acquisition never enters action", { skip: process.platform === "win32" ? "requires POSIX flock and directory fsync" : false }, async () => {
   const dir = directory(), lock = path.join(dir, "binding.flock"), controller = new AbortController(); let entered = false;
   try {
     const held = await acquireWmuxLock(lock);
@@ -77,7 +77,7 @@ test("cancelled acquisition never enters action", async () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("symlinked parent is rejected without traversal", async () => {
+test("symlinked parent is rejected without traversal", { skip: process.platform === "win32" ? "requires POSIX flock and directory fsync" : false }, async () => {
   const dir = directory(), link = `${dir}-link`;
   try {
     fs.symlinkSync(dir, link);
