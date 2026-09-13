@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +19,7 @@ const tmuxExecutable = process.platform === "win32" ? undefined : resolveExecuta
 const tmuxTest = tmuxExecutable ? test : test.skip;
 
 test("SSH staging keeps registration capability in owner-only runtime payload and stages broker helper", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-stage-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-stage-"));
   const previous = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = directory;
   const capability = `aic_${"a".repeat(36)}.${"C".repeat(43)}`;
@@ -42,7 +43,7 @@ test("SSH staging keeps registration capability in owner-only runtime payload an
     const payloadMatch = /wmux_payload='([^']+)'/.exec(wrapperText);
     assert.ok(payloadMatch);
     const payload = fs.readFileSync(payloadMatch[1], "utf8");
-    assert.equal(fs.statSync(payloadMatch[1]).mode & 0o777, 0o600);
+    assertPrivateFile(payloadMatch[1]);
     assert.match(payload, new RegExp(capability));
     assert.match(payload, /__wmux_stage_agent_input_v1/);
     assert.match(payload, /"\$HOME\/\.wmux\/agent-input"/);
@@ -126,8 +127,8 @@ tmuxTest("full durable tmux command keeps its long-lived child alive with staged
       assert.equal(Object.values(childEnvironment).includes(capability), false);
       assert.equal(fs.readFileSync(unsetProbePath, "utf8"), "");
       assert.equal(fs.readFileSync(capabilityPath, "utf8"), `${capability}\n`);
-      assert.equal(fs.statSync(path.dirname(capabilityPath)).mode & 0o777, 0o700);
-      assert.equal(fs.statSync(capabilityPath).mode & 0o777, 0o600);
+      assertPrivateFile(path.dirname(capabilityPath));
+      assertPrivateFile(capabilityPath);
       assert.equal(fs.readFileSync(afterTrapPath, "utf8"), fs.readFileSync(beforeTrapPath, "utf8"));
       assert.equal(fs.readFileSync(afterUmaskPath, "utf8"), fs.readFileSync(beforeUmaskPath, "utf8"));
       const callerFlags = fs.readFileSync(afterOptionsPath, "utf8").trim();
@@ -260,8 +261,8 @@ tmuxTest("durable agent-input staging fails closed when its private write cannot
   }
 });
 
-test("local runtime staging refuses a symlinked runtime directory before writing capability material", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-stage-link-"));
+test("local runtime staging refuses a symlinked runtime directory before writing capability material", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-stage-link-"));
   const previous = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = directory;
   try {
@@ -289,7 +290,7 @@ test("local runtime staging refuses a symlinked runtime directory before writing
   }
 });
 
-test("POSIX session agent stages capability bytes outside pane env and exposes only broker paths", () => {
+test("POSIX session agent stages capability bytes outside pane env and exposes only broker paths", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const source = String.raw`
 import base64
 import hashlib
@@ -390,7 +391,7 @@ test("local and SSH agent backends carry pane capability only as an authenticate
       ...(kind === "ssh" ? { host: "127.0.0.1" } : {}),
       sessionBackend: "agent", agentPort: address.port, agentToken: "agent-token",
     };
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `wmux-${kind}-agent-stage-`));
+    const directory = privateTempDirectory(path.join(os.tmpdir(), `wmux-${kind}-agent-stage-`));
     const state = new StateStore([machine], path.join(directory, "state.json"));
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
     const manager = new SessionManager(state, [machine]);
@@ -460,7 +461,7 @@ test("feature-disabled, legacy POSIX, and Windows agent sessions start without a
       ...(machineKind === "local" ? {} : { host: "127.0.0.1" }),
       sessionBackend: "agent", agentPort: address.port, agentToken: "agent-token",
     };
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-no-stage-"));
+    const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-agent-no-stage-"));
     const state = new StateStore([machine], path.join(directory, "state.json"));
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
     const manager = new SessionManager(state, [machine]);
@@ -540,7 +541,7 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
 
 const createTmuxFixture = (prefix: string) => {
   assert.ok(tmuxExecutable);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), prefix));
   const home = path.join(directory, "home");
   const bin = path.join(directory, "bin");
   const runtimePath = path.join(directory, "runtime.sh");

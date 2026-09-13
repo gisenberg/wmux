@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +17,7 @@ const withServer = async (
   run: (baseUrl: string) => Promise<void>,
   machineSource: MachineSource = initialMachines,
 ): Promise<void> => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-target-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-target-"));
   const state = new StateStore(initialMachines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
   const server = await createHttpServer(

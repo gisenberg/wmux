@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -32,7 +33,7 @@ const createAuth = (
 };
 
 test("scoped credentials expire and rotation invalidates the old value", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-scoped-credentials-"),
   );
   try {
@@ -57,8 +58,8 @@ test("scoped credentials expire and rotation invalidates the old value", () => {
       fs.readFileSync(auth.helperTokenPath!, "utf8").trim(),
       auth.helperToken,
     );
-    assert.equal(fs.statSync(metadataPath).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(auth.helperTokenPath!).mode & 0o777, 0o600);
+    assertPrivateFile(metadataPath);
+    assertPrivateFile(auth.helperTokenPath!);
     assert.doesNotMatch(fs.readFileSync(metadataPath, "utf8"), new RegExp(auth.helperToken!));
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -66,7 +67,7 @@ test("scoped credentials expire and rotation invalidates the old value", () => {
 });
 
 test("environment-backed scoped credentials fail closed on rotation", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-scoped-environment-"),
   );
   try {
@@ -86,7 +87,7 @@ test("environment-backed scoped credentials fail closed on rotation", () => {
 });
 
 test("scoped credential metadata refuses future schemas", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-scoped-future-"),
   );
   try {

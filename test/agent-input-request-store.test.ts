@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile, setDirectoryPrivate } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -79,7 +80,7 @@ const expectQuota = (operation: () => unknown, code: "source_byte_limit" | "glob
 };
 
 test("request store enforces ask generations, duplicate semantics, transitions, CAS, and answer validation", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-store-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-store-"));
   try {
     const store = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "digest-key" });
     let changes = 0;
@@ -140,7 +141,7 @@ test("request store enforces ask generations, duplicate semantics, transitions, 
 });
 
 test("non-retryable SDK failure is a durable public terminal state and later native resolution reconciles it", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-sdk-terminal-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-sdk-terminal-"));
   const filePath = path.join(directory, "requests.json");
   try {
     let store = new AgentInputRequestStore(filePath, { answerDigestKey: "digest-key" });
@@ -175,13 +176,13 @@ test("non-retryable SDK failure is a durable public terminal state and later nat
 });
 
 test("request store is owner-only, clone-safe, atomic, backup-recoverable, migrated, and future-safe", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-durable-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-durable-"));
   const filePath = path.join(directory, "requests.json");
   try {
     const store = new AgentInputRequestStore(filePath, { answerDigestKey: "digest-key" });
     const first = capture(store);
     capture(store, "second");
-    assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+    assertPrivateFile(filePath);
     assert.match(fs.readFileSync(filePath, "utf8"), /occ-oc-request/);
     assert.doesNotMatch(JSON.stringify(store.snapshot()), /occ-oc-request/,
       "occurrence identities remain server-only");
@@ -238,7 +239,7 @@ test("request store is owner-only, clone-safe, atomic, backup-recoverable, migra
 });
 
 test("request retention leaves generation tombstones and raw answers never reach disk, backups, snapshots, or errors", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-retention-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-retention-"));
   const filePath = path.join(directory, "requests.json");
   try {
     const store = new AgentInputRequestStore(filePath, {
@@ -269,15 +270,19 @@ test("request retention leaves generation tombstones and raw answers never reach
 });
 
 test("request store refuses unsafe parent modes and symlink record paths", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-security-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-security-"));
   try {
-    fs.chmodSync(directory, 0o755);
+    setDirectoryPrivate(directory, false);
     assert.throws(() => new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" }), /owner-only/);
-    fs.chmodSync(directory, 0o700);
+    setDirectoryPrivate(directory, true);
     const target = path.join(directory, "target.json");
     fs.writeFileSync(target, "{}", { mode: 0o600 });
     const link = path.join(directory, "link.json");
-    fs.symlinkSync(target, link);
+    if (process.platform === "win32") {
+      const targetDirectory = path.join(directory, "target-directory");
+      fs.mkdirSync(targetDirectory);
+      fs.symlinkSync(targetDirectory, link, "junction");
+    } else fs.symlinkSync(target, link);
     assert.throws(() => new AgentInputRequestStore(link, { answerDigestKey: "key" }), /non-symlink/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -285,7 +290,7 @@ test("request store refuses unsafe parent modes and symlink record paths", () =>
 });
 
 test("production retention timer prunes sustained mutations and dispose stops scheduled pruning", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-retention-timer-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-retention-timer-"));
   try {
     const store = new AgentInputRequestStore(path.join(directory, "requests.json"), {
       answerDigestKey: "key", resolvedRetentionMs: 1, tombstoneRetentionMs: 1_000, pruneIntervalMs: 5,
@@ -309,7 +314,7 @@ test("production retention timer prunes sustained mutations and dispose stops sc
 });
 
 test("v3 sdk-start, retryable, and in-doubt submissions migrate conservatively to durable ambiguity", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-v3-migration-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-v3-migration-"));
   try {
     for (const [index, status] of ["retryable", "in_doubt", "reserved"] .entries()) {
       const filePath = path.join(directory, `${status}.json`);
@@ -339,7 +344,7 @@ test("v3 sdk-start, retryable, and in-doubt submissions migrate conservatively t
 });
 
 test("single-shot persistence boundaries fail closed at reserve, buffer, exposure, and SDK result", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-boundary-faults-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-boundary-faults-"));
   const filePath = path.join(directory, "requests.json");
   try {
     let fail = false;
@@ -381,7 +386,7 @@ test("single-shot persistence boundaries fail closed at reserve, buffer, exposur
 });
 
 test("request durability fsyncs the containing directory after each rename and restarts from the renamed primary", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-directory-fsync-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-directory-fsync-"));
   const filePath = path.join(directory, "requests.json");
   try {
     const events: string[] = [];
@@ -443,7 +448,7 @@ test("request durability fsyncs the containing directory after each rename and r
 });
 
 test("complete occurrence snapshots close every absent pending state and preserve exact included members", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-occurrence-barrier-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-occurrence-barrier-"));
   try {
     const store = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });
     const captures = ["ordinary", "reserved", "exposed", "ambiguous", "failed", "present"].map((id) => capture(store, id));
@@ -477,7 +482,7 @@ test("complete occurrence snapshots close every absent pending state and preserv
 });
 
 test("cut-scoped snapshot absence closes only applicable native keys", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-scoped-barrier-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-scoped-barrier-"));
   try {
     const store = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });
     const beforeCut = capture(store, "before-cut");
@@ -495,7 +500,7 @@ test("cut-scoped snapshot absence closes only applicable native keys", () => {
 });
 
 test("generation anchors survive request and tombstone pruning and retire old exact operations after recovery", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-anchor-retention-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-anchor-retention-"));
   const filePath = path.join(directory, "requests.json");
   try {
     let store = new AgentInputRequestStore(filePath, { answerDigestKey: "key", resolvedRetentionMs: 1, tombstoneRetentionMs: 1 });
@@ -519,7 +524,7 @@ test("generation anchors survive request and tombstone pruning and retire old ex
 });
 
 test("occurrence allocation, snapshot barrier, and exact resolution fault cuts remain atomic", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-occurrence-fault-cuts-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-occurrence-fault-cuts-"));
   const filePath = path.join(directory, "requests.json");
   try {
     let fail = false;
@@ -545,7 +550,7 @@ test("occurrence allocation, snapshot barrier, and exact resolution fault cuts r
 });
 
 test("backup recovery closes every potentially exposed submission without losing generation anchors", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-monotonic-recovery-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-monotonic-recovery-"));
   const filePath = path.join(directory, "requests.json");
   try {
     let store = new AgentInputRequestStore(filePath, { answerDigestKey: "key" });
@@ -574,7 +579,7 @@ test("backup recovery closes every potentially exposed submission without losing
 });
 
 test("per-source count and byte quotas isolate a saturating source from unrelated capture", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-source-quotas-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-source-quotas-"));
   try {
     const countStore = new AgentInputRequestStore(path.join(directory, "counts.json"), { answerDigestKey: "key" });
     for (let index = 0; index < MAX_AGENT_INPUT_PENDING_PER_SOURCE; index += 1) {
@@ -605,7 +610,7 @@ test("per-source count and byte quotas isolate a saturating source from unrelate
 });
 
 test("serialized admission quotas are exact while lifecycle headroom guarantees terminal mutations", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-hard-byte-quotas-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-hard-byte-quotas-"));
   try {
     const seedPath = path.join(directory, "seed.json");
     const seed = new AgentInputRequestStore(seedPath, { answerDigestKey: "key" });
@@ -782,7 +787,7 @@ test("fixed lifecycle ceilings accept exact serialized boundaries and reject one
 });
 
 test("retired-source churn compacts generation anchors only after request and tombstone evidence expires", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-retired-churn-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-retired-churn-"));
   const filePath = path.join(directory, "requests.json");
   try {
     const store = new AgentInputRequestStore(filePath, {

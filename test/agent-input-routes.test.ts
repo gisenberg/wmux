@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -52,7 +53,7 @@ const liveSessions = (live = () => true) => ({
 }) as unknown as SessionManager;
 
 test("real server routes enforce source/pane authority and deliver ephemeral answers with typed outcomes", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-routes-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-routes-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
@@ -392,7 +393,7 @@ test("real server routes enforce source/pane authority and deliver ephemeral ans
 });
 
 test("source and registration authority retire on abnormal exit, backend replacement, host retarget, and incarnation change", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-live-authority-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-live-authority-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local", sessionBackend: "tmux" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
@@ -531,7 +532,7 @@ test("source and registration authority retire on abnormal exit, backend replace
 });
 
 test("agent-input routes enforce body, poll, concurrency, cancellation, status, and cache boundaries", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-route-limits-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-route-limits-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
@@ -763,7 +764,7 @@ test("agent-input routes enforce body, poll, concurrency, cancellation, status, 
 });
 
 test("feature disable rejects challenge creation without leaving pending challenge authority", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-route-disabled-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-route-disabled-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));

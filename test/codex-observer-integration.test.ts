@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -39,9 +40,9 @@ async function hook(env: NodeJS.ProcessEnv) {
 
 for (const backend of ["pty", "tmux"] as const) test(`production hook observes a bound root through the private Unix socket (${backend})`, {
   timeout: 40_000,
-  skip: backend === "tmux" && spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 ? "tmux is unavailable" : false,
+  skip: process.platform === "win32" ? "requires a private POSIX Unix socket" : backend === "tmux" && spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 ? "tmux is unavailable" : false,
 }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-observer-integration-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-codex-observer-integration-"));
   const home = path.join(directory, "home"), socketDirectory = path.join(home, "app-server-control"), socketPath = path.join(socketDirectory, "app-server-control.sock");
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 }); fs.mkdirSync(socketDirectory, { recursive: true, mode: 0o700 });
   const nativeServer = http.createServer(), native = new WebSocketServer({ server: nativeServer });

@@ -33,7 +33,7 @@ test("doctor reports driver durability and pane failures without machine secrets
       missing: [],
     };
     const report = buildDoctorReport(state.snapshot(), machines, statuses, audit);
-    assert.equal(report.panes[0].transport, "local-multiplexer");
+    assert.equal(report.panes[0].transport, process.platform === "win32" ? "pty" : "local-multiplexer");
     assert.equal(report.panes[0].restartDurable, false, "configuration alone does not establish durability");
     assert.equal(report.panes[0].capabilitySource, "unconfirmed");
     assert.match(report.panes[0].issue ?? "", /code 7/);

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { posixHostShell } from "../src/server/host-shell.js";
 import { execFile, spawnSync } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -136,7 +138,7 @@ test("every backend attachment receives a fresh agent-input authority epoch", ()
 });
 
 test("idle durable-client recycle detaches only the transient client and keeps the old endpoint snapshot", () => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-recycle-"));
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-recycle-"));
   let machine: MachineConfig = {
     id: "recycled-roamer",
     name: "Recycled roamer",
@@ -218,7 +220,7 @@ test("idle durable-client recycle detaches only the transient client and keeps t
 });
 
 test("bound durable browser reconnect restores its live checkpoint without refresh and retains raw watcher replay", async () => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-codex-checkpoint-"));
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-codex-checkpoint-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", sessionBackend: "tmux" };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -296,8 +298,8 @@ test("bound durable browser reconnect restores its live checkpoint without refre
 });
 
 test("ready holds every empty durable-refresh replay, including a late attach to a live client", async () => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-refresh-ready-"));
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-refresh-ready-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
   const manager = new SessionManager(state, [machine]);
@@ -360,8 +362,8 @@ test("ready holds every empty durable-refresh replay, including a late attach to
 });
 
 test("output watchers receive raw replay instead of a rendered checkpoint", async () => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-output-replay-"));
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-output-replay-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
   const manager = new SessionManager(state, [machine]);
@@ -390,7 +392,7 @@ test("output watchers receive raw replay instead of a rendered checkpoint", asyn
 });
 
 test("offline registered machines reject new session creation", () => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-offline-"));
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-offline-"));
   const machine: MachineConfig = {
     id: "offline-host",
     name: "Offline host",
@@ -416,6 +418,7 @@ class FakeSocket extends EventEmitter {
   readyState = this.OPEN;
   bufferedAmount = 0;
   sent: unknown[] = [];
+  closeReason = "";
 
   send(raw: string): void {
     this.sent.push(JSON.parse(raw));
@@ -425,6 +428,7 @@ class FakeSocket extends EventEmitter {
   close(code = 1000, reason = ""): void {
     if (this.readyState !== this.OPEN) return;
     this.readyState = 3;
+    this.closeReason = reason;
     this.emit("close", code, Buffer.from(reason));
   }
 
@@ -443,7 +447,7 @@ const waitForMessage = async (ws: WebSocket, predicate: (message: any) => boolea
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error(`timed out waiting for session message: ${JSON.stringify(target.sent.slice(-3))}`));
+      reject(new Error(`timed out waiting for session message: ${JSON.stringify(target.sent.slice(-3))}; close: ${target.closeReason}`));
     }, timeoutMs);
     const onSent = () => {
       const match = target.sent.find(predicate);
@@ -468,8 +472,8 @@ const waitForCondition = async (predicate: () => boolean, timeoutMs = 3_000): Pr
 };
 
 test("agent-input authority epochs are exact and graceful shutdown retires only the current binding", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-agent-input-epoch-"));
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-session-agent-input-epoch-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
   const manager = new SessionManager(state, [machine]);
@@ -516,7 +520,7 @@ test("agent-input authority epochs are exact and graceful shutdown retires only 
 });
 
 test("abnormal live backend exit retires its exact agent-input authority", { skip: process.platform === "win32" }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-agent-input-exit-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-session-agent-input-exit-"));
   const machine: MachineConfig = {
     id: "local",
     name: "Local",
@@ -567,7 +571,7 @@ const waitForWebSocketMessage = async (
 });
 
 const withState = async (machine: MachineConfig, run: (state: StateStore, dir: string) => Promise<void>) => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-manager-"));
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-manager-"));
   try {
     await run(new StateStore([machine], path.join(dir, "state.json")), dir);
   } finally {
@@ -652,7 +656,7 @@ test("failed agent exit retains its old endpoint snapshot for close after a hear
   assert.ok(oldAddress && typeof oldAddress === "object");
   assert.ok(newAddress && typeof newAddress === "object");
 
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-agent-move-"));
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-agent-move-"));
   let machine: MachineConfig = {
     id: "moving-agent",
     name: "Moving agent",
@@ -759,7 +763,7 @@ test("restart reattaches a referenced rollout generation on its pinned private o
   const baseAddress = baseAgent.address();
   assert.ok(generationAddress && typeof generationAddress === "object");
   assert.ok(baseAddress && typeof baseAddress === "object");
-  const directory = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-generation-restart-"));
+  const directory = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-generation-restart-"));
   const statePath = path.join(directory, "state.json");
   const endpointPath = path.join(directory, "session-endpoints.json");
   const configuredMachine: MachineConfig = {
@@ -846,7 +850,7 @@ test("agent interrupt input scopes bare escape fallback to Codex", () => {
 });
 
 test("Prime Agent escape UI actions do not interrupt active pane lifecycle", async () => {
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
     const manager = new SessionManager(state, [machine]);
@@ -896,7 +900,7 @@ test("terminal-generated response metadata survives client message parsing", () 
 });
 
 test("pane output acknowledges each browser's latest input sequence without tagging output watchers", () => {
-  const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-input-ack-"));
+  const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-input-ack-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
   const state = new StateStore([machine], path.join(dir, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
@@ -1115,7 +1119,7 @@ test("multi-client PTY attach broadcasts output, replays, and removes cleanly", 
 });
 
 test("lagging viewers and output watchers disconnect without blocking a healthy viewer", async () => {
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
     const manager = new SessionManager(state, [machine]);
@@ -1341,8 +1345,11 @@ test("late attach receives an authoritative checkpoint for a full-screen PTY", {
   });
 });
 
-test("late attach after a terminal resize receives an authoritative checkpoint", async () => {
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: ["/bin/sh"] };
+test("late attach after a terminal resize receives an authoritative checkpoint", {
+  // This fixture depends on byte-exact POSIX PTY output; ConPTY rewrites the screen.
+  skip: process.platform === "win32" ? "POSIX PTY fixture; native resize is covered by backend conformance" : false,
+}, async () => {
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", command: [posixHostShell()] };
   await withState(machine, async (state) => {
     const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
     const manager = new SessionManager(state, [machine]);
@@ -1380,7 +1387,7 @@ test(
   "raw PTY restores its persisted screen checkpoint after manager restart",
   { skip: process.platform === "win32" },
   async () => {
-    const directory = fs.mkdtempSync(
+    const directory = privateTempDirectory(
       path.join(canonicalTempRoot, "wmux-raw-checkpoint-"),
     );
     const machine: MachineConfig = {
@@ -1446,7 +1453,7 @@ test(
   "new and reattached tmux panes synchronize cwd after the durable session is ready",
   { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
   async () => {
-    const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-session-cwd-"));
+    const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-session-cwd-"));
     const initialCwd = path.join(dir, "initial");
     const movedCwd = path.join(dir, "moved");
     fs.mkdirSync(initialCwd);
@@ -1601,7 +1608,7 @@ test(
   "output-only HTTP websocket refreshes a controller-created tmux pane and streams later input",
   { skip: process.platform === "win32" || spawnSync("tmux", ["-V"], { stdio: "ignore" }).status !== 0 },
   async () => {
-    const dir = fs.mkdtempSync(path.join(canonicalTempRoot, "wmux-controller-tmux-"));
+    const dir = privateTempDirectory(path.join(canonicalTempRoot, "wmux-controller-tmux-"));
     const machine: MachineConfig = {
       id: "local",
       name: "Local",

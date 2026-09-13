@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
+import { privateTempDirectory, assertPrivateFile } from "./private-fixture.js";
 
-const ownershipPath = path.resolve("plugins/wmux/scripts/wmux-name-ownership.mjs");
+const ownershipPath = pathToFileURL(path.resolve("plugins/wmux/scripts/wmux-name-ownership.mjs")).href;
 const FILE = "wmux-session-names-v1.json";
 
-function runtime() { return fs.mkdtempSync(path.join(os.tmpdir(), "wmux-session-name-store-")); }
+function runtime() { return privateTempDirectory(path.join(os.tmpdir(), "wmux-session-name-store-")); }
 async function withRuntime(action: (directory: string, store: typeof import("../plugins/wmux/scripts/wmux-name-ownership.mjs")) => Promise<void>) {
   const directory = runtime(), prior = process.env.WMUX_CODEX_PLUGIN_RUNTIME_DIR;
   process.env.WMUX_CODEX_PLUGIN_RUNTIME_DIR = directory;
@@ -30,7 +32,7 @@ test("wmux semantic names are private, atomic, per-session, normalized, and boun
     // are the largest JSON encoding (six bytes per UTF-16 code unit).
     for (let index = 0; index < 520; index++) await names.rememberWmuxSessionName(`thread_${index}`, "\ud800".repeat(80));
     const file = path.join(directory, FILE), stat = fs.statSync(file), stored = JSON.parse(fs.readFileSync(file, "utf8"));
-    assert.equal(stat.mode & 0o077, 0);
+    assertPrivateFile(file);
     assert.equal(stored.schemaVersion, 1);
     assert.equal(stored.sessions.length, 512);
     assert.equal(names.wmuxSessionName("thread_one"), null);
@@ -48,9 +50,12 @@ test("distinct processes retain concurrent session-name writes without native ca
   const worker = `import { rememberWmuxSessionName } from ${JSON.stringify(ownershipPath)}; const [prefix, count] = process.argv.slice(1); for (let index = 0; index < Number(count); index++) await rememberWmuxSessionName(prefix + index, prefix + index);`;
   const run = (prefix: string) => new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "--eval", worker, prefix, "80"], {
-      env: { ...process.env, WMUX_CODEX_PLUGIN_RUNTIME_DIR: directory, PATH: `${bin}:${process.env.PATH}` }, stdio: "ignore",
+      env: { ...process.env, WMUX_CODEX_PLUGIN_RUNTIME_DIR: directory, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, stdio: ["ignore", "ignore", "pipe"],
     });
-    child.once("exit", code => code === 0 ? resolve() : reject(new Error(`session-name worker exited ${code}`)));
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", code => code === 0 ? resolve() : reject(new Error(`session-name worker exited ${code}: ${stderr}`)));
   });
   try {
     await Promise.all([run("alpha_"), run("bravo_")]);
@@ -71,7 +76,11 @@ test("session-name storage rejects corrupt, future, and symlinked files", async 
     fs.unlinkSync(file);
     const target = path.join(directory, "target.json");
     fs.writeFileSync(target, JSON.stringify({ schemaVersion: 1, sessions: [] }), { mode: 0o600 });
-    fs.symlinkSync(target, file);
+    if (process.platform === "win32") {
+      const targetDirectory = path.join(directory, "target-directory");
+      fs.mkdirSync(targetDirectory);
+      fs.symlinkSync(targetDirectory, file, "junction");
+    } else fs.symlinkSync(target, file);
     assert.throws(() => names.wmuxSessionName("thread_one"), /unreadable or unsafe/);
   });
 });

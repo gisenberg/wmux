@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -19,7 +20,7 @@ const agentsFor = (state: StateStore): AgentSessionService => {
 };
 
 const withTempState = (run: (filePath: string, dir: string) => void): void => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-state-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-state-"));
   try {
     run(path.join(dir, "state.json"), dir);
   } finally {
@@ -46,8 +47,8 @@ test("fresh state storage creates an owner-only directory", () => {
     const storageDirectory = path.join(dir, "new-storage");
     const filePath = path.join(storageDirectory, "state.json");
     new StateStore(machines, filePath);
-    assert.equal(fs.statSync(storageDirectory).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+    assertPrivateFile(storageDirectory);
+    assertPrivateFile(filePath);
   });
 });
 

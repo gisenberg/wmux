@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -182,7 +183,7 @@ test("registry is bounded and rejects malformed credentials", () => {
 });
 
 test("Codex binding routes accept helper authority, validate bodies, and never echo receipts", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-binding-http-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-codex-binding-http-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));

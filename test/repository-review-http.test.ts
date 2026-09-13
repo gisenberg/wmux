@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -45,7 +46,7 @@ interface HttpFixture {
 }
 
 const createFixture = async (): Promise<HttpFixture> => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-repository-http-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-repository-http-"));
   const repository = path.join(directory, "canonical repo");
   const nonRepository = path.join(directory, "not a repo");
   fs.mkdirSync(repository);

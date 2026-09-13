@@ -196,7 +196,7 @@ test("local durable credentials are staged outside observable process arguments"
   assert.equal(fs.statSync(spec.args[0]).mode & 0o777, 0o700);
 });
 
-test("local durable reattach uses a fresh systemd scope", () => {
+test("local durable reattach uses a fresh systemd scope", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const first = buildSpawnSpec(machines[0].machine, 120, 40, extraEnv);
   const firstRuntime = fs.readFileSync(first.args[0], "utf8");
   const second = buildSpawnSpec(machines[0].machine, 120, 40, extraEnv);
@@ -211,14 +211,14 @@ test("local durable reattach uses a fresh systemd scope", () => {
   assert.match(firstRuntime, /tmux set-option -t 'wmux_pane_fixed001' status off/);
 });
 
-test("raw local panes launch through the managed shell wrapper", () => {
+test("raw local panes launch through the managed shell wrapper", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const spec = buildSpawnSpec(machines[1].machine, 120, 40, extraEnv);
   assert.equal(spec.file, "/bin/sh");
   assert.ok((spec.env.PATH ?? "").split(path.delimiter).includes(path.join(os.homedir(), ".local", "bin")));
   assert.match(spec.args.join(" "), /exec/);
 });
 
-test("opt-in raw bash panes install managed command tracking hooks", () => {
+test("opt-in raw bash panes install managed command tracking hooks", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const spec = buildSpawnSpec({
     id: "tracked",
     name: "Tracked",
@@ -237,7 +237,7 @@ test("opt-in raw bash panes install managed command tracking hooks", () => {
   assert.match(command, /_wmux_command_precmd/);
 });
 
-test("opt-in raw zsh panes install preexec and precmd command tracking hooks", () => {
+test("opt-in raw zsh panes install preexec and precmd command tracking hooks", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const spec = buildSpawnSpec({
     id: "tracked-zsh",
     name: "Tracked zsh",
@@ -255,7 +255,7 @@ test("opt-in raw zsh panes install preexec and precmd command tracking hooks", (
   assert.match(command, /wmux-shell-run-event finish/);
 });
 
-test("raw shell command tracking remains disabled or unsupported by default", () => {
+test("raw shell command tracking remains disabled or unsupported by default", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const bash = buildSpawnSpec({
     id: "plain-bash",
     name: "Plain bash",

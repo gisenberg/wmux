@@ -39,7 +39,7 @@ async function fixture(t: any, respond: (message: any) => unknown = () => ({})) 
   return { socketPath, directory, messages, wss, details: () => ({ extensions, userAgent }) };
 }
 
-test("read-only Codex transport connects over a private Unix socket and bounds every request", async t => {
+test("read-only Codex transport connects over a private Unix socket and bounds every request", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => ({ method: m.method }));
   const client = await connectCodexObserver({ threadId: "root_thread", socketPath: f.socketPath });
   t.after(() => client.close());
@@ -51,7 +51,7 @@ test("read-only Codex transport connects over a private Unix socket and bounds e
   assert.deepEqual(f.messages[3].params, { threadId: "root_thread", cursor: null, limit: 8, sortDirection: "desc", itemsView: "notLoaded" });
 });
 
-test("read-only Codex transport cannot drive, resume, answer, or select another thread", async t => {
+test("read-only Codex transport cannot drive, resume, answer, or select another thread", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t);
   const client = await connectCodexObserver({ threadId: "root", socketPath: f.socketPath });
   t.after(() => client.close());
@@ -66,7 +66,7 @@ test("read-only Codex transport cannot drive, resume, answer, or select another 
   assert.deepEqual(f.messages.map(m => m.method), ["initialize", "initialized", "thread/read"]);
 });
 
-test("read-only Codex transport rejects unsafe socket and parent permissions without connecting", async t => {
+test("read-only Codex transport rejects unsafe socket and parent permissions without connecting", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t);
   fs.chmodSync(f.socketPath, 0o666);
   await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: f.socketPath }));
@@ -80,7 +80,7 @@ test("read-only Codex transport rejects unsafe socket and parent permissions wit
   assert.deepEqual(f.messages, []);
 });
 
-test("read-only Codex transport rejects pending operations when its local connection closes", async t => {
+test("read-only Codex transport rejects pending operations when its local connection closes", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => m.method === "initialize" ? {} : undefined);
   const client = await connectCodexObserver({ threadId: "root", socketPath: f.socketPath });
   const pending = client.request("thread/read", { threadId: "root" });
@@ -90,7 +90,7 @@ test("read-only Codex transport rejects pending operations when its local connec
   await assert.rejects(client.request("thread/read", { threadId: "root" }));
 });
 
-test("read-only Codex transport fails closed on malformed native messages", async t => {
+test("read-only Codex transport fails closed on malformed native messages", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => m.method === "initialize" ? {} : undefined);
   const client = await connectCodexObserver({ threadId: "root", socketPath: f.socketPath });
   t.after(() => client.close());
