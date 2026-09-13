@@ -11,7 +11,7 @@ test("integration generation is deterministic across checkout line endings and r
     for (const file of ["scripts/generate-hooks.mjs", "scripts/wmux-hooks", "src/integrations/hooks-installer.mjs", "src/integrations/opencode.ts", "src/integrations/prime-agent.ts"]) {
       const target = path.join(root, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, fs.readFileSync(file, "utf8").replaceAll("\n", "\r\n"));
+      fs.writeFileSync(target, fs.readFileSync(file, "utf8").replaceAll("\r\n", "\n").replaceAll("\n", "\r\n"));
     }
     const check = () => spawnSync(process.execPath, ["scripts/generate-hooks.mjs", "--check"], { cwd: root, encoding: "utf8" });
     const clean = check();
