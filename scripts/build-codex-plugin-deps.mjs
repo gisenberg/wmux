@@ -26,7 +26,7 @@ const result = await build({
 });
 const output = result.outputFiles[0].text;
 if (process.argv.includes("--check")) {
-  if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== output) {
+  if (!fs.existsSync(target) || fs.readFileSync(target, "utf8").replaceAll("\r\n", "\n") !== output) {
     throw new Error("Codex plugin dependency bundle is stale; run node scripts/build-codex-plugin-deps.mjs.");
   }
 } else {
