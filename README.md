@@ -68,8 +68,9 @@ Clients fetch a full bootstrap snapshot only for initial load, reconnect recover
 ## Quick Start
 
 Server requirements: Linux or macOS, Node.js 22+, npm, and `/bin/sh` with a
-supported local PTY environment. Windows is supported as a remote
-`powershell-ssh` target, but not as the wmux server host. Running the complete
+supported local PTY environment. This fork also has an experimental
+[native Windows host path](docs/WINDOWS_HOST.md) using Git Bash and ConPTY.
+Windows remains supported as a remote `powershell-ssh` target. Running the complete
 development check (`npm run check`) additionally requires Bash and Python 3;
 individual TypeScript and client build commands may work elsewhere, but the
 full development workflow is supported on Linux and macOS.

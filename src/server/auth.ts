@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -259,14 +260,14 @@ const readValidatedSecretFile = (filePath: string, label: string): string => {
   if (typeof process.getuid === "function" && parent.uid !== process.getuid()) {
     throw new Error(`${label} parent directory must be owned by the wmux user`);
   }
-  if ((parent.mode & 0o077) !== 0) throw new Error(`${label} parent directory must be owner-only`);
+  if (!hasPrivatePermissions(parentPath, parent, true)) throw new Error(`${label} parent directory must be owner-only`);
   if (!file.isFile() || file.isSymbolicLink() || fs.realpathSync(resolvedPath) !== resolvedPath) {
     throw new Error(`${label} file must be a regular non-symlink file`);
   }
   if (typeof process.getuid === "function" && file.uid !== process.getuid()) {
     throw new Error(`${label} file must be owned by the wmux user`);
   }
-  if ((file.mode & 0o777) !== 0o600) throw new Error(`${label} file permissions must be 0600`);
+  if (!hasPrivatePermissions(resolvedPath, file)) throw new Error(`${label} file permissions must be 0600`);
   return validateScopedSecret(fs.readFileSync(resolvedPath, "utf8"), label);
 };
 

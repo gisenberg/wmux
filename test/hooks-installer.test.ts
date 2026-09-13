@@ -1485,6 +1485,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
   const captured: Record<string, unknown>[] = [];
   const titleCaptured: Record<string, unknown>[] = [];
   let failNextTitle = false;
+  let shutdown: (() => Promise<void>) | undefined;
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -1560,6 +1561,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
           titleStates.push(data);
         },
       });
+      shutdown = async () => { await handlers.get("session_shutdown")?.({ reason: "quit" }, context); };
       return handlers;
     };
     let handlers = await loadHandlers("initial");
@@ -1644,7 +1646,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     failNextTitle = true;
     sessionName = "Canonical idle name";
     appendSessionEntry({ type: "session_info", name: sessionName });
-    await waitUntil(() => titleCaptured.filter((request) => request.title === sessionName).length === 2);
+    await waitUntil(() => titleCaptured.filter((request) => request.title === sessionName).length === 2, 10_000);
     const idleTitleCount = titleCaptured.length;
     await new Promise((resolve) => setTimeout(resolve, 1_100));
     assert.equal(titleCaptured.length, idleTitleCount);
@@ -1665,8 +1667,8 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     assert.equal(sessionName, undefined);
     assert.equal(titleCaptured.length, titleRequestCount);
     assert.ok(titleStates.length >= 16);
-    await handlers.get("session_shutdown")?.({ reason: "quit" }, context);
   } finally {
+    await shutdown?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];

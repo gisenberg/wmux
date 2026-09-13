@@ -14,6 +14,7 @@ export const isDurableMultiplexerMachine = (machine: MachineConfig): boolean => 
   const backend = machine.sessionBackend ?? "auto";
   return (
     !machine.command?.length
+    && !(machine.kind === "local" && process.platform === "win32")
     && (machine.kind === "local" || machine.kind === "ssh")
     && (backend === "auto" || backend === "tmux" || backend === "screen")
   );

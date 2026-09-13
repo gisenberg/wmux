@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { protectWindowsStateDirectory } from "./private-permissions.js";
+import { configureWindowsHostTools } from "./host-shell.js";
 import type { ServerOptions as HttpsServerOptions } from "node:https";
 import os from "node:os";
 import { AgentSessionService } from "./agent-sessions.js";
@@ -63,6 +65,8 @@ const main = async (): Promise<void> => {
     );
   }
 
+  protectWindowsStateDirectory(path.join(os.homedir(), ".wmux"));
+  configureWindowsHostTools();
   const config = loadConfig();
   const auth = loadAuthConfig();
   const registrationAuth = loadRegistrationAuthConfig();

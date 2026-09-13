@@ -18,6 +18,7 @@ export const rawPtyCapabilities = (machine: MachineConfig): BackendCapabilities 
   restartDurable: false,
   supportsFileStaging:
     !machine.command?.length
+    && process.platform !== "win32"
     && (machine.kind === "local" || machine.kind === "ssh" || machine.kind === "powershell-ssh"),
   supportsCwdReport: true,
   replay: true,

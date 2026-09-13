@@ -13,13 +13,14 @@ export const durableSessionName = (paneId?: string): string =>
 
 export const canRefreshDurableSessionClient = (machine: MachineConfig): boolean => {
   const backend = machine.sessionBackend ?? "auto";
-  return machine.kind === "local" && !machine.command?.length && (backend === "auto" || backend === "tmux");
+  return process.platform !== "win32" && machine.kind === "local" && !machine.command?.length && (backend === "auto" || backend === "tmux");
 };
 
 export const readDurableSessionCwd = async (
   machine: MachineConfig,
   paneId: string,
 ): Promise<string | undefined> => {
+  if (machine.kind === "local" && process.platform === "win32") return undefined;
   const backend = machine.sessionBackend ?? "auto";
   if (backend === "screen" || backend === "pty" || backend === "agent" || machine.command?.length) return undefined;
   if (machine.kind !== "local" && machine.kind !== "ssh") return undefined;
@@ -73,6 +74,7 @@ export const disposeDurableSession = async (
   paneId: string,
 ): Promise<boolean> => {
   const backend = machine.sessionBackend ?? "auto";
+  if (machine.kind === "local" && process.platform === "win32") return false;
   if (backend === "pty" || backend === "agent" || machine.command?.length) return false;
   if (machine.kind !== "local" && machine.kind !== "ssh") return false;
   const sessionName = durableSessionName(paneId);

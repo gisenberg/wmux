@@ -472,6 +472,7 @@ const publicMachineStatusBase = (machine: MachineConfig): Omit<MachineStatus, "r
 
 const localBackendDetail = (machine: MachineConfig): string => {
   const backend = machine.sessionBackend ?? "auto";
+  if (process.platform === "win32" && (backend === "auto" || backend === "pty")) return "Windows ConPTY; not restart-durable";
   if (backend === "agent") return "POSIX agent backend";
   if (backend === "pty") return "raw PTY; not restart-durable";
   const tmux = commandExists("tmux") ? "tmux available" : "tmux missing";
