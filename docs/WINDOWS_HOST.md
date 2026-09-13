@@ -75,7 +75,7 @@ they fail closed instead of reconnecting to an unpinned target. Native local
 image paste is also disabled. Session-agent file staging is separate.
 
 Git Bash cwd prompt integration, automatic Windows service startup, and broad helper/agent integration parity remain incomplete.
-Local pane disposal terminates the Windows process tree before ConPTY teardown so it does not race node-pty's console-list helper.
+Node-pty can emit `AttachConsole failed` from its cleanup helper after an exited console; this upstream diagnostic remains unresolved.
 The complete POSIX-oriented test suite is not green on native Windows, so this is a local trial path, not release parity.
 
 ## Verification
