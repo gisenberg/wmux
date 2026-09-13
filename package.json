@@ -44,6 +44,7 @@
     "@opencode-ai/sdk": "1.18.9",
     "@vitejs/plugin-react": "^4.7.0",
     "ghostty-web": "file:vendor/ghostty-web-pr169/ghostty-web-0.4.1-pr169-faf6fbd-wmux4.tgz",
+    "koffi": "3.2.1",
     "lucide-react": "^0.468.0",
     "node-pty": "^1.0.0",
     "tsx": "^4.20.5",

@@ -87,7 +87,7 @@ export const durableMultiplexerCapabilities = (machine: MachineConfig): BackendC
   return {
     transport: machine.kind === "ssh" ? "ssh-multiplexer" : "local-multiplexer",
     restartDurable: true,
-    supportsFileStaging: true,
+    supportsFileStaging: process.platform !== "win32",
     supportsCwdReport: backend !== "screen",
     replay: true,
     resize: true,

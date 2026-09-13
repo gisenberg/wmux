@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -641,6 +642,9 @@ export class SessionManager {
     if (this.strandedEndpointCleanupRunning) return;
     this.strandedEndpointCleanupRunning = true;
     void cleanupStrandedDurableEndpoints(this.durableEndpoints)
+      .catch(() => {
+        console.error("wmux: stranded endpoint cleanup failed; check state directory permissions before the next sweep");
+      })
       .finally(() => {
         this.strandedEndpointCleanupRunning = false;
       });
@@ -1374,7 +1378,7 @@ const stageLocalAgentInputCapability = (
   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()
     || fs.realpathSync(directory) !== path.resolve(directory)
     || (typeof process.getuid === "function" && directoryStat.uid !== process.getuid())
-    || (directoryStat.mode & 0o077) !== 0) {
+    || !hasPrivatePermissions(directory, directoryStat, true)) {
     throw new Error("agent input staging directory is unsafe");
   }
   const capabilityPath = path.join(directory, `${paneId}.cap`);

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import path from "node:path";
 import { z } from "zod";
 import type { AuthConfig } from "./auth.js";
@@ -241,7 +242,7 @@ export class ScopedCredentialStore {
     if (!parent.isDirectory() || parent.isSymbolicLink()) {
       throw new Error("scoped credential token parent must be a regular directory");
     }
-    if ((parent.mode & 0o077) !== 0) {
+    if (!hasPrivatePermissions(parentPath, parent, true)) {
       throw new Error("scoped credential token parent must be owner-only");
     }
     if (fs.existsSync(tokenPath)) this.assertSecureFile(tokenPath);
@@ -283,7 +284,7 @@ export class ScopedCredentialStore {
     ) {
       throw new Error("scoped credential parent directory must be owned by the wmux user");
     }
-    if ((parent.mode & 0o077) !== 0) {
+    if (!hasPrivatePermissions(parentPath, parent, true)) {
       throw new Error("scoped credential parent directory must be owner-only");
     }
   }
@@ -303,7 +304,7 @@ export class ScopedCredentialStore {
     ) {
       throw new Error("scoped credential record must be owned by the wmux user");
     }
-    if ((file.mode & 0o777) !== 0o600) {
+    if (!hasPrivatePermissions(filePath, file)) {
       throw new Error("scoped credential record permissions must be 0600");
     }
   }

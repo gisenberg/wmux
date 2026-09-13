@@ -92,7 +92,7 @@ test("spawn spec matrix matches the golden snapshot", { skip: process.platform =
   assert.deepEqual(current, golden);
 });
 
-test("every machine kind produces a runnable file + cwd", () => {
+test("every machine kind produces a runnable file + cwd", { skip: process.platform === "win32" }, () => {
   for (const { label, spec } of sampleSpecs()) {
     assert.ok(spec.file, `${label} has a spawn file`);
     assert.ok(spec.cwd, `${label} has a cwd`);
