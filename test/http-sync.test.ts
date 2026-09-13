@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -81,7 +82,7 @@ test("health epochs use safe restart-sortable process bases", () => {
 });
 
 test("workspace reorder API moves existing workspaces and validates targets", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-reorder-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-reorder-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const first = state.snapshot().workspaces[0];
@@ -163,7 +164,7 @@ test("agent workspace creation fails closed when its validated parent disappears
 });
 
 test("agent workspace creation validates the complete parent context", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-parent-context-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-parent-context-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const root = state.snapshot().workspaces[0];
@@ -213,7 +214,7 @@ test("agent workspace creation validates the complete parent context", async () 
 });
 
 test("agent workspace creation reports workspace_depth without changing the tree", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-workspace-depth-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-workspace-depth-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const root = state.snapshot().workspaces[0];
@@ -245,7 +246,7 @@ test("agent workspace creation reports workspace_depth without changing the tree
 });
 
 test("agent workspace cleanup API validates, persists, and disarms bounded policies", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-workspace-cleanup-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-workspace-cleanup-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const userWorkspace = state.snapshot().workspaces[0];
@@ -386,7 +387,7 @@ test("agent workspace cleanup API validates, persists, and disarms bounded polic
 });
 
 test("bundled browser fonts remain available without API credentials", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-font-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-font-"));
   const machines: MachineConfig[] = [];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const settings = new SettingsStore(path.join(dir, "settings.json"));
@@ -421,7 +422,7 @@ test("bundled browser fonts remain available without API credentials", async () 
 });
 
 test("delegation status API returns persisted lifecycle results by run id", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-delegation-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-delegation-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(dir, "state.json"));
   const paneId = state.snapshot().workspaces[0].tabs[0].panes[0].id;
@@ -518,7 +519,7 @@ test("delegation status API returns persisted lifecycle results by run id", asyn
 });
 
 test("mutations use cached health and publish revisioned WebSocket deltas", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-sync-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-sync-"));
   const healthDelayMs = 600;
   const healthServer = http.createServer((_request, response) => {
     setTimeout(() => {
@@ -641,7 +642,7 @@ test("mutations use cached health and publish revisioned WebSocket deltas", asyn
 });
 
 test("health polls publish only meaningful typed deltas to every browser", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-health-delta-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-health-delta-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   let changed = false;
   let machineChecks = 0;
@@ -698,7 +699,7 @@ test("health polls publish only meaningful typed deltas to every browser", async
 });
 
 test("POST /api/settings persists terminal scroll mode and sidebar host grouping", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-settings-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-settings-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const settingsPath = path.join(dir, "settings.json");
   const state = new StateStore(machines, path.join(dir, "state.json"));

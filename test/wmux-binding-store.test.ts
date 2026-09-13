@@ -34,7 +34,9 @@ test("binding store caps valid records, removes expired records, and selects onl
   assert.equal(fs.existsSync(path.join(runtime, expiredFile)), false);
 });
 
-test("same-session bindings serialize the full action despite distinct receipts", async () => {
+test("same-session bindings serialize the full action despite distinct receipts", {
+  skip: process.platform === "win32" ? "binding serialization requires POSIX flock and directory fsync" : false,
+}, async () => {
   const first = binding(700, "first"), second = binding(701, "second"), events: string[] = [];
   bindings.saveBinding(first); bindings.saveBinding(second);
   await Promise.all([
@@ -46,6 +48,8 @@ test("same-session bindings serialize the full action despite distinct receipts"
 });
 
 test("updating an existing binding at capacity does not evict another receipt, and legacy v2 is not supervised", () => {
+  // This record must exist even when the POSIX serialization test is skipped.
+  bindings.saveBinding(binding(701, "second"));
   const before = fs.readdirSync(runtime).filter(name => name.endsWith(".json")).sort();
   bindings.saveBinding(binding(701, "second"));
   const after = fs.readdirSync(runtime).filter(name => name.endsWith(".json")).sort();

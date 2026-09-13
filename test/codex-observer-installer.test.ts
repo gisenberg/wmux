@@ -8,7 +8,7 @@ import test from "node:test";
 
 const run = promisify(execFile);
 
-test("observer installer renders quoted special-character paths using a mocked user systemctl", async () => {
+test("observer installer renders quoted special-character paths using a mocked user systemctl", { skip: process.platform === "win32" ? "requires Linux systemd and POSIX paths" : false }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux observer % & | "));
   const home = path.join(directory, "home % & |"), bin = path.join(directory, "bin");
   fs.mkdirSync(bin, { recursive: true });

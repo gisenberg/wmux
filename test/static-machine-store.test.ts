@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,7 +10,7 @@ import {
 } from "../src/server/static-machine-store.js";
 
 test("static machine CRUD is validated, atomic, owner-only, and secret-preserving", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-static-machines-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-static-machines-"));
   const configPath = path.join(directory, ".wmux", "config.json");
   const store = new StaticMachineStore([{
     id: "local",
@@ -31,8 +32,8 @@ test("static machine CRUD is validated, atomic, owner-only, and secret-preservin
       user: "operator",
       sessionBackend: "auto",
     });
-    assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(path.dirname(configPath)).mode & 0o777, 0o700);
+    assertPrivateFile(configPath);
+    assertPrivateFile(path.dirname(configPath));
     assert.deepEqual(store.snapshot().map((machine) => machine.id), ["local", "remote"]);
 
     const publicLocal = store.publicSnapshot().find((machine) => machine.id === "local");
@@ -83,7 +84,7 @@ test("static machine CRUD is validated, atomic, owner-only, and secret-preservin
 });
 
 test("browser updates cannot retarget a hidden session-agent token", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-static-agent-origin-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-static-agent-origin-"));
   const configPath = path.join(directory, ".wmux", "config.json");
   const store = new StaticMachineStore([{
     id: "agent",

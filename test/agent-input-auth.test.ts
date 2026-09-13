@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile, setDirectoryPrivate } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -74,7 +75,7 @@ const registration = (
 };
 
 test("single-use capability exchange persists hashes only and relay refresh rotates immediately", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-"));
   const filePath = path.join(directory, "credentials.json");
   try {
     const store = new AgentInputCredentialStore(filePath, { hashKey: "server-key", capabilityTtlMs: 100, relayTtlMs: 500 });
@@ -92,7 +93,7 @@ test("single-use capability exchange persists hashes only and relay refresh rota
     const persisted = fs.readFileSync(filePath, "utf8");
     assert.doesNotMatch(persisted, new RegExp(issued.capability.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(persisted, new RegExp(exchange.relaySecret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+    assertPrivateFile(filePath);
     assert.equal(store.authenticate(issued.capability, 1_003)?.kind, "agent-input-registration");
     assert.throws(() => registration(store, registrationPrincipal, "N".repeat(43), 1_003), /unauthorized/);
     assert.deepEqual(store.exchange(registrationPrincipal, registrationBody, 1_003), {
@@ -142,7 +143,7 @@ test("single-use capability exchange persists hashes only and relay refresh rota
 });
 
 test("new capabilities supersede stale registration authority and one bound context has one active source", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-supersede-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-supersede-"));
   try {
     const store = new AgentInputCredentialStore(path.join(directory, "credentials.json"), {
       hashKey: "server-key", capabilityTtlMs: 10_000, relayTtlMs: 20_000,
@@ -180,7 +181,7 @@ test("new capabilities supersede stale registration authority and one bound cont
 });
 
 test("server challenges are one-shot, renewable, and exact to capability, pane, source, and credential generation", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-server-challenge-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-server-challenge-"));
   try {
     const store = new AgentInputCredentialStore(path.join(directory, "credentials.json"), {
       hashKey: "server-key", challengeTtlMs: 1_000, relayTtlMs: 10_000,
@@ -267,7 +268,7 @@ test("server challenges are one-shot, renewable, and exact to capability, pane, 
 });
 
 test("capability and source expiry, unsupported versions, migrations, backup recovery, and future refusal fail closed", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-durable-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-durable-"));
   const filePath = path.join(directory, "credentials.json");
   try {
     const store = new AgentInputCredentialStore(filePath, { hashKey: "server-key", capabilityTtlMs: 10, relayTtlMs: 20 });
@@ -333,11 +334,19 @@ test("capability and source expiry, unsupported versions, migrations, backup rec
 });
 
 test("credential store refuses unsafe parents and symlinks", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-security-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-security-"));
   try {
-    fs.chmodSync(directory, 0o755);
+    setDirectoryPrivate(directory, false);
     assert.throws(() => new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "key" }), /owner-only/);
-    fs.chmodSync(directory, 0o700);
+    setDirectoryPrivate(directory, true);
+    if (process.platform === "win32") {
+      const target = path.join(directory, "target-directory");
+      fs.mkdirSync(target);
+      const link = path.join(directory, "junction");
+      fs.symlinkSync(target, link, "junction");
+      assert.throws(() => new AgentInputCredentialStore(path.join(link, "credentials.json"), { hashKey: "key" }), /symlinks/);
+      return;
+    }
     const target = path.join(directory, "target.json");
     fs.writeFileSync(target, "{}", { mode: 0o600 });
     const link = path.join(directory, "link.json");
@@ -349,7 +358,7 @@ test("credential store refuses unsafe parents and symlinks", () => {
 });
 
 test("schema-2 pre-attestation capabilities and sources migrate disabled and require a fresh pane", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v2-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v2-"));
   const currentPath = path.join(directory, "current.json");
   const migrationPath = path.join(directory, "migration.json");
   try {
@@ -389,14 +398,14 @@ test("schema-2 pre-attestation capabilities and sources migrate disabled and req
 });
 
 test("authentic parent schema-3 primary migrates with only source refresh authority", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v3-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v3-"));
   const migrationPath = path.join(directory, "migration.json");
   try {
     fs.writeFileSync(migrationPath, schema3Fixture, { mode: 0o600 });
 
     const migrated = new AgentInputCredentialStore(migrationPath, { hashKey: "schema3-fixture-key" });
     assert.equal(migrated.snapshot().schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
-    assert.equal(fs.statSync(migrationPath).mode & 0o777, 0o600);
+    assertPrivateFile(migrationPath);
     assert.equal(migrated.authenticate(schema3UnusedCapability, 1_003), undefined,
       "unexchanged schema-3 registration capability must not survive the challenge boundary");
     const disabled = migrated.source(schema3SourceId)!;
@@ -419,7 +428,7 @@ test("authentic parent schema-3 primary migrates with only source refresh author
 });
 
 test("schema-4 injected-client health evidence migrates to source-authenticated serverUrl reattestation", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v4-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v4-"));
   const seedPath = path.join(directory, "seed.json");
   const migrationPath = path.join(directory, "migration.json");
   try {
@@ -473,7 +482,7 @@ test("schema-4 injected-client health evidence migrates to source-authenticated 
 });
 
 test("schema-5 serverUrl health evidence migrates to injected-transport reattestation", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v5-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v5-"));
   const seedPath = path.join(directory, "seed.json");
   const migrationPath = path.join(directory, "migration.json");
   try {
@@ -527,7 +536,7 @@ test("schema-5 serverUrl health evidence migrates to injected-transport reattest
 });
 
 test("schema-6 credentials without live session bindings migrate revoked", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v6-binding-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v6-binding-"));
   const filePath = path.join(directory, "credentials.json");
   try {
     const store = new AgentInputCredentialStore(filePath, { hashKey: "server-key" });
@@ -553,7 +562,7 @@ test("schema-6 credentials without live session bindings migrate revoked", () =>
 });
 
 test("authentic parent schema-3 backup recovery revokes all recovered authority", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v3-backup-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v3-backup-"));
   const migrationPath = path.join(directory, "migration.json");
   try {
     fs.writeFileSync(migrationPath, "{broken", { mode: 0o600 });
@@ -561,7 +570,7 @@ test("authentic parent schema-3 backup recovery revokes all recovered authority"
     const recovered = new AgentInputCredentialStore(migrationPath, { hashKey: "schema3-fixture-key" });
     const persisted = JSON.parse(fs.readFileSync(migrationPath, "utf8"));
     assert.equal(persisted.schemaVersion, CURRENT_AGENT_INPUT_CREDENTIAL_SCHEMA_VERSION);
-    assert.equal(fs.statSync(migrationPath).mode & 0o777, 0o600);
+    assertPrivateFile(migrationPath);
     assert.equal(recovered.authenticate(schema3UnusedCapability, 1_003), undefined);
     assert.equal(recovered.authenticate(schema3RelaySecret, 1_003), undefined);
     assert.equal(recovered.source(schema3SourceId)?.diagnostic, "recovery_invalidated");
@@ -572,7 +581,7 @@ test("authentic parent schema-3 backup recovery revokes all recovered authority"
 });
 
 test("schema-3 malformed attestation is rejected and future primary refuses valid backup fallback", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-v3-invalid-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-v3-invalid-"));
   try {
     const malformedPath = path.join(directory, "malformed.json");
     const malformed = JSON.parse(schema3Fixture);
@@ -597,7 +606,7 @@ test("schema-3 malformed attestation is rejected and future primary refuses vali
 });
 
 test("record-id HMAC authentication keeps malformed bearer floods off the event-loop scrypt path", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-flood-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-flood-"));
   try {
     const store = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "server-key" });
     let timerFired = false;
@@ -615,7 +624,7 @@ test("record-id HMAC authentication keeps malformed bearer floods off the event-
 });
 
 test("credential rotation and revoke fsync directory rename boundaries and fail closed after an unacknowledged primary fsync", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-directory-fsync-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-directory-fsync-"));
   const filePath = path.join(directory, "credentials.json");
   try {
     const events: string[] = [];
@@ -688,7 +697,7 @@ test("credential rotation and revoke fsync directory rename boundaries and fail 
 });
 
 test("backup recovery invalidates pre-refresh, pre-revoke, and pre-exchange authority before authentication", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-monotonic-recovery-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-monotonic-recovery-"));
   try {
     const createSource = (name: string) => {
       const filePath = path.join(directory, `${name}.json`);
@@ -733,7 +742,7 @@ test("backup recovery invalidates pre-refresh, pre-revoke, and pre-exchange auth
 });
 
 test("retired source records compact without allowing an old source ID or credential to return", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-auth-retirement-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-auth-retirement-"));
   try {
     const store = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "server-key" });
     const issue = (nonce: string, nowMs: number) => {

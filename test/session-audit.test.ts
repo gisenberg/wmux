@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -81,7 +82,7 @@ test("remote durable session output only admits wmux-owned tmux and screen sessi
 });
 
 test("audit and cleanup retain the old endpoint after dynamic ID reassignment", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-remote-audit-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-remote-audit-"));
   const statePath = path.join(directory, "state.json");
   const endpointPath = path.join(directory, "session-endpoints.json");
   const oldMachine = registeredMachine("100.64.0.10");
@@ -164,7 +165,7 @@ test("audit and cleanup retain the old endpoint after dynamic ID reassignment", 
 });
 
 test("unreachable registered endpoints are reported but never cleanup-enabled", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-remote-unreachable-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-remote-unreachable-"));
   const statePath = path.join(directory, "state.json");
   const endpointPath = path.join(directory, "session-endpoints.json");
   try {
@@ -190,7 +191,7 @@ test("unreachable registered endpoints are reported but never cleanup-enabled", 
 });
 
 test("native-agent strands use the persisted endpoint for audit and cleanup", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-audit-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-agent-audit-"));
   const statePath = path.join(directory, "state.json");
   const endpointPath = path.join(directory, "session-endpoints.json");
   const oldMachine = {

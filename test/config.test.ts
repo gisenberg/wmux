@@ -261,6 +261,7 @@ test("the managed home catalog overrides only checkout-local machines", () => {
   const home = path.join(directory, "home");
   const previousDirectory = process.cwd();
   const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
   const previousConfigPath = process.env.WMUX_CONFIG_PATH;
   fs.mkdirSync(checkout);
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true });
@@ -268,6 +269,7 @@ test("the managed home catalog overrides only checkout-local machines", () => {
   try {
     delete process.env.WMUX_CONFIG_PATH;
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     process.chdir(checkout);
     fs.writeFileSync(
       path.join(checkout, "wmux.config.json"),
@@ -294,6 +296,8 @@ test("the managed home catalog overrides only checkout-local machines", () => {
     process.chdir(previousDirectory);
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
     if (previousConfigPath === undefined) delete process.env.WMUX_CONFIG_PATH;
     else process.env.WMUX_CONFIG_PATH = previousConfigPath;
     fs.rmSync(directory, { recursive: true, force: true });

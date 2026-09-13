@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,7 +18,7 @@ import {
 import type { BootstrapPayload, EventServerMessage, MachineConfig } from "../src/shared/protocol.js";
 
 test("agent-input bootstrap and deltas converge with deterministic order, removals, and contentless notification dedupe", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-projection-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-projection-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), {
@@ -144,7 +145,7 @@ test("a new client upgrades an old-server bootstrap shape when agent-input delta
 });
 
 test("agent-input bootstrap filters requests whose panes are no longer visible", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-visible-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-visible-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });

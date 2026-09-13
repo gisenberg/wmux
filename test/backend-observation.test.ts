@@ -25,7 +25,7 @@ test("unrelated and malformed reports cannot claim backend durability", () => {
   assert.equal(observer.mode, "raw");
 });
 
-test("auto startup reports raw fallback when no durable executable is available", () => {
+test("auto startup reports raw fallback when no durable executable is available", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, () => {
   const observer = new BackendObservation();
   const script = durableShellScript({
     backend: "auto", sessionName: "wmux_observation_fixture", cols: 80, rows: 24,

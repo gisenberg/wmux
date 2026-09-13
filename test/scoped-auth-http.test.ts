@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +28,7 @@ const rejected = async (url: string, headers?: http.OutgoingHttpHeaders): Promis
 };
 
 test("login-only enforces scoped REST and WebSocket transports end to end", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-scoped-http-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-scoped-http-"));
   const auth: AuthConfig = {
     enabled: true,
     token: "legacy-test-token",

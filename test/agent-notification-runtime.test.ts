@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,7 +17,7 @@ import type {
 } from "../src/server/types.js";
 
 test("the agent heartbeat emits one durable exceeded-budget notification", async () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-agent-notification-runtime-"),
   );
   const machines: MachineConfig[] = [{

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,7 +12,7 @@ import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
 
 test("login verifies asynchronously and throttles attempts per client address", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-http-login-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-http-login-"));
   const auth: AuthConfig = {
     enabled: true,
     token: "shared-test-token",

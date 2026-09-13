@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,13 +19,13 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 3_000): Promise<voi
 };
 
 test("a replaced raw session cannot bind from delayed old output after the pane is live again", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-binding-lifecycle-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-codex-binding-lifecycle-"));
   const machine: MachineConfig = {
     id: "local",
     name: "Local",
     kind: "local",
     sessionBackend: "pty",
-    command: ["sh", "-c", "cat"],
+    command: [process.execPath, "-e", "process.stdin.resume()"],
   };
   const state = new StateStore([machine], path.join(directory, "state.json"));
   const pane = state.snapshot().workspaces[0]?.tabs[0]?.panes[0];
