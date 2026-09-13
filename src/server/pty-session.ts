@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type IPty } from "node-pty";
@@ -28,6 +29,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
   private readonly checkpoint: TerminalCheckpoint;
   private replayRequiresCheckpoint = false;
   private exited = false;
+  private killing = false;
   private title: string;
   private cwd = "";
   private cwdCaptureBuffer = "";
@@ -57,8 +59,6 @@ export class PtySession extends EventEmitter<PtyEvents> {
       rows,
       cwd: spec.cwd,
       env: spec.env,
-      // The bundled ConPTY closes its process tree without the racy console-list helper.
-      ...(process.platform === "win32" ? { useConptyDll: true } : {}),
     });
 
     this.pty.onData((data) => {
@@ -150,13 +150,28 @@ export class PtySession extends EventEmitter<PtyEvents> {
   }
 
   kill(): void {
-    if (this.exited) {
+    if (this.exited || this.killing) {
       this.checkpoint.dispose();
       return;
     }
+    this.killing = true;
     try {
-      this.pty.kill();
+      if (process.platform === "win32") {
+        // Terminate the process tree before ConPTY teardown, avoiding node-pty's
+        // asynchronous console-list probe racing the closed console.
+        execFile("taskkill.exe", ["/PID", String(this.pty.pid), "/T", "/F"], {
+          windowsHide: true, timeout: 5_000,
+        }, (error) => {
+          if (error && !this.exited) {
+            this.killing = false;
+            console.error("wmux: Windows pane process-tree termination failed");
+          }
+        });
+      } else {
+        this.pty.kill();
+      }
     } catch {
+      this.killing = false;
       /* PTY already exited */
     } finally {
       this.checkpoint.dispose();
