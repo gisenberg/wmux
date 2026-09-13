@@ -67,7 +67,7 @@ export const shouldEnterMobileKeyboardOpening = (
 export const isImmediateMobileKeyboardTarget = (target: Element | null): boolean =>
   shouldEnterMobileKeyboardOpening(
     isEditableViewportTarget(target),
-    Boolean(target?.closest(".terminal-host")),
+    Boolean(target?.closest(".terminal-host, .retro-boot-terminal")),
   );
 
 export interface MobileViewportState {

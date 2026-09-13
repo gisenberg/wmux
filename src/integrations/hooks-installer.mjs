@@ -25,6 +25,7 @@ const usage = () => {
   console.error(`Usage:
   wmux-hooks install claude
   wmux-hooks install codex [--agent-titles]
+  wmux-hooks uninstall codex
   wmux-hooks install opencode
   wmux-hooks install prime-agent
   wmux-hooks status
@@ -185,6 +186,32 @@ const installCodex = () => {
   console.log("Run /hooks inside Codex to review and trust this hook before expecting it to run.");
 };
 
+// Migrate to the Codex plugin without touching other integrations or hooks.
+const uninstallCodex = () => {
+  const settingsPath = path.join(os.homedir(), ".codex", "hooks.json");
+  const settings = readJson(settingsPath);
+  const managedCommand = /^\S*\/wmux-agent-event --agent codex --codex-hook(?: --no-title)?$/;
+  let removed = 0;
+  for (const [eventName, groups] of Object.entries(settings.hooks ?? {})) {
+    const kept = [];
+    for (const group of groups) {
+      const hooks = (group.hooks ?? []).filter((hook) => {
+        const managed = hook.type === "command" && typeof hook.command === "string"
+          && managedCommand.test(hook.command);
+        if (managed) removed++;
+        return !managed;
+      });
+      if (hooks.length === (group.hooks ?? []).length) kept.push(group);
+      else if (hooks.length) kept.push({ ...group, hooks });
+    }
+    if (kept.length) settings.hooks[eventName] = kept;
+    else delete settings.hooks[eventName];
+  }
+  if (removed) writeJson(settingsPath, settings);
+  console.log(`Removed ${removed} legacy Codex wmux hooks from ${settingsPath}`);
+  console.log("The Codex plugin and unrelated hooks are preserved. Start a fresh Codex session to test plugin-only behavior.");
+};
+
 const opencodePluginPath = () => path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "opencode", "plugins", "wmux.ts");
 const opencodeConfigRoot = () => path.resolve(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"));
 
@@ -340,6 +367,8 @@ if (command === "install" && target === "claude") {
   installClaude();
 } else if (command === "install" && target === "codex") {
   installCodex();
+} else if (command === "uninstall" && target === "codex") {
+  uninstallCodex();
 } else if (command === "install" && target === "opencode") {
   installOpenCode();
 } else if (command === "install" && target === "prime-agent") {

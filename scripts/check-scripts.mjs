@@ -60,6 +60,7 @@ run(python.command, [
 for (const script of [
   "scripts/wmux-hooks",
   "scripts/verify-remote.mjs",
+  "scripts/codex-baseline.mjs",
   "scripts/verification-runner.cjs",
   "scripts/wmux-agent-input-broker",
   "scripts/wmux-moonlight-gateway",
@@ -70,10 +71,12 @@ for (const script of [
   "plugins/wmux/scripts/wmux-binding.mjs",
   "plugins/wmux/scripts/wmux-session.mjs",
   "plugins/wmux/scripts/wmux-title.mjs",
-  "plugins/wmux/scripts/wmux-name-ownership.mjs",
+  "plugins/wmux/scripts/wmux-name-observer.mjs",
   "plugins/wmux/scripts/codex-lifecycle.mjs",
   "plugins/wmux/scripts/codex-rpc.mjs",
   "plugins/wmux/scripts/wmux-observer.mjs",
+  "plugins/wmux/scripts/wmux-observation-supervisor.mjs",
+  "plugins/wmux/scripts/wmux-lock.mjs",
   "scripts/build-codex-plugin-deps.mjs",
 ]) {
   run(process.execPath, ["--check", script]);
@@ -89,6 +92,7 @@ if (!bash) throw new Error("Git Bash is required for Windows shell script valida
 run(bash, [
   "-n",
   "scripts/install-user-service.sh",
+  "scripts/install-codex-observer-service.sh",
   "scripts/install-stream-service.sh",
   "scripts/install-heartbeat-service.sh",
   "scripts/install-tailscale-cert-service.sh",

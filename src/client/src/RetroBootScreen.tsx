@@ -225,6 +225,8 @@ function RetroTerminalBootScreen({
         cursorBlink: true,
         cursorStyle: "block",
         disableStdin: false,
+        // Only the explicit login prompt may request keyboard focus.
+        focusOnOpen: false,
         fontSize: mobile ? profile.fontSize.mobile : profile.fontSize.desktop,
         fontFamily: profile.fontFamily,
         scrollback: 0,

@@ -54,13 +54,14 @@ when available and otherwise fall back to a non-durable shell.
 
 ## Permissions and limitations
 
-Startup protects the default `~/.wmux` directory with an inheritable,
-current-user-only Windows ACL. Existing directory ownership and symlink checks
-must pass. Credential and endpoint validation reads live ACLs through Koffi and
-Win32 APIs instead of trusting Windows' synthetic POSIX mode bits. Grants to
-other ordinary accounts or groups are rejected; SYSTEM and Administrators are
-accepted as privileged Windows principals. Do not broaden the state ACL for
-automation sandboxes. Custom state paths need equivalently private parents.
+Startup protects the default `~/.wmux` directory with an inheritable, current-user-only Windows ACL.
+Existing directory ownership and symlink checks must pass.
+Credential and endpoint validation reads live ACLs through Koffi and Win32 APIs instead of trusting Windows' synthetic POSIX mode bits.
+Owners and grants are restricted to the current user, SYSTEM, and Administrators; other ordinary accounts and groups are rejected.
+Windows can assign Administrators ownership to files created by an elevated token, so those files retain the same ACL validation as user-owned files.
+See Microsoft's [object ownership rules](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object).
+Do not broaden the state ACL for automation sandboxes.
+Custom state paths need equivalently private parents.
 
 File contents are flushed before atomic replacement. Windows cannot perform
 the POSIX directory fsync used by the agent-input stores, so sudden-power-loss

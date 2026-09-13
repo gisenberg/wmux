@@ -3,12 +3,16 @@ import { useEffect, useRef } from "react";
 export function WorkspaceRenameDialog({
   workspaceId,
   title,
+  ownership,
   onRename,
+  onUseAutomaticName,
   onClose,
 }: {
   workspaceId: string;
   title: string;
+  ownership: string;
   onRename: (workspaceId: string, title: string) => void | Promise<void>;
+  onUseAutomaticName: (workspaceId: string) => void | Promise<void>;
   onClose: () => void;
 }) {
   const backdropRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +104,7 @@ export function WorkspaceRenameDialog({
           <span>// RENAME WORKSPACE</span>
           <strong id="workspace-rename-title">Rename {title}</strong>
         </div>
+        <p id={`workspace-name-ownership-${workspaceId}`}>Current workspace name is {ownership}.</p>
         <label htmlFor={`command-workspace-rename-${workspaceId}`}>Workspace name</label>
         <input
           ref={inputRef}
@@ -107,7 +112,7 @@ export function WorkspaceRenameDialog({
           name="title"
           type="text"
           defaultValue={title}
-          maxLength={50}
+          maxLength={4096}
           required
           onInput={(event) => event.currentTarget.setCustomValidity("")}
           autoComplete="off"
@@ -115,6 +120,14 @@ export function WorkspaceRenameDialog({
         />
         <div className="workspace-rename-actions">
           <button type="button" onClick={onClose}>[ESC] Cancel</button>
+          <button
+            type="button"
+            aria-describedby={`workspace-name-ownership-${workspaceId}`}
+            aria-label={`Use automatic workspace name for ${title}; current name is ${ownership}`}
+            onClick={() => { onClose(); void onUseAutomaticName(workspaceId); }}
+          >
+            Use automatic workspace name
+          </button>
           <button type="submit">[OK] Save name</button>
         </div>
       </form>

@@ -890,7 +890,7 @@ function SidebarContextMenu({
             name="title"
             type="text"
             defaultValue={workspace?.title ?? ""}
-            maxLength={50}
+            maxLength={4096}
             required
             onInput={(event) => event.currentTarget.setCustomValidity("")}
             autoComplete="off"

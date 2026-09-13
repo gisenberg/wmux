@@ -1,0 +1,13 @@
+[Unit]
+Description=wmux Codex read-only observation supervisor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart="@WMUX_NODE@" "@WMUX_OBSERVER@" --service
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

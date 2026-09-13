@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { CodexDiagnostics, type CodexDiagnosticsReport } from "./CodexDiagnostics";
 import {
   clearTerminalLatency,
   terminalLatency,
@@ -70,6 +71,7 @@ export function DiagnosticsModal({ report, loading, error, onRefresh, onClose }:
         </div>
         <div className="diagnostics-content">
           <LatencyDiagnostics snapshot={latency} onCopy={copyLatency} onClear={clearTerminalLatency} />
+          {codexReport(report) ? <CodexDiagnostics report={codexReport(report)!} /> : null}
           <div className="diagnostics-section-heading">
             <span>SERVER::PANE_DRIVERS</span>
             <span>{report ? `${report.summary.paneCount} PANE${report.summary.paneCount === 1 ? "" : "S"}` : "PROBING"}</span>
@@ -108,6 +110,9 @@ export function DiagnosticsModal({ report, loading, error, onRefresh, onClose }:
     </div>
   );
 }
+
+const codexReport = (report: DoctorReport | null): CodexDiagnosticsReport | undefined =>
+  (report as (DoctorReport & { codex?: CodexDiagnosticsReport }) | null)?.codex;
 
 const formatLatency = (value: number | null): string => {
   if (value === null) return "-";

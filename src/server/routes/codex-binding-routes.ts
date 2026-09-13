@@ -1,4 +1,5 @@
 import { HttpError, type ApiRoute, routePolicy } from "./route.js";
+import { isValidTitle } from "../../shared/title.js";
 
 const hasOnly = (body: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(body).every((key) => keys.includes(key));
@@ -8,13 +9,29 @@ const objectBody = (value: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
-const validTitle = (value: unknown): value is string =>
-  typeof value === "string"
-  && value.length <= 80
-  && Boolean(value.trim())
-  && !/[\x00-\x1f\x7f-\x9f]/.test(value);
-
 export const codexBindingRoutes: readonly ApiRoute[] = [
+  {
+    id: "codex-binding-observation",
+    method: "POST",
+    pattern: "/api/codex-bindings/observation",
+    policy: routePolicy("codex-binding-observation", "POST", "/api/codex-bindings/observation", "normal", ["helper"]),
+    handler: async ({ deps, readJsonBody, sendJson }) => {
+      deps.sessions.codexTerminalBindings.recordObservation(objectBody(await readJsonBody()));
+      sendJson(200, { recorded: true });
+    },
+  },
+  {
+    id: "codex-binding-revoke",
+    method: "POST",
+    pattern: "/api/codex-bindings/revoke",
+    policy: routePolicy("codex-binding-revoke", "POST", "/api/codex-bindings/revoke", "normal", ["helper"]),
+    handler: async ({ deps, readJsonBody, sendJson }) => {
+      const body = objectBody(await readJsonBody());
+      if (!hasOnly(body, ["sessionId", "receipts"])) throw new HttpError(400, "invalid_binding_body");
+      deps.sessions.codexTerminalBindings.revoke(body.sessionId, body.receipts);
+      sendJson(200, { revoked: true });
+    },
+  },
   {
     id: "codex-binding-issue",
     method: "POST",
@@ -58,7 +75,7 @@ export const codexBindingRoutes: readonly ApiRoute[] = [
     handler: async ({ deps, readJsonBody, sendJson }) => {
       const body = objectBody(await readJsonBody());
       if (!hasOnly(body, ["sessionId", "receipt", "title", "mode"])) throw new HttpError(400, "invalid_binding_body");
-      if (!validTitle(body.title)) throw new HttpError(400, "invalid_title");
+      if (!isValidTitle(body.title)) throw new HttpError(400, "invalid_title");
       if (body.mode !== "auto") throw new HttpError(400, "invalid_title_mode");
       const binding = deps.sessions.codexTerminalBindings.resolve(body.sessionId, body.receipt);
       const result = deps.state.setAutoTitle({
@@ -66,6 +83,7 @@ export const codexBindingRoutes: readonly ApiRoute[] = [
           tabId: binding.tabId,
           sourcePaneId: binding.paneId,
           title: body.title,
+          exact: true,
           tabOnlyIfMultiple: false,
         });
       sendJson(200, { ...result, ...binding });

@@ -17,6 +17,7 @@ import { useOpenTuiTheme, type OpenTuiTheme } from "./color-scheme-context";
 export interface OpenTuiTabItem {
   id: string;
   title: string;
+  displayTitle?: string;
   active: boolean;
   unreadCount: number;
   href?: string;
@@ -215,7 +216,7 @@ const drawTopbar = (
 
   let col = 1;
   for (const tab of props.tabs) {
-    const label = `${tab.title}${tab.unreadCount > 0 ? ` (${tab.unreadCount})` : ""}`;
+    const label = `${tab.displayTitle ?? tab.title}${tab.unreadCount > 0 ? ` (${tab.unreadCount})` : ""}`;
     const width = Math.min(Math.max(12, label.length + 2), 24);
     fill(row, col, width, tab.active ? rgba.selection : rgba.panel);
     write(row, col + 1, label, tab.active ? rgba.selectionText : rgba.text, tab.active ? 700 : 600);

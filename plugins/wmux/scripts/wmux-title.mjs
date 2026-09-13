@@ -1,10 +1,14 @@
 import { api } from "./wmux-binding.mjs";
 
+export const MAX_TITLE_UTF16_LENGTH = 4096;
+export const MAX_TITLE_GRAPHEME_COUNT = 512;
+const graphemeCount = value => Array.from(new Intl.Segmenter().segment(value)).length;
+
 export function validTitle(value) {
-  if (typeof value !== "string" || value.length > 80 || /[\x00-\x1f\x7f-\x9f]/.test(value) || !value.trim()) {
-    throw new Error("title must be non-empty, printable, and at most 80 characters.");
+  if (typeof value !== "string" || value.length > MAX_TITLE_UTF16_LENGTH || graphemeCount(value) > MAX_TITLE_GRAPHEME_COUNT || /[\x00-\x1f\x7f-\x9f]/.test(value) || !value.trim()) {
+    throw new Error("title must be non-empty, printable, and at most 512 graphemes / 4096 UTF-16 code units.");
   }
-  return value.replace(/\s+/g, " ").trim();
+  return value;
 }
 
 export async function mirrorTitle(record, name, mode = "auto") {

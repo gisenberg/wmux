@@ -24,6 +24,22 @@ const makeRegistry = () => {
   return { registry, live, panes };
 };
 
+test("session-end revocation is receipt-scoped, idempotent and cannot revoke a later binding", () => {
+  const { registry } = makeRegistry();
+  const first = registry.issue("root"), other = registry.issue("other");
+  registry.observe("pane-a", first.marker); registry.observe("pane-b", other.marker);
+  assert.throws(() => registry.revoke("root", [first.receipt, "malformed"]), /invalid_receipts/);
+  assert.equal(registry.resolve("root", first.receipt).paneId, "pane-a");
+  registry.revoke("root", [other.receipt]);
+  assert.equal(registry.resolve("other", other.receipt).paneId, "pane-b");
+  registry.revoke("root", [first.receipt]);
+  assert.throws(() => registry.resolve("root", first.receipt), /binding_not_found/);
+  const next = registry.issue("root"); registry.observe("pane-a", next.marker);
+  registry.revoke("root", [first.receipt]);
+  assert.equal(registry.resolve("root", next.receipt).paneId, "pane-a");
+  assert.equal(registry.resolve("other", other.receipt).paneId, "pane-b");
+});
+
 test("client retention requires a live observed binding to the unchanged pane tuple", () => {
   const { registry, live, panes } = makeRegistry();
   const issued = registry.issue("thread_retained", "turn_retained");
@@ -232,6 +248,27 @@ test("Codex binding routes accept helper authority, validate bodies, and never e
     assert.equal(issuedResponse.status, 201);
     const issued = await issuedResponse.json() as { receipt: string; marker: string };
     registry.observe(pane.id, issued.marker);
+    const observation = { sessionId: "thread_1", receipt: issued.receipt, channel: "naming", status: "active",
+      sampledAt: Date.now(), lastSuccessAt: Date.now(), pluginVersion: "0.3.0", counters: { attempts: 1 } };
+    observation.lastSuccessAt = observation.sampledAt;
+    const observationPath = "/api/codex-bindings/observation";
+    assert.equal((await request(observationPath, undefined, observation)).status, 401);
+    assert.equal((await request(observationPath, auth.automationToken, observation)).status, 403);
+    assert.equal((await request(observationPath, auth.helperToken, { ...observation, endpoint: "private-path" })).status, 400);
+    assert.equal((await request(observationPath, auth.helperToken, { ...observation, reason: "private-path" })).status, 400);
+    assert.equal((await request(observationPath, auth.helperToken, { ...observation, counters: { receipt: 1 } })).status, 400);
+    assert.equal((await request(observationPath, auth.helperToken, { ...observation, sessionId: "wrong-root" })).status, 404);
+    assert.equal((await request(observationPath, auth.helperToken, observation)).status, 200);
+    const diagnostic = registry.diagnostics(state.snapshot().workspaces);
+    assert.equal(diagnostic.bindings[0].naming?.status, "active");
+    assert.equal(diagnostic.bindings[0].activity?.reason, "missing_turn_id");
+    assert.doesNotMatch(JSON.stringify(diagnostic), new RegExp(issued.receipt));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /receiptHash|WMUX:/);
+    const stale = registry.diagnostics(state.snapshot().workspaces, Date.now() + 31_000);
+    assert.equal(stale.bindings[0].naming?.stale, true);
+    const expired = registry.diagnostics(state.snapshot().workspaces, Date.now() + 25 * 60 * 60 * 1000);
+    assert.equal(expired.bindings[0].binding, "expired");
+    assert.equal(expired.expiredCount, 1);
     assert.equal((await request("/api/codex-bindings/title", auth.helperToken, {
       sessionId: "thread_1", receipt: issued.receipt, title: "\u0000bad", mode: "auto",
     })).status, 400);
@@ -240,6 +277,7 @@ test("Codex binding routes accept helper authority, validate bodies, and never e
       sessionId: "thread_1", receipt: issued.receipt, title: "Attempted replacement", mode: "manual",
     })).status, 400);
     assert.equal(state.snapshot().workspaces[0]?.name, "Manual workspace");
+    assert.equal(registry.diagnostics(state.snapshot().workspaces).bindings[0].workspaceOwnership, "user");
     const titled = await request("/api/codex-bindings/title", auth.helperToken, {
       sessionId: "thread_1", receipt: issued.receipt, title: "Automatic title", mode: "auto",
     });

@@ -1,5 +1,122 @@
 # Codex plain-start conformance matrix
 
+## M0 acceptance tooling — 2026-09-12
+
+The [M0 procedure](CODEX_M0_UAT.md) adds repeatable artifact/schema collection,
+focused qualification commands, and native-client UAT cases. The
+[roadmap](CODEX_INTEGRATION_ROADMAP.md) defines its release gate.
+
+M0 is **pending combined candidate qualification and native UAT**. Naming PR #126
+is published at `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3` and incorporated into the
+isolated integration branch. The user authorized M0–M2 implementation and rollout
+preparation with the reset gap carried into M1. This is not UAT acceptance.
+
+This section does not supersede the selected profile or acceptance evidence
+maintained by the naming workstream. Attach a clean candidate commit, plugin
+hash, matching deployment/build evidence, engineering results, and per-case UAT
+decisions before recording M0 accepted.
+
+Provisional read-only checkpoint on 2026-09-12: installed CLI and default daemon
+both reported `0.154.0`. The production observation transport read an explicitly
+selected active desktop root's metadata and found a native name. The generated
+CLI schema exposes metadata-only reads, bounded turn listing, native names and
+name notifications; observation subscription remains unestablished.
+
+The independently inspected naming source was dirty on base `20480f6`, with
+plugin version `0.3.0`. The installed cache artifact reported
+`0.3.0+codex.20260912150139`; manifest, MCP environment and hook configuration
+differed. Executable source matches and deployed source matches do not settle
+those configuration differences or identify a compiled running build. Preserve
+the private capture and reconcile them with the naming workstream's final
+candidate. None of this establishes live rename propagation or UAT acceptance.
+
+M0 toolkit engineering evidence at `1d79a3e0a759e662618913c8dcea889d6facf751`
+(base `20480f6`, older naming profile): 84 focused checks passed locally. An
+isolated external Linux runner passed `npm run check`: 1,088 tests passed,
+four skipped, zero failures, followed by type checks, generated/script checks,
+and production build. These results qualify the toolkit on its stated base;
+rerun against the combined naming candidate before native-name acceptance.
+
+The same external candidate passed all four focused Chromium desktop/mobile
+checks in `codex-sidebar-lifecycle.spec.ts` and `codex-durable-reconnect.spec.ts`.
+These injected-data browser fixtures exercised live durable-pane reconnect and
+status chrome; they did not launch native Codex. The verification workspaces
+were closed after evidence capture. Subsequent native observations are recorded
+below; full N01–N11 qualification and the user's accept/rework/defer decision
+remain pending.
+
+### Coordinated native UAT follow-up — 2026-09-12
+
+Reviewed the private follow-up report `wmux-live-20260912/README.md` and the
+naming workstream's ignored
+`test-results/native-name-mirror-20260911/integration-session-verification-20260912.json`.
+These are live evidence on an uncommitted deployment, not a new qualified source
+revision. Preserve precise task/pane mappings and personal titles privately.
+
+| Area | Evidence and decision |
+| --- | --- |
+| Native blocking input and notifications | Live waiting → running → completed and one input/one completion notification recorded; waiting indicator user-confirmed. Scoped live pass, not blanket approval/request conformance. |
+| Idle native rename | User-confirmed and subsequent live title reads matched. Scoped live pass; candidate qualification pending. |
+| Active browser refresh | User-confirmed titles/running state survived. Does not establish every-viewer disconnect or every backend case. |
+| Workspace manual pin | Manual workspace name stayed fixed while native name and automatic tab changed together. Preservation passed; no unpin performed. |
+| Workspace reset | Existing authorized workspace title route accepts `{ clear: true }`, but no browser unpin control was available. User-facing N05 reset is missing/unaccepted. |
+| Tab reset | Existing tab title route sets a manual title and has no clear/reset operation; browser control also missing. N06–N07 reset is missing/unaccepted. |
+| CLI exit cleanup | Partial: shell/pin survived; observer disappearance overlapped new activity and stale receipt rejection was checked after reopening. Local binding record remained. N09 is under separate investigation, not accepted. |
+| Clipboard image paste | User-confirmed in the primary evidence; not proof of text clipboard, media playback or mobile parity. |
+| Legacy hooks | Coordination reports all three legacy Codex wmux hooks removed on both Linux execution hosts. No hook/config changes made by M0 tooling. |
+
+**Roadmap decision:** assign independent workspace AND tab unpin/reset to M1,
+including accessible desktop/mobile controls and the existing authorized title
+routes. Workspace reset reuses its explicit clear operation; tab reset requires
+an explicit clear operation and state transition. Preserve the other surface's
+pin and persist automatic eligibility. With a healthy live binding, the observer
+must apply the current native name on its next normal sample even while idle
+and without another rename. Unavailable metadata or stale bindings must leave
+reset ownership intact but synchronization pending, without reviving authority.
+
+Acceptance requires supported UI/API paths for independent/both pins, idle reset,
+reload persistence, unauthorized requests, unavailable metadata and stale binding
+handling. Fixtures that directly alter state do not qualify user-facing unpin.
+See [M1 requirements](CODEX_INTEGRATION_ROADMAP.md#m1--explain-integration-state-and-restore-automatic-naming)
+and [M0 UAT cases](CODEX_M0_UAT.md#uat-cases-and-observations).
+M0 remains open for combined candidate qualification and native acceptance.
+Neither unpin nor exit cleanup is accepted. The subsequent M0–M2 authorization
+starts implementation; [M1–M2 UAT](CODEX_M1_M2_UAT.md) records the new checkpoints.
+
+## Naming baseline from PR #126 — 2026-09-12
+
+Source base: `origin/main` at `20480f6`. Plugin source version: `0.3.0`.
+Selected mode: **native-name-mirror**. This baseline section supersedes the historical
+wmux-owned naming scope below. Bounded Linux test deployment is verified; full
+harness parity is not claimed. The current M1–M2 candidate adds reset controls,
+long-name/schema support, diagnostics and Linux observer supervision to this
+baseline. Its engineering and native acceptance gates are recorded in
+[M1–M2 UAT](CODEX_M1_M2_UAT.md); PR #126's live passes do not certify new behavior.
+
+| Area | Current behavior and evidence |
+| --- | --- |
+| Name authority / NAM-02 | Read exact root `Thread.name` using `thread/read`, then mirror; no native set and no competing semantic-name store. MCP/transport tests assert the read-only method allowlist. |
+| Native generation / NAM-01, NAM-03 | Delegated to Codex. wmux mirrors its accepted name and does not choose or rewrite native titles. Semantic quality and native automatic/manual arbitration are not adapter guarantees. |
+| Manual ownership / NAM-04, NAM-06 | Existing server receipt and layout-owner checks preserve independent workspace/tab pins. Real PTY/tmux fixtures cover pinned workspace plus updating tab and pin clearing. Live workspace-pin preservation passed. User-facing independent unpin controls belong to the separate roadmap, outside this PR. |
+| Rename latency / NAM-05, EXT-01 | Two-second idle polling, bounded by an exact live receipt. Production hook/socket/HTTP/PTY/tmux fixtures verify later names after terminal completion, unpin recovery and browser reconnect. No event-subscription claim. |
+| Failure / NAM-08, R18–R20 | Missing/invalid names, stale receipts, wrong roots, socket outages, rejected title delivery and reconnect are tested. No stale cached name is replayed. An explicitly delivered fixture SessionEnd revokes captured receipts while the shell remains alive; later receipts and other roots are protected. This does not certify native event emission on exit. |
+| Desktop/native evidence | Read-only checks found named desktop metadata on two hosts' different supported private routes; one task was active, the other was stored/notLoaded. Cross-host reads were not interchangeable. CLI schema 0.154.0 and live server 0.153.4 were inspected. |
+| Desktop binding limit | Hook output must be observed on a live wmux backend. A desktop-only task with no observed marker has no inferred pane binding. No arbitrary desktop-pairing acceptance claim. |
+| Live Linux acceptance — 2026-09-12 | Test deployment and plugin-only setup on two executing hosts; idle native `/rename`, workspace pin preservation, blocking input → running → completed with one completion notification, browser refresh during work, and user-confirmed clipboard image paste. Audited explicit agent sync calls were no-ops after the observer had already mirrored the name. |
+| Exit investigation — closed by scope | Immediate shared-client `/quit`/disconnect cleanup is excluded from this PR. Client detach does not immediately emit native SessionEnd. Receipts/observers can remain until native SessionEnd, binding/backend replacement, pane closure, or the 24-hour lease cap. No live native SessionEnd acceptance pass is claimed. |
+| Remaining boundaries | User-facing unpin controls are separate roadmap work. No macOS/Windows, automatic successor-turn ownership, exact request set, schedule, browser-answer or full-parity claim. Historical tests below do not certify the new mode. |
+
+Maintained implementation details and commands:
+[CODEX_PLUGIN.md](CODEX_PLUGIN.md). Interface evidence:
+[CODEX_NATIVE_API_GAPS.md](CODEX_NATIVE_API_GAPS.md).
+
+## Historical conformance ledger — 2026-09-06
+
+Everything below records the earlier baselines and experiments. Its selected
+naming modes, matrices and proposed work packages are historical, not current
+instructions. Native-write ownership failures remain evidence against that
+superseded design; they are not failures of the one-way read-only profile.
+
 Status date: 2026-09-06.  This is an evidence ledger for the normative
 [harness integration contract](HARNESS_INTEGRATION_SPEC.md), revision 1.1; it is
 not a certification claim.  Scope is the ordinary interactive `codex` plugin
@@ -44,7 +161,7 @@ It is not full-parity certification. Publication of the narrower capability
 profile below is explicitly approved; the original harness-neutral contract
 remains intact.
 
-## Approved achievable scope
+## Historical approved achievable scope
 
 The approved Codex naming mode is **wmux-owned-name**. The plugin resolves and
 preflights its private title store, then the server atomically accepts the bound

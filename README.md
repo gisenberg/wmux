@@ -48,7 +48,7 @@ See [retro boot fidelity](docs/RETRO_BOOT_FIDELITY.md) for historical references
 | HTTP transport | Declarative route table with stable route ids, exact method/path matching, body limits, authorization policy, request dispatch, static delivery, event publication, and WebSocket upgrades |
 | Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
 | Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; the versioned timeline store retains prompts, outcomes, touched files, and archived working-tree snapshots; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
-| Optional Codex wmux plugin | A trusted prompt hook emits a short-lived marker; wmux's live backend binds its private receipt and native turn to the pane without inherited pane variables. MCP atomically validates the automatic wmux title target before persisting a wmux-owned semantic title, and never synchronizes Codex saved names. A plugin-owned observer reads the existing local daemon over its private Unix socket and sends receipt-bound activity to `AgentSessionService`; it never drives Codex or answers requests. A server watchdog withdraws stale activity. Binding leases are memory-only; restart requires a new prompt. See the conformance matrix for unverified and missing capabilities. |
+| Optional Codex wmux plugin | A trusted prompt hook emits a short-lived marker; the live backend binds its private receipt and native turn to the pane. Native names remain canonical; workspace/tab reset controls independently restore automatic eligibility. The Linux wmux-owned observer user service supervises a bounded sampler with connections scoped to each receipt's existing private native socket and exact roots. It mirrors names and reports prompt-bound activity without driving Codex or answering requests. Kernel locks serialize plugin reads/writes; the server withdraws stale activity. Binding authority is memory-only; wmux server restart requires fresh terminal proof. See the conformance matrix for acceptance limits. |
 | Session manager | One live client per pane, persisted registered-host disposal snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Raw PTY, durable `tmux`/`screen`, and native session-agent adapters; POSIX and Windows agents own pane processes, replay, dynamic-registration heartbeat, and view-only capture supervision |
@@ -571,7 +571,6 @@ account where that agent runs:
 
 ```bash
 wmux-hooks install claude
-wmux-hooks install codex
 wmux-hooks install opencode
 wmux-hooks install prime-agent
 wmux-hooks status
@@ -584,39 +583,48 @@ The Claude installer merges lifecycle commands into `~/.claude/settings.json`
 and installs a small generated delegation skill at
 `~/.claude/skills/wmux/SKILL.md`. An existing skill not marked as wmux-managed is
 preserved instead of overwritten.
-The optional [`wmux` Codex plugin](docs/CODEX_PLUGIN.md) adds MCP tools to
+For Codex, install the [`wmux` plugin](docs/CODEX_PLUGIN.md). It adds MCP tools to
 ordinary Codex sessions for inspecting and naming their bound wmux workspace and
 tab. It never wraps or replaces the `codex` command, and it uses the existing
 helper credential boundary and server-enforced title ownership.
-Its selected naming mode is **wmux-owned**: after the server atomically accepts
-the bound automatic workspace/tab write, the plugin persists the agent's
-semantic title privately in wmux. It intentionally does not read, set, or synchronize Codex's
-saved conversation name; native `/rename` remains independent. Each prompt emits
-a small visible binding marker; no terminal focus, cwd, latest prompt, or
-recent-session search determines the target. Follow-ups reuse the wmux-stored
-title through their fresh binding, and a material objective change replaces that
-stored semantic title.
-The plugin requires the matching wmux server-side binding routes, not just an
-updated plugin package. See the plugin guide for verification and limitations.
-An isolated local plain-`codex` daemon fixture on Codex 0.153.4 verified
-wmux-owned first-task/follow-up/shift naming, child isolation, manual-pin
-protection, independent native `/rename`, same-pane native resume, and aggregate
-native input attention; native saved names were left untouched. It also recorded
-receipt-bound running/approval/completed states. This is not deployment,
-restart/reconnect, cross-platform, cross-pane handoff, browser answers, pending
-request identity, or native-name-parity acceptance; the local screenshots are
-deliberately not published.
-With this plugin, opt existing Codex lifecycle hooks into
-`wmux-hooks install codex --agent-titles` so prompt/stop telemetry does not
-overwrite that title. Review and trust the plugin hooks with `/hooks`.
-This opt-in prevents title collisions only. Receipt-bound lifecycle observation
-is a separate capability with documented platform/runtime limits; see the
+Its selected naming mode is **native-name-mirror**: Codex automatic names and later
+desktop/CLI renames are read through an existing private App Server socket and
+mirrored to eligible wmux surfaces. The plugin never writes native names or uses
+a separate semantic-name store. A two-second poll continues while idle and
+reapplies the current native name when a manual pin is cleared. The command
+palette provides **Use automatic workspace name** and **Use automatic tab name**
+on desktop/mobile; each action identifies its target and preserves the other pin.
+Doctor and the session inspector show binding/observation health and sample age.
+The Linux supervised profile adds a wmux-owned user service for idle worker
+recovery; see [M1–M2 qualification and rollout](docs/CODEX_M1_M2_UAT.md).
+Each prompt emits a small visible binding marker; the live backend must observe
+it. No terminal focus, cwd or recent-session search determines the target.
+Desktop-only tasks without an observed marker have no automatic wmux binding.
+Configure `WMUX_CODEX_SOCKET_PATH` when the verified local metadata endpoint uses
+a nondefault socket; clients on different backends need not share thread data.
+Missing names, unsupported names, stale bindings and unavailable servers retain
+the current titles. The matching server-side binding routes are required.
+
+Production PTY/tmux tests cover marker binding, idle rename mirroring and manual
+pins with fixture-level pin clearing. Bounded Linux test deployment verified idle
+native rename mirroring, workspace-pin preservation, lifecycle waiting/completion,
+browser refresh during work, and user-confirmed image clipboard paste. Immediate
+shared-client `/quit` cleanup is outside this PR: client detach does not immediately
+emit `SessionEnd`, so the receipt/observer may remain until native session end,
+binding/backend replacement, pane closure, or its 24-hour lease expiry. Arbitrary
+desktop pairing is unclaimed. See the plugin guide and conformance ledger for the
+current evidence and historical native-write experiments.
+Review and trust the plugin hooks with `/hooks`, then remove the old generated
+Codex reporters with `wmux-hooks uninstall codex` on each executing host.
+The plugin alone owns naming and supported lifecycle reporting; do not install
+the legacy prompt/PreToolUse/Stop hooks alongside it. Lifecycle observation has
+documented platform/runtime limits; see the
 [Codex conformance matrix](docs/CODEX_CONFORMANCE.md).
 
-The Codex installer merges commands into `~/.codex/hooks.json`; start a new
-Codex session, run `/hooks`, and review and trust the wmux command before
-expecting events. Codex sandbox or approval settings do not replace this hook
-trust step.
+`wmux-hooks install codex` remains available for the separate legacy profile.
+The uninstaller removes only its generated handlers from `~/.codex/hooks.json`
+and preserves unrelated hooks. Start a fresh Codex session after migration.
+Codex sandbox or approval settings do not replace plugin hook trust.
 
 `wmux-hooks install opencode` writes an auto-loaded global TypeScript plugin to
 `${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/wmux.ts`; it does not modify

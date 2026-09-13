@@ -222,7 +222,17 @@ Keep websocket, media, clipboard, hook, and run endpoints behind the same networ
   File and shared-memory source normalization must stay pane-scoped, bounded, and tied to the live immutable machine snapshot.
 - `wmux-hooks install claude` mutates `~/.claude/settings.json` outside the repo. Merge hooks idempotently and preserve user settings.
 - The Claude hook installer also owns `~/.claude/skills/wmux/SKILL.md` only when it contains the wmux generated marker. Preserve any unmanaged skill at that path.
+- The Codex plugin uses one-way `native-name-mirror`: read the exact root thread name
+  through a verified existing private App Server socket and mirror through the live
+  terminal receipt. Never generate a competing wmux name or write native names.
+  Name polling survives turn completion, preserves manual pins, and stops on
+  delivered SessionEnd/revocation/lease expiry. Shared-client `/quit` or disconnect
+  does not imply immediate SessionEnd; immediate per-client exit cleanup is outside
+  this profile's current scope. Desktop metadata visibility is not a pane
+  binding; without an observed terminal marker, fail closed. Keep hook/tool/skill
+  descriptions aligned with this source-of-truth policy.
 - `wmux-hooks install codex` mutates `~/.codex/hooks.json` outside the repo. Codex command hooks require the user to review/trust them with `/hooks` before they run.
+- The native-name-mirror Codex profile uses the plugin alone for naming and lifecycle. After installing/trusting it, migrate each executing host with `wmux-hooks uninstall codex`; preserve unrelated hooks. Do not reinstall legacy prompt/PreToolUse/Stop reporters alongside the plugin or hide unavailable native lifecycle metadata with that second reporter.
 - `wmux-hooks install opencode` writes an auto-loaded global plugin under `${XDG_CONFIG_HOME:-~/.config}/opencode/plugins` without mutating OpenCode JSON configuration. POSIX is supported; Windows installer parity is not included.
 - `wmux-hooks install prime-agent` writes an auto-loaded managed extension under `~/.prime/agent/extensions` and preserves an unmanaged extension at the managed path.
   It reports a pane as running while either the root turn or any nested RLM descendant is active; an idle pane with any active Prime heartbeat schedule uses distinct scheduler-presence metadata and a red heart pulse, while delivered heartbeat turns use the ordinary working state.

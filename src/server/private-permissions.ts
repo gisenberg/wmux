@@ -39,12 +39,14 @@ function windowsSecurity() {
     user = sidString(koffi.decode(buffer, "void *") as bigint);
   } finally { closeHandle(token[0]); }
 
+  const trustedPrincipals = new Set([user, "S-1-5-18", "S-1-5-32-544"]);
   const inspect = (filePath: string, ownerOnly = false): boolean => {
     const owner = [null], dacl = [null], descriptor = [null];
     const result = getSecurity(filePath, 1, 5, owner, null, dacl, null, descriptor);
     if (result !== 0) throw new Error(`Cannot read Windows file ACL (${result})`);
     try {
-      if (!owner[0] || sidString(owner[0]) !== user) return false;
+      // Elevated Windows tokens can create Administrators-owned files.
+      if (!owner[0] || !trustedPrincipals.has(sidString(owner[0]))) return false;
       if (ownerOnly) return true;
       if (!dacl[0]) return false;
       const count = koffi.decode(dacl[0], 4, "uint16_t") as number;
@@ -57,7 +59,7 @@ function windowsSecurity() {
         if (type === 1) continue;
         if (type !== 0) return false;
         const principal = sidString((ace[0] as bigint) + 8n);
-        if (![user, "S-1-5-18", "S-1-5-32-544"].includes(principal)) return false;
+        if (!trustedPrincipals.has(principal)) return false;
         const flags = koffi.decode(ace[0], 1, "uint8_t") as number;
         if (principal === user && !(flags & 8)) userAccess = true;
       }
@@ -68,7 +70,7 @@ function windowsSecurity() {
   return {
     inspect,
     protect(directory: string): void {
-      if (!inspect(directory, true)) throw new Error("Windows state directory must be owned by the wmux user");
+      if (!inspect(directory, true)) throw new Error("Windows state directory must have a trusted owner");
       const descriptor = [null], dacl = [null], present = [0], defaulted = [0];
       if (!parseDescriptor(`D:P(A;OICI;FA;;;${user})`, 1, descriptor, null)) throw new Error("Cannot construct private Windows ACL");
       try {

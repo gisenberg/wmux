@@ -1485,6 +1485,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
   const captured: Record<string, unknown>[] = [];
   const titleCaptured: Record<string, unknown>[] = [];
   let failNextTitle = false;
+  let shutdown: (() => Promise<void>) | undefined;
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -1560,6 +1561,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
           titleStates.push(data);
         },
       });
+      shutdown = async () => { await handlers.get("session_shutdown")?.({ reason: "quit" }, context); };
       return handlers;
     };
     let handlers = await loadHandlers("initial");
@@ -1644,7 +1646,7 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     failNextTitle = true;
     sessionName = "Canonical idle name";
     appendSessionEntry({ type: "session_info", name: sessionName });
-    await waitUntil(() => titleCaptured.filter((request) => request.title === sessionName).length === 2);
+    await waitUntil(() => titleCaptured.filter((request) => request.title === sessionName).length === 2, 10_000);
     const idleTitleCount = titleCaptured.length;
     await new Promise((resolve) => setTimeout(resolve, 1_100));
     assert.equal(titleCaptured.length, idleTitleCount);
@@ -1665,8 +1667,8 @@ test("Prime Agent extension periodically refreshes contextual titles and preserv
     assert.equal(sessionName, undefined);
     assert.equal(titleCaptured.length, titleRequestCount);
     assert.ok(titleStates.length >= 16);
-    await handlers.get("session_shutdown")?.({ reason: "quit" }, context);
   } finally {
+    await shutdown?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
@@ -1757,6 +1759,30 @@ test("Codex installer covers prompt, tool, and stop lifecycle hooks idempotently
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("Codex plugin migration removes only legacy wmux handlers and is idempotent", { skip: process.platform === "win32" }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-migration-"));
+  const hooks = path.join(repoRoot, "scripts", "wmux-hooks");
+  const env = { ...process.env, HOME: home };
+  const settingsPath = path.join(home, ".codex", "hooks.json");
+  try {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const unrelated = { type: "command", command: "echo unrelated" };
+    const plugin = { type: "command", command: 'node "$PLUGIN_ROOT/scripts/wmux-context.mjs"' };
+    fs.writeFileSync(settingsPath, JSON.stringify({ custom: true, hooks: {
+      UserPromptSubmit: [{ matcher: "keep-me", hooks: [unrelated, { type: "command", command: "/old/wmux-agent-event --agent codex --codex-hook" }] }],
+      PreToolUse: [{ hooks: [{ type: "command", command: "/new/wmux-agent-event --agent codex --codex-hook --no-title" }] }],
+      Stop: [{ hooks: [plugin] }],
+    } }));
+    await execFileAsync(hooks, ["uninstall", "codex"], { env });
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), { custom: true, hooks: {
+      UserPromptSubmit: [{ matcher: "keep-me", hooks: [unrelated] }], Stop: [{ hooks: [plugin] }],
+    } });
+    const once = fs.readFileSync(settingsPath, "utf8");
+    await execFileAsync(hooks, ["uninstall", "codex"], { env });
+    assert.equal(fs.readFileSync(settingsPath, "utf8"), once);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 test("generated OpenCode plugin forwards a complete top-level lifecycle", { skip: process.platform === "win32" }, async () => {

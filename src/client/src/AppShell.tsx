@@ -21,6 +21,7 @@ import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
 import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
 import { WorkspaceRenameDialog } from "./WorkspaceRenameDialog";
+import { displayTitle } from "../../shared/title";
 import { SettingsModal, cleanAlias, defaultSettings } from "./SettingsModal";
 import { MachineManagerModal } from "./MachineManagerModal";
 import { ColorSchemeProvider } from "./color-scheme-context";
@@ -29,6 +30,13 @@ import { colorSchemeById, colorSchemeCssVariables } from "./color-schemes";
 // The full pane surface (Ghostty + Kitty graphics) stays lazy; the lightweight
 // boot screen owns the initial Ghostty startup while the API bootstrap runs.
 const LayoutView = lazy(() => import("./LayoutView").then((m) => ({ default: m.LayoutView })));
+
+const automaticNameStatus = (source: "default" | "auto" | "user" | undefined): string =>
+  source === "user"
+    ? "a custom name pinned by you"
+    : source === "auto"
+      ? "an automatic native name"
+      : "an automatic name awaiting a native title";
 import { useAppState, useAppStore } from "./app-store";
 import { RetroBootScreen } from "./RetroBootScreen";
 import { EmptyWorkspaceView } from "./EmptyWorkspaceView";
@@ -1288,6 +1296,26 @@ export function AppShell() {
     },
   );
 
+  const useAutomaticWorkspaceName = guard(
+    (workspaceId: string) => `workspace:${workspaceId}:automatic-name`,
+    "Using automatic workspace name...",
+    async (workspaceId: string) => {
+      const response = await api.clearWorkspaceTitle(workspaceId);
+      await refresh(response.state);
+      pushToast("Workspace name now follows the automatic native name when available.", "info");
+    },
+  );
+
+  const useAutomaticTabName = guard(
+    (workspaceId: string, tabId: string) => `workspace:${workspaceId}:tab:${tabId}:automatic-name`,
+    "Using automatic tab name...",
+    async (workspaceId: string, tabId: string) => {
+      const response = await api.clearTabTitle(workspaceId, tabId);
+      await refresh(response.state);
+      pushToast("Tab name now follows the automatic native name when available.", "info");
+    },
+  );
+
   const reorderWorkspace = guard(
     (workspaceId: string, _targetWorkspaceId: string | undefined, _position: WorkspaceReorderPosition) => `workspace:${workspaceId}:reorder`,
     "Reordering workspace...",
@@ -1531,6 +1559,28 @@ export function AppShell() {
         keywords: ["name", "title", "sidebar", "agent"],
       },
       {
+        id: "automatic-workspace-name",
+        title: "Use automatic workspace name",
+        subtitle: activeWorkspace
+          ? `Current: ${displayTitle(activeWorkspace.name)} — ${automaticNameStatus(activeWorkspace.nameSource)}`
+          : "No active workspace",
+        section: "Actions",
+        disabled: !activeWorkspace,
+        run: () => { if (activeWorkspace) void useAutomaticWorkspaceName(activeWorkspace.id); },
+        keywords: ["name", "title", "reset", "native"],
+      },
+      {
+        id: "automatic-tab-name",
+        title: "Use automatic tab name",
+        subtitle: activeTab
+          ? `Current: ${displayTitle(activeTab.title)} — ${automaticNameStatus(activeTab.titleSource)}`
+          : "No active tab",
+        section: "Actions",
+        disabled: !activeWorkspace || !activeTab,
+        run: () => { if (activeWorkspace && activeTab) void useAutomaticTabName(activeWorkspace.id, activeTab.id); },
+        keywords: ["name", "title", "reset", "native"],
+      },
+      {
         id: "copy-link",
         title: "Copy active session link",
         subtitle: "Copy a direct link to this tab",
@@ -1766,6 +1816,8 @@ export function AppShell() {
     zoomedTabId,
     activeTab,
     activeWorkspace,
+    useAutomaticWorkspaceName,
+    useAutomaticTabName,
     requestTerminalFocus,
     displayMachines,
     machines,
@@ -1904,7 +1956,7 @@ export function AppShell() {
                     )}
                   >
                     <span aria-hidden="true">[T]</span>
-                    <span>{tab.title}</span>
+                    <span title={tab.title} aria-label={tab.title}>{displayTitle(tab.title)}</span>
                     {(unreadByTabId.get(tab.id) ?? 0) > 0 ? (
                       <span className="badge">{unreadByTabId.get(tab.id)}</span>
                     ) : null}
@@ -2028,6 +2080,7 @@ export function AppShell() {
                 id: tab.id,
                 href: workspaceTabPath(activeWorkspace.id, tab.id),
                 title: tab.title,
+                displayTitle: displayTitle(tab.title),
                 active: tab.id === activeTab?.id,
                 unreadCount: unreadByTabId.get(tab.id) ?? 0,
               })) ?? []
@@ -2174,6 +2227,9 @@ export function AppShell() {
           onToggleDock={!mobileViewport.isMobile ? () => setFleetDocked((value) => !value) : undefined}
           state={state}
           machines={displayMachines}
+          codexReport={doctorReport?.codex}
+          codexLoading={doctorLoading}
+          onRefreshCodex={() => void refreshDiagnostics()}
           onClose={() => setAgentFleetOpen(false)}
           onOpenSession={(row: AgentFleetRow) => {
             if (!fleetDocked || mobileViewport.isMobile) setAgentFleetOpen(false);
@@ -2211,7 +2267,9 @@ export function AppShell() {
         <WorkspaceRenameDialog
           workspaceId={renameWorkspaceDialog.id}
           title={renameWorkspaceDialog.title}
+          ownership={automaticNameStatus(state.workspaces.find((workspace) => workspace.id === renameWorkspaceDialog.id)?.nameSource)}
           onRename={renameWorkspace}
+          onUseAutomaticName={useAutomaticWorkspaceName}
           onClose={() => setRenameWorkspaceDialog(null)}
         />
       ) : null}
