@@ -196,6 +196,11 @@ test("mobile boot exits without a decorative delay once bootstrap is ready", asy
   await bootstrapReady;
   await expect(page.locator("main.app-shell")).toBeVisible({ timeout: 2_000 });
   await expect(page.locator(".retro-boot-screen")).toHaveCount(0, { timeout: 2_000 });
+  await expect(page.locator("main.app-shell")).not.toHaveClass(/mobile-keyboard-open/);
+  // A warm reload can finish mounting Ghostty while the app shell takes over.
+  await page.reload();
+  await awaitAppShell(page);
+  await expect(page.locator("main.app-shell")).not.toHaveClass(/mobile-keyboard-open/);
 });
 
 test("Spectrum tape phases animate their native palettes and stop under reduced motion", async ({
