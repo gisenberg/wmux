@@ -57,6 +57,8 @@ export class PtySession extends EventEmitter<PtyEvents> {
       rows,
       cwd: spec.cwd,
       env: spec.env,
+      // The bundled ConPTY closes its process tree without the racy console-list helper.
+      ...(process.platform === "win32" ? { useConptyDll: true } : {}),
     });
 
     this.pty.onData((data) => {

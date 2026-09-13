@@ -54,13 +54,14 @@ when available and otherwise fall back to a non-durable shell.
 
 ## Permissions and limitations
 
-Startup protects the default `~/.wmux` directory with an inheritable,
-current-user-only Windows ACL. Existing directory ownership and symlink checks
-must pass. Credential and endpoint validation reads live ACLs through Koffi and
-Win32 APIs instead of trusting Windows' synthetic POSIX mode bits. Grants to
-other ordinary accounts or groups are rejected; SYSTEM and Administrators are
-accepted as privileged Windows principals. Do not broaden the state ACL for
-automation sandboxes. Custom state paths need equivalently private parents.
+Startup protects the default `~/.wmux` directory with an inheritable, current-user-only Windows ACL.
+Existing directory ownership and symlink checks must pass.
+Credential and endpoint validation reads live ACLs through Koffi and Win32 APIs instead of trusting Windows' synthetic POSIX mode bits.
+Owners and grants are restricted to the current user, SYSTEM, and Administrators; other ordinary accounts and groups are rejected.
+Windows can assign Administrators ownership to files created by an elevated token, so those files retain the same ACL validation as user-owned files.
+See Microsoft's [object ownership rules](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object).
+Do not broaden the state ACL for automation sandboxes.
+Custom state paths need equivalently private parents.
 
 File contents are flushed before atomic replacement. Windows cannot perform
 the POSIX directory fsync used by the agent-input stores, so sudden-power-loss
@@ -73,11 +74,9 @@ Consequently pane-bound SSH image paste and Kitty file transfers are unavailable
 they fail closed instead of reconnecting to an unpinned target. Native local
 image paste is also disabled. Session-agent file staging is separate.
 
-Git Bash cwd prompt integration, automatic Windows service startup, and broad
-helper/agent integration parity remain incomplete. Node-pty can emit
-`AttachConsole failed` from its cleanup helper after an exited console; this
-diagnostic remains unresolved. The complete POSIX-oriented test suite is not
-green on native Windows, so this is a local trial path, not release parity.
+Git Bash cwd prompt integration, automatic Windows service startup, and broad helper/agent integration parity remain incomplete.
+Local panes use node-pty's bundled ConPTY so process disposal does not race its legacy console-list helper.
+The complete POSIX-oriented test suite is not green on native Windows, so this is a local trial path, not release parity.
 
 ## Verification
 
