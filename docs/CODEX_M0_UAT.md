@@ -1,10 +1,12 @@
 # M0: reproducible Codex naming baseline
 
-Status: tooling implemented; PR #126 at `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`
+Status: M0 baseline qualification complete in the declared Linux scope; final
+runtime `09525913b6f27a058396e31c0d8878e19dc0793c` is deployed on Haswell.
+PR #126 at `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`
 is the fixed naming baseline for combined qualification. The user authorized
 M0–M2 implementation and deployment preparation with the observed unpin gap
 carried into M1. Native rename, blocking-cycle and unbound Desktop isolation
-have passed in their recorded scopes; final candidate qualification is tracked
+have passed in their recorded scopes; final candidate qualification is recorded
 in [M1–M2 UAT](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14). Immediate shared-client
 quit/disconnect cleanup is excluded from the baseline, not accepted; native
 `SessionEnd` delivery on exit is unverified. Use the

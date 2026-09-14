@@ -1,6 +1,8 @@
 # Codex integration roadmap
 
-Status: M0–M2 is deployed and in use on Haswell. The final fixes and qualification
+Status: M0 and M1 are qualified in the declared Linux scope. M2 functional
+recovery is qualified; its supplemental 24-hour load soak is running. M0–M2 is
+deployed and in use on Haswell. The final fixes and qualification
 are tracked in [PR #130](https://github.com/gisenberg/wmux/pull/130), following
 [PR #127](https://github.com/gisenberg/wmux/pull/127). Naming
 [PR #126](https://github.com/gisenberg/wmux/pull/126) is the fixed baseline at
@@ -17,20 +19,23 @@ additional device, pin-order, race and outage cases retain their own evidence.
 M1 sidebar follow-up adds **Use automatic workspace name** alongside sidebar
 rename, using the existing authorized reset route for the selected row.
 The follow-up in [PR #130](https://github.com/gisenberg/wmux/pull/130) is deployed
-for testing at `9499c0cd14ae3141c53577ce79d216cfbd555584`; full checks and staged
+initially at `9499c0cd14ae3141c53577ce79d216cfbd555584`; full checks and staged
 and live sidebar browser tests passed. The user accepted sidebar discoverability.
 The delegated native waiting → running → completed test passed with exactly one
 input and one completion notification. The follow-up fixes Unicode grapheme
 shaping and wide-character spacing, adds a browser **Rename current tab** dialog,
-and returns explicit 404 responses for deleted title targets. Isolated recovery
-tests cover actual browser controls, endpoint faults and systemd replacement. See
+and returns explicit 404 responses for deleted title targets. Final deployed
+revision `09525913b6f27a058396e31c0d8878e19dc0793c` also confines each tab label
+to its assigned canvas width. Live desktop/mobile full-name inspection, reload,
+tab pin/reset and Unicode shaping passed. Isolated recovery tests cover actual
+browser controls, endpoint faults and systemd replacement. See
 [current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
 | Implemented milestone | Deployment acceptance still required |
 | --- | --- |
-| M0 | Native rename/cycle evidence and unbound Desktop isolation passed; qualify final rollout identity |
-| M1 | User acceptance recorded; Unicode, tab pin control and fault/race fixes in final qualification |
-| M2 | Actual systemd replacement, endpoint recovery, two-browser reconnect and 20-root socket bounds passed in isolated fixtures; real 24-hour synthetic soak remains a separate gate |
+| M0 | Complete: baseline/artifacts recorded; supported native rename/cycle and unbound Desktop isolation passed; fixture evidence remains distinguished from native evidence |
+| M1 | Complete: user acceptance plus delegated Unicode, independent title controls, reload and fault/race qualification passed on the final rollout |
+| M2 | Functional qualification complete: systemd replacement, endpoint recovery, two-browser reconnect and 20-root socket bounds passed. Supplemental actual 24-hour soak runs until 2026-09-15 16:52 UTC; acceptance remains pending its final report |
 
 Consult PR #130's checks and the private release manifest for the qualified
 source/build identity. The final rollout changes wmux only; its unchanged
@@ -151,7 +156,7 @@ Deliverables:
   explicit reset form and a dedicated state clear operation for the selected
   tab. Both route bodies must distinguish reset from setting a manual title;
   reject ambiguous/invalid requests instead of interpreting an empty title as
-  unpin. This is planned API work, not a claim that tab reset already exists.
+  unpin. M1 implements this operation; it was absent from the original M0 baseline.
 - Preserve existing route authorization: normal browser authorization on both;
   scoped automation/helper grants on workspace title, scoped automation on tab
   title. Do not grant helper credentials tab-reset authority, broaden routes,

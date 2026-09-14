@@ -65,6 +65,32 @@ native sockets are deliberate fault fixtures, not native-client certification.
 
 ### Final qualification — 2026-09-14
 
+Final Haswell runtime: `09525913b6f27a058396e31c0d8878e19dc0793c`, activated
+at 17:09 UTC. M0/M1 qualification is complete in the declared Linux scope;
+M2 functional recovery is qualified and its actual load-soak report is pending.
+The wmux-only activation preserved existing names, independent pins and layouts.
+Codex App Server and the production observer retained their PIDs/restart counts
+and native configuration; no native service or plugin reinstall occurred.
+
+Final external `npm run check` passed at that revision: **1,125 passed, four
+skipped, zero failures**, plus type checks, generated/script checks and build.
+The complete POSIX browser fallback at `9852ddd` passed **112 browser tests and
+three authentication tests**, with 107 conditional skips. No Windows runner was
+configured. A live visual check then found tab-label overflow; `0952591` fixes
+that final browser-only issue. Its new canvas-bounds regression, final full
+check and live public desktop/mobile Unicode/pin/reset/reload tests passed.
+The served HTML and JavaScript hashes match the immutable final release.
+See PR #130 for hosted checks against its latest head.
+
+Private evidence: `test-results/m012-final-deploy/`,
+`test-results/m012-final-artifacts/`, `test-results/remote/c33579a2e41f3aa0/`,
+`test-results/remote/f55e33676ad13159/` and
+`test-results/unicode-fixed-20260914/live-chrome-result.json`.
+Installed plugin 0.4.0 executable files match source. Its retained MCP/hook
+differences only select the existing host-specific native socket; hook command
+suffixes are unchanged. The collector's `nativeUat: pending` is its fixed
+non-signoff field, not a replacement for the scoped UAT record here.
+
 The user requested completion of all open M0–M2 work and confirmed that the
 Haswell deployment is in use with a soak already underway. Preserve that running
 deployment and its observation history; inject faults only into disposable
@@ -75,11 +101,11 @@ where an explicit result is recorded.
 | --- | --- |
 | N10 | Passed through Codex Desktop's native title control on an idle, unbound disposable task sharing an existing cwd. Eight subsequent samples found no binding or change to any existing wmux workspace/tab name or pin. The exact disposable task was archived. Private evidence: `test-results/m0-unbound-20260914/result.json`. |
 | M1-01–M1-03 | Browser tab pinning is now available through **Rename current tab** in Ctrl/Cmd+K or mobile **Chat → Actions**. Its dialog exposes full title, ownership and **Use automatic tab name**, alongside the existing workspace controls. Browser tests preserve the workspace pin through tab rename, reload and reset. Delayed automatic delivery after re-pin preserves the new manual values on desktop/mobile. |
-| M1-04 | Renderer now paints complete grapheme clusters once, reserves wide cells and clips only at cluster boundaries. Joined emoji, combining accents and Japanese match browser-shaped reference text in the corrected canvas reproduction. Native full-name/reload and real cycle evidence remains in `test-results/unicode-cycle-20260914/`; corrected visual evidence is in `test-results/unicode-fixed-20260914/`. Final deployed chrome is checked separately. |
-| M1-05 | Real authorized title routes now return `404 workspace_not_found` or `404 tab_not_found` for deleted targets. A private Unix-socket outage fixture runs the production observer and real HTTP/PTTY binding; reset persists, other pins survive, and current metadata returns through the same live receipt on recovery. Stale-receipt browser coverage rejects the old receipt and requires fresh PTY proof. These are controlled synthetic native endpoints, not a production outage. |
+| M1-04 | Passed: complete grapheme clusters, wide-cell spacing and tab-region clipping. Final live desktop/mobile chrome, complete rename-input values and reload passed; canvas paint capture and visual review confirm joined emoji, combining accents and Japanese. Native full-name/reload and real cycle evidence remains in `test-results/unicode-cycle-20260914/`; corrected evidence is in `test-results/unicode-fixed-20260914/`. |
+| M1-05 | Passed: authorized title routes return `404 workspace_not_found` or `404 tab_not_found` for deleted targets. A continuous production name observer at its normal two-second cadence records an actual rejected private-socket attempt; real desktop/mobile controls reset each title while preserving the other pin and displaying awaiting-native ownership. Current metadata returns through the same receipt and observer after recovery. Default and browser-enabled outage tests passed. Stale-receipt browser coverage rejects the old receipt and requires fresh PTY proof. These are controlled synthetic native endpoints, not a production outage. |
 | M2-01–M2-03, N08 | A unique disposable systemd user unit replaces its SIGKILLed observer; lifecycle sequence advances without duplicate terminal notification. A failed endpoint backs off and recovers while its healthy peer continues. Two actual wmux app browser contexts disconnect entirely and reopen with the same live receipt and an idle rename. After an isolated same-port server restart, the old receipt returns 404 and fresh terminal proof restores the title. `test-results/m2-recovery-20260914/qualification.txt` records the run. |
 | M2 resource bounds | Twenty synthetic roots share one actual private Unix-socket transport, with at most four concurrent RPC requests. This short engineering test does not establish a 24-hour soak. |
-| M2-04 | Existing production observer uptime exceeded 41 hours at the read-only 2026-09-14 16:23 UTC capture, with zero restarts, no warning-level journal entries and a recorded peak of 48,123,904 bytes (about 46 MiB). This supports production continuity, but no retained 24-hour twenty-root/fault/counter record has been found. Keep the specified synthetic soak open; neither uptime nor the bounded fixture is equivalent evidence. Private capture: `test-results/soak-existing-20260914/service-evidence.json`. |
+| M2-04 | Running, not accepted yet. Preserve the user's existing live-use soak. Production observer uptime exceeded 41 hours at the 16:23 UTC capture, with zero restarts, no warning-level journal entries and a recorded peak of 48,123,904 bytes (about 46 MiB); this supports continuity but is not the specified load record. The supplemental twenty-root actual 24-hour fixture started at **2026-09-14 16:52:05 UTC**, due **2026-09-15 16:52:05 UTC**, under the unique `wmux-codex-m2-soak-20260914T1653.service` unit. Private evidence: `test-results/m2-soak-20260914/manifest.json`, `run/events.jsonl`, and the eventual `run/report.json`. Its observer/plugin source at `33f77e0` is byte-identical to the final deployed observer/plugin. Short accelerated and six-minute normal-fault harness runs passed but remain engineering-only. |
 
 Run browser-enabled isolated recovery against freshly built assets with
 `WMUX_BROWSER_QUALIFICATION=1 node --import tsx --test test/codex-supervised-recovery.test.ts test/codex-outage-reset-recovery.test.ts`.
@@ -154,7 +180,7 @@ user's already-running production soak with this supplemental fixture lane.
   one completion notification remained stable for over two minutes, including
   idle native renames and browser reloads. No synthetic lifecycle events or
   receipts supplied this result.
-- **M1-04: rework.** Two native titles of 232 and 336 grapheme clusters, including
+- **M1-04: initial failure, resolved by final qualification above.** Two native titles of 232 and 336 grapheme clusters, including
   combining accents, skin-tone/ZWJ emoji, flags and Japanese, mirrored exactly to
   workspace/tab and survived desktop/mobile reload with complete rename-input
   values. However, canvas labels decompose joined emoji, separate combining
