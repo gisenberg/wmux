@@ -87,6 +87,23 @@ Default unit runs must not depend on pre-existing build output or browser binari
 Full candidate checks, deployment identity and live smoke are recorded with the
 final release rather than inferred from earlier revisions.
 
+The supplemental load lane uses `node scripts/codex-observer-soak.mjs --out
+/absolute/fresh/private-report-dir`. It runs for an actual 86,400 seconds by
+default with twenty synthetic binding records, the production supervisor and
+two private fixture sockets. Every five minutes one endpoint is unavailable for
+twenty seconds; the healthy endpoint must continue sampling and every affected
+root must recover its current name. The fixture records ten-second resource
+samples, RPC/socket bounds, title and diagnostic counts, and exactly one terminal
+lifecycle delivery per synthetic root. Its binding/post adapter is synthetic;
+real HTTP authorization, receipt expiry, systemd replacement and server
+notification deduplication are qualified by the separate recovery tests above.
+The load harness never contacts production wmux or a native Codex endpoint.
+
+Use a fresh output directory, and retain `events.jsonl` and `report.json` with the
+source revision. A shorter `--duration-seconds` or explicit accelerated fault
+interval is only harness qualification, never a 24-hour pass. Do not replace the
+user's already-running production soak with this supplemental fixture lane.
+
 ### Direct user observations — 2026-09-14
 
 - **N04: user-confirmed** Codex Desktop → wmux name syncing. This confirms
