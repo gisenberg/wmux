@@ -1,12 +1,13 @@
 # Codex integration roadmap
 
-Status: M0–M2 implementation is available in
-[PR #127](https://github.com/gisenberg/wmux/pull/127) for deployment preparation;
-engineering qualification and native-client UAT are separate gates. Naming
+Status: M0–M2 is deployed and in use on Haswell. The final fixes and qualification
+are tracked in [PR #130](https://github.com/gisenberg/wmux/pull/130), following
+[PR #127](https://github.com/gisenberg/wmux/pull/127). Naming
 [PR #126](https://github.com/gisenberg/wmux/pull/126) is the fixed baseline at
 `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`. M1 closes the observed unpin gap;
-M2 adds bounded recovery. M3–M6 remain proposed. Unpin, immediate CLI exit cleanup,
-and the M2 24-hour soak are not accepted by authorization to implement.
+M2 adds bounded recovery. M3–M6 remain proposed. Immediate shared-client CLI
+exit cleanup is excluded. Existing production use continues during final checks;
+the real 24-hour synthetic soak requires its own evidence.
 Updated: 2026-09-14.
 
 Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior, mobile
@@ -19,21 +20,21 @@ The follow-up in [PR #130](https://github.com/gisenberg/wmux/pull/130) is deploy
 for testing at `9499c0cd14ae3141c53577ce79d216cfbd555584`; full checks and staged
 and live sidebar browser tests passed. The user accepted sidebar discoverability.
 The delegated native waiting → running → completed test passed with exactly one
-input and one completion notification. Long Unicode names survive syncing and
-reload, but canvas rendering fails grapheme shaping and wide-character spacing;
-M1-04 remains rework. See
+input and one completion notification. The follow-up fixes Unicode grapheme
+shaping and wide-character spacing, adds a browser **Rename current tab** dialog,
+and returns explicit 404 responses for deleted title targets. Isolated recovery
+tests cover actual browser controls, endpoint faults and systemd replacement. See
 [current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
 | Implemented milestone | Deployment acceptance still required |
 | --- | --- |
-| M0 | Artifact/capability collector and conformance ledger delivered; repeat native smoke against the deployed candidate |
-| M1 | Unpin, mobile presentation, sidebar reset and diagnostics clarity accepted; native cycle passed; Unicode canvas rendering needs rework; remaining fault/race cases pending |
-| M2 | Bounded Linux observation worker and wmux-owned supervision delivered; native fault UAT and the actual 24-hour soak pending |
+| M0 | Native rename/cycle evidence and unbound Desktop isolation passed; qualify final rollout identity |
+| M1 | User acceptance recorded; Unicode, tab pin control and fault/race fixes in final qualification |
+| M2 | Actual systemd replacement, endpoint recovery, two-browser reconnect and 20-root socket bounds passed in isolated fixtures; real 24-hour synthetic soak remains a separate gate |
 
-The candidate is staged separately from the active release. Consult PR #127's
-checks for the qualified revision and the private release manifest for built
-artifact identity. No live deployment, native service change, unpin acceptance,
-or immediate CLI exit-cleanup acceptance follows from this implementation status.
+Consult PR #130's checks and the private release manifest for the qualified
+source/build identity. The final rollout changes wmux only; its unchanged
+production observer and native App Server continue running.
 
 ## Objective and boundary
 

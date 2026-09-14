@@ -8,6 +8,7 @@ import {
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
+  textCellWidth,
   type CellGrid,
   type CellMetrics,
   type RGBA,
@@ -1064,9 +1065,9 @@ const drawSidebarGrid = (
       return;
     }
     write(row, cursor, compact.prefix, rgba.muted, 700);
-    cursor += compact.prefix.length;
+    cursor += textCellWidth(compact.prefix);
     write(row, cursor, compact.marker, rgba.faint, 600);
-    cursor += compact.marker.length;
+    cursor += textCellWidth(compact.marker);
     write(row, cursor, compact.suffix, rgba.muted, 700);
   };
   const section = (row: number, label: string) => {
@@ -1088,10 +1089,10 @@ const drawSidebarGrid = (
   if (model.groupSidebarSessionsByHost) {
     section(row, "hosts");
     const spaceCount = String(model.machines.length);
-    write(row, Math.max(10, cols - spaceCount.length - 1), spaceCount, rgba.faint, 700);
+    write(row, Math.max(10, cols - textCellWidth(spaceCount) - 1), spaceCount, rgba.faint, 700);
     if (model.targetMachineReachable) {
       const newLabel = "[+]";
-      const newCol = Math.max(10, cols - spaceCount.length - newLabel.length - 3);
+      const newCol = Math.max(10, cols - textCellWidth(spaceCount) - textCellWidth(newLabel) - 3);
       write(row, newCol, newLabel, rgba.gold, 700);
       actionCells(row, newCol, newLabel.length, `New agent session on ${model.targetMachineName}`, { type: "create-workspace" });
     }
@@ -1111,7 +1112,7 @@ const drawSidebarGrid = (
     const countLabel = machine.activeAgentCount > 0
       ? `${machine.workspaceCount}/${machine.activeAgentCount}`
       : String(machine.workspaceCount);
-    const countCol = Math.max(8, cols - countLabel.length - 1);
+    const countCol = Math.max(8, cols - textCellWidth(countLabel) - 1);
     write(row, countCol, countLabel, machine.activeAgentCount > 0 ? rgba.goldDim : rgba.faint, 700);
     writeWithin(
       row,
@@ -1127,8 +1128,8 @@ const drawSidebarGrid = (
     const spaceContext = activeTarget ? `target · ${versionLabel}` : versionLabel;
     write(row, 6, spaceContext, activeTarget ? rgba.goldDim : rgba.faint, 700);
     if (machine.detail && cols > 28) {
-      const detailCol = 6 + spaceContext.length + 3;
-      write(row, 6 + spaceContext.length, " · ", rgba.faint);
+      const detailCol = 6 + textCellWidth(spaceContext) + 3;
+      write(row, 6 + textCellWidth(spaceContext), " · ", rgba.faint);
       write(row, detailCol, machine.detail, machine.reachable ? rgba.faint : rgba.red);
     }
     row++;
@@ -1158,7 +1159,7 @@ const drawSidebarGrid = (
     : `${model.workspaces.length}`;
   write(
     row,
-    Math.max(13, cols - workspaceCountLabel.length - 1),
+    Math.max(13, cols - textCellWidth(workspaceCountLabel) - 1),
     workspaceCountLabel,
     activeAgentCount > 0 ? rgba.goldDim : rgba.faint,
     700,
@@ -1200,7 +1201,7 @@ const drawSidebarGrid = (
       if (model.groupSidebarSessionsByHost) {
         write(row, 2, machineId === model.targetMachineId ? ">" : " ", machineId === model.targetMachineId ? rgba.gold : rgba.faint, 700);
         write(row, 4, (machine?.name ?? machineWorkspaces[0]?.host ?? machineId).toUpperCase(), machineId === model.targetMachineId ? rgba.goldDim : rgba.faint, 700);
-        write(row, Math.max(10, cols - groupCountLabel.length - 1), groupCountLabel, groupActiveCount > 0 ? rgba.goldDim : rgba.faint, 700);
+        write(row, Math.max(10, cols - textCellWidth(groupCountLabel) - 1), groupCountLabel, groupActiveCount > 0 ? rgba.goldDim : rgba.faint, 700);
         actionCells(row, 0, cols, `Agent group actions for ${machine?.name ?? machineId}`, { type: "machine-group", machineId });
         row++;
       }
@@ -1301,8 +1302,8 @@ const drawSidebarGrid = (
           write(row, detailCol, statusContextLine, statusColor);
         }
         if (workspace.descriptor) {
-          const descriptorCol = detailCol + (statusContextLine ? statusContextLine.length + 3 : 0);
-          if (statusContextLine) write(row, detailCol + statusContextLine.length, " · ", rgba.faint);
+          const descriptorCol = detailCol + (statusContextLine ? textCellWidth(statusContextLine) + 3 : 0);
+          if (statusContextLine) write(row, detailCol + textCellWidth(statusContextLine), " · ", rgba.faint);
           write(row, descriptorCol, workspace.descriptor, rgba.muted);
         } else if (!statusContextLine) {
           write(row, detailCol, "shell", rgba.muted);

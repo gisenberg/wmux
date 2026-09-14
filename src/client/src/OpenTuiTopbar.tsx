@@ -7,6 +7,7 @@ import {
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
+  textCellWidth,
   type CellGrid,
   type CellMetrics,
   type RGBA,
@@ -217,7 +218,7 @@ const drawTopbar = (
   let col = 1;
   for (const tab of props.tabs) {
     const label = `${tab.displayTitle ?? tab.title}${tab.unreadCount > 0 ? ` (${tab.unreadCount})` : ""}`;
-    const width = Math.min(Math.max(12, label.length + 2), 24);
+    const width = Math.min(Math.max(12, textCellWidth(label) + 2), 24);
     fill(row, col, width, tab.active ? rgba.selection : rgba.panel);
     write(row, col + 1, label, tab.active ? rgba.selectionText : rgba.text, tab.active ? 700 : 600);
     hit(row, col, width, `Activate ${tab.title}`, { type: "tab", tabId: tab.id });
@@ -230,10 +231,10 @@ const drawTopbar = (
   hit(row, col, 4, `New on ${props.targetLabel}`, { type: "create" }, !props.canCreate);
 
   const serviceLabel = `wmux ${props.serviceConnection}`;
-  const serviceWidth = Math.max(13, serviceLabel.length + 4);
+  const serviceWidth = Math.max(13, textCellWidth(serviceLabel) + 4);
   let right = cols - 1;
   for (const [label, title, action, disabled, active] of buttons) {
-    const width = Math.max(5, label.length + 2);
+    const width = Math.max(5, textCellWidth(label) + 2);
     right -= width;
     fill(row, right, width, active ? rgba.active : rgba.panel);
     write(row, right + 1, label, disabled ? rgba.faint : active ? rgba.gold : rgba.text, active ? 700 : 600);
@@ -247,7 +248,7 @@ const drawTopbar = (
   write(row, right + 1, serviceLabel, serviceColor, 700);
   if (rows > 1) {
     write(0, 1, "tabs", rgba.faint, 700);
-    write(0, Math.max(1, cols - props.targetLabel.length - 10), `target ${props.targetLabel}`, rgba.faint, 700);
+    write(0, Math.max(1, cols - textCellWidth(props.targetLabel) - 10), `target ${props.targetLabel}`, rgba.faint, 700);
   }
   return grid;
 };

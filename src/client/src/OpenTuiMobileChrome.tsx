@@ -6,6 +6,7 @@ import {
   fitText,
   observeCanvasViewport,
   syncPainterViewport,
+  textCellWidth,
   writeText,
   type CellMetrics,
   type RGBA,
@@ -185,7 +186,7 @@ const drawMobileChrome = (
   const connection = model.serviceConnection === "connecting"
     ? `${runningFrames[model.animationTick]} CONNECTING`
     : `● ${model.serviceConnection.toUpperCase()}`;
-  write(0, Math.max(1, cols - connection.length - 1), connection, connectionColor, true);
+  write(0, Math.max(1, cols - textCellWidth(connection) - 1), connection, connectionColor, true);
 
   const statusColor = statusColors[model.status];
   const statusMark = model.status === "running"
@@ -205,7 +206,7 @@ const drawMobileChrome = (
   const actionRowCount = rows - actionRow;
   if (actionRow >= 3) {
     write(1, 1, `> ${model.workspaceName}`, rgba.gold, true);
-    if (versionText) write(1, Math.max(1, cols - versionText.length - 1), versionText, versionColor, true);
+    if (versionText) write(1, Math.max(1, cols - textCellWidth(versionText) - 1), versionText, versionColor, true);
     const detail = [model.statusLabel, model.subtitle].filter(Boolean).join(" / ");
     write(2, 1, `${statusMark} ${detail}`, statusColor, true);
   } else if (actionRow >= 2) {
@@ -230,7 +231,7 @@ const drawMobileChrome = (
     const labelRow = Math.min(rows - 1, actionRow + Math.floor(actionRowCount / 2));
     write(
       labelRow,
-      col + Math.max(1, Math.floor((width - label.length) / 2)),
+      col + Math.max(1, Math.floor((width - textCellWidth(label)) / 2)),
       label,
       active ? rgba.selectionText : rgba.text,
       active,

@@ -3,7 +3,9 @@
 Status: tooling implemented; PR #126 at `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`
 is the fixed naming baseline for combined qualification. The user authorized
 M0–M2 implementation and deployment preparation with the observed unpin gap
-carried into M1. Native-client acceptance remains pending. Immediate shared-client
+carried into M1. Native rename, blocking-cycle and unbound Desktop isolation
+have passed in their recorded scopes; final candidate qualification is tracked
+in [M1–M2 UAT](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14). Immediate shared-client
 quit/disconnect cleanup is excluded from the baseline, not accepted; native
 `SessionEnd` delivery on exit is unverified. Use the
 [M1–M2 UAT procedure](CODEX_M1_M2_UAT.md) for the new candidate's reset and recovery tests.
@@ -156,7 +158,12 @@ subsequently confirmed **unpin behavior** after receiving control-location
 guidance. Accept the exercised flow without inferring every device or pin-order
 trial. The user subsequently accepted sidebar reset discoverability and
 diagnostics clarity. A fresh native blocking-input cycle passed; long Unicode
-name retention passed but canvas rendering requires M1-04 rework. See the current
+name retention passed and the subsequent M1-04 renderer fix is in final
+qualification. N10 subsequently passed using the native Desktop title action:
+an unbound task sharing an existing cwd did not affect any wmux title or pin.
+N08's complete viewer disconnect/reopen passed in an isolated two-browser,
+real-socket observer fixture; that result is distinct from native-client evidence.
+See the current
 [M1–M2 observations and control locations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 The missing controls/routes described below record the original M0 baseline,
 before the M1 candidate. They do not describe all currently deployed surfaces.
@@ -164,9 +171,11 @@ before the M1 candidate. They do not describe all currently deployed surfaces.
 The actions below are acceptance requirements, not a statement that every
 control currently exists. Live UAT on 2026-09-12 found no browser unpin control
 and no tab clear/reset route. N05's pin-preservation portion has live evidence;
-the reset portions of N05–N07 remain blocked by missing product support.
-Do not replace them with persisted-state edits or direct state-method calls.
-N09 remains partial/unaccepted pending an exit-only observation interval.
+the reset portions of N05–N07 were blocked at that baseline. M1 supplies both
+reset routes, desktop/mobile controls and a manual tab-rename dialog. Do not
+replace their acceptance with persisted-state edits or direct state-method calls.
+N09 immediate shared-client detach cleanup is excluded and unaccepted; no new
+native exit-event delivery is claimed.
 
 | ID | User action | Expected result |
 | --- | --- | --- |

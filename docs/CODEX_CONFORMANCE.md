@@ -1,5 +1,31 @@
 # Codex plain-start conformance matrix
 
+## Current M0–M2 qualification — 2026-09-14
+
+M0–M2 is deployed and in use on Haswell. The user accepted Desktop name syncing,
+unpin behavior, mobile presentation, sidebar reset and diagnostics clarity.
+The delegated native blocking-input cycle passed with one input and one
+completion notification. Native full Unicode values survived mirroring/reload;
+the follow-up in [PR #130](https://github.com/gisenberg/wmux/pull/130) fixes the
+canvas shaping defect and adds browser tab pinning and explicit deleted-target
+404 responses. Native Desktop unbound-task isolation passed without selecting
+any wmux surface by cwd, focus or recency.
+
+Real HTTP/PTTY/private-socket fixtures now cover idle outage reset, independent
+pins, late delivery after re-pin, stale receipt rejection, actual systemd observer
+replacement, endpoint recovery, two app browsers disconnecting/reopening and
+fresh proof after isolated server restart. These qualify wmux recovery wiring;
+they are not claims of faults injected into a native shared service. Twenty-root
+socket/request bounds are engineering-tested. Existing production observation
+exceeded 41 hours without a worker restart, but the separately specified 24-hour
+synthetic soak remains open without its full retained counters/fault record.
+
+See [final qualification](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14)
+for evidence scope and final candidate/deployment checks. Immediate shared-client
+CLI exit cleanup remains excluded; M3–M6 remain proposed. Historical pending
+statuses below describe their dated baselines and are superseded only by these
+explicit current results.
+
 ## M0 acceptance tooling — 2026-09-12
 
 The [M0 procedure](CODEX_M0_UAT.md) adds repeatable artifact/schema collection,

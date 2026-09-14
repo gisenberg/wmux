@@ -1,18 +1,20 @@
 import { useEffect, useRef } from "react";
 
-export function WorkspaceRenameDialog({
-  workspaceId,
+export function TitleRenameDialog({
+  entityId,
+  kind,
   title,
   ownership,
   onRename,
   onUseAutomaticName,
   onClose,
 }: {
-  workspaceId: string;
+  entityId: string;
+  kind: "workspace" | "tab";
   title: string;
   ownership: string;
-  onRename: (workspaceId: string, title: string) => void | Promise<void>;
-  onUseAutomaticName: (workspaceId: string) => void | Promise<void>;
+  onRename: (entityId: string, title: string) => void | Promise<void>;
+  onUseAutomaticName: (entityId: string) => void | Promise<void>;
   onClose: () => void;
 }) {
   const backdropRef = useRef<HTMLDivElement | null>(null);
@@ -83,7 +85,7 @@ export function WorkspaceRenameDialog({
         className="workspace-rename-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="workspace-rename-title"
+        aria-labelledby={`${kind}-rename-title`}
         tabIndex={-1}
         onSubmit={(event) => {
           event.preventDefault();
@@ -91,24 +93,24 @@ export function WorkspaceRenameDialog({
           if (!input) return;
           const nextTitle = input.value.trim();
           if (!nextTitle) {
-            input.setCustomValidity("Enter a workspace name.");
+            input.setCustomValidity(`Enter a ${kind} name.`);
             input.reportValidity();
             return;
           }
           input.setCustomValidity("");
           onClose();
-          void onRename(workspaceId, nextTitle);
+          void onRename(entityId, nextTitle);
         }}
       >
         <div className="workspace-rename-heading">
-          <span>// RENAME WORKSPACE</span>
-          <strong id="workspace-rename-title">Rename {title}</strong>
+          <span>// RENAME {kind.toUpperCase()}</span>
+          <strong id={`${kind}-rename-title`}>Rename {title}</strong>
         </div>
-        <p id={`workspace-name-ownership-${workspaceId}`}>Current workspace name is {ownership}.</p>
-        <label htmlFor={`command-workspace-rename-${workspaceId}`}>Workspace name</label>
+        <p id={`${kind}-name-ownership-${entityId}`}>Current {kind} name is {ownership}.</p>
+        <label htmlFor={`command-${kind}-rename-${entityId}`}>{kind === "workspace" ? "Workspace" : "Tab"} name</label>
         <input
           ref={inputRef}
-          id={`command-workspace-rename-${workspaceId}`}
+          id={`command-${kind}-rename-${entityId}`}
           name="title"
           type="text"
           defaultValue={title}
@@ -122,11 +124,11 @@ export function WorkspaceRenameDialog({
           <button type="button" onClick={onClose}>[ESC] Cancel</button>
           <button
             type="button"
-            aria-describedby={`workspace-name-ownership-${workspaceId}`}
-            aria-label={`Use automatic workspace name for ${title}; current name is ${ownership}`}
-            onClick={() => { onClose(); void onUseAutomaticName(workspaceId); }}
+            aria-describedby={`${kind}-name-ownership-${entityId}`}
+            aria-label={`Use automatic ${kind} name for ${title}; current name is ${ownership}`}
+            onClick={() => { onClose(); void onUseAutomaticName(entityId); }}
           >
-            Use automatic workspace name
+            Use automatic {kind} name
           </button>
           <button type="submit">[OK] Save name</button>
         </div>

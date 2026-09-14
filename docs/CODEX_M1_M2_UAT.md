@@ -63,6 +63,30 @@ native sockets are deliberate fault fixtures, not native-client certification.
 
 ## Milestone UAT checkpoints
 
+### Final qualification — 2026-09-14
+
+The user requested completion of all open M0–M2 work and confirmed that the
+Haswell deployment is in use with a soak already underway. Preserve that running
+deployment and its observation history; inject faults only into disposable
+fixtures. This section supersedes the earlier rework/pending observations below
+where an explicit result is recorded.
+
+| Cases | Result and evidence scope |
+| --- | --- |
+| N10 | Passed through Codex Desktop's native title control on an idle, unbound disposable task sharing an existing cwd. Eight subsequent samples found no binding or change to any existing wmux workspace/tab name or pin. The exact disposable task was archived. Private evidence: `test-results/m0-unbound-20260914/result.json`. |
+| M1-01–M1-03 | Browser tab pinning is now available through **Rename current tab** in Ctrl/Cmd+K or mobile **Chat → Actions**. Its dialog exposes full title, ownership and **Use automatic tab name**, alongside the existing workspace controls. Browser tests preserve the workspace pin through tab rename, reload and reset. Delayed automatic delivery after re-pin preserves the new manual values on desktop/mobile. |
+| M1-04 | Renderer now paints complete grapheme clusters once, reserves wide cells and clips only at cluster boundaries. Joined emoji, combining accents and Japanese match browser-shaped reference text in the corrected canvas reproduction. Native full-name/reload and real cycle evidence remains in `test-results/unicode-cycle-20260914/`; corrected visual evidence is in `test-results/unicode-fixed-20260914/`. Final deployed chrome is checked separately. |
+| M1-05 | Real authorized title routes now return `404 workspace_not_found` or `404 tab_not_found` for deleted targets. A private Unix-socket outage fixture runs the production observer and real HTTP/PTTY binding; reset persists, other pins survive, and current metadata returns through the same live receipt on recovery. Stale-receipt browser coverage rejects the old receipt and requires fresh PTY proof. These are controlled synthetic native endpoints, not a production outage. |
+| M2-01–M2-03, N08 | A unique disposable systemd user unit replaces its SIGKILLed observer; lifecycle sequence advances without duplicate terminal notification. A failed endpoint backs off and recovers while its healthy peer continues. Two actual wmux app browser contexts disconnect entirely and reopen with the same live receipt and an idle rename. After an isolated same-port server restart, the old receipt returns 404 and fresh terminal proof restores the title. `test-results/m2-recovery-20260914/qualification.txt` records the run. |
+| M2 resource bounds | Twenty synthetic roots share one actual private Unix-socket transport, with at most four concurrent RPC requests. This short engineering test does not establish a 24-hour soak. |
+| M2-04 | Existing production observer uptime exceeded 41 hours at the read-only 2026-09-14 16:23 UTC capture, with zero restarts, no warning-level journal entries and a recorded peak of 48,123,904 bytes (about 46 MiB). This supports production continuity, but no retained 24-hour twenty-root/fault/counter record has been found. Keep the specified synthetic soak open; neither uptime nor the bounded fixture is equivalent evidence. Private capture: `test-results/soak-existing-20260914/service-evidence.json`. |
+
+Run browser-enabled isolated recovery against freshly built assets with
+`WMUX_BROWSER_QUALIFICATION=1 node --import tsx --test test/codex-supervised-recovery.test.ts test/codex-outage-reset-recovery.test.ts`.
+Default unit runs must not depend on pre-existing build output or browser binaries.
+Full candidate checks, deployment identity and live smoke are recorded with the
+final release rather than inferred from earlier revisions.
+
 ### Direct user observations — 2026-09-14
 
 - **N04: user-confirmed** Codex Desktop → wmux name syncing. This confirms
