@@ -420,10 +420,7 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("workspace title route matched without captures");
       const body = parseTitleMutation(await readJsonBody());
-      const workspace = deps.state.snapshot().workspaces.find(
-        (candidate) => candidate.id === match[1],
-      );
-      if (!workspace) throw new HttpError(404, "workspace_not_found");
+      if (!deps.state.hasWorkspace(match[1])) throw new HttpError(404, "workspace_not_found");
       const updatedWorkspace = "clear" in body
         ? deps.state.clearWorkspaceTitle(match[1])
         : deps.state.setWorkspaceTitle(match[1], body.title);
@@ -561,11 +558,8 @@ export const workspaceRoutes: readonly ApiRoute[] = [
     handler: async ({ deps, match, readJsonBody, sendJson }) => {
       if (!match) throw new Error("tab title route matched without captures");
       const body = parseTitleMutation(await readJsonBody());
-      const workspace = deps.state.snapshot().workspaces.find(
-        (candidate) => candidate.id === match[1],
-      );
-      if (!workspace) throw new HttpError(404, "workspace_not_found");
-      if (!workspace.tabs.some((candidate) => candidate.id === match[2])) {
+      if (!deps.state.hasWorkspace(match[1])) throw new HttpError(404, "workspace_not_found");
+      if (!deps.state.hasTab(match[1], match[2])) {
         throw new HttpError(404, "tab_not_found");
       }
       const tab = "clear" in body

@@ -201,6 +201,16 @@ export class StateStore extends EventEmitter {
     );
   }
 
+  hasWorkspace(workspaceId: string): boolean {
+    return this.state.workspaces.some((workspace) => workspace.id === workspaceId);
+  }
+
+  hasTab(workspaceId: string, tabId: string): boolean {
+    return this.state.workspaces.some((workspace) =>
+      workspace.id === workspaceId && workspace.tabs.some((tab) => tab.id === tabId),
+    );
+  }
+
   save(): void {
     this.state.revision = Math.max(0, Math.floor(this.state.revision || 0)) + 1;
     this.dirty = true;
