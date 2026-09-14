@@ -9,6 +9,51 @@ const profileRandom = (id: string) => {
   return (weightBefore + (RETRO_BOOT_PROFILES[index].weight ?? 1) / 2) / total;
 };
 
+test("long Unicode tab labels paint within their tab bounds", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop canvas tab chrome");
+  await page.addInitScript(() => {
+    const captured = window as typeof window & { titlePaints: Array<{ text: string; left: number; right: number }> };
+    captured.titlePaints = [];
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
+      if (this.canvas.closest(".open-tui-topbar") && (text === "🌱" || text === "👩🏽‍💻") && captured.titlePaints.length < 2_048) {
+        const left = this.canvas.getBoundingClientRect().left + x;
+        captured.titlePaints.push({ text, left, right: left + this.measureText(text).width });
+      }
+      if (maxWidth === undefined) original.call(this, text, x, y);
+      else original.call(this, text, x, y, maxWidth);
+    };
+  });
+  const created = await request.post("/api/workspaces", { data: { machineId: "local" } });
+  expect(created.ok()).toBeTruthy();
+  const { workspace } = await created.json() as { workspace: { id: string; activeTabId: string } };
+  try {
+    const title = "👩🏽‍💻 Café 日本語 " + "🌱".repeat(40);
+    expect((await request.post(`/api/workspaces/${workspace.id}/tabs/${workspace.activeTabId}/title`, { data: { title } })).ok()).toBeTruthy();
+    await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+    await awaitAppShell(page);
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      (window as typeof window & { titlePaints: unknown[] }).titlePaints = [];
+    });
+    await page.setViewportSize({ width: 1441, height: 901 });
+    const paints = () => page.evaluate(() => (window as typeof window & { titlePaints: Array<{ text: string; left: number; right: number }> }).titlePaints);
+    await expect.poll(async () => (await paints()).length).toBeGreaterThan(0);
+    const tab = page.locator(`.open-tui-topbar a[href$="/tabs/${workspace.activeTabId}"]`);
+    const bounds = await tab.boundingBox();
+    expect(bounds).not.toBeNull();
+    const observed = await paints();
+    expect(observed.some((paint) => paint.text === "👩🏽‍💻")).toBeTruthy();
+    for (const paint of observed) {
+      expect(paint.left).toBeGreaterThanOrEqual(bounds!.x);
+      expect(paint.right).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+    }
+    await expect(tab).toHaveAttribute("aria-label", `Activate ${title}`);
+  } finally {
+    await request.delete(`/api/workspaces/${workspace.id}`);
+  }
+});
+
 
 const openDelayedRetroBoot = async ({
   browser,

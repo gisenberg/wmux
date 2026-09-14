@@ -220,7 +220,7 @@ const drawTopbar = (
     const label = `${tab.displayTitle ?? tab.title}${tab.unreadCount > 0 ? ` (${tab.unreadCount})` : ""}`;
     const width = Math.min(Math.max(12, textCellWidth(label) + 2), 24);
     fill(row, col, width, tab.active ? rgba.selection : rgba.panel);
-    write(row, col + 1, label, tab.active ? rgba.selectionText : rgba.text, tab.active ? 700 : 600);
+    write(row, col + 1, fitText(label, width - 2), tab.active ? rgba.selectionText : rgba.text, tab.active ? 700 : 600);
     hit(row, col, width, `Activate ${tab.title}`, { type: "tab", tabId: tab.id });
     col += width + 1;
     if (col > cols - (compactActions ? 46 : 78)) break;
