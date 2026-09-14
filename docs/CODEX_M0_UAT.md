@@ -150,6 +150,15 @@ without recording the actual eventual outcome and endpoint health.
 
 ## UAT cases and observations
 
+User follow-up (2026-09-14): **N04 Desktop → wmux name syncing is
+user-confirmed**. This does not accept N10's unbound-task isolation. The user
+subsequently confirmed **unpin behavior** after receiving control-location
+guidance. Accept the exercised flow without inferring every device or pin-order
+trial. The desktop sidebar reset discoverability issue remains open; see the current
+[M1–M2 observations and control locations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
+The missing controls/routes described below record the original M0 baseline,
+before the M1 candidate. They do not describe all currently deployed surfaces.
+
 The actions below are acceptance requirements, not a statement that every
 control currently exists. Live UAT on 2026-09-12 found no browser unpin control
 and no tab clear/reset route. N05's pin-preservation portion has live evidence;

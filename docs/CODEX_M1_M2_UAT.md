@@ -63,6 +63,41 @@ native sockets are deliberate fault fixtures, not native-client certification.
 
 ## Milestone UAT checkpoints
 
+### Direct user observations — 2026-09-14
+
+- **N04: user-confirmed** Codex Desktop → wmux name syncing. This confirms
+  the reported Desktop rename flow; it does not accept N10's unbound-task
+  isolation or the independent pin/reset matrix.
+- **M1-01: rework / discoverability gap.** The user could not find a return
+  to automatic action in the deployed desktop browser sidebar menu. The
+  sidebar's own rename menu has no reset action. In the deployed candidate,
+  select the intended workspace/tab, open **Ctrl/Cmd+K**, and search
+  **Use automatic workspace name** or **Use automatic tab name**. The palette's
+  **Rename current workspace** dialog also exposes workspace reset; it is a
+  different surface from the sidebar rename menu. Mobile uses **Chat → Actions**.
+  Add workspace reset alongside sidebar rename and qualify that entry point
+  before accepting sidebar discoverability.
+- **Unpin behavior: user-confirmed.** After the control-location guidance,
+  the user reported "unpin behavior confirmed." Accept the exercised unpin
+  flow. The report does not enumerate surfaces, pin orders, idle timing or
+  devices, so it does not independently certify every M1-01–M1-03 matrix case.
+  Keep existing agent evidence separate and the sidebar discoverability issue
+  open. Outage, stale-binding, race, exit-cleanup and soak status are unchanged.
+
+- **Mobile appearance/usability: user-confirmed.** The user reported "mobile
+  looks ok as well." Accept the reviewed mobile presentation and usability.
+  Specific long/Unicode title edge cases, fault diagnostics and recovery tests
+  retain their separate evidence requirements.
+- **Sidebar follow-up: implemented, qualification pending.** Adds **Use
+  automatic workspace name** next to **Rename workspace** in the desktop
+  sidebar context menu. Right-click a workspace row or focus it and press
+  **Shift+F10**; arrow keys and Enter operate the menu. The action resets that
+  row's workspace through the existing route, preserving its tab pins and any
+  other active workspace. Browser regression coverage includes keyboard focus,
+  exact-target behavior and reload persistence. Re-test discoverability after
+  deploying the follow-up; the previous user confirmation remains attached to
+  the previously deployed control path.
+
 Use disposable tasks and explicit pane IDs. Keep personal names, paths, receipt
 markers and tokens in private evidence. Record expected/actual behavior, latency,
 candidate identity, screenshots where useful, and accept/rework/defer per row.

@@ -1898,6 +1898,7 @@ export function AppShell() {
           onToggleWorkspace={toggleWorkspaceCollapsed}
           onToggleFavoriteWorkspace={toggleFavoriteWorkspace}
           onRenameWorkspace={renameWorkspace}
+          onUseAutomaticWorkspaceName={useAutomaticWorkspaceName}
           onRequestCloseWorkspace={requestCloseWorkspace}
           onRequestCloseWorkspaceGroup={closeWorkspaceGroup}
           movesDisabled={openTuiWorkspaceTree.movesDisabled}

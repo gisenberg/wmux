@@ -7,12 +7,21 @@ engineering qualification and native-client UAT are separate gates. Naming
 `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`. M1 closes the observed unpin gap;
 M2 adds bounded recovery. M3–M6 remain proposed. Unpin, immediate CLI exit cleanup,
 and the M2 24-hour soak are not accepted by authorization to implement.
-Updated: 2026-09-12.
+Updated: 2026-09-14.
+
+Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior and mobile
+appearance/usability are user-confirmed. These confirmations cover the user's exercised flows;
+additional device, pin-order, race and outage cases retain their own evidence.
+M1 sidebar follow-up adds **Use automatic workspace name** alongside sidebar
+rename, using the existing authorized reset route for the selected row.
+Qualification and deployment of this follow-up are tracked separately from the
+previous candidate's user acceptance. See
+[current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
 | Implemented milestone | Deployment acceptance still required |
 | --- | --- |
 | M0 | Artifact/capability collector and conformance ledger delivered; repeat native smoke against the deployed candidate |
-| M1 | Independent workspace/tab reset controls, title persistence/display and diagnostics delivered; desktop/mobile idle unpin and failure UAT pending |
+| M1 | Unpin behavior and mobile appearance/usability user-confirmed; sidebar follow-up qualification and remaining title edge cases, diagnostics and failure cases pending |
 | M2 | Bounded Linux observation worker and wmux-owned supervision delivered; native fault UAT and the actual 24-hour soak pending |
 
 The candidate is staged separately from the active release. Consult PR #127's

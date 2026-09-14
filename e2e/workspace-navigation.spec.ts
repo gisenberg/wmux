@@ -369,10 +369,11 @@ test("mobile sidebar opens and activates workspaces by touch", async ({ page, re
   }
 });
 
-test("desktop workspace menu renames the sidebar entry", async ({ page, request }, testInfo) => {
+test("desktop workspace menu renames and resets only the selected workspace", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "one desktop run covers the shared sidebar menu");
   const renamedTitle = `Renamed workspace ${Date.now()}`;
   let workspaceId: string | undefined;
+  let otherWorkspaceId: string | undefined;
 
   try {
     const response = await request.post("/api/workspaces", { data: { machineId: "local" } });
@@ -418,7 +419,46 @@ test("desktop workspace menu renames the sidebar entry", async ({ page, request 
       const updated = payload.workspaces.find((candidate) => candidate.id === workspace.id);
       return updated ? { name: updated.name, nameSource: updated.nameSource } : null;
     }).toEqual({ name: renamedTitle, nameSource: "user" });
+
+    const tabPin = await request.post(`/api/workspaces/${workspace.id}/tabs/${workspace.activeTabId}/title`, {
+      data: { title: "Keep tab pinned" },
+    });
+    expect(tabPin.ok()).toBeTruthy();
+    const otherResponse = await request.post("/api/workspaces", { data: { machineId: "local" } });
+    expect(otherResponse.ok()).toBeTruthy();
+    const other = (await otherResponse.json() as { workspace: E2eWorkspace }).workspace;
+    otherWorkspaceId = other.id;
+    expect((await request.post(`/api/workspaces/${other.id}/title`, {
+      data: { title: "Keep active workspace pinned" },
+    })).ok()).toBeTruthy();
+    await page.goto(`/workspaces/${other.id}/tabs/${other.activeTabId}`);
+    await awaitAppShell(page);
+
+    // A sidebar action targets its row even when another workspace is active.
+    await workspaceItem.focus();
+    await workspaceItem.press("Shift+F10");
+    const resetMenu = page.getByRole("menu", { name: `Agent actions: ${renamedTitle}` });
+    await resetMenu.getByRole("menuitem", { name: "Rename workspace" }).press("ArrowDown");
+    const reset = resetMenu.getByRole("menuitem", { name: "Use automatic workspace name" });
+    await expect(reset).toBeFocused();
+    const resetResponse = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/workspaces/${workspace.id}/title`) && response.request().method() === "POST");
+    await reset.press("Enter");
+    expect((await resetResponse).ok()).toBeTruthy();
+    await expect(resetMenu).toBeHidden();
+    await expect(workspaceItem).toBeFocused();
+    await expect(page).toHaveURL(new RegExp(`/workspaces/${other.id}/tabs/${other.activeTabId}$`));
+    await page.reload();
+    await awaitAppShell(page);
+    const state = await (await request.get("/api/bootstrap")).json() as {
+      workspaces: Array<{ id: string; name: string; nameSource: string; tabs: Array<{ id: string; title: string; titleSource: string }> }>;
+    };
+    const updated = state.workspaces.find((candidate) => candidate.id === workspace.id);
+    expect(updated?.nameSource).toBe("default");
+    expect(updated?.tabs.find((tab) => tab.id === workspace.activeTabId)).toMatchObject({ title: "Keep tab pinned", titleSource: "user" });
+    expect(state.workspaces.find((candidate) => candidate.id === other.id)).toMatchObject({ name: "Keep active workspace pinned", nameSource: "user" });
   } finally {
+    if (otherWorkspaceId) await request.delete(`/api/workspaces/${otherWorkspaceId}`).catch(() => undefined);
     if (workspaceId) await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);
   }
 });

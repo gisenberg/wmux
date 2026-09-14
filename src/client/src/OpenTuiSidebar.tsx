@@ -106,6 +106,7 @@ interface OpenTuiSidebarProps {
   onRequestCloseWorkspaceGroup?: (machineId: string) => void | Promise<void>;
   onToggleFavoriteWorkspace?: (workspaceId: string) => void | Promise<void>;
   onRenameWorkspace?: (workspaceId: string, title: string) => void | Promise<void>;
+  onUseAutomaticWorkspaceName?: (workspaceId: string) => void | Promise<void>;
   allWorkspaces: Workspace[];
   groupSidebarSessionsByHost: boolean;
 }
@@ -209,6 +210,7 @@ export function OpenTuiSidebar({
   onRequestCloseWorkspaceGroup,
   onToggleFavoriteWorkspace,
   onRenameWorkspace,
+  onUseAutomaticWorkspaceName,
   allWorkspaces,
   groupSidebarSessionsByHost,
 }: OpenTuiSidebarProps) {
@@ -359,7 +361,7 @@ export function OpenTuiSidebar({
 
   const contextMenuPosition = (clientX: number, clientY: number) => ({
     x: Math.max(8, Math.min(clientX, window.innerWidth - 280)),
-    y: Math.max(8, Math.min(clientY, window.innerHeight - 220)),
+    y: Math.max(8, Math.min(clientY, window.innerHeight - 260)),
   });
 
   const semanticWorkspaceElement = (workspaceId: string): HTMLElement | null => Array.from(
@@ -778,6 +780,10 @@ export function OpenTuiSidebar({
             setContextMenu(null);
             void onRenameWorkspace?.(workspaceId, title);
           }}
+          onUseAutomaticWorkspaceName={onUseAutomaticWorkspaceName ? (workspaceId) => {
+            setContextMenu(null);
+            void onUseAutomaticWorkspaceName(workspaceId);
+          } : undefined}
           onCloseWorkspace={(workspaceId) => {
             const returnFocus = contextMenu.returnFocus;
             setContextMenu(null);
@@ -804,6 +810,7 @@ function SidebarContextMenu({
   onCopyWorkspaceId,
   onBeginRename,
   onRenameWorkspace,
+  onUseAutomaticWorkspaceName,
   onCloseWorkspace,
   onCloseGroup,
 }: {
@@ -817,6 +824,7 @@ function SidebarContextMenu({
   onCopyWorkspaceId: (workspaceId: string) => void;
   onBeginRename: () => void;
   onRenameWorkspace: (workspaceId: string, title: string) => void;
+  onUseAutomaticWorkspaceName?: (workspaceId: string) => void;
   onCloseWorkspace: (workspaceId: string) => void;
   onCloseGroup: (machineId: string) => void;
 }) {
@@ -919,6 +927,17 @@ function SidebarContextMenu({
             <span aria-hidden="true">[R]</span>
             Rename workspace
           </button>
+          {onUseAutomaticWorkspaceName ? (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!workspace}
+              onClick={() => workspace && onUseAutomaticWorkspaceName(workspace.id)}
+            >
+              <span aria-hidden="true">[A]</span>
+              Use automatic workspace name
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"
