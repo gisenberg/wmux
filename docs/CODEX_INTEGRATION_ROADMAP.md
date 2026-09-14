@@ -9,21 +9,25 @@ M2 adds bounded recovery. M3–M6 remain proposed. Unpin, immediate CLI exit cle
 and the M2 24-hour soak are not accepted by authorization to implement.
 Updated: 2026-09-14.
 
-Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior and mobile
-appearance/usability are user-confirmed. These confirmations cover the user's exercised flows;
+Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior, mobile
+appearance/usability, the sidebar reset action and diagnostics clarity are
+user-confirmed. These confirmations cover the user's exercised flows;
 additional device, pin-order, race and outage cases retain their own evidence.
 M1 sidebar follow-up adds **Use automatic workspace name** alongside sidebar
 rename, using the existing authorized reset route for the selected row.
 The follow-up in [PR #130](https://github.com/gisenberg/wmux/pull/130) is deployed
 for testing at `9499c0cd14ae3141c53577ce79d216cfbd555584`; full checks and staged
-and live sidebar browser tests passed. Its sidebar discoverability still needs
-user review. See
+and live sidebar browser tests passed. The user accepted sidebar discoverability.
+The delegated native waiting → running → completed test passed with exactly one
+input and one completion notification. Long Unicode names survive syncing and
+reload, but canvas rendering fails grapheme shaping and wide-character spacing;
+M1-04 remains rework. See
 [current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
 | Implemented milestone | Deployment acceptance still required |
 | --- | --- |
 | M0 | Artifact/capability collector and conformance ledger delivered; repeat native smoke against the deployed candidate |
-| M1 | Unpin behavior and mobile appearance/usability user-confirmed; sidebar fix deployed for review; remaining title edge cases, diagnostics and failure cases pending |
+| M1 | Unpin, mobile presentation, sidebar reset and diagnostics clarity accepted; native cycle passed; Unicode canvas rendering needs rework; remaining fault/race cases pending |
 | M2 | Bounded Linux observation worker and wmux-owned supervision delivered; native fault UAT and the actual 24-hour soak pending |
 
 The candidate is staged separately from the active release. Consult PR #127's
@@ -113,6 +117,14 @@ immediately emit native `SessionEnd`; neither that behavior nor native event
 delivery on exit is accepted. Delivered-event cleanup retains fixture coverage.
 
 ## M1 — Explain integration state and restore automatic naming
+
+Live rendering follow-up (2026-09-14): render complete grapheme clusters with
+appropriate display widths in the canvas grid. Code-point-per-cell drawing
+breaks combining accents, skin-tone/ZWJ emoji and wide Japanese glyphs despite
+correct stored values. Make final canvas truncation cluster-safe and keep text
+inside the assigned title region. Qualify desktop/mobile sidebar and tab chrome
+against native-shaped reference text, including long-name reload and full-name
+access; do not accept M1-04 from API/input equality alone.
 
 Deliverables:
 

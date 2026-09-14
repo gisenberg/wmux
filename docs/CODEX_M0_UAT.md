@@ -154,7 +154,9 @@ User follow-up (2026-09-14): **N04 Desktop → wmux name syncing is
 user-confirmed**. This does not accept N10's unbound-task isolation. The user
 subsequently confirmed **unpin behavior** after receiving control-location
 guidance. Accept the exercised flow without inferring every device or pin-order
-trial. The desktop sidebar reset discoverability issue remains open; see the current
+trial. The user subsequently accepted sidebar reset discoverability and
+diagnostics clarity. A fresh native blocking-input cycle passed; long Unicode
+name retention passed but canvas rendering requires M1-04 rework. See the current
 [M1–M2 observations and control locations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 The missing controls/routes described below record the original M0 baseline,
 before the M1 candidate. They do not describe all currently deployed surfaces.

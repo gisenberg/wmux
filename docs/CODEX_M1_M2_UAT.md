@@ -68,35 +68,33 @@ native sockets are deliberate fault fixtures, not native-client certification.
 - **N04: user-confirmed** Codex Desktop → wmux name syncing. This confirms
   the reported Desktop rename flow; it does not accept N10's unbound-task
   isolation or the independent pin/reset matrix.
-- **M1-01: rework / discoverability gap.** The user could not find a return
+- **M1-01: original discoverability gap, now resolved.** The user could not find a return
   to automatic action in the deployed desktop browser sidebar menu. The
   sidebar's own rename menu has no reset action. In the deployed candidate,
   select the intended workspace/tab, open **Ctrl/Cmd+K**, and search
   **Use automatic workspace name** or **Use automatic tab name**. The palette's
   **Rename current workspace** dialog also exposes workspace reset; it is a
   different surface from the sidebar rename menu. Mobile uses **Chat → Actions**.
-  Add workspace reset alongside sidebar rename and qualify that entry point
-  before accepting sidebar discoverability.
+  The sidebar follow-up below supplies that entry point and is user-accepted.
 - **Unpin behavior: user-confirmed.** After the control-location guidance,
   the user reported "unpin behavior confirmed." Accept the exercised unpin
   flow. The report does not enumerate surfaces, pin orders, idle timing or
   devices, so it does not independently certify every M1-01–M1-03 matrix case.
-  Keep existing agent evidence separate and the sidebar discoverability issue
-  open. Outage, stale-binding, race, exit-cleanup and soak status are unchanged.
+  Keep existing agent evidence separate. Outage, stale-binding, race,
+  exit-cleanup and soak status are unchanged.
 
 - **Mobile appearance/usability: user-confirmed.** The user reported "mobile
   looks ok as well." Accept the reviewed mobile presentation and usability.
   Specific long/Unicode title edge cases, fault diagnostics and recovery tests
   retain their separate evidence requirements.
-- **Sidebar follow-up: deployed for review.** Adds **Use
+- **Sidebar follow-up: user-accepted.** Adds **Use
   automatic workspace name** next to **Rename workspace** in the desktop
   sidebar context menu. Right-click a workspace row or focus it and press
   **Shift+F10**; arrow keys and Enter operate the menu. The action resets that
   row's workspace through the existing route, preserving its tab pins and any
   other active workspace. Browser regression coverage includes keyboard focus,
-  exact-target behavior and reload persistence. Re-test discoverability after
-  deploying the follow-up; the previous user confirmation remains attached to
-  the previously deployed control path. [PR #130](https://github.com/gisenberg/wmux/pull/130),
+  exact-target behavior and reload persistence. The user subsequently reported
+  "sidebar action confirmed." [PR #130](https://github.com/gisenberg/wmux/pull/130),
   revision `9499c0cd14ae3141c53577ce79d216cfbd555584`, passed external full checks
   (1,116 tests passed, four skipped), the staged sidebar browser regression and
   a live public-browser right-click reset test with pin preservation and reload.
@@ -104,6 +102,31 @@ native sockets are deliberate fault fixtures, not native-client certification.
   layouts; native and observer processes/configuration were unchanged. Full
   browser-suite evidence is recorded separately; these targeted passes do not
   accept remaining recovery or soak cases.
+- **Diagnostics clarity: user-accepted.** The user explicitly accepted clarity.
+  This accepts presentation; controlled outage and stale-binding behavior retain
+  separate qualification requirements.
+- **Native cycle: agent-tested pass.** On the deployed sidebar revision, a
+  disposable native CLI task on the existing App Server issued a real blocking
+  Plan-mode input question. Native `waitingOnUserInput` and wmux waiting agreed;
+  answering through that exact CLI resumed running, then completed. The browser
+  showed waiting, working and done. Exactly one input-required notification and
+  one completion notification remained stable for over two minutes, including
+  idle native renames and browser reloads. No synthetic lifecycle events or
+  receipts supplied this result.
+- **M1-04: rework.** Two native titles of 232 and 336 grapheme clusters, including
+  combining accents, skin-tone/ZWJ emoji, flags and Japanese, mirrored exactly to
+  workspace/tab and survived desktop/mobile reload with complete rename-input
+  values. However, canvas labels decompose joined emoji, separate combining
+  accents and overlap wide glyphs. An isolated reproduction using the unchanged
+  production grid renderer confirms that `writeText` and `GridPainter.paint`
+  draw individual code points in successive single-width cells, unlike the
+  browser-shaped input. Fix cluster shaping, width allocation and final clipping;
+  repeat visual acceptance on sidebar/tab chrome. Normal ellipsis truncation is
+  distinct from this defect. Private evidence is under
+  `test-results/unicode-cycle-20260914/`, including `cycle-result.json`,
+  `unicode-results.json` and `renderer-repro.png`. The exact idle native test task
+  was archived and its workspace removed; existing names/pins and all service
+  PIDs/restart counts were preserved.
 
 Use disposable tasks and explicit pane IDs. Keep personal names, paths, receipt
 markers and tokens in private evidence. Record expected/actual behavior, latency,
