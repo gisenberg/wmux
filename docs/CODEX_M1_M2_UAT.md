@@ -88,7 +88,7 @@ native sockets are deliberate fault fixtures, not native-client certification.
   looks ok as well." Accept the reviewed mobile presentation and usability.
   Specific long/Unicode title edge cases, fault diagnostics and recovery tests
   retain their separate evidence requirements.
-- **Sidebar follow-up: implemented, qualification pending.** Adds **Use
+- **Sidebar follow-up: deployed for review.** Adds **Use
   automatic workspace name** next to **Rename workspace** in the desktop
   sidebar context menu. Right-click a workspace row or focus it and press
   **Shift+F10**; arrow keys and Enter operate the menu. The action resets that
@@ -96,7 +96,14 @@ native sockets are deliberate fault fixtures, not native-client certification.
   other active workspace. Browser regression coverage includes keyboard focus,
   exact-target behavior and reload persistence. Re-test discoverability after
   deploying the follow-up; the previous user confirmation remains attached to
-  the previously deployed control path.
+  the previously deployed control path. [PR #130](https://github.com/gisenberg/wmux/pull/130),
+  revision `9499c0cd14ae3141c53577ce79d216cfbd555584`, passed external full checks
+  (1,116 tests passed, four skipped), the staged sidebar browser regression and
+  a live public-browser right-click reset test with pin preservation and reload.
+  The wmux-only activation preserved existing workspace/tab names, ownership and
+  layouts; native and observer processes/configuration were unchanged. Full
+  browser-suite evidence is recorded separately; these targeted passes do not
+  accept remaining recovery or soak cases.
 
 Use disposable tasks and explicit pane IDs. Keep personal names, paths, receipt
 markers and tokens in private evidence. Record expected/actual behavior, latency,

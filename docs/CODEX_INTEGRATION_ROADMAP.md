@@ -14,14 +14,16 @@ appearance/usability are user-confirmed. These confirmations cover the user's ex
 additional device, pin-order, race and outage cases retain their own evidence.
 M1 sidebar follow-up adds **Use automatic workspace name** alongside sidebar
 rename, using the existing authorized reset route for the selected row.
-Qualification and deployment of this follow-up are tracked separately from the
-previous candidate's user acceptance. See
+The follow-up in [PR #130](https://github.com/gisenberg/wmux/pull/130) is deployed
+for testing at `9499c0cd14ae3141c53577ce79d216cfbd555584`; full checks and staged
+and live sidebar browser tests passed. Its sidebar discoverability still needs
+user review. See
 [current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
 | Implemented milestone | Deployment acceptance still required |
 | --- | --- |
 | M0 | Artifact/capability collector and conformance ledger delivered; repeat native smoke against the deployed candidate |
-| M1 | Unpin behavior and mobile appearance/usability user-confirmed; sidebar follow-up qualification and remaining title edge cases, diagnostics and failure cases pending |
+| M1 | Unpin behavior and mobile appearance/usability user-confirmed; sidebar fix deployed for review; remaining title edge cases, diagnostics and failure cases pending |
 | M2 | Bounded Linux observation worker and wmux-owned supervision delivered; native fault UAT and the actual 24-hour soak pending |
 
 The candidate is staged separately from the active release. Consult PR #127's
