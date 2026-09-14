@@ -47,7 +47,11 @@ surfaces. Manual workspace and tab pins are independent and persist until an
 explicit wmux unpin. The next successful sample applies the current native
 name after unpinning, even if Codex has not renamed it again. In the command
 palette, **Use automatic workspace name** and **Use automatic tab name** reset
-only the selected surface. The workspace rename dialog also offers reset.
+only the selected surface. **Rename current workspace** and **Rename current
+tab** open dialogs to set independent manual pins, inspect the full title or
+return that surface to automatic naming. On mobile, open **Chat → Actions**;
+on desktop use **Ctrl/Cmd+K**. The desktop sidebar's row context menu also
+provides **Use automatic workspace name** for that exact row.
 Controls show their target/ownership and acknowledge the change. Until a valid
 sample arrives, default ownership means automatic eligibility/awaiting sync.
 Both existing title routes accept explicit `{ "clear": true }`; ambiguous

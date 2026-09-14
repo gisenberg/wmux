@@ -123,6 +123,68 @@ test("workspace and tab title resets are independent, strict, and idempotent", a
   });
 });
 
+test("authenticated title mutations report deleted workspace and tab targets as not found", async () => {
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-title-target-auth-"));
+  const state = new StateStore(machines, path.join(directory, "state.json"));
+  const settings = new SettingsStore(path.join(directory, "settings.json"));
+  const token = "T".repeat(43);
+  const server = await createHttpServer(
+    "127.0.0.1",
+    state,
+    machines,
+    {} as SessionManager,
+    settings,
+    { auth: { enabled: true, token, loginEnabled: false, sessionSecret: "test" } },
+  );
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const post = (url: string, body: object) => fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+
+  try {
+    const created = await post(`${baseUrl}/api/workspaces`, { machineId: "local" });
+    assert.equal(created.status, 201);
+    const workspace = (await created.json() as { workspace: { id: string; activeTabId: string } }).workspace;
+    const workspaceUrl = `${baseUrl}/api/workspaces/${workspace.id}/title`;
+    const tabUrl = `${baseUrl}/api/workspaces/${workspace.id}/tabs/${workspace.activeTabId}/title`;
+
+    assert.equal((await post(workspaceUrl, { title: "Before deletion" })).status, 200);
+    assert.equal((await post(tabUrl, { title: "Before deletion" })).status, 200);
+    state.removeWorkspace(workspace.id);
+
+    for (const [url, body, error] of [
+      [workspaceUrl, { title: "Late rename" }, "workspace_not_found"],
+      [workspaceUrl, { clear: true }, "workspace_not_found"],
+      [tabUrl, { title: "Late tab rename" }, "workspace_not_found"],
+      [tabUrl, { clear: true }, "workspace_not_found"],
+    ] as const) {
+      const response = await post(url, body);
+      assert.equal(response.status, 404);
+      assert.deepEqual(await response.json(), { error });
+    }
+
+    const replacement = state.createWorkspace("local");
+    const missingTabUrl = `${baseUrl}/api/workspaces/${replacement.id}/tabs/tab_missing/title`;
+    for (const body of [{ title: "Late tab rename" }, { clear: true }]) {
+      const response = await post(missingTabUrl, body);
+      assert.equal(response.status, 404);
+      assert.deepEqual(await response.json(), { error: "tab_not_found" });
+    }
+  } finally {
+    server.close();
+    await once(server, "close");
+    state.flush();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("workspace creation accepts idempotent validated client ids", async () => {
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   await withServer(machines, async (baseUrl) => {

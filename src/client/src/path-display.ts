@@ -1,3 +1,5 @@
+import { sliceTextEndToCells, sliceTextToCells, textCellWidth } from "./opentui-grid";
+
 export interface CompactPathParts {
   full: string;
   prefix: string;
@@ -23,24 +25,24 @@ export const compactMiddlePath = (pathValue: string, maxCells: number): CompactP
   const full = pathValue.trim();
   const limit = Math.max(0, Math.floor(maxCells));
   if (!full || limit <= 0) return { full, prefix: "", marker: "", suffix: "", text: "", compacted: false };
-  if (full.length <= limit) {
+  if (textCellWidth(full) <= limit) {
     return { full, prefix: full, marker: "", suffix: "", text: full, compacted: false };
   }
   if (limit <= 4) {
-    const text = full.slice(0, limit);
+    const text = sliceTextToCells(full, limit);
     return { full, prefix: text, marker: "", suffix: "", text, compacted: true };
   }
 
   const marker = "..";
-  const available = limit - marker.length;
+  const available = limit - textCellWidth(marker);
   let suffixLength = Math.max(3, Math.floor(available * 0.35));
   let prefixLength = available - suffixLength;
   if (prefixLength < 1) {
     prefixLength = 1;
     suffixLength = Math.max(0, available - prefixLength);
   }
-  const prefix = full.slice(0, prefixLength);
-  const suffix = full.slice(-suffixLength);
+  const prefix = sliceTextToCells(full, prefixLength);
+  const suffix = sliceTextEndToCells(full, suffixLength);
   const text = `${prefix}${marker}${suffix}`;
   return { full, prefix, marker, suffix, text, compacted: true };
 };

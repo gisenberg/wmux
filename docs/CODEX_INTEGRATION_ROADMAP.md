@@ -1,24 +1,45 @@
 # Codex integration roadmap
 
-Status: M0–M2 implementation is available in
-[PR #127](https://github.com/gisenberg/wmux/pull/127) for deployment preparation;
-engineering qualification and native-client UAT are separate gates. Naming
+Status: M0 and M1 are qualified in the declared Linux scope. M2 functional
+recovery is qualified; its supplemental 24-hour load soak is running. M0–M2 is
+deployed and in use on Haswell. The final fixes and qualification
+are tracked in [PR #130](https://github.com/gisenberg/wmux/pull/130), following
+[PR #127](https://github.com/gisenberg/wmux/pull/127). Naming
 [PR #126](https://github.com/gisenberg/wmux/pull/126) is the fixed baseline at
 `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`. M1 closes the observed unpin gap;
-M2 adds bounded recovery. M3–M6 remain proposed. Unpin, immediate CLI exit cleanup,
-and the M2 24-hour soak are not accepted by authorization to implement.
-Updated: 2026-09-12.
+M2 adds bounded recovery. M3–M6 remain proposed. Immediate shared-client CLI
+exit cleanup is excluded. Existing production use continues during final checks;
+the real 24-hour synthetic soak requires its own evidence.
+Updated: 2026-09-14.
+
+Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior, mobile
+appearance/usability, the sidebar reset action and diagnostics clarity are
+user-confirmed. These confirmations cover the user's exercised flows;
+additional device, pin-order, race and outage cases retain their own evidence.
+M1 sidebar follow-up adds **Use automatic workspace name** alongside sidebar
+rename, using the existing authorized reset route for the selected row.
+The follow-up in [PR #130](https://github.com/gisenberg/wmux/pull/130) is deployed
+initially at `9499c0cd14ae3141c53577ce79d216cfbd555584`; full checks and staged
+and live sidebar browser tests passed. The user accepted sidebar discoverability.
+The delegated native waiting → running → completed test passed with exactly one
+input and one completion notification. The follow-up fixes Unicode grapheme
+shaping and wide-character spacing, adds a browser **Rename current tab** dialog,
+and returns explicit 404 responses for deleted title targets. Final deployed
+revision `09525913b6f27a058396e31c0d8878e19dc0793c` also confines each tab label
+to its assigned canvas width. Live desktop/mobile full-name inspection, reload,
+tab pin/reset and Unicode shaping passed. Isolated recovery tests cover actual
+browser controls, endpoint faults and systemd replacement. See
+[current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
 | Implemented milestone | Deployment acceptance still required |
 | --- | --- |
-| M0 | Artifact/capability collector and conformance ledger delivered; repeat native smoke against the deployed candidate |
-| M1 | Independent workspace/tab reset controls, title persistence/display and diagnostics delivered; desktop/mobile idle unpin and failure UAT pending |
-| M2 | Bounded Linux observation worker and wmux-owned supervision delivered; native fault UAT and the actual 24-hour soak pending |
+| M0 | Complete: baseline/artifacts recorded; supported native rename/cycle and unbound Desktop isolation passed; fixture evidence remains distinguished from native evidence |
+| M1 | Complete: user acceptance plus delegated Unicode, independent title controls, reload and fault/race qualification passed on the final rollout |
+| M2 | Functional qualification complete: systemd replacement, endpoint recovery, two-browser reconnect and 20-root socket bounds passed. Supplemental actual 24-hour soak runs until 2026-09-15 16:52 UTC; acceptance remains pending its final report |
 
-The candidate is staged separately from the active release. Consult PR #127's
-checks for the qualified revision and the private release manifest for built
-artifact identity. No live deployment, native service change, unpin acceptance,
-or immediate CLI exit-cleanup acceptance follows from this implementation status.
+Consult PR #130's checks and the private release manifest for the qualified
+source/build identity. The final rollout changes wmux only; its unchanged
+production observer and native App Server continue running.
 
 ## Objective and boundary
 
@@ -103,6 +124,14 @@ delivery on exit is accepted. Delivered-event cleanup retains fixture coverage.
 
 ## M1 — Explain integration state and restore automatic naming
 
+Live rendering follow-up (2026-09-14): render complete grapheme clusters with
+appropriate display widths in the canvas grid. Code-point-per-cell drawing
+breaks combining accents, skin-tone/ZWJ emoji and wide Japanese glyphs despite
+correct stored values. Make final canvas truncation cluster-safe and keep text
+inside the assigned title region. Qualify desktop/mobile sidebar and tab chrome
+against native-shaped reference text, including long-name reload and full-name
+access; do not accept M1-04 from API/input equality alone.
+
 Deliverables:
 
 - Extend doctor and the session inspector with separate naming, activity,
@@ -127,7 +156,7 @@ Deliverables:
   explicit reset form and a dedicated state clear operation for the selected
   tab. Both route bodies must distinguish reset from setting a manual title;
   reject ambiguous/invalid requests instead of interpreting an empty title as
-  unpin. This is planned API work, not a claim that tab reset already exists.
+  unpin. M1 implements this operation; it was absent from the original M0 baseline.
 - Preserve existing route authorization: normal browser authorization on both;
   scoped automation/helper grants on workspace title, scoped automation on tab
   title. Do not grant helper credentials tab-reset authority, broaden routes,

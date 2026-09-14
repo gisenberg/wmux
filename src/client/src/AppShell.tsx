@@ -20,7 +20,7 @@ import { directionalPane, type PaneDirection } from "./pane-navigation";
 import { AgentInputRequestShelf } from "./AgentInputRequestShelf";
 import { isAgentInputRequestVisible } from "./agent-input-reference";
 import { CommandPalette, type PaletteCommand } from "./CommandPalette";
-import { WorkspaceRenameDialog } from "./WorkspaceRenameDialog";
+import { TitleRenameDialog } from "./TitleRenameDialog";
 import { displayTitle } from "../../shared/title";
 import { SettingsModal, cleanAlias, defaultSettings } from "./SettingsModal";
 import { MachineManagerModal } from "./MachineManagerModal";
@@ -218,6 +218,7 @@ export function AppShell() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
   const [renameWorkspaceDialog, setRenameWorkspaceDialog] = useState<{ id: string; title: string } | null>(null);
+  const [renameTabDialog, setRenameTabDialog] = useState<{ workspaceId: string; tabId: string; title: string } | null>(null);
   const [previewSettings, setPreviewSettings] = useState<WmuxSettings | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
   const [agentFleetOpen, setAgentFleetOpen] = useState(false);
@@ -1306,6 +1307,15 @@ export function AppShell() {
     },
   );
 
+  const renameTab = guard(
+    (workspaceId: string, tabId: string, _title: string) => `workspace:${workspaceId}:tab:${tabId}:rename`,
+    "Renaming tab...",
+    async (workspaceId: string, tabId: string, title: string) => {
+      const response = await api.setTabTitle(workspaceId, tabId, title);
+      await refresh(response.state);
+    },
+  );
+
   const useAutomaticTabName = guard(
     (workspaceId: string, tabId: string) => `workspace:${workspaceId}:tab:${tabId}:automatic-name`,
     "Using automatic tab name...",
@@ -1411,7 +1421,7 @@ export function AppShell() {
   useKeyboardShortcuts({
     keybindings,
     apple: appleKeybindings,
-    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || diagnosticsOpen
+    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || Boolean(renameTabDialog) || diagnosticsOpen
       || Boolean(inspectedHostId) || (agentFleetOpen && (!fleetDocked || mobileViewport.isMobile)),
     openCommandPalette,
     openSettings,
@@ -1579,6 +1589,17 @@ export function AppShell() {
         disabled: !activeWorkspace || !activeTab,
         run: () => { if (activeWorkspace && activeTab) void useAutomaticTabName(activeWorkspace.id, activeTab.id); },
         keywords: ["name", "title", "reset", "native"],
+      },
+      {
+        id: "rename-tab",
+        title: "Rename current tab",
+        subtitle: "Set a custom tab name",
+        section: "Actions",
+        disabled: !activeWorkspace || !activeTab,
+        run: () => {
+          if (activeWorkspace && activeTab) setRenameTabDialog({ workspaceId: activeWorkspace.id, tabId: activeTab.id, title: activeTab.title });
+        },
+        keywords: ["name", "title", "pin", "manual"],
       },
       {
         id: "copy-link",
@@ -1898,6 +1919,7 @@ export function AppShell() {
           onToggleWorkspace={toggleWorkspaceCollapsed}
           onToggleFavoriteWorkspace={toggleFavoriteWorkspace}
           onRenameWorkspace={renameWorkspace}
+          onUseAutomaticWorkspaceName={useAutomaticWorkspaceName}
           onRequestCloseWorkspace={requestCloseWorkspace}
           onRequestCloseWorkspaceGroup={closeWorkspaceGroup}
           movesDisabled={openTuiWorkspaceTree.movesDisabled}
@@ -2264,13 +2286,25 @@ export function AppShell() {
         />
       ) : null}
       {renameWorkspaceDialog ? (
-        <WorkspaceRenameDialog
-          workspaceId={renameWorkspaceDialog.id}
+        <TitleRenameDialog
+          kind="workspace"
+          entityId={renameWorkspaceDialog.id}
           title={renameWorkspaceDialog.title}
           ownership={automaticNameStatus(state.workspaces.find((workspace) => workspace.id === renameWorkspaceDialog.id)?.nameSource)}
           onRename={renameWorkspace}
           onUseAutomaticName={useAutomaticWorkspaceName}
           onClose={() => setRenameWorkspaceDialog(null)}
+        />
+      ) : null}
+      {renameTabDialog ? (
+        <TitleRenameDialog
+          kind="tab"
+          entityId={renameTabDialog.tabId}
+          title={renameTabDialog.title}
+          ownership={automaticNameStatus(state.workspaces.find((workspace) => workspace.id === renameTabDialog.workspaceId)?.tabs.find((tab) => tab.id === renameTabDialog.tabId)?.titleSource)}
+          onRename={(tabId, title) => renameTab(renameTabDialog.workspaceId, tabId, title)}
+          onUseAutomaticName={(tabId) => useAutomaticTabName(renameTabDialog.workspaceId, tabId)}
+          onClose={() => setRenameTabDialog(null)}
         />
       ) : null}
       {commandPaletteOpen ? (

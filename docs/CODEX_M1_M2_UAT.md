@@ -63,6 +63,138 @@ native sockets are deliberate fault fixtures, not native-client certification.
 
 ## Milestone UAT checkpoints
 
+### Final qualification — 2026-09-14
+
+Final Haswell runtime: `09525913b6f27a058396e31c0d8878e19dc0793c`, activated
+at 17:09 UTC. M0/M1 qualification is complete in the declared Linux scope;
+M2 functional recovery is qualified and its actual load-soak report is pending.
+The wmux-only activation preserved existing names, independent pins and layouts.
+Codex App Server and the production observer retained their PIDs/restart counts
+and native configuration; no native service or plugin reinstall occurred.
+
+Final external `npm run check` passed at that revision: **1,125 passed, four
+skipped, zero failures**, plus type checks, generated/script checks and build.
+The complete POSIX browser fallback at `9852ddd` passed **112 browser tests and
+three authentication tests**, with 107 conditional skips. No Windows runner was
+configured. A live visual check then found tab-label overflow; `0952591` fixes
+that final browser-only issue. Its new canvas-bounds regression, final full
+check and live public desktop/mobile Unicode/pin/reset/reload tests passed.
+The served HTML and JavaScript hashes match the immutable final release.
+See PR #130 for hosted checks against its latest head.
+
+Private evidence: `test-results/m012-final-deploy/`,
+`test-results/m012-final-artifacts/`, `test-results/remote/c33579a2e41f3aa0/`,
+`test-results/remote/f55e33676ad13159/` and
+`test-results/unicode-fixed-20260914/live-chrome-result.json`.
+Installed plugin 0.4.0 executable files match source. Its retained MCP/hook
+differences only select the existing host-specific native socket; hook command
+suffixes are unchanged. The collector's `nativeUat: pending` is its fixed
+non-signoff field, not a replacement for the scoped UAT record here.
+
+The user requested completion of all open M0–M2 work and confirmed that the
+Haswell deployment is in use with a soak already underway. Preserve that running
+deployment and its observation history; inject faults only into disposable
+fixtures. This section supersedes the earlier rework/pending observations below
+where an explicit result is recorded.
+
+| Cases | Result and evidence scope |
+| --- | --- |
+| N10 | Passed through Codex Desktop's native title control on an idle, unbound disposable task sharing an existing cwd. Eight subsequent samples found no binding or change to any existing wmux workspace/tab name or pin. The exact disposable task was archived. Private evidence: `test-results/m0-unbound-20260914/result.json`. |
+| M1-01–M1-03 | Browser tab pinning is now available through **Rename current tab** in Ctrl/Cmd+K or mobile **Chat → Actions**. Its dialog exposes full title, ownership and **Use automatic tab name**, alongside the existing workspace controls. Browser tests preserve the workspace pin through tab rename, reload and reset. Delayed automatic delivery after re-pin preserves the new manual values on desktop/mobile. |
+| M1-04 | Passed: complete grapheme clusters, wide-cell spacing and tab-region clipping. Final live desktop/mobile chrome, complete rename-input values and reload passed; canvas paint capture and visual review confirm joined emoji, combining accents and Japanese. Native full-name/reload and real cycle evidence remains in `test-results/unicode-cycle-20260914/`; corrected evidence is in `test-results/unicode-fixed-20260914/`. |
+| M1-05 | Passed: authorized title routes return `404 workspace_not_found` or `404 tab_not_found` for deleted targets. A continuous production name observer at its normal two-second cadence records an actual rejected private-socket attempt; real desktop/mobile controls reset each title while preserving the other pin and displaying awaiting-native ownership. Current metadata returns through the same receipt and observer after recovery. Default and browser-enabled outage tests passed. Stale-receipt browser coverage rejects the old receipt and requires fresh PTY proof. These are controlled synthetic native endpoints, not a production outage. |
+| M2-01–M2-03, N08 | A unique disposable systemd user unit replaces its SIGKILLed observer; lifecycle sequence advances without duplicate terminal notification. A failed endpoint backs off and recovers while its healthy peer continues. Two actual wmux app browser contexts disconnect entirely and reopen with the same live receipt and an idle rename. After an isolated same-port server restart, the old receipt returns 404 and fresh terminal proof restores the title. `test-results/m2-recovery-20260914/qualification.txt` records the run. |
+| M2 resource bounds | Twenty synthetic roots share one actual private Unix-socket transport, with at most four concurrent RPC requests. This short engineering test does not establish a 24-hour soak. |
+| M2-04 | Running, not accepted yet. Preserve the user's existing live-use soak. Production observer uptime exceeded 41 hours at the 16:23 UTC capture, with zero restarts, no warning-level journal entries and a recorded peak of 48,123,904 bytes (about 46 MiB); this supports continuity but is not the specified load record. The supplemental twenty-root actual 24-hour fixture started at **2026-09-14 16:52:05 UTC**, due **2026-09-15 16:52:05 UTC**, under the unique `wmux-codex-m2-soak-20260914T1653.service` unit. Private evidence: `test-results/m2-soak-20260914/manifest.json`, `run/events.jsonl`, and the eventual `run/report.json`. Its observer/plugin source at `33f77e0` is byte-identical to the final deployed observer/plugin. Short accelerated and six-minute normal-fault harness runs passed but remain engineering-only. |
+
+Run browser-enabled isolated recovery against freshly built assets with
+`WMUX_BROWSER_QUALIFICATION=1 node --import tsx --test test/codex-supervised-recovery.test.ts test/codex-outage-reset-recovery.test.ts`.
+Default unit runs must not depend on pre-existing build output or browser binaries.
+Full candidate checks, deployment identity and live smoke are recorded with the
+final release rather than inferred from earlier revisions.
+
+The supplemental load lane uses `node scripts/codex-observer-soak.mjs --out
+/absolute/fresh/private-report-dir`. It runs for an actual 86,400 seconds by
+default with twenty synthetic binding records, the production supervisor and
+two private fixture sockets. Every five minutes one endpoint is unavailable for
+twenty seconds; the healthy endpoint must continue sampling and every affected
+root must recover its current name. The fixture records ten-second resource
+samples, RPC/socket bounds, title and diagnostic counts, and exactly one terminal
+lifecycle delivery per synthetic root. Its binding/post adapter is synthetic;
+real HTTP authorization, receipt expiry, systemd replacement and server
+notification deduplication are qualified by the separate recovery tests above.
+The load harness never contacts production wmux or a native Codex endpoint.
+
+Use a fresh output directory, and retain `events.jsonl` and `report.json` with the
+source revision. A shorter `--duration-seconds` or explicit accelerated fault
+interval is only harness qualification, never a 24-hour pass. Do not replace the
+user's already-running production soak with this supplemental fixture lane.
+
+### Direct user observations — 2026-09-14
+
+- **N04: user-confirmed** Codex Desktop → wmux name syncing. This confirms
+  the reported Desktop rename flow; it does not accept N10's unbound-task
+  isolation or the independent pin/reset matrix.
+- **M1-01: original discoverability gap, now resolved.** The user could not find a return
+  to automatic action in the deployed desktop browser sidebar menu. The
+  sidebar's own rename menu has no reset action. In the deployed candidate,
+  select the intended workspace/tab, open **Ctrl/Cmd+K**, and search
+  **Use automatic workspace name** or **Use automatic tab name**. The palette's
+  **Rename current workspace** dialog also exposes workspace reset; it is a
+  different surface from the sidebar rename menu. Mobile uses **Chat → Actions**.
+  The sidebar follow-up below supplies that entry point and is user-accepted.
+- **Unpin behavior: user-confirmed.** After the control-location guidance,
+  the user reported "unpin behavior confirmed." Accept the exercised unpin
+  flow. The report does not enumerate surfaces, pin orders, idle timing or
+  devices, so it does not independently certify every M1-01–M1-03 matrix case.
+  Keep existing agent evidence separate. Outage, stale-binding, race,
+  exit-cleanup and soak status are unchanged.
+
+- **Mobile appearance/usability: user-confirmed.** The user reported "mobile
+  looks ok as well." Accept the reviewed mobile presentation and usability.
+  Specific long/Unicode title edge cases, fault diagnostics and recovery tests
+  retain their separate evidence requirements.
+- **Sidebar follow-up: user-accepted.** Adds **Use
+  automatic workspace name** next to **Rename workspace** in the desktop
+  sidebar context menu. Right-click a workspace row or focus it and press
+  **Shift+F10**; arrow keys and Enter operate the menu. The action resets that
+  row's workspace through the existing route, preserving its tab pins and any
+  other active workspace. Browser regression coverage includes keyboard focus,
+  exact-target behavior and reload persistence. The user subsequently reported
+  "sidebar action confirmed." [PR #130](https://github.com/gisenberg/wmux/pull/130),
+  revision `9499c0cd14ae3141c53577ce79d216cfbd555584`, passed external full checks
+  (1,116 tests passed, four skipped), the staged sidebar browser regression and
+  a live public-browser right-click reset test with pin preservation and reload.
+  The wmux-only activation preserved existing workspace/tab names, ownership and
+  layouts; native and observer processes/configuration were unchanged. Full
+  browser-suite evidence is recorded separately; these targeted passes do not
+  accept remaining recovery or soak cases.
+- **Diagnostics clarity: user-accepted.** The user explicitly accepted clarity.
+  This accepts presentation; controlled outage and stale-binding behavior retain
+  separate qualification requirements.
+- **Native cycle: agent-tested pass.** On the deployed sidebar revision, a
+  disposable native CLI task on the existing App Server issued a real blocking
+  Plan-mode input question. Native `waitingOnUserInput` and wmux waiting agreed;
+  answering through that exact CLI resumed running, then completed. The browser
+  showed waiting, working and done. Exactly one input-required notification and
+  one completion notification remained stable for over two minutes, including
+  idle native renames and browser reloads. No synthetic lifecycle events or
+  receipts supplied this result.
+- **M1-04: initial failure, resolved by final qualification above.** Two native titles of 232 and 336 grapheme clusters, including
+  combining accents, skin-tone/ZWJ emoji, flags and Japanese, mirrored exactly to
+  workspace/tab and survived desktop/mobile reload with complete rename-input
+  values. However, canvas labels decompose joined emoji, separate combining
+  accents and overlap wide glyphs. An isolated reproduction using the unchanged
+  production grid renderer confirms that `writeText` and `GridPainter.paint`
+  draw individual code points in successive single-width cells, unlike the
+  browser-shaped input. Fix cluster shaping, width allocation and final clipping;
+  repeat visual acceptance on sidebar/tab chrome. Normal ellipsis truncation is
+  distinct from this defect. Private evidence is under
+  `test-results/unicode-cycle-20260914/`, including `cycle-result.json`,
+  `unicode-results.json` and `renderer-repro.png`. The exact idle native test task
+  was archived and its workspace removed; existing names/pins and all service
+  PIDs/restart counts were preserved.
+
 Use disposable tasks and explicit pane IDs. Keep personal names, paths, receipt
 markers and tokens in private evidence. Record expected/actual behavior, latency,
 candidate identity, screenshots where useful, and accept/rework/defer per row.
