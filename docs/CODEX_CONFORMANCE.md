@@ -55,6 +55,10 @@ verified cross-browser association create/move/remove/reload, independent pins,
 and one notification for a real later CLI turn across two display associations.
 Fresh native views on both Linux hosts verified requested cwd and no automatic
 turn. Testing corrected stale deployed helper links and missing remote `--cd`.
+Final runtime `e232290` also fixes long-name overflow in mobile catalog controls
+while retaining full selected identities. Its external full check passed 1,170
+tests with eight skips; all three catalog browser projects and final served
+desktop/mobile checks passed after workstation maintenance.
 Only personal desktop/physical-mobile usability and native trust/input decisions
 remain direct UAT; the new 24-hour mixed-task soak remains an automated pending
 gate. See the [M6 acceptance ledger](CODEX_M6_UAT.md) for exact evidence and the

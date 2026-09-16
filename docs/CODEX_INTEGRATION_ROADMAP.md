@@ -7,6 +7,10 @@ Live automation now covers native fresh views, later-turn notification
 deduplication, catalog inspection and browser association persistence. Remaining
 human checks are native trust/input decisions and personal desktop/phone
 usability; the 24-hour mixed-task gate is still running automatically.
+Final deployed runtime `e232290` passed the external full check and all three
+catalog browser projects after workstation maintenance; served browser and
+native read-only checks also passed. The soak's storage interruption remains
+part of its final evidence review.
 See the [current M6 handoff](CODEX_M6_UAT.md). Existing
 M0–M2 acceptance below remains attached to its qualified release. See
 [catalog configuration, limits and combined UAT](CODEX_TASK_CATALOG.md).

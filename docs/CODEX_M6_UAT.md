@@ -3,7 +3,7 @@
 ## Candidate — 2026-09-16
 
 The unmerged `feat/codex-m3-m6` candidate is deployed on Haswell for combined
-UAT. Runtime source is `e24c127b05e811b708410ca88a7e10951280d6ea`.
+UAT. Runtime source is `e2322905d37c995c36fa851c7cdd317d8551553c`.
 M0–M2 retain their prior acceptance; **M3–M6 are not yet accepted**.
 No Codex/App Server source, configuration or lifecycle changes were made.
 
@@ -37,8 +37,9 @@ this checkpoint concerns the new catalog and launch flow.
 | M6-04 — Browser and recovery | Live desktop/mobile reload, Unicode pins and natural sample expiry passed; stale selection disabled association. Isolated tests cover endpoint outages, stale identities, launch uncertainty, reload recovery, authorization and backup/rollback. Physical-device usability remains M6-H2. |
 
 Private live evidence is under `test-results/m6-automation-20260916/`, including
-`catalog/root-browser-result.json`, `cli/notification-result.json`,
-`cli-final/result.json` and `audit/coverage-audit.md`. Failed browser harness
+`catalog/root-browser-result.json`, `catalog/native-pages.json`,
+`cli/notification-result.json`, `cli-final/result.json`,
+`final-native-smoke.json` and `audit/coverage-audit.md`. Failed browser harness
 attempts were corrected and rerun; only completed assertions are counted.
 Test associations and ordinary test workspaces were removed. Only the two
 native trust views remain deliberately retained for direct interaction; the
@@ -53,6 +54,16 @@ its outbox is separate from receipt-bound lifecycle reporting.
 
 ## Engineering qualification
 
+- Final runtime `e232290`: external `npm run check` passed **1,170 tests / 8
+  skips**, typechecks, script validation and production build (run
+  `32a8ebffbd064796`). The exact checked build was deployed, and served
+  desktop/mobile association create/move/remove/reload and natural expiry
+  passed again. Both retained native trust prompts survived deployment.
+- Long Unicode names exposed mobile overflow in catalog controls. Compact,
+  recognizable option labels now fit while full selected names and exact
+  identities remain visible below. The complete catalog browser fixture passed
+  **3/3** on the final runtime in desktop Chromium, mobile Chromium and mobile
+  WebKit, including geometry checks before and after opening association controls.
 - Live automation found and corrected two fresh-view deployment problems:
   installed local helpers referenced an old release, and remote CLI argv lacked
   explicit `--cd`. Local helper links now follow the active release; the wmux
@@ -63,19 +74,21 @@ its outbox is separate from receipt-bound lifecycle reporting.
 - An additional isolated catalog/association/launch/API/CLI-boundary run passed
   **36/36**. It includes strict authorization, uncertain-attempt recovery,
   endpoint failure, persistence and notification deduplication.
-- Final source `ff524a4`: external `npm run check` passed **1,170 tests**, with
+- Earlier runtime `ff524a4`: external `npm run check` passed **1,170 tests**, with
   **8 skips**, plus TypeScript, script validation and production build.
 - Full browser run on `ce6ee74`: **116 passed / 109 intentional skips**, followed
-  by **3 passed** login-only tests. The final change touched only catalog browser
-  code and its fixture; that complete fixture passed again on `ff524a4` in
-  desktop Chromium, mobile Chromium and mobile WebKit (**3/3**).
+  by **3 passed** login-only tests. Subsequent changes affected the launcher and
+  catalog browser code; final full checks, native launches and the complete
+  catalog fixture above qualify those changes.
 - Live served desktop/mobile Chromium smoke used the real native catalog and
   real association route. Both returned HTTP 200 and preserved independent
   workspace/tab pins. Temporary associations/workspaces were removed afterward.
   This is agent-run qualification, not direct user acceptance.
 - Native read-only probes on two existing Linux endpoints returned exact-ID
-  metadata and bounded turn information, including remote pagination. The
-  installed CLI/App Server contract is 0.154.0. No task was resumed for inspection.
+  metadata and bounded turn information, fetched a real second remote page,
+  and queried archived tasks. Stored tasks remained `notLoaded` after history
+  reads. The installed CLI/App Server contract is 0.154.0. No task was resumed
+  for inspection. These probes passed again after workstation maintenance.
 - Isolated disable/rollback/backup-restore qualification passed. Both releases
   use main state schema 10; the prior release ignores the separate new ledgers.
 - Deployment preserved existing workspace/tab identities, names and pins.
@@ -86,11 +99,20 @@ The complete POSIX browser fallback was used because no Windows browser runner
 was configured. Haswell lacked the local WebKit executable, so final WebKit
 qualification ran on the external runner.
 
-Private evidence is retained under `test-results/m6-qualification-20260916/`.
-Remote full-check IDs are `53a35d2d694e4ec2` (final source) and
+Earlier private evidence is retained under `test-results/m6-qualification-20260916/`.
+Earlier remote full-check IDs are `53a35d2d694e4ec2` (`ff524a4`) and
 `12cbff5194aab931` (preceding runtime); full browser ID is `159d4a86616ec8c4`.
+Final checks and deployment records are under
+`test-results/m6-automation-20260916/`; final full-check ID is
+`32a8ebffbd064796` (`e232290`).
 The deployment record includes the exact artifact hashes and predeployment
 backup; live inventories and credentials are not committed.
+
+The external workstation rebooted for user-confirmed maintenance around
+15:45 and 15:50 UTC. Shared storage paused and the disposable runner was lost.
+Interrupted run `34eb1dd12e12a88f` is not a pass. The runner was rebuilt and
+the final full check and native reachability checks passed after maintenance.
+The obsolete remote trust view was replaced with a fresh native trust prompt.
 
 ## Overnight gate — running, not accepted
 
@@ -105,6 +127,9 @@ and resource bounds. It does not fault or modify native services. The frozen
 soak source is `ce6ee74`; the candidate's 97 server/harness artifacts were
 verified byte-identical. The CLI wrapper correction is qualified separately by
 live launch tests; it does not change the backend exercised by this soak.
+The soak process survived workstation maintenance without a restart; shared
+storage access paused and fault/recovery events resumed afterward. Review that
+interruption in the final evidence rather than claiming an uninterrupted run.
 Short fixture runs and elapsed wall time alone do not accept the gate: inspect
 the final report, all assertions and successful unit exit.
 
