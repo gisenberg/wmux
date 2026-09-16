@@ -161,6 +161,12 @@ test("catalog preserves identity, display associations, pagination, and disabled
   await openCatalog();
   const dialog = page.getByRole("dialog", { name: "Codex tasks" });
   const assertNoHorizontalOverflow = async (phase: string) => {
+    await dialog.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+    });
     const horizontalBounds = await dialog.evaluate((element) => {
       const bounds = element.getBoundingClientRect();
       return {
