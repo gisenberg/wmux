@@ -160,26 +160,29 @@ test("catalog preserves identity, display associations, pagination, and disabled
   };
   await openCatalog();
   const dialog = page.getByRole("dialog", { name: "Codex tasks" });
+  const assertNoHorizontalOverflow = async (phase: string) => {
+    const horizontalBounds = await dialog.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        overflowing: Array.from(element.querySelectorAll<HTMLElement>("*")).flatMap((child) => {
+          const childBounds = child.getBoundingClientRect();
+          return childBounds.right > bounds.right + 1 || child.scrollWidth > child.clientWidth + 1
+            ? [{ tag: child.tagName, className: child.className, right: Math.round(childBounds.right), containerRight: Math.round(bounds.right), clientWidth: child.clientWidth, scrollWidth: child.scrollWidth }]
+            : [];
+        }),
+      };
+    });
+    expect(
+      horizontalBounds.scrollWidth,
+      `horizontal overflow (${phase}): ${JSON.stringify(horizontalBounds)}`,
+    ).toBeLessThanOrEqual(horizontalBounds.clientWidth + 1);
+  };
   await expect(dialog).toContainText("Same title");
   await expect(dialog).toContainText(`${endpoint.identity} · thread-1`);
   await expect(dialog.locator(".codex-task-list strong").first()).toHaveText(longUnicodeName.trim());
-  const horizontalBounds = await dialog.evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    return {
-      clientWidth: element.clientWidth,
-      scrollWidth: element.scrollWidth,
-      overflowing: Array.from(element.querySelectorAll<HTMLElement>("*")).flatMap((child) => {
-        const childBounds = child.getBoundingClientRect();
-        return childBounds.right > bounds.right + 1 || child.scrollWidth > child.clientWidth + 1
-          ? [{ tag: child.tagName, className: child.className, right: Math.round(childBounds.right), containerRight: Math.round(bounds.right), clientWidth: child.clientWidth, scrollWidth: child.scrollWidth }]
-          : [];
-      }),
-    };
-  });
-  expect(
-    horizontalBounds.scrollWidth,
-    `horizontal overflow: ${JSON.stringify(horizontalBounds)}`,
-  ).toBeLessThanOrEqual(horizontalBounds.clientWidth + 1);
+  await assertNoHorizontalOverflow("catalog list");
   await dialog.screenshot({
     path: testInfo.outputPath("codex-tasks-catalog.png"),
   });
@@ -207,6 +210,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
   await dialog.getByRole("button", { name: "ASSOCIATE NEW" }).click();
   await expect(dialog).toContainText("Associated display target");
   await expect(dialog).toContainText("no title ownership or input authority");
+  await assertNoHorizontalOverflow("task detail and association controls");
   await dialog.getByRole("button", { name: "LOAD MORE" }).click();
   await expect(dialog).toContainText(`${endpoint.identity} · thread-2`);
   await dialog.getByRole("button", { name: "NEW CLI VIEW" }).click();
