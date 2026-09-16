@@ -1,16 +1,16 @@
 # Codex integration roadmap
 
-Status: M0 and M1 are qualified in the declared Linux scope. M2 functional
-recovery is qualified; its supplemental 24-hour load soak is running. M0–M2 is
+Status: M0, M1 and M2 are qualified in the declared Linux scope. M2's
+supplemental actual 24-hour load soak passed and was accepted on 2026-09-16. M0–M2 is
 deployed and in use on Haswell. The final fixes and qualification
 are tracked in [PR #130](https://github.com/gisenberg/wmux/pull/130), following
 [PR #127](https://github.com/gisenberg/wmux/pull/127). Naming
 [PR #126](https://github.com/gisenberg/wmux/pull/126) is the fixed baseline at
 `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`. M1 closes the observed unpin gap;
 M2 adds bounded recovery. M3–M6 remain proposed. Immediate shared-client CLI
-exit cleanup is excluded. Existing production use continues during final checks;
-the real 24-hour synthetic soak requires its own evidence.
-Updated: 2026-09-14.
+exit cleanup is excluded. The qualified implementation remains unmerged;
+PR #130's hosted browser CI flake and maintainer merge remain separate gates.
+Updated: 2026-09-16.
 
 Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior, mobile
 appearance/usability, the sidebar reset action and diagnostics clarity are
@@ -31,11 +31,11 @@ tab pin/reset and Unicode shaping passed. Isolated recovery tests cover actual
 browser controls, endpoint faults and systemd replacement. See
 [current UAT observations](CODEX_M1_M2_UAT.md#direct-user-observations--2026-09-14).
 
-| Implemented milestone | Deployment acceptance still required |
+| Implemented milestone | Qualification status |
 | --- | --- |
 | M0 | Complete: baseline/artifacts recorded; supported native rename/cycle and unbound Desktop isolation passed; fixture evidence remains distinguished from native evidence |
 | M1 | Complete: user acceptance plus delegated Unicode, independent title controls, reload and fault/race qualification passed on the final rollout |
-| M2 | Functional qualification complete: systemd replacement, endpoint recovery, two-browser reconnect and 20-root socket bounds passed. Supplemental actual 24-hour soak runs until 2026-09-15 16:52 UTC; acceptance remains pending its final report |
+| M2 | Complete: systemd replacement, endpoint recovery, two-browser reconnect and resource bounds passed. The twenty-root 24-hour soak ended 2026-09-15 16:52 UTC with all 287 fault/recovery cycles and all twelve assertions passed; accepted 2026-09-16. See the [soak acceptance record](CODEX_M1_M2_UAT.md#soak-acceptance--2026-09-16). |
 
 Consult PR #130's checks and the private release manifest for the qualified
 source/build identity. The final rollout changes wmux only; its unchanged

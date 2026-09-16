@@ -63,11 +63,51 @@ native sockets are deliberate fault fixtures, not native-client certification.
 
 ## Milestone UAT checkpoints
 
+### Soak acceptance — 2026-09-16
+
+**M2-04 passed; M0–M2 qualification is complete in the declared Linux scope.**
+The isolated twenty-root run started at `2026-09-14T16:52:05.231Z` and ended at
+`2026-09-15T16:52:05.238Z`, recording **86,400,006 ms** of actual elapsed time at
+the normal two-second cadence. Its final report has `accepted: true` and
+`qualification: accepted`; the systemd unit reports `Result=success`,
+`ExecMainStatus=0`, zero restarts and is now inactive after completion.
+
+All **287** injected endpoint faults completed recovery. Every affected root
+regained its current title, while the healthy endpoint continued sampling.
+All twelve assertions passed: no stale deliveries, fixture RPC errors, unknown
+RPCs, fault errors or dropped report events, and one terminal lifecycle fixture
+delivery per root. The 1,478 transport failures were recorded during the
+controlled endpoint outages; they are not failed acceptance assertions.
+
+The report records 829,769 RPC requests and 10,655 event lines. Peak RSS was
+89,444,352 bytes (85.3 MiB), peak sampled CPU fraction was 0.00545 (0.545% of one
+core), peak sockets two and peak concurrent RPCs one, all within the declared
+limits. This accepts the synthetic load/fault lane; native behavior and actual
+HTTP binding/notification semantics retain their separate evidence below.
+
+Private evidence: `test-results/m2-soak-20260914/run/report.json` and
+`run/events.jsonl`, with the original `manifest.json`. Report SHA-256:
+`27940fad77d78aa604dc43607ded6b285ab168a050e66ced2c30a8a2d164ec33`.
+The sampled supervisor/plugin at `33f77e0` is byte-identical to the qualified
+runtime at `0952591`. No service restart or deployment is needed to accept this
+completed run; the user's existing production-use soak was preserved.
+
+**Separate integration gate:** PR #130 was still open when acceptance was
+recorded. Hosted run `34873517301` passed Check and container smoke, but strict
+flaky-test policy failed Browser E2E: 112 passed, 109 skipped and one existing
+mobile WebKit workspace-delete smoke test passed only on retry after
+`ECONNRESET`. Ten subsequent repetitions on ice3070 passed with retries disabled.
+No retry/timeout workaround was added. A rerun request was denied with HTTP 403
+requiring repository admin rights. Consult current PR checks after this
+documentation update; milestone acceptance does not certify a green CI run or
+authorize claims of an upstream merge.
+
 ### Final qualification — 2026-09-14
 
 Final Haswell runtime: `09525913b6f27a058396e31c0d8878e19dc0793c`, activated
 at 17:09 UTC. M0/M1 qualification is complete in the declared Linux scope;
-M2 functional recovery is qualified and its actual load-soak report is pending.
+M2 functional recovery is qualified. Its load-soak report was pending at this
+deployment checkpoint and is now accepted in the 2026-09-16 record above.
 The wmux-only activation preserved existing names, independent pins and layouts.
 Codex App Server and the production observer retained their PIDs/restart counts
 and native configuration; no native service or plugin reinstall occurred.
@@ -105,7 +145,7 @@ where an explicit result is recorded.
 | M1-05 | Passed: authorized title routes return `404 workspace_not_found` or `404 tab_not_found` for deleted targets. A continuous production name observer at its normal two-second cadence records an actual rejected private-socket attempt; real desktop/mobile controls reset each title while preserving the other pin and displaying awaiting-native ownership. Current metadata returns through the same receipt and observer after recovery. Default and browser-enabled outage tests passed. Stale-receipt browser coverage rejects the old receipt and requires fresh PTY proof. These are controlled synthetic native endpoints, not a production outage. |
 | M2-01–M2-03, N08 | A unique disposable systemd user unit replaces its SIGKILLed observer; lifecycle sequence advances without duplicate terminal notification. A failed endpoint backs off and recovers while its healthy peer continues. Two actual wmux app browser contexts disconnect entirely and reopen with the same live receipt and an idle rename. After an isolated same-port server restart, the old receipt returns 404 and fresh terminal proof restores the title. `test-results/m2-recovery-20260914/qualification.txt` records the run. |
 | M2 resource bounds | Twenty synthetic roots share one actual private Unix-socket transport, with at most four concurrent RPC requests. This short engineering test does not establish a 24-hour soak. |
-| M2-04 | Running, not accepted yet. Preserve the user's existing live-use soak. Production observer uptime exceeded 41 hours at the 16:23 UTC capture, with zero restarts, no warning-level journal entries and a recorded peak of 48,123,904 bytes (about 46 MiB); this supports continuity but is not the specified load record. The supplemental twenty-root actual 24-hour fixture started at **2026-09-14 16:52:05 UTC**, due **2026-09-15 16:52:05 UTC**, under the unique `wmux-codex-m2-soak-20260914T1653.service` unit. Private evidence: `test-results/m2-soak-20260914/manifest.json`, `run/events.jsonl`, and the eventual `run/report.json`. Its observer/plugin source at `33f77e0` is byte-identical to the final deployed observer/plugin. Short accelerated and six-minute normal-fault harness runs passed but remain engineering-only. |
+| M2-04 | Passed; accepted 2026-09-16 from the completed actual 24-hour report and successful unit exit. All 287 fault/recovery cycles and twelve assertions passed; see [soak acceptance](#soak-acceptance--2026-09-16). The user's existing live-use soak was preserved. Short accelerated and six-minute normal-fault harness runs remain engineering-only. |
 
 Run browser-enabled isolated recovery against freshly built assets with
 `WMUX_BROWSER_QUALIFICATION=1 node --import tsx --test test/codex-supervised-recovery.test.ts test/codex-outage-reset-recovery.test.ts`.

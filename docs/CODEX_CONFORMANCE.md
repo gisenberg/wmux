@@ -1,11 +1,12 @@
 # Codex plain-start conformance matrix
 
-## Current M0–M2 qualification — 2026-09-14
+## Current M0–M2 qualification — 2026-09-16
 
 M0/M1 qualification is complete in the declared Linux scope, deployed on Haswell
-at `09525913b6f27a058396e31c0d8878e19dc0793c`. M2 functional recovery is qualified;
-its supplemental actual 24-hour load soak runs until 2026-09-15 16:52 UTC and
-remains unaccepted until the final report passes. The user accepted Desktop name syncing,
+at `09525913b6f27a058396e31c0d8878e19dc0793c`. M2 functional recovery and its
+supplemental actual 24-hour load soak are accepted: all 287 controlled faults
+recovered, all twelve assertions passed, and the unit exited successfully.
+The user accepted Desktop name syncing,
 unpin behavior, mobile presentation, sidebar reset and diagnostics clarity.
 The delegated native blocking-input cycle passed with one input and one
 completion notification. Native full Unicode values survived mirroring/reload;
@@ -21,13 +22,16 @@ fresh proof after isolated server restart. These qualify wmux recovery wiring;
 they are not claims of faults injected into a native shared service. Twenty-root
 socket/request bounds are engineering-tested. Existing production observation
 exceeded 41 hours without a worker restart; the separate synthetic soak now
-retains its own counters and fault record. Final full checks passed 1,125 tests
+retains its completed counters and fault record. Final full checks passed 1,125 tests
 with four skips, and live desktop/mobile Unicode, full-name inspection, tab
 pin/reset and reload passed against the served final bundle.
 
-See [final qualification](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14)
+See [soak acceptance](CODEX_M1_M2_UAT.md#soak-acceptance--2026-09-16) and
+[final qualification](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14)
 for evidence scope and final candidate/deployment checks. Immediate shared-client
-CLI exit cleanup remains excluded; M3–M6 remain proposed. Historical pending
+CLI exit cleanup remains excluded; M3–M6 remain proposed. Milestone qualification
+does not imply green hosted CI or upstream merge: PR #130 remains open with
+the recorded browser transport flake. Historical pending
 statuses below describe their dated baselines and are superseded only by these
 explicit current results.
 
