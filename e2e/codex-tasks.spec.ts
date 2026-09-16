@@ -187,6 +187,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
   };
   await expect(dialog).toContainText("Same title");
   await expect(dialog).toContainText(`${endpoint.identity} · thread-1`);
+  await expect(dialog.locator(".codex-endpoint-identity")).toHaveText(endpoint.identity);
   await expect(dialog.locator(".codex-task-list strong").first()).toHaveText(longUnicodeName.trim());
   await assertNoHorizontalOverflow("catalog list");
   await dialog.screenshot({

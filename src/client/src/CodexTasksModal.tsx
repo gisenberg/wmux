@@ -434,10 +434,13 @@ export function CodexTasksModal({
             >
               {endpoints.map((item) => (
                 <option key={`${item.id}:${item.identity}`} value={item.id}>
-                  {item.label} — {item.identity}
+                  {item.label} — {item.id}
                 </option>
               ))}
             </select>
+            <small className="codex-endpoint-identity">
+              {endpoints.find((item) => item.id === endpointId)?.identity}
+            </small>
           </label>
           <label>
             <input
