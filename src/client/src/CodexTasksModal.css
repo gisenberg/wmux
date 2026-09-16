@@ -4,4 +4,4 @@
 .codex-task-list>button{min-width:0;overflow-wrap:anywhere}
 .codex-tasks-modal select,.codex-tasks-modal input{min-width:0;max-width:100%}
 .codex-tasks-toolbar label{min-width:0;max-width:100%}
-.codex-tasks-toolbar select{width:100%;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%23d8f6ed' d='m1 1 4 4 4-4'/%3E%3C/svg%3E");background-position:right .55rem center;background-repeat:no-repeat;background-size:.65rem auto;padding-right:1.5rem;text-overflow:ellipsis;white-space:nowrap}
+.codex-tasks-toolbar select{width:100%;-webkit-appearance:none!important;appearance:none!important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%23d8f6ed' d='m1 1 4 4 4-4'/%3E%3C/svg%3E");background-position:right .55rem center;background-repeat:no-repeat;background-size:.65rem auto;padding-right:1.5rem;text-overflow:ellipsis;white-space:nowrap}
