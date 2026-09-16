@@ -24,7 +24,7 @@ const truncateGraphemes = (value: string, maximum: number) => {
     : value;
 };
 const compactTargetLabel = (workspace: Workspace, tab: Workspace["tabs"][number], pane: Workspace["tabs"][number]["panes"][number]) =>
-  `${truncateGraphemes(workspace.name || "Workspace", 6)} / ${truncateGraphemes(tab.title || "Tab", 6)} / ${truncateGraphemes(pane.title || "Pane", 6)} [${pane.id.slice(-8)}]`;
+  `${truncateGraphemes(workspace.name || "Workspace", 6)} / ${truncateGraphemes(tab.title || "Tab", 6)} [${pane.id.slice(-8)}]`;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed";
 const taskKey = (task: Pick<CodexTask, "endpointIdentity" | "threadId">) =>
