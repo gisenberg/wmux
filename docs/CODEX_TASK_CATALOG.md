@@ -133,10 +133,25 @@ Never feed a future ledger schema into an older implementation or alter native
 task stores to undo a wmux deployment. Normal wmux restart durability rules still
 apply to panes; review the actual backend mix before maintenance.
 
+When deploying through an active-release symlink, ensure the installed local
+`wmux-*` helper links resolve through that symlink too. A login shell can prefer
+the installed helper over the service's prepended PATH; a stale helper may
+reject a new launch field even when the browser/server were updated. Verify
+the resolved `wmux-agent-run` source and an actual local launch. Preserve
+unmanaged commands and retain helper-link provenance with the deployment
+backup. Rollback must select matching helpers as well as matching server code.
+
+Remote Codex views pass the validated directory through native `--cd`, in
+addition to setting the launcher process cwd. Changing only the wrapper cwd
+does not establish the remote App Server task's working directory. Trust and
+approval policy remain native; wmux sends no automatic trust response.
+
 ## Combined M6 acceptance
 
-Engineering tests and native metadata probes do not replace direct UAT. Use
-disposable tasks and panes for this checkpoint:
+Use disposable tasks and panes for functional qualification. The following
+cases can be automated; the [current acceptance ledger](CODEX_M6_UAT.md)
+separates completed engineering evidence from the remaining human decisions
+and physical-device usability checks:
 
 1. Find Desktop, CLI and stored tasks across configured hosts; inspect duplicate
    titles, parent IDs, stale labels, pagination and explicit history loading.

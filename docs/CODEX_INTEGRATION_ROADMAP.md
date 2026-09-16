@@ -3,6 +3,10 @@
 Execution update — 2026-09-16: the user authorized M6 as the combined release
 target. M3–M5 are implemented together in a pushed, unmerged candidate now
 deployed for one combined M6 UAT checkpoint and a new mixed-task overnight soak.
+Live automation now covers native fresh views, later-turn notification
+deduplication, catalog inspection and browser association persistence. Remaining
+human checks are native trust/input decisions and personal desktop/phone
+usability; the 24-hour mixed-task gate is still running automatically.
 See the [current M6 handoff](CODEX_M6_UAT.md). Existing
 M0–M2 acceptance below remains attached to its qualified release. See
 [catalog configuration, limits and combined UAT](CODEX_TASK_CATALOG.md).

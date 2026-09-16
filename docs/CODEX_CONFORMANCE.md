@@ -50,9 +50,15 @@ Read-only probes of two existing Linux endpoints returned paginated task
 metadata and exact-ID details through CLI/App Server 0.154.0. These probes did
 not resume tasks or change native services. Full checks, browser qualification, live browser association smoke and isolated
 rollback qualification passed. The new candidate is deployed with existing
-names/pins preserved and native processes unchanged. Direct native UAT and the
-new 24-hour mixed-task soak remain pending; see the
-[M6 acceptance ledger](CODEX_M6_UAT.md). Fixture success cannot accept those cases.
+names/pins preserved and native processes unchanged. Additional live automation
+verified cross-browser association create/move/remove/reload, independent pins,
+and one notification for a real later CLI turn across two display associations.
+Fresh native views on both Linux hosts verified requested cwd and no automatic
+turn. Testing corrected stale deployed helper links and missing remote `--cd`.
+Only personal desktop/physical-mobile usability and native trust/input decisions
+remain direct UAT; the new 24-hour mixed-task soak remains an automated pending
+gate. See the [M6 acceptance ledger](CODEX_M6_UAT.md) for exact evidence and the
+two remaining human checks. Automated success does not itself accept M6.
 
 Resume is deliberately unavailable: existing metadata cannot prove exclusive
 client ownership. A fresh view returns exact wmux pane identity, not inferred
