@@ -12,6 +12,7 @@ import {
 import { GripVertical, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { api, modalSettingsUpdate, UnauthorizedError, WorkspaceReorderConflictError } from "./api";
 import { DiagnosticsModal } from "./DiagnosticsModal";
+import { CodexTasksModal } from "./CodexTasksModal";
 import { ActivityPanel, buildActivityItems } from "./ActivityPanel";
 import { AgentFleet, type AgentFleetRow } from "./AgentFleet";
 import { buildSessionRows, sessionActivities } from "./session-inventory";
@@ -227,6 +228,7 @@ export function AppShell() {
   const [inspectedHostId, setInspectedHostId] = useState<string | null>(null);
   const [streamOpen, setStreamOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [codexTasksOpen, setCodexTasksOpen] = useState(false);
   const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
   const [doctorError, setDoctorError] = useState("");
@@ -1421,7 +1423,7 @@ export function AppShell() {
   useKeyboardShortcuts({
     keybindings,
     apple: appleKeybindings,
-    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || Boolean(renameTabDialog) || diagnosticsOpen
+    modalOpen: !bootComplete || settingsOpen || machineManagerOpen || commandPaletteOpen || Boolean(renameWorkspaceDialog) || Boolean(renameTabDialog) || diagnosticsOpen || codexTasksOpen
       || Boolean(inspectedHostId) || (agentFleetOpen && (!fleetDocked || mobileViewport.isMobile)),
     openCommandPalette,
     openSettings,
@@ -1530,6 +1532,14 @@ export function AppShell() {
         section: "View",
         run: () => setAgentFleetOpen(true),
         keywords: ["agents", "delegations", "waiting", "blocked", "control plane"],
+      },
+      {
+        id: "open-codex-tasks",
+        title: "Open Codex tasks",
+        subtitle: "Browse endpoint-scoped Codex task catalog",
+        section: "View",
+        run: () => setCodexTasksOpen(true),
+        keywords: ["codex", "catalog", "threads", "task"],
       },
       {
         id: "open-activity",
@@ -2324,6 +2334,16 @@ export function AppShell() {
             autoFocus={!mobileViewport.isMobile}
           />
         )
+      ) : null}
+      {codexTasksOpen ? (
+        <CodexTasksModal
+          workspaces={state.workspaces}
+          onClose={() => setCodexTasksOpen(false)}
+          onOpenTarget={(target) => {
+            activateWorkspaceTab(target.workspaceId, target.tabId);
+            void activatePaneInTab(target.tabId, target.paneId);
+          }}
+        />
       ) : null}
     </main>
     </ColorSchemeProvider>

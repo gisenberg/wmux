@@ -1137,6 +1137,19 @@ def validate_tui_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"wmuxctl: invalid --{key.replace('_', '-')}")
     if args.opencode_agent and args.runtime != "opencode":
         raise SystemExit("wmuxctl: --opencode-agent is only valid for OpenCode")
+    if args.codex_remote:
+        if args.runtime != "codex":
+            raise SystemExit("wmuxctl: --codex-remote is only valid for Codex")
+        if (
+            not isinstance(args.codex_remote, str)
+            or len(args.codex_remote) > 4096
+            or not args.codex_remote.startswith("unix:///")
+            or args.codex_remote.startswith("unix:////")
+            or "?" in args.codex_remote
+            or "#" in args.codex_remote
+            or any(ord(character) < 32 or ord(character) == 127 for character in args.codex_remote)
+        ):
+            raise SystemExit("wmuxctl: --codex-remote must be a unix:/// absolute socket URI")
     if not posixpath.isabs(args.directory) or len(args.directory) > 4096 or "\x00" in args.directory:
         raise SystemExit("wmuxctl: TUI directory must be an absolute POSIX path of at most 4096 characters")
 
@@ -1651,6 +1664,7 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
             args.gate_timeout,
             args.cols,
             args.rows,
+            {"codexRemote": args.codex_remote} if args.codex_remote else None,
         )
         launch_digest = hashlib.sha256(launched.encode()).hexdigest()
         info["state"] = "ready"
@@ -2602,6 +2616,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--title", default="", help="manual workspace title")
     tui.add_argument("--model", default="", help="optional runtime model")
     tui.add_argument("--opencode-agent", default="", help="optional OpenCode agent name")
+    tui.add_argument("--codex-remote", default="", help="existing private unix:/// Codex App Server socket (Codex only)")
     tui.add_argument("--timeout", type=float, default=30, help="prompt/activity verification timeout in seconds")
     tui.add_argument("--ready-timeout", type=float, default=30, help="shell/helper readiness timeout in seconds")
     tui.add_argument("--gate-timeout", type=float, default=5, help="post-start safety-gate observation in seconds (default: 5)")

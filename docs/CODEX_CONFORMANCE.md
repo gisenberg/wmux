@@ -29,11 +29,33 @@ pin/reset and reload passed against the served final bundle.
 See [soak acceptance](CODEX_M1_M2_UAT.md#soak-acceptance--2026-09-16) and
 [final qualification](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14)
 for evidence scope and final candidate/deployment checks. Immediate shared-client
-CLI exit cleanup remains excluded; M3–M6 remain proposed. Milestone qualification
-does not imply green hosted CI or upstream merge: PR #130 remains open with
-the recorded browser transport flake. Historical pending
+CLI exit cleanup remains excluded. M3–M6 are now authorized as a combined
+implementation and UAT checkpoint, not accepted. PR #130 remains open; its
+replacement CI run 35051523412 passed. Neither that CI result nor M0–M2
+acceptance qualifies the new M6 candidate. Historical pending
 statuses below describe their dated baselines and are superseded only by these
 explicit current results.
+
+## Combined M3–M6 candidate — 2026-09-16
+
+Implementation lives on the isolated `feat/codex-m3-m6` branch. It adds a
+bounded local/SSH native catalog, exact-identity display associations and
+persisted, explicit fresh CLI-view attempts. Normal browser authority controls
+these routes; receipt-bound plugin tools retain their existing scope. See the
+[catalog runbook](CODEX_TASK_CATALOG.md) for configuration, limits and the
+combined UAT procedure.
+
+Read-only probes of two existing Linux endpoints returned paginated task
+metadata and exact-ID details through CLI/App Server 0.154.0. These probes did
+not resume tasks or change native services. Direct native UAT, isolated
+rollback qualification and the new 24-hour mixed-task soak remain pending.
+Fixture success cannot accept those cases. M0–M2 production is unchanged.
+
+Resume is deliberately unavailable: existing metadata cannot prove exclusive
+client ownership. A fresh view returns exact wmux pane identity, not inferred
+native task identity or evidence of execution. macOS and Windows native
+transport are not qualified by this candidate. Catalog notifications deduplicate
+across display associations; they are separate from receipt-bound reporters.
 
 ## M0 acceptance tooling — 2026-09-12
 

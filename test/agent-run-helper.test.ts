@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -424,6 +425,45 @@ posixTest("wmux-agent-run tui rejects mismatched ids, forbidden or unknown field
       assert.match(String(decodeResult(completed.stdout).error), new RegExp(message));
     }
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+posixTest("wmux-agent-run tui accepts only a private canonical Unix Codex remote and preserves approval defaults", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-tui-remote-"));
+  const bin = path.join(dir, "bin");
+  const socketPath = path.join(dir, "codex.sock");
+  const capture = path.join(dir, "capture.json");
+  fs.chmodSync(dir, 0o700);
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "codex"), `#!/usr/bin/env python3
+import json,sys
+json.dump(sys.argv[1:],open(__import__('os').environ['CAPTURE_PATH'],'w'))
+`);
+  fs.chmodSync(path.join(bin, "codex"), 0o755);
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
+  fs.chmodSync(socketPath, 0o600);
+  const remote = `unix://${socketPath}`;
+  try {
+    const request = { runId: "tui-remote", runtime: "codex", directory: dir, codexRemote: remote };
+    const completed = spawnSync(helper, ["tui", "tui-remote"], {
+      input: `${Buffer.from(JSON.stringify(request)).toString("base64")}\nWMUX_AGENT_TUI_ACK tui-remote\nWMUX_AGENT_TUI_RELEASE tui-remote\n`,
+      encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CAPTURE_PATH: capture },
+    });
+    assert.equal(completed.status, 0, completed.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), ["--remote", remote]);
+
+    for (const invalid of ["http://127.0.0.1:3478", "unix:///missing.sock", `unix://${dir}/../${path.basename(dir)}/codex.sock`]) {
+      const rejected = spawnSync(helper, ["tui", "tui-remote"], {
+        input: `${Buffer.from(JSON.stringify({ ...request, codexRemote: invalid })).toString("base64")}\n`,
+        encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+      assert.notEqual(rejected.status, 0);
+      assert.match(String(decodeResult(rejected.stdout).error), /invalid Codex remote/);
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

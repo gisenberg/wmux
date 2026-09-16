@@ -7,6 +7,7 @@ import re
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -165,7 +166,7 @@ def validate(request, tui=False):
     if tui:
         if "prompt" in request:
             raise ValueError("interactive request must not contain prompt")
-        allowed = {"runId", "runtime", "directory", "model", "agent", "unattended", "writeAccess", "sandboxMode"}
+        allowed = {"runId", "runtime", "directory", "model", "agent", "unattended", "writeAccess", "sandboxMode", "codexRemote"}
         unknown = sorted(set(request) - allowed)
         if unknown:
             raise ValueError("interactive request contains forbidden key: %s" % unknown[0])
@@ -175,7 +176,48 @@ def validate(request, tui=False):
             raise ValueError("interactive sandbox mode is only valid for codex")
         if request.get("unattended") is True and runtime != "codex":
             raise ValueError("interactive unattended mode is only valid for codex")
+        if "codexRemote" in request:
+            if runtime != "codex":
+                raise ValueError("interactive Codex remote is only valid for codex")
+            validate_codex_remote(request["codexRemote"])
     return run_id, runtime, prompt, directory
+
+
+def validate_codex_remote(remote):
+    """Accept only an already-running, private, canonical Unix App Server socket."""
+    if os.name == "nt" or not isinstance(remote, str) or len(remote) > 4096:
+        raise ValueError("invalid Codex remote")
+    if not remote.startswith("unix:///") or any(ord(char) < 32 or ord(char) == 127 for char in remote):
+        raise ValueError("invalid Codex remote")
+    socket_path = remote[len("unix://"):]
+    if (
+        not os.path.isabs(socket_path)
+        or socket_path.startswith("//")
+        or any(character in socket_path for character in "?#")
+        or remote != "unix://" + socket_path
+    ):
+        raise ValueError("invalid Codex remote")
+    try:
+        resolved = os.path.abspath(socket_path)
+        parent = os.path.dirname(resolved)
+        socket_stat = os.lstat(resolved)
+        parent_stat = os.lstat(parent)
+        private_owner = lambda value: value.st_uid == os.getuid() and not (value.st_mode & 0o077)
+        if (
+            resolved != socket_path
+            or os.path.realpath(parent) != parent
+            or os.path.realpath(resolved) != resolved
+            or not stat.S_ISDIR(parent_stat.st_mode)
+            or stat.S_ISLNK(parent_stat.st_mode)
+            or not stat.S_ISSOCK(socket_stat.st_mode)
+            or stat.S_ISLNK(socket_stat.st_mode)
+            or not private_owner(parent_stat)
+            or not private_owner(socket_stat)
+        ):
+            raise ValueError("invalid Codex remote")
+    except OSError as error:
+        raise ValueError("invalid Codex remote") from error
+    return remote
 
 
 def tui_command_for(request, runtime):
@@ -196,6 +238,8 @@ def tui_command_for(request, runtime):
         argv.extend(["--config", "check_for_update_on_startup=false", "--sandbox", sandbox_mode])
         if request.get("unattended") is True:
             argv.extend(["--ask-for-approval", "never"])
+    if runtime == "codex" and request.get("codexRemote"):
+        argv.extend(["--remote", request["codexRemote"]])
     if runtime == "opencode" and request.get("agent"):
         argv.extend(["--agent", request["agent"]])
     if model:

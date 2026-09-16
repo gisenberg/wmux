@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { CodexTasksService } from "../codex-tasks.js";
 import type { AgentFollowUpService } from "../agent-follow-up.js";
 import type { AgentSessionService } from "../agent-sessions.js";
 import type { AuthConfig, AuthPrincipal } from "../auth.js";
@@ -46,6 +47,7 @@ export class HttpError extends Error {
 }
 
 export interface ServerDeps {
+  codexTasks: CodexTasksService;
   bindHost: string;
   auth: AuthConfig;
   browserSessions?: BrowserSessionStore;

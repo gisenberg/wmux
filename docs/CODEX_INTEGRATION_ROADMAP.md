@@ -1,5 +1,13 @@
 # Codex integration roadmap
 
+Execution update — 2026-09-16: the user authorized M6 as the combined release
+target. M3–M5 implementation proceeds together on an isolated candidate, with
+one combined M6 UAT checkpoint and an actual mixed-task overnight soak. Existing
+M0–M2 acceptance below remains attached to its qualified release. See
+[catalog configuration, limits and combined UAT](CODEX_TASK_CATALOG.md).
+Safe resume cannot be established by the existing ownership contract and is
+explicitly disabled in this candidate; fresh CLI views preserve native policy.
+
 Status: M0, M1 and M2 are qualified in the declared Linux scope. M2's
 supplemental actual 24-hour load soak passed and was accepted on 2026-09-16. M0–M2 is
 deployed and in use on Haswell. The final fixes and qualification
@@ -7,7 +15,8 @@ are tracked in [PR #130](https://github.com/gisenberg/wmux/pull/130), following
 [PR #127](https://github.com/gisenberg/wmux/pull/127). Naming
 [PR #126](https://github.com/gisenberg/wmux/pull/126) is the fixed baseline at
 `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`. M1 closes the observed unpin gap;
-M2 adds bounded recovery. M3–M6 remain proposed. Immediate shared-client CLI
+M2 adds bounded recovery. M3–M6 are authorized for combined implementation;
+their native UAT and release acceptance remain pending. Immediate shared-client CLI
 exit cleanup is excluded. The qualified implementation remains unmerged;
 PR #130's hosted browser CI flake and maintainer merge remain separate gates.
 Updated: 2026-09-16.
