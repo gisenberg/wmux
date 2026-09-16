@@ -78,6 +78,7 @@ for (const script of [
   "plugins/wmux/scripts/wmux-observation-supervisor.mjs",
   "plugins/wmux/scripts/wmux-lock.mjs",
   "scripts/build-codex-plugin-deps.mjs",
+  "scripts/codex-observer-soak.mjs",
 ]) {
   run(process.execPath, ["--check", script]);
 }

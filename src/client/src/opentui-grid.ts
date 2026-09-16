@@ -7,6 +7,12 @@ export interface CellGrid {
   fg: Float32Array;
   bg: Float32Array;
   attrs: Uint32Array;
+  /**
+   * Full grapheme clusters written through writeText. chars remains the compact
+   * scalar buffer for existing callers; this layer lets canvas paint a cluster
+   * once at its leading cell.
+   */
+  graphemes?: Array<string | undefined>;
 }
 
 export interface GridPainterOptions {
@@ -61,6 +67,52 @@ const configureCanvasText = (context: CanvasRenderingContext2D): void => {
   extended.fontKerning = "normal";
   extended.fontVariantLigatures = "common-ligatures contextual";
   extended.fontFeatureSettings = '"calt" 1, "liga" 1';
+};
+
+const graphemeSegmenter = Intl.Segmenter ? new Intl.Segmenter() : undefined;
+
+const segmentGraphemes = (text: string): string[] =>
+  graphemeSegmenter ? Array.from(graphemeSegmenter.segment(text), (part) => part.segment) : Array.from(text);
+
+const zeroWidth = /[\u0000-\u001f\u007f-\u009f\u0300-\u036f\u0483-\u0489\u0591-\u05bd\u05bf\u05c1-\u05c2\u05c4-\u05c5\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed\u0711\u0730-\u074a\u07a6-\u07b0\u07eb-\u07f3\u0816-\u0819\u081b-\u0823\u0825-\u0827\u0829-\u082d\u0859-\u085b\u08d3-\u0902\u093a\u093c\u0941-\u0948\u094d\u0951-\u0957\u0962-\u0963\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufe00-\ufe0f\ufe20-\ufe2f]/u;
+const wideCodePoint = /[\u1100-\u115f\u231a-\u231b\u2329-\u232a\u23e9-\u23ec\u23f0\u23f3\u25fd-\u25fe\u2614-\u2615\u2648-\u2653\u267f\u2693\u26a1\u26aa-\u26ab\u26bd-\u26be\u26c4-\u26c5\u26ce\u26d4\u26ea\u26f2-\u26f3\u26f5\u26fa\u26fd\u2705\u270a-\u270b\u2728\u274c\u274e\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b-\u2b1c\u2b50\u2b55\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6\u{1f000}-\u{1faff}\u{20000}-\u{3fffd}]/u;
+const emojiPresentation = /\ufe0f|\u20e3/u;
+
+/** Terminal-cell width for a complete grapheme cluster. */
+export const graphemeCellWidth = (grapheme: string): 0 | 1 | 2 => {
+  if (!grapheme || Array.from(grapheme).every((part) => zeroWidth.test(part))) return 0;
+  return wideCodePoint.test(grapheme) || emojiPresentation.test(grapheme) ? 2 : 1;
+};
+
+export const textCellWidth = (text: string): number =>
+  segmentGraphemes(text).reduce((width, grapheme) => width + graphemeCellWidth(grapheme), 0);
+
+/** Returns complete graphemes that fit in the requested terminal-cell width. */
+export const sliceTextToCells = (text: string, maxCells: number): string => {
+  let width = 0;
+  const result: string[] = [];
+  for (const grapheme of segmentGraphemes(text)) {
+    const nextWidth = graphemeCellWidth(grapheme);
+    if (width + nextWidth > maxCells) break;
+    result.push(grapheme);
+    width += nextWidth;
+  }
+  return result.join("");
+};
+
+/** Complete graphemes from the end of text that fit in maxCells. */
+export const sliceTextEndToCells = (text: string, maxCells: number): string => {
+  let width = 0;
+  const result: string[] = [];
+  const graphemes = segmentGraphemes(text);
+  for (let index = graphemes.length - 1; index >= 0; index -= 1) {
+    const grapheme = graphemes[index]!;
+    const nextWidth = graphemeCellWidth(grapheme);
+    if (width + nextWidth > maxCells) break;
+    result.unshift(grapheme);
+    width += nextWidth;
+  }
+  return result.join("");
 };
 
 /** A small wmux-owned renderer for the cell grids used by the surrounding chrome. */
@@ -156,8 +208,14 @@ export class GridPainter {
       const top = row * this.cellHeight;
       for (let col = 0; col < grid.width; col += 1) {
         const cell = row * grid.width + col;
+        const storedGrapheme = grid.graphemes?.[cell];
         const codePoint = grid.chars[cell] ?? 0x20;
-        if (codePoint === 0 || codePoint === 0x20 || codePoint > 0x10ffff) continue;
+        // An empty grapheme marks the trailing cell of a wide cluster.
+        if (storedGrapheme === "" && codePoint === 0x20) continue;
+        // Direct scalar-buffer callers retain their old behavior even after a
+        // cell was previously populated through writeText.
+        const grapheme = storedGrapheme && storedGrapheme.codePointAt(0) === codePoint ? storedGrapheme : undefined;
+        if ((!grapheme && (codePoint === 0 || codePoint === 0x20 || codePoint > 0x10ffff))) continue;
 
         const attrs = grid.attrs[cell] ?? 0;
         const nextFont = canvasFont(this.fontSize, this.fontFamily, attrs);
@@ -175,10 +233,10 @@ export class GridPainter {
             ? this.cellHeight - this.fontSize
             : 0;
         const left = col * this.cellWidth;
-        context.fillText(String.fromCodePoint(codePoint), left, top + verticalOffset);
+        context.fillText(grapheme ?? String.fromCodePoint(codePoint), left, top + verticalOffset);
         if (attrs & ATTR_UNDERLINE) {
           const underline = Math.min(top + this.cellHeight - 1, top + verticalOffset + this.fontSize - 1);
-          context.fillRect(left, underline, this.cellWidth, 1);
+          context.fillRect(left, underline, this.cellWidth * (grapheme ? graphemeCellWidth(grapheme) || 1 : 1), 1);
         }
       }
     }
@@ -285,14 +343,39 @@ export const writeText = (
 ) => {
   if (row < 0 || row >= grid.height || col >= grid.width) return;
   let x = Math.max(0, col);
-  for (const char of text) {
-    if (x >= grid.width) break;
-    const codePoint = char.codePointAt(0) ?? 0x20;
+  const graphemes = grid.graphemes ?? (grid.graphemes = new Array(grid.width * grid.height));
+  const clearGraphemeAt = (cell: number) => {
+    let leadingCell = cell;
+    if (graphemes[leadingCell] === "" && leadingCell % grid.width > 0) leadingCell -= 1;
+    const existing = graphemes[leadingCell];
+    if (!existing) return;
+    const existingWidth = graphemeCellWidth(existing) || 1;
+    for (let offset = 0; offset < existingWidth && leadingCell + offset < (row + 1) * grid.width; offset += 1) {
+      const index = leadingCell + offset;
+      grid.chars[index] = 0x20;
+      grid.attrs[index] = 0;
+      graphemes[index] = undefined;
+    }
+  };
+  for (const grapheme of segmentGraphemes(text)) {
+    const width = graphemeCellWidth(grapheme);
+    if (width === 0) continue;
+    if (x + width > grid.width) break;
+    for (let offset = 0; offset < width; offset += 1) clearGraphemeAt(row * grid.width + x + offset);
+    const codePoint = grapheme.codePointAt(0) ?? 0x20;
     const index = row * grid.width + x;
     grid.chars[index] = codePoint;
+    graphemes[index] = grapheme;
     grid.attrs[index] = attributes;
     setRgba(grid.fg, index, color);
-    x += 1;
+    for (let trailing = 1; trailing < width; trailing += 1) {
+      const trailingIndex = index + trailing;
+      grid.chars[trailingIndex] = 0x20;
+      graphemes[trailingIndex] = "";
+      grid.attrs[trailingIndex] = attributes;
+      setRgba(grid.fg, trailingIndex, color);
+    }
+    x += width;
   }
 };
 
@@ -326,9 +409,9 @@ export const setRgba = (buffer: Float32Array, index: number, color: RGBA) => {
 
 export const fitText = (text: string, maxCells: number): string => {
   if (maxCells <= 0) return "";
-  if (text.length <= maxCells) return text;
-  if (maxCells <= 3) return text.slice(0, maxCells);
-  return `${text.slice(0, maxCells - 3)}...`;
+  if (textCellWidth(text) <= maxCells) return text;
+  if (maxCells <= 3) return sliceTextToCells(text, maxCells);
+  return `${sliceTextToCells(text, maxCells - 3)}...`;
 };
 
 export function hexToRgba(hex: string): RGBA {

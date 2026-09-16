@@ -9,6 +9,7 @@ import {
   observeCanvasViewport,
   syncPainterViewport,
   writeText,
+  textCellWidth,
   type CellGrid,
   type CellMetrics,
   type RGBA,
@@ -222,7 +223,7 @@ const drawPaneToolbar = (
     disabled = false,
     active = false,
   ): number => {
-    const width = Math.max(4, label.length + 2);
+    const width = Math.max(4, textCellWidth(label) + 2);
     const col = Math.max(0, right - width);
     fillCells(grid, row, col, width, active ? rgba.active : rgba.black);
     writeText(grid, row, col + 1, fitText(label, width - 2), disabled ? rgba.faint : active ? rgba.gold : rgba.text, 1);
@@ -243,7 +244,7 @@ const drawPaneToolbar = (
     right = button(right, "rerun", "Rerun last command", { type: "rerun-last-command" }, !props.canRerunLastCommand);
     right = button(right, "copy", "Copy last command", { type: "copy-last-command" }, !props.canCopyLastCommand);
     const runLabel = fitText(props.run.label, Math.min(14, Math.max(6, right - 8)));
-    const runWidth = Math.max(6, runLabel.length + 2);
+    const runWidth = Math.max(6, textCellWidth(runLabel) + 2);
     const runCol = Math.max(0, right - runWidth);
     fillCells(grid, row, runCol, runWidth, rgba.black);
     writeText(grid, row, runCol + 1, runLabel, runColor(props.run.status, theme), 1);

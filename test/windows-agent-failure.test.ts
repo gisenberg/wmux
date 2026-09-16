@@ -63,6 +63,34 @@ const listenOnAdjacentPorts = async (currentServer: http.Server, sideServer: htt
   throw new Error("could not reserve adjacent loopback ports after 32 attempts");
 };
 
+// The agent deliberately probes eight adjacent rollout ports. Reserve that
+// complete fixture range so parallel test workers cannot masquerade as a
+// current generation during the probe. The rollout-port blocker is released
+// only by the test activator immediately before it starts that generation.
+const reserveRolloutRange = async (currentServer: http.Server) => {
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    await listen(currentServer, 0);
+    const address = currentServer.address();
+    assert.ok(address && typeof address === "object");
+    const blockers = Array.from({ length: 8 }, () => http.createServer());
+    try {
+      for (let offset = 1; offset <= 8; offset += 1) {
+        await listen(blockers[offset - 1]!, address.port + offset);
+      }
+      return {
+        currentPort: address.port,
+        rolloutPort: address.port + 1,
+        rolloutBlocker: blockers[0]!,
+        blockers: blockers.slice(1),
+      };
+    } catch {
+      await Promise.all(blockers.map(closeServer));
+      await closeServer(currentServer);
+    }
+  }
+  throw new Error("could not reserve Windows agent rollout range after 32 attempts");
+};
+
 test("Windows agent updates use a bounded encoded SSH command with an explicit acknowledgement", () => {
   const invocation = buildWindowsAgentUpdateSshInvocation({
     id: "windows",
@@ -977,10 +1005,10 @@ test("a new pane cancels a legacy global drain and rolls onto a side-by-side gen
     }
     response.writeHead(404).end(JSON.stringify({ error: "not_found" }));
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const reservation = await reserveRolloutRange(server);
   const address = server.address();
   assert.ok(address && typeof address === "object");
+  assert.equal(address.port, reservation.currentPort);
   let session: WindowsAgentSession | undefined;
   let currentSession: WindowsAgentSession | undefined;
   try {
@@ -1005,8 +1033,9 @@ test("a new pane cancels a legacy global drain and rolls onto a side-by-side gen
       {},
       async (_machine, rolloutPort) => {
         assert.equal(created, false, "the new generation starts before it owns the pane");
-        assert.ok(rolloutPort, "the updater selects an adjacent rollout port");
+        assert.equal(rolloutPort, reservation.rolloutPort, "the updater selects the reserved adjacent rollout port");
         updateScheduled = true;
+        await closeServer(reservation.rolloutBlocker);
         generationServer.listen(rolloutPort, "127.0.0.1");
         await once(generationServer, "listening");
         return rolloutPort;
@@ -1058,6 +1087,7 @@ test("a new pane cancels a legacy global drain and rolls onto a side-by-side gen
     if (generationServer.listening) {
       await new Promise<void>((resolve) => generationServer.close(() => resolve()));
     }
+    await Promise.all([closeServer(reservation.rolloutBlocker), ...reservation.blockers.map(closeServer)]);
   }
 });
 

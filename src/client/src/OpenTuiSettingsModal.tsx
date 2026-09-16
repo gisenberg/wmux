@@ -16,6 +16,7 @@ import {
   observeCanvasViewport,
   setCellBackground,
   syncPainterViewport,
+  textCellWidth,
   writeText,
   type CellGrid,
   type CellMetrics,
@@ -985,7 +986,7 @@ const drawSettings = (
       write(row, 14, item.meta, selected ? rgba.text : rgba.muted, selected ? 700 : 600);
       write(row + 1, 14, item.detail, rgba.faint, 400);
       if (item.id && item.actionLabel) {
-        drawButton(grid, row, Math.max(2, cols - item.actionLabel.length - 4), item.actionLabel, selected, hits, item.id, "activate", theme);
+        drawButton(grid, row, Math.max(2, cols - textCellWidth(item.actionLabel) - 4), item.actionLabel, selected, hits, item.id, "activate", theme);
       } else if (item.id && item.backend && item.name) {
         drawButton(grid, row, Math.max(2, cols - 9), "quit", selected, hits, item.id, "activate", theme);
       }

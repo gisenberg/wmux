@@ -129,3 +129,51 @@ test("renames the current workspace through the command palette", async ({ page,
     if (workspaceId) await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);
   }
 });
+
+test("browser tab rename and reset preserve the workspace pin", async ({ page, request }, testInfo) => {
+  const mobile = testInfo.project.name.startsWith("mobile-");
+  let workspaceId: string | undefined;
+  try {
+    const created = await request.post("/api/workspaces", { data: { machineId: "local" } });
+    expect(created.ok()).toBeTruthy();
+    const workspace = (await created.json() as { workspace: { id: string; activeTabId: string } }).workspace;
+    workspaceId = workspace.id;
+    expect((await request.post(`/api/workspaces/${workspace.id}/title`, { data: { title: "Keep workspace pinned" } })).ok()).toBeTruthy();
+    await page.goto(`/workspaces/${workspace.id}/tabs/${workspace.activeTabId}`);
+    await awaitAppShell(page);
+    const rename = async () => {
+      if (mobile) {
+        await page.getByRole("button", { name: "Open chat", exact: true }).click();
+        await page.getByRole("button", { name: "Actions", exact: true }).click();
+      } else await page.keyboard.press("Control+K");
+      const palette = page.getByRole("dialog", { name: "Command palette" });
+      const search = palette.getByPlaceholder("Search commands, workspaces, tabs, hosts");
+      await search.fill("Rename current tab");
+      if (mobile) await palette.getByRole("button", { name: /Rename current tab/ }).click();
+      else await search.press("Enter");
+      return page.getByRole("dialog", { name: /^Rename / });
+    };
+    const dialog = await rename();
+    await expect(dialog.getByRole("textbox", { name: "Tab name" })).toBeFocused();
+    await dialog.getByRole("textbox", { name: "Tab name" }).fill("Pinned tab 👩🏽‍💻");
+    const pinResponse = page.waitForResponse(response => response.url().endsWith(`/tabs/${workspace.activeTabId}/title`) && response.request().method() === "POST");
+    await dialog.getByRole("button", { name: "[OK] Save name", exact: true }).click();
+    expect((await pinResponse).ok()).toBeTruthy();
+    await page.reload();
+    await awaitAppShell(page);
+    const resetDialog = await rename();
+    await expect(resetDialog.getByRole("textbox", { name: "Tab name" })).toHaveValue("Pinned tab 👩🏽‍💻");
+    await expect(resetDialog).toContainText("a custom name pinned by you");
+    const resetResponse = page.waitForResponse(response => response.url().endsWith(`/tabs/${workspace.activeTabId}/title`) && response.request().method() === "POST");
+    await resetDialog.getByRole("button", { name: /Use automatic tab name for/ }).click();
+    expect((await resetResponse).ok()).toBeTruthy();
+    const state = await (await request.get("/api/bootstrap")).json() as {
+      workspaces: Array<{ id: string; name: string; nameSource: string; tabs: Array<{ id: string; titleSource: string }> }>;
+    };
+    const updated = state.workspaces.find(item => item.id === workspace.id);
+    expect(updated).toMatchObject({ name: "Keep workspace pinned", nameSource: "user" });
+    expect(updated?.tabs.find(tab => tab.id === workspace.activeTabId)?.titleSource).toBe("default");
+  } finally {
+    if (workspaceId) await request.delete(`/api/workspaces/${workspaceId}`).catch(() => undefined);
+  }
+});
