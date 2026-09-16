@@ -214,6 +214,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
   expect(calls).toContain("read:thread-1:true");
   const target = dialog.getByRole("combobox", { name: "Pane target" });
   await target.selectOption({ index: 1 });
+  await expect(dialog.locator(".codex-target-identity")).toContainText(knownTarget.paneId);
   await dialog.getByRole("button", { name: "ASSOCIATE NEW" }).click();
   await expect(dialog).toContainText("Associated display target");
   await expect(dialog).toContainText("no title ownership or input authority");

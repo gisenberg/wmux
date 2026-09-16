@@ -6,3 +6,6 @@
 .codex-tasks-toolbar label{min-width:0;max-width:100%}
 .codex-tasks-toolbar select{width:100%}
 .codex-endpoint-identity{color:#9ab7b5;overflow-wrap:anywhere}
+.codex-association label{min-width:0}
+.codex-association select{width:100%}
+.codex-target-identity{color:#9ab7b5;overflow-wrap:anywhere}

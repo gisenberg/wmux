@@ -621,10 +621,13 @@ export function CodexTasksModal({
                       <option value="">Choose an exact pane</option>
                       {targets.map((target) => (
                         <option key={target.paneId} value={target.paneId}>
-                          {target.label}
+                          {target.paneId}
                         </option>
                       ))}
                     </select>
+                    <small className="codex-target-identity">
+                      {targets.find((target) => target.paneId === targetId)?.label}
+                    </small>
                   </label>
                   <button
                     type="button"
