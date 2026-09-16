@@ -452,7 +452,7 @@ json.dump(sys.argv[1:],open(__import__('os').environ['CAPTURE_PATH'],'w'))
       encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CAPTURE_PATH: capture },
     });
     assert.equal(completed.status, 0, completed.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), ["--remote", remote]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(capture, "utf8")), ["--remote", remote, "--cd", dir]);
 
     for (const invalid of ["http://127.0.0.1:3478", "unix:///missing.sock", `unix://${dir}/../${path.basename(dir)}/codex.sock`]) {
       const rejected = spawnSync(helper, ["tui", "tui-remote"], {

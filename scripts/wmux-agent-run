@@ -220,7 +220,7 @@ def validate_codex_remote(remote):
     return remote
 
 
-def tui_command_for(request, runtime):
+def tui_command_for(request, runtime, directory):
     executable = shutil.which(runtime)
     if not executable:
         raise FileNotFoundError("%s executable not found" % runtime)
@@ -239,7 +239,10 @@ def tui_command_for(request, runtime):
         if request.get("unattended") is True:
             argv.extend(["--ask-for-approval", "never"])
     if runtime == "codex" and request.get("codexRemote"):
-        argv.extend(["--remote", request["codexRemote"]])
+        # A remote App Server selects its own working directory unless Codex is
+        # told explicitly.  The launcher process cwd only governs this local
+        # wrapper, so preserve the validated directory in the remote TUI too.
+        argv.extend(["--remote", request["codexRemote"], "--cd", directory])
     if runtime == "opencode" and request.get("agent"):
         argv.extend(["--agent", request["agent"]])
     if model:
@@ -258,7 +261,7 @@ def tui_main(expected_run_id):
         if expected_run_id and request_run_id != expected_run_id:
             raise ValueError("runId does not match TUI launch marker")
         run_id = request_run_id
-        argv = tui_command_for(request, runtime)
+        argv = tui_command_for(request, runtime, directory)
     except FileNotFoundError as error:
         return fail(run_id, str(error), 127)
     except (OSError, ValueError) as error:
