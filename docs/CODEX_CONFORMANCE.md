@@ -59,13 +59,19 @@ Final runtime `e232290` also fixes long-name overflow in mobile catalog controls
 while retaining full selected identities. Its external full check passed 1,170
 tests with eight skips; all three catalog browser projects and final served
 desktop/mobile checks passed after workstation maintenance.
-The user confirmed the native trust interaction on 2026-09-16. Only personal
-desktop/physical-mobile usability remains direct UAT; the new 24-hour mixed-task soak remains an automated pending
-gate. See the [M6 acceptance ledger](CODEX_M6_UAT.md) for exact evidence and the
-remaining human check. Automated success does not itself accept M6.
+The user confirmed the native trust interaction on 2026-09-16, then identified
+that the catalog cannot open an existing conversation in a CLI. This is an
+unaccepted product gap, not merely an outstanding cosmetic check. The
+[attachment investigation](CODEX_SESSION_ATTACHMENT.md) defines corrective M5a/M5b
+work and revised UAT. The new mixed-task soak remains an automated gate for the
+deployed implementation; it cannot qualify future attachment changes. See the
+[M6 acceptance ledger](CODEX_M6_UAT.md). Automated success does not itself accept M6.
 
-Resume is deliberately unavailable: existing metadata cannot prove exclusive
-client ownership. A fresh view returns exact wmux pane identity, not inferred
+Resume is unavailable in the deployed catalog. Native investigation supersedes
+the blanket exclusive-client requirement: exact same-server CLI sharing works
+on the qualified background endpoints. Server ownership, route and native
+capability checks remain necessary. The current Desktop managed launcher failed
+readiness qualification; Desktop attachment is not accepted. A fresh view returns exact wmux pane identity, not inferred
 native task identity or evidence of execution. macOS and Windows native
 transport are not qualified by this candidate. Catalog notifications deduplicate
 across display associations; they are separate from receipt-bound reporters.

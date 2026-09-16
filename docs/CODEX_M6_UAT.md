@@ -7,6 +7,11 @@ UAT. Runtime source is `e2322905d37c995c36fa851c7cdd317d8551553c`.
 M0–M2 retain their prior acceptance; **M3–M6 are not yet accepted**.
 No Codex/App Server source, configuration or lifecycle changes were made.
 
+**UAT finding:** the user could not use the catalog to open an existing task in
+a wmux CLI. The observation-only experience does not meet the intended workflow.
+Existing-task attachment must be implemented and qualified before repeating
+catalog UAT. See the [investigation and corrective plan](CODEX_SESSION_ATTACHMENT.md).
+
 Open **Codex tasks** from the desktop command palette, or mobile
 **Chat → Actions → Open Codex tasks**. Configuration, authority boundaries and
 recovery details are in the [catalog runbook](CODEX_TASK_CATALOG.md).
@@ -20,7 +25,7 @@ The combined checkpoint tracks these interaction checks:
 | Case | User action and expected result | Decision |
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
-| M6-H2 — Personal desktop/mobile workflow | On your desktop and physical phone, find a task you recognize and try the catalog's inspection/association controls, including **Open target** for an uncertain launch. Judge whether names, host identity, status, explanations, native keyboard/paste interaction and touch targets are understandable and usable. Mobile emulation cannot establish physical keyboard, touch or assistive-technology experience. | Pending direct interaction |
+| M6-H2 — Personal desktop/mobile workflow | Select a familiar existing task and open that exact conversation in a wmux CLI. See its current work/history and continue it through the native prompt. Judge whether host selection, explanations and desktop/phone controls are usable. | Not accepted: existing-task CLI access is missing. Repeat after M5a/M5b. |
 
 The retained native trust prompts show the requested directories. No trust,
 login or approval response was automated. Prior M0–M2 acceptance, including
@@ -49,9 +54,10 @@ Test associations and ordinary test workspaces were removed. Only the two
 native trust views remain deliberately retained for direct interaction; the
 immutable launch ledger retains test attempt history by design.
 
-Resume is deliberately disabled. Current native metadata cannot prove exclusive
-client ownership, so seamless Desktop/CLI takeover is outside this release's
-supported matrix. Windows native observation and unqualified macOS transports
+Resume is disabled in this deployed build. The original blanket ownership
+restriction is under correction: same-server multi-client attachment is natively
+supported, while wrong-server resume is a different operation. The attachment
+investigation defines the required routing and capability gates. Windows native observation and unqualified macOS transports
 remain unsupported. Existing receipt-bound naming is independent of display
 associations. Catalog notification deduplication applies across associations;
 its outbox is separate from receipt-bound lifecycle reporting.
@@ -139,7 +145,9 @@ the final report, all assertions and successful unit exit.
 
 ## Release decision
 
-Accept M6 only after M6-H1, M6-H2 and the overnight gate pass. The soak remains
+Accept M6 only after corrective M5a/M5b qualification, M6-H1, revised M6-H2 and
+the relevant overnight gate pass. The existing soak cannot qualify unimplemented
+attachment code. The soak remains
 an automated engineering gate, not a test delegated to the user. Record any
 rework or deferred capability explicitly. The previous accepted release and
 private state/configuration backup remain available for rollback. A deployment

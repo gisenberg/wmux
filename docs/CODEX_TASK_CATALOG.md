@@ -111,10 +111,13 @@ unknown. After inspecting it, explicitly acknowledge that attempt to allow a
 separate fresh view. Acknowledgement neither cancels the existing view nor
 retries its request, and the original attempt remains in the ledger.
 
-**Resume stays disabled in this profile.** Native loaded/idle metadata cannot
-prove exclusive client ownership or prevent another client from submitting work
-between checks. No association, cwd match, title match or preview marker grants
-resume authority. Use the native client when the catalog explains this limit.
+**Resume stays disabled in the deployed profile.** UAT identified existing-task
+CLI access as a required missing workflow. The [attachment investigation](CODEX_SESSION_ATTACHMENT.md)
+supersedes the original blanket exclusive-client restriction: clients can share
+the same running App Server, but a matching stored task on another server is not
+the same route. Corrective work must establish actual server ownership and
+preserve the managed launcher and native capabilities. Display associations,
+cwd matches, title matches and preview markers do not establish that route.
 
 ## Persistence, disable and rollback
 

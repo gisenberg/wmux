@@ -1,12 +1,17 @@
 # Codex integration roadmap
 
-Execution update — 2026-09-16: the user authorized M6 as the combined release
-target. M3–M5 are implemented together in a pushed, unmerged candidate now
-deployed for one combined M6 UAT checkpoint and a new mixed-task overnight soak.
+Execution update — 2026-09-16: M6 UAT exposed a product gap. The user needs to
+select an existing Codex conversation and open that exact task in a wmux CLI.
+Inspection and display associations alone do not meet that need. **M6 remains
+unaccepted; existing-task attachment in M5 requires implementation.** See the
+[native attachment investigation and corrective checkpoints](CODEX_SESSION_ATTACHMENT.md).
+The user authorized M6 as the combined release target. The current pushed,
+unmerged candidate provides M3/M4 and fresh CLI launch for combined testing.
 Live automation now covers native fresh views, later-turn notification
 deduplication, catalog inspection and browser association persistence. The user
-confirmed the native trust interaction on 2026-09-16. Personal desktop/phone
-usability remains direct UAT; the 24-hour mixed-task gate is still running automatically.
+confirmed the native trust interaction on 2026-09-16. The catalog usability
+check identified the missing continuation workflow; repeat it after that work.
+The 24-hour mixed-task gate is still running automatically.
 Final deployed runtime `e232290` passed the external full check and all three
 catalog browser projects after workstation maintenance; served browser and
 native read-only checks also passed. The soak's storage interruption remains
@@ -14,8 +19,13 @@ part of its final evidence review.
 See the [current M6 handoff](CODEX_M6_UAT.md). Existing
 M0–M2 acceptance below remains attached to its qualified release. See
 [catalog configuration, limits and combined UAT](CODEX_TASK_CATALOG.md).
-Safe resume cannot be established by the existing ownership contract and is
-explicitly disabled in this candidate; fresh CLI views preserve native policy.
+Resume remains disabled in the deployed candidate. Native tests now establish
+same-server CLI sharing on the background endpoints; the earlier blanket
+exclusive-client requirement is superseded by the investigation's route and
+capability checks. Fresh CLI views preserve native policy.
+The current Desktop managed-launch route failed readiness qualification; it is
+not a proven wmux-only delivery path. The investigation records that blocker
+separately from the successful background-server attachment tests.
 
 Status: M0, M1 and M2 are qualified in the declared Linux scope. M2's
 supplemental actual 24-hour load soak passed and was accepted on 2026-09-16. M0–M2 is
@@ -309,10 +319,11 @@ Deliverables:
 - Support a fresh task on a configured existing server and an explicit resume
   for eligible tasks. Preserve native sandbox/approval behavior; pass prompts
   through supported structured input or protected files, not shell interpolation.
-- Before resume, inspect available runtime/queue state and wmux's own launch
-  records. These checks cannot prove ownership across arbitrary standalone
-  processes: ambiguous or foreign-active cases must remain unavailable for
-  automatic launch. Show the reason and retain inspection access.
+- Before resume, resolve the actual running App Server and inspect runtime/queue
+  state and wmux's own launch records. Another client on that same verified server
+  is not by itself a blocker. A stored task visible on a different server does
+  not prove ownership. Ambiguous owners, unsupported native client capabilities
+  and arbitrary standalone processes remain unavailable; explain the reason.
 - Track one wmux launch attempt and its resulting native identity. A successful
   process spawn or queued input is not successful execution. After uncertain
   submission, reconcile and show unknown rather than automatically resubmitting.
@@ -326,7 +337,9 @@ approval prompts. Confirm one intended submission, the correct host/cwd, no
 automatic retry after uncertain delivery, and no silent permission changes.
 
 Exit: the supported eligibility matrix is precise. Seamless desktop/CLI takeover
-is not claimed. A capability may be deferred without blocking M1–M4 release.
+is not claimed. M5a/M5b in the [attachment plan](CODEX_SESSION_ATTACHMENT.md)
+define the corrective implementation and UAT gates. M1–M4 can retain their
+qualified scope, but the user's M6 workflow requires existing-task CLI access.
 
 ## M6 — Integrated UAT and release
 
