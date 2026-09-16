@@ -3,3 +3,5 @@
 .codex-tasks-grid>*{min-width:0}
 .codex-task-list>button{min-width:0;overflow-wrap:anywhere}
 .codex-tasks-modal select,.codex-tasks-modal input{min-width:0;max-width:100%}
+.codex-tasks-toolbar label{min-width:0;max-width:100%}
+.codex-tasks-toolbar select{width:100%}

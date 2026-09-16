@@ -163,7 +163,23 @@ test("catalog preserves identity, display associations, pagination, and disabled
   await expect(dialog).toContainText("Same title");
   await expect(dialog).toContainText(`${endpoint.identity} · thread-1`);
   await expect(dialog.locator(".codex-task-list strong").first()).toHaveText(longUnicodeName.trim());
-  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const horizontalBounds = await dialog.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      overflowing: Array.from(element.querySelectorAll<HTMLElement>("*")).flatMap((child) => {
+        const childBounds = child.getBoundingClientRect();
+        return childBounds.right > bounds.right + 1
+          ? [{ tag: child.tagName, className: child.className, right: Math.round(childBounds.right), containerRight: Math.round(bounds.right) }]
+          : [];
+      }),
+    };
+  });
+  expect(
+    horizontalBounds.scrollWidth,
+    `horizontal overflow: ${JSON.stringify(horizontalBounds)}`,
+  ).toBeLessThanOrEqual(horizontalBounds.clientWidth + 1);
   await dialog.screenshot({
     path: testInfo.outputPath("codex-tasks-catalog.png"),
   });
