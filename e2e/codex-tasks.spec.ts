@@ -23,7 +23,8 @@ test("catalog preserves identity, display associations, pagination, and disabled
     freshLaunch: true,
     launchReason: null,
   };
-  const task = (threadId: string, name = "Same title") => ({
+  const longUnicodeName = "Same title — 日本語 Ελληνικά e\u0301 👩🏽‍💻 🚀 ".repeat(12);
+  const task = (threadId: string, name = longUnicodeName) => ({
     endpointId: "e1",
     endpointIdentity: endpoint.identity,
     threadId,
@@ -161,6 +162,8 @@ test("catalog preserves identity, display associations, pagination, and disabled
   const dialog = page.getByRole("dialog", { name: "Codex tasks" });
   await expect(dialog).toContainText("Same title");
   await expect(dialog).toContainText(`${endpoint.identity} · thread-1`);
+  await expect(dialog.locator(".codex-task-list strong").first()).toHaveText(longUnicodeName.trim());
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await dialog.screenshot({
     path: testInfo.outputPath("codex-tasks-catalog.png"),
   });
