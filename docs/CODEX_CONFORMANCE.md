@@ -2,8 +2,9 @@
 
 ## Current M0–M2 qualification — 2026-09-16
 
-M0/M1 qualification is complete in the declared Linux scope, deployed on Haswell
-at `09525913b6f27a058396e31c0d8878e19dc0793c`. M2 functional recovery and its
+M0/M1 qualification is complete in the declared Linux scope. Its accepted
+deployment baseline is `09525913b6f27a058396e31c0d8878e19dc0793c`; the
+[new combined candidate](CODEX_M6_UAT.md) is deployed for a separate UAT decision. M2 functional recovery and its
 supplemental actual 24-hour load soak are accepted: all 287 controlled faults
 recovered, all twelve assertions passed, and the unit exited successfully.
 The user accepted Desktop name syncing,
@@ -47,9 +48,11 @@ combined UAT procedure.
 
 Read-only probes of two existing Linux endpoints returned paginated task
 metadata and exact-ID details through CLI/App Server 0.154.0. These probes did
-not resume tasks or change native services. Direct native UAT, isolated
-rollback qualification and the new 24-hour mixed-task soak remain pending.
-Fixture success cannot accept those cases. M0–M2 production is unchanged.
+not resume tasks or change native services. Full checks, browser qualification, live browser association smoke and isolated
+rollback qualification passed. The new candidate is deployed with existing
+names/pins preserved and native processes unchanged. Direct native UAT and the
+new 24-hour mixed-task soak remain pending; see the
+[M6 acceptance ledger](CODEX_M6_UAT.md). Fixture success cannot accept those cases.
 
 Resume is deliberately unavailable: existing metadata cannot prove exclusive
 client ownership. A fresh view returns exact wmux pane identity, not inferred
