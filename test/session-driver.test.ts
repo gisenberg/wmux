@@ -15,7 +15,7 @@ const machine = (patch: Partial<MachineConfig>): MachineConfig => ({
 });
 
 test("session drivers describe restart durability by backend", () => {
-  assert.equal(sessionBackendCapabilitiesForMachine(machine({ sessionBackend: "tmux" })).restartDurable, true);
+  assert.equal(sessionBackendCapabilitiesForMachine(machine({ sessionBackend: "tmux" })).restartDurable, process.platform !== "win32");
   assert.equal(sessionBackendCapabilitiesForMachine(machine({ sessionBackend: "pty" })).restartDurable, false);
   assert.equal(
     sessionBackendCapabilitiesForMachine(machine({ kind: "ssh", host: "example", sessionBackend: "screen" })).transport,

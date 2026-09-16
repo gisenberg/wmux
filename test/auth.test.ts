@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, makeFilePublic } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -36,7 +37,7 @@ const baseAuth = (over: Partial<AuthConfig> = {}): AuthConfig => ({
 // Run a callback with a hermetic ~/.wmux so loadAuthConfig never touches real home.
 const withIsolatedHome = (run: (dir: string) => void): void => {
   const saved = { ...process.env };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-auth-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-auth-"));
   process.env.HOME = dir;
   process.env.WMUX_TOKEN_PATH = path.join(dir, "token");
   process.env.WMUX_AUTH_PATH = path.join(dir, "auth.json");
@@ -248,7 +249,7 @@ test("login-only rejects malformed, unsafe, and duplicate scoped secret files", 
     writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
     writeSecret(path.join(dir, "automation-token"), "A".repeat(43));
     writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
-    fs.chmodSync(path.join(dir, "helper-token"), 0o644);
+    makeFilePublic(path.join(dir, "helper-token"));
     assert.throws(() => loadAuthConfig(), /permissions must be 0600/);
   });
   withIsolatedHome((dir) => {
@@ -257,7 +258,10 @@ test("login-only rejects malformed, unsafe, and duplicate scoped secret files", 
     fs.writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ username: "operator", passwordHash: hashPassword("safe-password") }));
     writeSecret(path.join(dir, "session-secret"), "S".repeat(43));
     writeSecret(path.join(dir, "real-token"), "A".repeat(43));
-    fs.symlinkSync(path.join(dir, "real-token"), path.join(dir, "automation-token"));
+    if (process.platform === "win32") {
+      fs.mkdirSync(path.join(dir, "target-directory"));
+      fs.symlinkSync(path.join(dir, "target-directory"), path.join(dir, "automation-token"), "junction");
+    } else fs.symlinkSync(path.join(dir, "real-token"), path.join(dir, "automation-token"));
     writeSecret(path.join(dir, "helper-token"), "H".repeat(43));
     assert.throws(() => loadAuthConfig(), /regular non-symlink/);
   });

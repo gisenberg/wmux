@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile, makeFilePublic, setDirectoryPrivate } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -26,13 +27,13 @@ const registeredMachine = (
 });
 
 test("durable endpoint records survive restart with owner-only permissions", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-store-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-store-"));
   const filePath = path.join(directory, "session-endpoints.json");
   try {
     const store = new DurableEndpointStore(filePath);
     const record = store.bind("pane-one", registeredMachine("100.64.0.10"), "durable-multiplexer");
     assert.ok(record);
-    assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+    assertPrivateFile(filePath);
 
     const restored = new DurableEndpointStore(filePath);
     assert.deepEqual(restored.snapshot(), store.snapshot());
@@ -43,7 +44,7 @@ test("durable endpoint records survive restart with owner-only permissions", () 
 });
 
 test("static remote and session-agent endpoints are persisted while local multiplexers stay audit-owned", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-static-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-static-"));
   const filePath = path.join(directory, "session-endpoints.json");
   try {
     const store = new DurableEndpointStore(filePath);
@@ -89,7 +90,7 @@ test("static remote and session-agent endpoints are persisted while local multip
 });
 
 test("version 1 endpoint ledgers migrate atomically to configured source support", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-migrate-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-migrate-"));
   const filePath = path.join(directory, "session-endpoints.json");
   const recordId = "84eb13dc-cf36-487d-b243-746f84359a0a";
   try {
@@ -121,14 +122,14 @@ test("version 1 endpoint ledgers migrate atomically to configured source support
       JSON.parse(fs.readFileSync(filePath, "utf8")).schemaVersion,
       CURRENT_DURABLE_ENDPOINT_SCHEMA_VERSION,
     );
-    assert.equal(fs.statSync(`${filePath}.bak`).mode & 0o777, 0o600);
+    assertPrivateFile(`${filePath}.bak`);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("reassignment strands the old endpoint and binds the replacement separately", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-reassign-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-reassign-"));
   const filePath = path.join(directory, "session-endpoints.json");
   try {
     const store = new DurableEndpointStore(filePath);
@@ -168,7 +169,7 @@ test("reassignment strands the old endpoint and binds the replacement separately
 });
 
 test("reconciliation retains a pane-pinned agent generation across SSH hostname drift", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-generation-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-generation-"));
   try {
     const store = new DurableEndpointStore(path.join(directory, "session-endpoints.json"));
     const generation: MachineConfig = {
@@ -205,7 +206,7 @@ test("reconciliation retains a pane-pinned agent generation across SSH hostname 
 });
 
 test("invalid primary recovers from the last validated backup", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-backup-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-backup-"));
   const filePath = path.join(directory, "session-endpoints.json");
   try {
     const store = new DurableEndpointStore(filePath);
@@ -223,7 +224,7 @@ test("invalid primary recovers from the last validated backup", () => {
 });
 
 test("future endpoint ledger versions are refused without rewriting", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-future-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-future-"));
   const filePath = path.join(directory, "session-endpoints.json");
   const payload = `${JSON.stringify({
     schemaVersion: CURRENT_DURABLE_ENDPOINT_SCHEMA_VERSION + 1,
@@ -242,19 +243,19 @@ test("future endpoint ledger versions are refused without rewriting", () => {
 });
 
 test("endpoint ledger rejects unsafe parents and record files", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-security-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-security-"));
   const filePath = path.join(directory, "session-endpoints.json");
   try {
-    fs.chmodSync(directory, 0o755);
+    setDirectoryPrivate(directory, false);
     assert.throws(
       () => new DurableEndpointStore(filePath),
       /parent directory must be owner-only/,
     );
 
-    fs.chmodSync(directory, 0o700);
+    setDirectoryPrivate(directory, true);
     new DurableEndpointStore(filePath)
       .bind("pane-one", registeredMachine("100.64.0.10"), "durable-multiplexer");
-    fs.chmodSync(filePath, 0o644);
+    makeFilePublic(filePath);
     assert.throws(
       () => new DurableEndpointStore(filePath),
       /permissions must be 0600/,

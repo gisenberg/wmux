@@ -25,7 +25,7 @@ load_wmux_token() {
   local token="" token_file="" scoped=0 env_configured=0 env_token=""
   if [[ "${WMUX_HELPER_TOKEN+x}" == x ]]; then
     env_token="${WMUX_HELPER_TOKEN}"; env_configured=1
-    [[ "${env_token}" =~ ^[A-Za-z0-9_-]{32,256}$ ]] || { echo "wmux-media: configured helper token is empty or malformed" >&2; return 1; }
+    [[ "${env_token}" =~ ^[A-Za-z0-9_-]{32,255}[A-Za-z0-9_-]?$ ]] || { echo "wmux-media: configured helper token is empty or malformed" >&2; return 1; }
   fi
   if [[ "${WMUX_HELPER_TOKEN_PATH+x}" == x ]]; then token_file="${WMUX_HELPER_TOKEN_PATH}"; scoped=1
   elif [[ -e "${HOME}/.wmux/helper-token" ]]; then token_file="${HOME}/.wmux/helper-token"; scoped=1
@@ -35,7 +35,7 @@ load_wmux_token() {
     token="$(tr -d '[:space:]' < "${token_file}")"
   fi
   if [[ "${scoped}" -eq 1 ]]; then
-    [[ "${token}" =~ ^[A-Za-z0-9_-]{32,256}$ ]] || { echo "wmux-media: configured helper token is empty or malformed" >&2; return 1; }
+    [[ "${token}" =~ ^[A-Za-z0-9_-]{32,255}[A-Za-z0-9_-]?$ ]] || { echo "wmux-media: configured helper token is empty or malformed" >&2; return 1; }
     printf '%s' "${token}"
     return
   fi

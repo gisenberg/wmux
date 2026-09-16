@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -1029,7 +1030,7 @@ export class AgentInputCredentialStore extends EventEmitter {
     if (typeof process.getuid === "function" && parent.uid !== process.getuid()) {
       throw new Error("agent input credential parent directory must be owned by the wmux user");
     }
-    if ((parent.mode & 0o077) !== 0) throw new Error("agent input credential parent directory must be owner-only");
+    if (!hasPrivatePermissions(parentPath, parent, true)) throw new Error("agent input credential parent directory must be owner-only");
   }
 
   private assertSecureFile(filePath: string): void {
@@ -1040,7 +1041,7 @@ export class AgentInputCredentialStore extends EventEmitter {
     if (typeof process.getuid === "function" && file.uid !== process.getuid()) {
       throw new Error("agent input credential store must be owned by the wmux user");
     }
-    if ((file.mode & 0o777) !== 0o600) throw new Error("agent input credential store permissions must be 0600");
+    if (!hasPrivatePermissions(filePath, file)) throw new Error("agent input credential store permissions must be 0600");
   }
 
   private fsyncContainingDirectory(target: "backup" | "primary" | "quarantine"): void {
@@ -1267,7 +1268,7 @@ export const loadOrCreateAgentInputSecret = (filePath: string): string => {
   const parent = path.dirname(path.resolve(filePath));
   if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   const parentStat = fs.lstatSync(parent);
-  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || fs.realpathSync(parent) !== parent || (parentStat.mode & 0o077) !== 0) {
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || fs.realpathSync(parent) !== parent || !hasPrivatePermissions(parent, parentStat, true)) {
     throw new Error("agent input secret parent must be owner-only and must not use symlinks");
   }
   if (typeof process.getuid === "function" && parentStat.uid !== process.getuid()) {
@@ -1276,7 +1277,7 @@ export const loadOrCreateAgentInputSecret = (filePath: string): string => {
   if (fs.existsSync(filePath)) {
     const file = fs.lstatSync(filePath);
     if (!file.isFile() || file.isSymbolicLink() || fs.realpathSync(filePath) !== path.resolve(filePath)
-      || (file.mode & 0o777) !== 0o600) {
+      || !hasPrivatePermissions(filePath, file)) {
       throw new Error("agent input secret must be a regular 0600 file");
     }
     if (typeof process.getuid === "function" && file.uid !== process.getuid()) {
@@ -1306,6 +1307,8 @@ export const loadOrCreateAgentInputSecret = (filePath: string): string => {
 };
 
 const fsyncDirectory = (directory: string): void => {
+  // Windows flushes the file before rename but does not support directory fsync.
+  if (process.platform === "win32") return;
   const handle = fs.openSync(directory, "r");
   try {
     fs.fsyncSync(handle);

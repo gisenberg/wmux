@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile, makeFilePublic, setDirectoryPrivate } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,7 +11,7 @@ import {
 } from "../src/server/browser-session-store.js";
 
 test("browser sessions persist owner-only digests and survive restart", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-browser-sessions-"),
   );
   const filePath = path.join(directory, "browser-sessions.json");
@@ -23,8 +24,8 @@ test("browser sessions persist owner-only digests and survive restart", () => {
       });
     const contents = fs.readFileSync(filePath, "utf8");
     assert.doesNotMatch(contents, new RegExp(issued.token));
-    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+    assertPrivateFile(directory);
+    assertPrivateFile(filePath);
 
     const restored = new BrowserSessionStore(
       "session-secret",
@@ -54,7 +55,7 @@ test("browser sessions persist owner-only digests and survive restart", () => {
 });
 
 test("browser session files recover from backup and refuse downgrade", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-browser-session-recovery-"),
   );
   const filePath = path.join(directory, "browser-sessions.json");
@@ -93,7 +94,7 @@ test("browser session files recover from backup and refuse downgrade", () => {
 });
 
 test("browser sessions migrate v1 metadata and revoke subscribers immediately", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-browser-session-migration-"),
   );
   const filePath = path.join(directory, "browser-sessions.json");
@@ -133,13 +134,13 @@ test("browser sessions migrate v1 metadata and revoke subscribers immediately", 
 });
 
 test("browser session storage rejects unsafe parents and record files", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-browser-session-safety-"),
   );
   try {
     const unsafeParent = path.join(directory, "shared");
     fs.mkdirSync(unsafeParent, { mode: 0o755 });
-    fs.chmodSync(unsafeParent, 0o755); // Exercise unsafe permissions even under umask 077.
+    setDirectoryPrivate(unsafeParent, false); // Exercise unsafe permissions even under umask 077.
     assert.throws(
       () => new BrowserSessionStore(
         "session-secret",
@@ -152,7 +153,7 @@ test("browser session storage rejects unsafe parents and record files", () => {
     fs.mkdirSync(safeParent, { mode: 0o700 });
     const filePath = path.join(safeParent, "sessions.json");
     new BrowserSessionStore("session-secret", filePath).issue(60_000);
-    fs.chmodSync(filePath, 0o644);
+    makeFilePublic(filePath);
     assert.throws(
       () => new BrowserSessionStore("session-secret", filePath),
       /permissions must be 0600/,

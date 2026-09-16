@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -1092,7 +1093,7 @@ export class AgentInputRequestStore extends EventEmitter {
     if (typeof process.getuid === "function" && parent.uid !== process.getuid()) {
       throw new Error("agent input request parent directory must be owned by the wmux user");
     }
-    if ((parent.mode & 0o077) !== 0) throw new Error("agent input request parent directory must be owner-only");
+    if (!hasPrivatePermissions(parentPath, parent, true)) throw new Error("agent input request parent directory must be owner-only");
   }
 
   private assertSecureFile(filePath: string): void {
@@ -1103,7 +1104,7 @@ export class AgentInputRequestStore extends EventEmitter {
     if (typeof process.getuid === "function" && file.uid !== process.getuid()) {
       throw new Error("agent input request store must be owned by the wmux user");
     }
-    if ((file.mode & 0o777) !== 0o600) throw new Error("agent input request store permissions must be 0600");
+    if (!hasPrivatePermissions(filePath, file)) throw new Error("agent input request store permissions must be 0600");
   }
 
   private fsyncContainingDirectory(target: "backup" | "primary" | "quarantine"): void {
@@ -1112,6 +1113,8 @@ export class AgentInputRequestStore extends EventEmitter {
       this.options.directoryFsync(directory, target);
       return;
     }
+    // File contents are flushed before rename; Windows cannot fsync directories.
+    if (process.platform === "win32") return;
     const handle = fs.openSync(directory, "r");
     try {
       fs.fsyncSync(handle);

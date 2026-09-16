@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory, assertPrivateFile } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,7 +15,7 @@ const checkpoint = (label: string) => ({
 });
 
 test("terminal checkpoints are owner-only, atomic, and recover from backup", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-checkpoint-store-"),
   );
   try {
@@ -29,8 +30,8 @@ test("terminal checkpoints are owner-only, atomic, and recover from backup", () 
       directory,
       fs.readdirSync(directory).find((entry) => entry.endsWith(".json"))!,
     );
-    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(checkpointPath).mode & 0o777, 0o600);
+    assertPrivateFile(directory);
+    assertPrivateFile(checkpointPath);
     assert.deepEqual(
       store.load("pane-one", "raw-pty"),
       checkpoint("first"),
@@ -63,7 +64,7 @@ test("terminal checkpoints are owner-only, atomic, and recover from backup", () 
 });
 
 test("terminal checkpoint downgrade refusal preserves a future file", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-checkpoint-version-"),
   );
   try {
@@ -98,7 +99,7 @@ test("terminal checkpoint downgrade refusal preserves a future file", () => {
 });
 
 test("checkpoint pruning removes panes no longer present in state", () => {
-  const directory = fs.mkdtempSync(
+  const directory = privateTempDirectory(
     path.join(os.tmpdir(), "wmux-checkpoint-prune-"),
   );
   try {

@@ -316,7 +316,7 @@ test("wmuxctl bounds noisy durable refresh replay to the newest 2 MiB of valid U
     const replayBytes = Buffer.byteLength(result.stdout, "utf8");
     assert.ok(replayBytes <= 2 * 1024 * 1024);
     assert.ok(replayBytes >= 2 * 1024 * 1024 - 3, "only a split leading UTF-8 code point may be discarded");
-    assert.equal(result.stdout.endsWith(newest), true);
+    assert.equal(result.stdout.replaceAll("\r\n", "\n").endsWith(newest), true);
     assert.doesNotMatch(result.stdout, /oldest-must-be-trimmed/);
   } finally {
     await close(server);
@@ -376,7 +376,7 @@ test("WMUX_URL overrides a stale saved URL", async () => {
   try {
     const result = await execFileAsync("python3", [wmuxctl, "machines"], {
       cwd: repoRoot,
-      env: { ...process.env, HOME: home, WMUX_URL: url, WMUX_TOKEN: "test-token" },
+      env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_URL: url, WMUX_TOKEN: "test-token" },
     });
     assert.match(result.stdout, /^windows-runner\tpowershell-ssh\tup/m);
   } finally {
@@ -1952,23 +1952,23 @@ test("wmuxctl prefers automation auth and scoped preflight never falls back", as
   try {
     await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--scoped-auth", "bootstrap"], {
       cwd: repoRoot,
-      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+      env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_TOKEN: "legacy-test-token" },
     }));
     assert.deepEqual(authorizations, [`Bearer ${"A".repeat(43)}`], "a rejected scoped credential is never retried with legacy auth");
     fs.unlinkSync(path.join(home, ".wmux", "automation-token"));
     await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--scoped-auth", "bootstrap"], {
       cwd: repoRoot,
-      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+      env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_TOKEN: "legacy-test-token" },
     }), /requires WMUX_AUTOMATION_TOKEN/);
     assert.equal(authorizations.length, 1, "preflight failure makes no compatibility request");
     await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "--automation-token-path", path.join(home, "missing"), "bootstrap"], {
       cwd: repoRoot,
-      env: { ...process.env, HOME: home, WMUX_TOKEN: "legacy-test-token" },
+      env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_TOKEN: "legacy-test-token" },
     }), /configured automation token file is empty or unreadable/);
     assert.equal(authorizations.length, 1, "an explicitly configured scoped path never falls through to legacy auth");
     await assert.rejects(execFileAsync("python3", [wmuxctl, "--url", url, "bootstrap"], {
       cwd: repoRoot,
-      env: { ...process.env, HOME: home, WMUX_AUTOMATION_TOKEN: "short", WMUX_TOKEN: "legacy-test-token" },
+      env: { ...process.env, HOME: home, USERPROFILE: home, WMUX_AUTOMATION_TOKEN: "short", WMUX_TOKEN: "legacy-test-token" },
     }), /configured automation token is empty or malformed/);
     assert.equal(authorizations.length, 1, "an invalid scoped environment never falls through to legacy auth");
   } finally {
@@ -1979,7 +1979,9 @@ test("wmuxctl prefers automation auth and scoped preflight never falls back", as
 
 test("generic scripts/wmuxctl wrapper routes tui help to the canonical CLI", async () => {
   const wrapper = path.join(repoRoot, "scripts", "wmuxctl");
-  const result = await execFileAsync(wrapper, ["tui", "--help"], { cwd: repoRoot });
+  const result = process.platform === "win32"
+    ? await execFileAsync("bash", [wrapper.replaceAll("\\", "/"), "tui", "--help"], { cwd: repoRoot })
+    : await execFileAsync(wrapper, ["tui", "--help"], { cwd: repoRoot });
   assert.match(result.stdout, /--accept-trust/);
   assert.match(result.stdout, /\{opencode,codex,claude,prime-agent\}/);
 });

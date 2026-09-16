@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -29,7 +30,7 @@ const staticRemote: MachineConfig = {
 };
 
 test("stranded endpoint cleanup deletes owned sessions and stale records", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-cleanup-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-cleanup-"));
   const store = new DurableEndpointStore(path.join(directory, "session-endpoints.json"));
   try {
     const liveAgent = store.bind("pane-agent-live", staticAgent, "windows-agent");
@@ -82,7 +83,7 @@ test("stranded endpoint cleanup deletes owned sessions and stale records", async
 });
 
 test("stranded endpoint cleanup retains unreachable and failed targets for audit", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-endpoint-cleanup-failure-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-endpoint-cleanup-failure-"));
   const store = new DurableEndpointStore(path.join(directory, "session-endpoints.json"));
   try {
     assert.ok(store.bind("pane-agent", staticAgent, "windows-agent"));

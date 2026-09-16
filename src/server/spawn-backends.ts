@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { hostShellPath, posixHostShell } from "./host-shell.js";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -22,11 +24,11 @@ export const localMachine = (): MachineConfig => ({
   name: os.hostname(),
   kind: "local",
   cwd: os.homedir(),
-  sessionBackend: "auto",
+  sessionBackend: process.platform === "win32" ? "pty" : "auto",
 });
 
 export const defaultShell = (): string => {
-  if (process.platform === "win32") return process.env.ComSpec ?? "powershell.exe";
+  if (process.platform === "win32") return "powershell.exe";
   return process.env.SHELL ?? "/bin/bash";
 };
 
@@ -93,7 +95,7 @@ const sshBackend: Backend = {
         useSystemdScope: false,
       });
     const runtimePath = stageSshRuntime(machine, target, sessionName, remoteCommand, extraEnv.WMUX_PANE_ID);
-    return { file: "/bin/sh", args: [runtimePath], cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
+    return { file: posixHostShell(), args: [hostShellPath(runtimePath)], cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
   },
 };
 
@@ -128,7 +130,7 @@ const powershellSshBackend: Backend = {
         `iex (Invoke-RestMethod -Method Get -Uri ${powershellQuote(bootstrapUrl)} -Headers $WmuxHeaders)`,
       ].join("\n");
       const runtimePath = stagePowerShellSshRuntime(machine, target, extraEnv.WMUX_PANE_ID, bootstrapLoader);
-      return { file: "/bin/sh", args: [runtimePath], cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
+      return { file: posixHostShell(), args: [hostShellPath(runtimePath)], cwd: os.homedir(), env, title: machine.name, trackProcessTitle: false };
     }
     const bootstrapUrl = buildWindowsPowerShellBootstrapUrl(machine, startCwd, remoteEnv, bootstrapToken);
     const bootstrapCommand = `iex (irm ${powershellQuote(bootstrapUrl)})`;
@@ -154,6 +156,25 @@ const serviceBackend: Backend = {
 const localBackend: Backend = {
   spawnSpec: (machine, { cols, rows, extraEnv, env, startCwd }) => {
     const backend = machine.sessionBackend ?? "auto";
+    if (process.platform === "win32") {
+      if (backend !== "auto" && backend !== "pty") {
+        throw new Error(`Local Windows panes do not support the ${backend} multiplexer; use pty or a remote session agent`);
+      }
+      const shell = machine.shell ?? defaultShell();
+      const powershell = /^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.basename(shell));
+      const promptPath = path.resolve("scripts/windows/wmux-cwd-prompt.ps1");
+      return {
+        file: shell,
+        args: powershell ? [
+          "-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command",
+          `. ${powershellQuote(promptPath)}; __wmuxInstallPrompt $true`,
+        ] : /^(?:bash|sh)(?:\.exe)?$/i.test(path.basename(shell)) ? ["--login", "-i"] : [],
+        cwd: startCwd,
+        env,
+        title: path.basename(shell),
+        trackProcessTitle: true,
+      };
+    }
     if (backend !== "pty") {
       const sessionName = durableSessionName(extraEnv.WMUX_PANE_ID);
       const innerScript = durableShellScript({
@@ -255,7 +276,9 @@ const SERVER_SCOPED_ENV_KEYS = new Set([
 const buildSpawnEnv = (machine: MachineConfig, extraEnv: Record<string, string>): Record<string, string> => {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string" && !SERVER_SCOPED_ENV_KEYS.has(key)) env[key] = value;
+    if (typeof value === "string" && !SERVER_SCOPED_ENV_KEYS.has(key)) {
+      env[process.platform === "win32" && key.toUpperCase() === "PATH" ? "PATH" : key] = value;
+    }
   }
   env.TERM = DEFAULT_TERM;
   env.COLORTERM = "truecolor";
@@ -647,13 +670,17 @@ const preparePrivateRuntimeDirectory = (directory: string): void => {
     throw new Error(`wmux runtime directory is unsafe: ${resolved}`);
   }
   fs.chmodSync(resolved, 0o700);
+  if (process.platform === "win32" && !hasPrivatePermissions(resolved, stat, true)) {
+    throw new Error("Windows runtime directory ACL must be private");
+  }
 };
 
 const writePrivateRuntimeFile = (filePath: string, contents: string, mode: 0o600 | 0o700): void => {
   if (fs.existsSync(filePath)) {
     const existing = fs.lstatSync(filePath);
     if (!existing.isFile() || existing.isSymbolicLink()
-      || (typeof process.getuid === "function" && existing.uid !== process.getuid())) {
+      || (typeof process.getuid === "function" && existing.uid !== process.getuid())
+      || (process.platform === "win32" && !hasPrivatePermissions(filePath, existing))) {
       throw new Error(`wmux runtime file is unsafe: ${filePath}`);
     }
   }
@@ -881,7 +908,7 @@ ${innerScript}
 `;
   const wrapper = `#!/bin/sh
 set -eu
-wmux_payload=${shellQuote(payloadPath)}
+wmux_payload=${shellQuote(hostShellPath(payloadPath))}
 wmux_wrapper=$0
 wmux_cleanup() { rm -f "$wmux_payload" "$wmux_wrapper"; }
 trap wmux_cleanup EXIT HUP INT TERM
@@ -920,7 +947,7 @@ const stagePowerShellSshRuntime = (
   const profileOption = machine.loadPowerShellProfile === true ? "" : " -NoProfile";
   const wrapper = `#!/bin/sh
 set -eu
-wmux_payload=${shellQuote(payloadPath)}
+wmux_payload=${shellQuote(hostShellPath(payloadPath))}
 wmux_wrapper=$0
 wmux_cleanup() { rm -f "$wmux_payload" "$wmux_wrapper"; }
 trap wmux_cleanup EXIT HUP INT TERM

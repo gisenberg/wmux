@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -58,7 +59,7 @@ test("paste image validation recognizes only the four accepted magic headers", (
 });
 
 test("local staging creates private generated files and discard is pane scoped", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-images-"));
+  const root = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-images-"));
   const staging = new PasteImageStaging(root);
   try {
     const staged = await staging.stage("pane-local", { id: "local", name: "Local", kind: "local" }, png);
@@ -82,7 +83,7 @@ test("local staging creates private generated files and discard is pane scoped",
 });
 
 test("local startup sweep expires only generated image stages", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-sweep-"));
+  const root = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-sweep-"));
   const paneDirectory = path.join(root, "c".repeat(24));
   fs.mkdirSync(paneDirectory);
   const generated = path.join(paneDirectory, `paste-${"d".repeat(36)}.png`);
@@ -103,7 +104,7 @@ test("local startup sweep expires only generated image stages", () => {
 });
 
 test("custom-command, service, and legacy PowerShell targets fail closed", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-unsupported-"));
+  const root = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-unsupported-"));
   const staging = new PasteImageStaging(root);
   const machines: MachineConfig[] = [
     { id: "command", name: "Command", kind: "local", command: ["/bin/sh"] },
@@ -175,8 +176,8 @@ test("remote staging scripts use private generated paths and reject injected ide
   assert.throws(() => powershellPasteImageDeleteScript(stageId, "png'; exit 0; #"));
 });
 
-test("control-only SSH execution cannot fall back after its master disappears", async () => {
-  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-control-only-"));
+test("control-only SSH execution cannot fall back after its master disappears", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async () => {
+  const runtime = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-control-only-"));
   const previousRuntime = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = runtime;
   const received: Buffer[] = [];
@@ -225,7 +226,7 @@ const stagedResult = (stageId = `paste-${"b".repeat(36)}`): StagedPasteImage => 
 });
 
 test("SessionManager waits for the live agent port and passes its pinned snapshot", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-session-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-session-"));
   const machine: MachineConfig = {
     id: "agent",
     name: "Agent",
@@ -270,8 +271,8 @@ test("SessionManager waits for the live agent port and passes its pinned snapsho
 });
 
 test("SessionManager discards a stage that finishes after its pane session changes", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-race-"));
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local" };
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-race-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", sessionBackend: "agent" };
   const state = new StateStore([machine], path.join(directory, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
   let finishStage!: () => void;
@@ -313,8 +314,8 @@ test("SessionManager discards a stage that finishes after its pane session chang
 });
 
 test("SessionManager discards a stage when pane input changes concurrently", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-input-race-"));
-  const machine: MachineConfig = { id: "local", name: "Local", kind: "local" };
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-input-race-"));
+  const machine: MachineConfig = { id: "local", name: "Local", kind: "local", sessionBackend: "agent" };
   const state = new StateStore([machine], path.join(directory, "state.json"));
   const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
   let finishStage!: () => void;
@@ -358,7 +359,7 @@ test("SessionManager discards a stage when pane input changes concurrently", asy
 });
 
 test("pane paste image HTTP endpoint authenticates and accepts only bounded raw binary", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-paste-http-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-paste-http-"));
   const machine: MachineConfig = { id: "local", name: "Local", kind: "local" };
   const state = new StateStore([machine], path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));

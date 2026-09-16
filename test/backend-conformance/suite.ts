@@ -5,6 +5,10 @@ import type { AttachReplay } from "../../src/server/terminal-checkpoint.js";
 import type { PaneState } from "../../src/server/types.js";
 
 const OUTPUT_DEADLINE_MS = 5_000;
+const usesPowerShell = (backend: SessionBackend): boolean =>
+  backend.machine.kind === "powershell"
+  || backend.machine.kind === "powershell-ssh"
+  || (process.platform === "win32" && backend.machine.kind === "local");
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
   0x00, 0x00, 0x00, 0x0d,
@@ -75,7 +79,7 @@ const spawn = async (
   const baseline = output.snapshot().length;
   backend.write(
     session,
-    backend.machine.kind === "powershell" || backend.machine.kind === "powershell-ssh"
+    usesPowerShell(backend)
       ? "Write-Output ('WMUX_BACKEND_' + 'READY')\r"
       : "stty -echo; printf '%s%s\\n' 'WMUX_BACKEND_' 'READY'\r",
   );
@@ -92,9 +96,7 @@ export const exerciseBackendConformance = async (
   paneId: string,
 ): Promise<void> => {
   let session: BackendSession | undefined;
-  const windows =
-    backend.machine.kind === "powershell"
-    || backend.machine.kind === "powershell-ssh";
+  const windows = usesPowerShell(backend);
   try {
     const started = await spawn(backend, paneId);
     session = started.session;
@@ -106,7 +108,7 @@ export const exerciseBackendConformance = async (
     let baseline = output.snapshot().length;
     backend.write(
       session,
-      windows ? "Write-Output 'WMUX_ECHO_ROUND_TRIP'\r" : "printf 'WMUX_ECHO_ROUND_TRIP\\n'\r",
+      windows ? "Write-Output ('WMUX_ECHO_' + 'ROUND_TRIP')\r" : "printf 'WMUX_ECHO_ROUND_TRIP\\n'\r",
     );
     await output.waitFor("WMUX_ECHO_ROUND_TRIP", baseline);
     assert.match(backend.readReplay(session, true).data, /WMUX_ECHO_ROUND_TRIP/);
@@ -115,7 +117,7 @@ export const exerciseBackendConformance = async (
     baseline = output.snapshot().length;
     backend.write(
       session,
-      windows ? "Write-Output 'WMUX_RESIZED_101_31'\r"
+      windows ? "Write-Output ('WMUX_RESIZED_' + '101_31')\r"
         : "wmux_resize_attempt=0; while [ \"$(stty size)\" != '31 101' ] && [ \"$wmux_resize_attempt\" -lt 100 ]; do wmux_resize_attempt=$((wmux_resize_attempt + 1)); sleep 0.02; done; stty size\r",
     );
     await output.waitFor(windows ? "WMUX_RESIZED_101_31" : /\b31 101\b/, baseline);
@@ -141,7 +143,7 @@ export const exerciseBackendConformance = async (
     backend.write(
       session,
       windows
-        ? "[Console]::Out.Write(\"`e[?1049hWMUX_ALT_SCREEN\")\r"
+        ? "[Console]::Out.Write([string][char]27 + '[?1049hWMUX_ALT_' + 'SCREEN')\r"
         : "printf '\\033[?1049hWMUX_ALT_SCREEN'\r",
     );
     await output.waitFor("WMUX_ALT_SCREEN", baseline);
@@ -163,7 +165,7 @@ export const exerciseBackendConformance = async (
     }
     backend.write(
       session,
-      windows ? "[Console]::Out.Write(\"`e[?1049l\")\r" : "printf '\\033[?1049l'\r",
+      windows ? "[Console]::Out.Write([string][char]27 + '[?1049l')\r" : "printf '\\033[?1049l'\r",
     );
 
     if (backend.capabilities.supportsFileStaging) {

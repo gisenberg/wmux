@@ -39,7 +39,7 @@ async function fixture(t: any, respond: (message: any) => unknown = () => ({})) 
   return { socketPath, directory, messages, wss, details: () => ({ extensions, userAgent }) };
 }
 
-test("read-only Codex transport connects over a private Unix socket and bounds every request", async t => {
+test("read-only Codex transport connects over a private Unix socket and bounds every request", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => ({ method: m.method }));
   const client = await connectCodexObserver({ threadId: "root_thread", socketPath: f.socketPath });
   t.after(() => client.close());
@@ -51,7 +51,7 @@ test("read-only Codex transport connects over a private Unix socket and bounds e
   assert.deepEqual(f.messages[3].params, { threadId: "root_thread", cursor: null, limit: 8, sortDirection: "desc", itemsView: "notLoaded" });
 });
 
-test("read-only Codex transport cannot drive, resume, answer, or select another thread", async t => {
+test("read-only Codex transport cannot drive, resume, answer, or select another thread", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t);
   const client = await connectCodexObserver({ threadId: "root", socketPath: f.socketPath });
   t.after(() => client.close());
@@ -66,7 +66,7 @@ test("read-only Codex transport cannot drive, resume, answer, or select another 
   assert.deepEqual(f.messages.map(m => m.method), ["initialize", "initialized", "thread/read"]);
 });
 
-test("read-only Codex transport rejects unsafe socket and parent permissions without connecting", async t => {
+test("read-only Codex transport rejects unsafe socket and parent permissions without connecting", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t);
   fs.chmodSync(f.socketPath, 0o666);
   await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: f.socketPath }));
@@ -83,12 +83,12 @@ test("read-only Codex transport rejects unsafe socket and parent permissions wit
   assert.deepEqual(f.messages, []);
 });
 
-test("unsupported native metadata capability remains a sanitized endpoint reason", async t => {
+test("unsupported native metadata capability remains a sanitized endpoint reason", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => m.method === "initialize" ? { __error: { code: -32601, message: "no" } } : {});
   await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: f.socketPath }), (error: any) => error?.reason === "unsupported_endpoint");
 });
 
-test("read-only Codex transport rejects pending operations when its local connection closes", async t => {
+test("read-only Codex transport rejects pending operations when its local connection closes", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => m.method === "initialize" ? {} : undefined);
   const client = await connectCodexObserver({ threadId: "root", socketPath: f.socketPath });
   const pending = client.request("thread/read", { threadId: "root" });
@@ -98,7 +98,7 @@ test("read-only Codex transport rejects pending operations when its local connec
   await assert.rejects(client.request("thread/read", { threadId: "root" }));
 });
 
-test("read-only Codex transport fails closed on malformed native messages", async t => {
+test("read-only Codex transport fails closed on malformed native messages", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const f = await fixture(t, m => m.method === "initialize" ? {} : undefined);
   const client = await connectCodexObserver({ threadId: "root", socketPath: f.socketPath });
   t.after(() => client.close());
@@ -107,7 +107,7 @@ test("read-only Codex transport fails closed on malformed native messages", asyn
   await pending;
 });
 
-test("two recorded Unix endpoints retain separate bounded batch scopes", async t => {
+test("two recorded Unix endpoints retain separate bounded batch scopes", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
   const first = await fixture(t, m => ({ endpoint: "first", id: m.params?.threadId }));
   const second = await fixture(t, m => ({ endpoint: "second", id: m.params?.threadId }));
   const a = await connectCodexObservationBatch({ threadIds: ["same_root", "first_only"], socketPath: first.socketPath });

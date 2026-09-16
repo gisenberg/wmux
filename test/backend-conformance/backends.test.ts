@@ -23,6 +23,12 @@ const runCase = async (machine: MachineConfig): Promise<void> => {
   }
 };
 
+test("local Windows ConPTY conforms to the shared session backend contract", {
+  skip: process.platform !== "win32",
+}, async () => {
+  await runCase({ id: "conformance-windows", name: "Windows", kind: "local", sessionBackend: "auto" });
+});
+
 const reservePort = async (): Promise<number> => {
   const server = net.createServer();
   await new Promise<void>((resolve, reject) => {
@@ -60,7 +66,7 @@ const stopAgent = async (child: ChildProcess): Promise<void> => {
   if (child.exitCode === null) child.kill("SIGKILL");
 };
 
-test("raw PTY conforms to the shared session backend contract", async () => {
+test("raw PTY conforms to the shared session backend contract", { skip: process.platform === "win32" }, async () => {
   await runCase({
     id: "conformance-raw",
     name: "Conformance raw PTY",
@@ -71,7 +77,7 @@ test("raw PTY conforms to the shared session backend contract", async () => {
 });
 
 test("durable tmux conforms to the shared session backend contract", {
-  skip: available("tmux", ["-V"]) ? false : "tmux is unavailable",
+  skip: process.platform === "win32" || !available("tmux", ["-V"]) ? "POSIX tmux is unavailable" : false,
 }, async () => {
   await runCase({
     id: "conformance-tmux",

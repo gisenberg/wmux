@@ -3,6 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -49,7 +50,7 @@ const question: AgentInputQuestion = {
 };
 
 test("isolated reference-to-occurrence-broker-to-SDK harness preserves HTTP answers and writes zero pane bytes", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-occurrence-harness-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-occurrence-harness-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
@@ -152,7 +153,7 @@ test("isolated reference-to-occurrence-broker-to-SDK harness preserves HTTP answ
 });
 
 test("broker occurrence stream converges duplicate events, orders reused IDs, survives restart, and consumes permanent failures once", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-occurrence-stream-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-occurrence-stream-"));
   const credentialPath = path.join(directory, "pane.json");
   const calls: Array<{ path: string; body: any }> = [];
   const bindings = new Map<string, { id: string; generation: number; state: string }>();
@@ -247,7 +248,7 @@ test("broker occurrence stream converges duplicate events, orders reused IDs, su
 });
 
 test("identity-only orphan resolution fences an equal-cut stale member until broker restart", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-snapshot-trigger-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-snapshot-trigger-"));
   const credentialPath = path.join(directory, "pane.json");
   const calls: Array<{ path: string; body: any }> = [];
   const fixture = await startSimpleFixture(calls);
@@ -282,7 +283,7 @@ test("identity-only orphan resolution fences an equal-cut stale member until bro
 });
 
 test("broker rejects an earlier ask that arrives after a higher-sequence orphan resolution", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-reordered-orphan-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-reordered-orphan-"));
   const credentialPath = path.join(directory, "pane.json");
   const calls: Array<{ path: string; body: any }> = [];
   const fixture = await startSimpleFixture(calls);
@@ -304,7 +305,7 @@ test("broker rejects an earlier ask that arrives after a higher-sequence orphan 
 });
 
 test("broker resets a stale high delivery cursor when the transient relay epoch changes", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-relay-epoch-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-relay-epoch-"));
   const credentialPath = path.join(directory, "pane.json");
   const polls: string[] = [];
   let delivered = false;
@@ -354,7 +355,7 @@ test("broker resets a stale high delivery cursor when the transient relay epoch 
 });
 
 test("broker quarantines acknowledgement conflicts and requests native reconciliation", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-ack-conflict-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-ack-conflict-"));
   const credentialPath = path.join(directory, "pane.json");
   let acknowledgementCalls = 0;
   const server = http.createServer(async (request, response) => {
@@ -397,7 +398,7 @@ test("broker quarantines acknowledgement conflicts and requests native reconcili
 });
 
 test("broker retains snapshot and acknowledgement operations after malformed HTTP 200 responses", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-malformed-success-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-malformed-success-"));
   const credentialPath = path.join(directory, "pane.json");
   let snapshotCalls = 0;
   let acknowledgementCalls = 0;
@@ -446,7 +447,7 @@ test("broker retains snapshot and acknowledgement operations after malformed HTT
 });
 
 test("broker migrations discard unbound metadata, require fresh registration, and preserve future schemas byte-for-byte", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-migration-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-broker-migration-"));
   const credentialPath = path.join(directory, "pane.json");
   const calls: Array<{ path: string; body: any }> = [];
   const fixture = await startSimpleFixture(calls);
@@ -509,7 +510,7 @@ test("broker migrations discard unbound metadata, require fresh registration, an
 });
 
 test("broker stale credentials require fresh pane capability authority and receipt capacity fails closed", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-fail-closed-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-broker-fail-closed-"));
   const credentialPath = path.join(directory, "pane.json");
   const capabilityPath = `${credentialPath}.cap`;
   const calls: Array<{ path: string; body: any }> = [];
@@ -600,7 +601,7 @@ test("broker stale credentials require fresh pane capability authority and recei
 });
 
 test("running broker backs off until durable reattachment stages replacement authority", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-live-recovery-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-broker-live-recovery-"));
   const credentialPath = path.join(directory, "pane.json");
   const capabilityPath = `${credentialPath}.cap`;
   const calls: string[] = [];
@@ -711,7 +712,7 @@ test("running broker backs off until durable reattachment stages replacement aut
 });
 
 test("durable registration intent recovers after broker death following server commit", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-registration-restart-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-broker-registration-restart-"));
   const credentialPath = path.join(directory, "pane.json");
   const capabilityPath = `${credentialPath}.cap`;
   const registrationBodies: any[] = [];
@@ -773,7 +774,7 @@ test("durable registration intent recovers after broker death following server c
 });
 
 test("complete absence advances broker ordinals and queued orphan reconciliation reruns without accepting a stale member", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-broker-absence-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-broker-absence-"));
   const credentialPath = path.join(directory, "pane.json");
   const calls: Array<{ path: string; body: any }> = [];
   const fixture = await startSimpleFixture(calls);
@@ -812,7 +813,7 @@ test("complete absence advances broker ordinals and queued orphan reconciliation
 });
 
 test("same-key metadata stays FIFO through resolve backoff while an unrelated real-store capture proceeds", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-real-store-fifo-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-real-store-fifo-"));
   const credentialPath = path.join(directory, "pane.json");
   const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });
   let resolveAttempts = 0;
@@ -878,7 +879,7 @@ test("same-key metadata stays FIFO through resolve backoff while an unrelated re
 });
 
 test("capture metadata survives more than eight transient failures and recovers without consuming the occurrence", { skip: process.platform === "win32", timeout: 30_000 }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-capture-outage-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-capture-outage-"));
   const credentialPath = path.join(directory, "pane.json");
   let attempts = 0;
   const server = http.createServer(async (request, response) => {
@@ -919,7 +920,7 @@ test("capture metadata survives more than eight transient failures and recovers 
 });
 
 test("capture 429 retries use one source-wide backoff even when the response body is malformed", { skip: process.platform === "win32" }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-capture-quota-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-capture-quota-"));
   const credentialPath = path.join(directory, "pane.json");
   const attemptTimes: number[] = [];
   const server = http.createServer(async (request, response) => {
@@ -1003,7 +1004,7 @@ test("broker runtime attestation rejects every predicate with stable sanitized d
   ];
   for (const [name, diagnostic, mutate] of variants) {
     await t.test(name, async () => {
-      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-predicate-"));
+      const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attestation-predicate-"));
       const credentialPath = path.join(directory, "pane.json");
       writeCredential(credentialPath);
       const fixture = await startChallengeOnlyFixture();
@@ -1037,7 +1038,7 @@ test("broker runtime challenge is one-shot and distinguishes replay, duplicate, 
     ["conflict", "attestation_conflict", true],
   ] as const) {
     await t.test(name, async () => {
-      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-once-"));
+      const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attestation-once-"));
       const credentialPath = path.join(directory, "pane.json");
       writeCredential(credentialPath);
       const server = http.createServer(async (request, response) => {
@@ -1069,7 +1070,7 @@ test("broker runtime challenge is one-shot and distinguishes replay, duplicate, 
   }
 
   await t.test("replay", async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attestation-replay-"));
+    const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attestation-replay-"));
     const credentialPath = path.join(directory, "pane.json");
     writeCredential(credentialPath);
     const oldNonce = "R".repeat(43);

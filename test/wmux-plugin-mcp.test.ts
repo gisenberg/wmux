@@ -75,7 +75,7 @@ async function fixture(t: any) {
   return { home, native, titles, requests, state, request, call, env };
 }
 
-test("MCP advertises native mirroring, negotiates protocol, and never exposes a private receipt", async t => {
+test("MCP advertises native mirroring, negotiates protocol, and never exposes a private receipt", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t);
   assert.equal((await f.request("initialize", { protocolVersion: "2025-06-18" })).protocolVersion, "2025-06-18");
   const list = await f.request("tools/list");
@@ -90,7 +90,7 @@ test("MCP advertises native mirroring, negotiates protocol, and never exposes a 
   assert.ok(f.native.calls.filter(m => m.method === "thread/read").every(m => m.params.threadId === sessionId && m.params.includeTurns === false));
 });
 
-test("native automatic titles and later desktop renames win over legacy stores and proposed semantic names", async t => {
+test("native automatic titles and later desktop renames win over legacy stores and proposed semantic names", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t);
   fs.writeFileSync(path.join(f.home, ".wmux", "codex-plugin", "wmux-session-names-v1.json"), "obsolete corrupt state");
   await f.call("name_current_wmux_session", { title: "Agent proposal" });
@@ -100,7 +100,7 @@ test("native automatic titles and later desktop renames win over legacy stores a
   assert.equal(fs.readFileSync(path.join(f.home, ".wmux", "codex-plugin", "wmux-session-names-v1.json"), "utf8"), "obsolete corrupt state");
 });
 
-test("manual pins survive sync; explicit unpin permits the current native name", async t => {
+test("manual pins survive sync; explicit unpin permits the current native name", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t); f.state.pinned = true;
   const pinned = (await f.call()).structuredContent;
   assert.equal(pinned.workspaceApplied, false); assert.equal(pinned.tabApplied, false);
@@ -111,7 +111,7 @@ test("manual pins survive sync; explicit unpin permits the current native name",
   assert.equal((await f.call()).structuredContent.workspaceTitle, "Rename While Pinned");
 });
 
-test("missing, unrepresentable, child and wrong-thread names leave wmux unchanged", async t => {
+test("missing, unrepresentable, child and wrong-thread names leave wmux unchanged", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t);
   for (const name of [null, "", "x".repeat(513), "a" + "\u0301".repeat(4096), "Bad\u0000Title"]) {
     f.native.state.name = name; await f.call();
@@ -123,7 +123,7 @@ test("missing, unrepresentable, child and wrong-thread names leave wmux unchange
   assert.deepEqual(f.titles, []);
 });
 
-test("bounded long names and native whitespace mirror without rewriting", async t => {
+test("bounded long names and native whitespace mirror without rewriting", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t);
   for (const name of ["x".repeat(512), " Exact  native whitespace! ", "👩‍💻".repeat(100)]) {
     f.native.state.name = name;
@@ -132,14 +132,14 @@ test("bounded long names and native whitespace mirror without rewriting", async 
   }
 });
 
-test("stale receipt and absent binding fail before any native read", async t => {
+test("stale receipt and absent binding fail before any native read", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t); f.state.resolveStatus = 409;
   assert.equal((await f.call()).isError, true);
   assert.equal((await f.call("sync_current_wmux_session", { bindingId: "D".repeat(22) })).isError, true);
   assert.deepEqual(f.native.calls, []); assert.deepEqual(f.titles, []);
 });
 
-test("unavailable server and rejected title delivery recover using a fresh native read", async t => {
+test("unavailable server and rejected title delivery recover using a fresh native read", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t); f.native.state.available = false;
   assert.equal((await f.call()).isError, true); assert.deepEqual(f.titles, []);
   f.native.state.available = true; f.state.titleStatus = 409;
@@ -151,7 +151,7 @@ test("unavailable server and rejected title delivery recover using a fresh nativ
   assert.deepEqual(f.titles, ["Latest Accepted Name"]);
 });
 
-test("manual mode and empty helper credentials cannot acquire title authority", async t => {
+test("manual mode and empty helper credentials cannot acquire title authority", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t);
   assert.equal((await f.call("name_current_wmux_session", { title: "Manual", mode: "manual" })).isError, true);
   fs.writeFileSync(path.join(f.home, ".wmux", "helper-token"), "");
@@ -160,13 +160,13 @@ test("manual mode and empty helper credentials cannot acquire title authority", 
   assert.deepEqual(f.requests, []); assert.deepEqual(f.native.calls, []);
 });
 
-test("plugin forwards an explicit private socket route, never inherited pane identity", () => {
+test("plugin forwards an explicit private socket route, never inherited pane identity", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, () => {
   const config = JSON.parse(fs.readFileSync("plugins/wmux/.mcp.json", "utf8")).mcpServers.wmux;
   assert.ok(config.env_vars.includes("WMUX_CODEX_SOCKET_PATH"));
   assert.equal(config.env_vars.includes("WMUX_WORKSPACE_ID"), false);
 });
 
-test("SessionEnd revokes exact stored receipts without a turn ID; child hooks cannot revoke the root", async t => {
+test("SessionEnd revokes exact stored receipts without a turn ID; child hooks cannot revoke the root", { skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false }, async t => {
   const f = await fixture(t);
   async function end(agent_id?: string) {
     const child = spawn(process.execPath, [path.join(scripts, "wmux-context.mjs")], { env: f.env });

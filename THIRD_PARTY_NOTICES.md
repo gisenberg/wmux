@@ -6,6 +6,10 @@ license, and trademark terms.
 
 ## Runtime dependencies
 
+Native Windows file ACL validation uses [Koffi](https://koffi.dev/),
+MIT-licensed, copyright 2026 Niels Martignène. Its license is distributed
+with the npm package. Koffi is loaded only on Windows.
+
 JavaScript dependencies are distributed under the licenses declared by their
 packages. In particular, `ghostty-web` and Fira Code are MIT- and
 SIL-OFL-licensed respectively. wmux currently pins a locally built artifact of

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -50,7 +51,7 @@ const startServer = async (
   healthRefreshIntervals?: { machines?: number; streams?: number },
   healthResolvers?: NonNullable<Parameters<typeof createHttpServer>[5]>["healthResolvers"],
 ): Promise<TestServer> => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-registry-http-"));
+  const dir = privateTempDirectory(path.join(os.tmpdir(), "wmux-registry-http-"));
   const staticMachines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const configPath = path.join(dir, "config.json");
   const staticMachineStore = new StaticMachineStore(staticMachines, configPath);

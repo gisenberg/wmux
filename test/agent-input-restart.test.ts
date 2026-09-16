@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,7 +24,7 @@ const registrationInput = (
 };
 
 test("restart clears a pre-exposure delivery binding and permits the same submission retry", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-restart-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-restart-"));
   const credentialPath = path.join(directory, "credentials.json");
   const requestPath = path.join(directory, "requests.json");
   try {
@@ -101,7 +102,7 @@ test("restart clears a pre-exposure delivery binding and permits the same submis
 });
 
 test("restart after exposure remains quarantined while list-present and never redelivers", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-reconcile-restart-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-reconcile-restart-"));
   const credentialPath = path.join(directory, "credentials.json");
   const requestPath = path.join(directory, "requests.json");
   try {
@@ -154,7 +155,7 @@ test("restart after exposure remains quarantined while list-present and never re
 });
 
 test("durable delivery identity accepts SDK-success ack after relay restart without raw answers", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-ack-restart-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-ack-restart-"));
   const credentialPath = path.join(directory, "credentials.json");
   const requestPath = path.join(directory, "requests.json");
   try {

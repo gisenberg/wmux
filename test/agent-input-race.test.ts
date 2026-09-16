@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -65,7 +66,7 @@ const occurrenceInput = (input: any) => ({
 });
 
 test("two clients race, duplicate polls/acks converge, and only one SDK delivery wins", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-race-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-race-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("request-race");
@@ -97,7 +98,7 @@ test("two clients race, duplicate polls/acks converge, and only one SDK delivery
 });
 
 test("a waiting poll wakes at the unstarted redelivery deadline before delivery expiry", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-redelivery-wake-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-redelivery-wake-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("request-redelivery-wake");
@@ -120,7 +121,7 @@ test("a waiting poll wakes at the unstarted redelivery deadline before delivery 
 });
 
 test("a poll persistence failure clears its lease and cannot authorize a later submission", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-poll-failure-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-poll-failure-"));
   try {
     const { requests, relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("request-poll-failure");
@@ -148,7 +149,7 @@ test("a poll persistence failure clears its lease and cannot authorize a later s
 });
 
 test("native resolution and a later equivalent SDK acknowledgement commute", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-commutative-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-commutative-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("commutative");
@@ -171,7 +172,7 @@ test("native resolution and a later equivalent SDK acknowledgement commute", asy
 });
 
 test("native reconciliation remains source-confined after request retention creates a tombstone", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-tombstone-source-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-tombstone-source-"));
   try {
     const { credentials, requests, relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("retained-source");
@@ -206,7 +207,7 @@ test("native reconciliation remains source-confined after request retention crea
 });
 
 test("closing one duplicate same-key waiter cannot cancel the shared submission", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-shared-waiter-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-shared-waiter-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("shared-waiter");
@@ -229,7 +230,7 @@ test("closing one duplicate same-key waiter cannot cancel the shared submission"
 });
 
 test("duplicate submission waiters are bounded per delivery and globally and release on settlement", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-waiter-limits-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-waiter-limits-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const perDelivery = ask("waiter-per-delivery");
@@ -279,7 +280,7 @@ test("duplicate submission waiters are bounded per delivery and globally and rel
 });
 
 test("poll leases clean up exactly, replace per source, and enforce the global cap", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-poll-leases-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-poll-leases-"));
   try {
     const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "key" });
     const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });
@@ -314,7 +315,7 @@ test("poll leases clean up exactly, replace per source, and enforce the global c
 });
 
 test("terminal reply/reject races and delivery timeout return observable typed outcomes", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-terminal-race-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-terminal-race-"));
   try {
     const { relay, principal, ask } = setup(directory, 30);
     const replied = ask("terminal-first");
@@ -349,7 +350,7 @@ test("terminal reply/reject races and delivery timeout return observable typed o
 });
 
 test("delivery timeout releases unstarted handoffs but quarantines SDK-started delivery", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-start-timeout-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-start-timeout-"));
   try {
     const { relay, principal, requests, ask } = setup(directory, 40);
     const queued = ask("queued-timeout");
@@ -388,7 +389,7 @@ test("delivery timeout releases unstarted handoffs but quarantines SDK-started d
 });
 
 test("credential rotation cancels handoff, invalidates old principal, and confines source generations", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-rotation-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-rotation-"));
   try {
     const { relay, credentials, principal, relaySecret, ask } = setup(directory);
     const captured = ask("rotation");
@@ -411,7 +412,7 @@ test("credential rotation cancels handoff, invalidates old principal, and confin
 });
 
 test("pane closure settles a buffered submission before source revocation releases its delivery", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-pane-close-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-pane-close-"));
   try {
     const { relay, credentials, requests, principal, ask } = setup(directory);
     const captured = ask("pane-close-buffered");
@@ -430,7 +431,7 @@ test("pane closure settles a buffered submission before source revocation releas
 });
 
 test("disconnect after poll marks delivery in doubt until native reconciliation", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-in-doubt-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-in-doubt-"));
   try {
     const { relay, principal, ask } = setup(directory);
     const captured = ask("in-doubt");
@@ -456,7 +457,7 @@ test("disconnect after poll marks delivery in doubt until native reconciliation"
 });
 
 test("feature disable revokes sources, clears requests, and rejects new handoffs", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-disabled-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-disabled-"));
   try {
     const { relay, credentials, relaySecret, requests, ask } = setup(directory);
     const captured = ask("disabled");
@@ -475,7 +476,7 @@ test("feature disable revokes sources, clears requests, and rejects new handoffs
 });
 
 test("post-exposure SDK ambiguity is quarantined while deterministic SDK failures remain converged", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-sdk-retry-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-sdk-retry-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("sdk-retry");
@@ -525,7 +526,7 @@ test("post-exposure SDK ambiguity is quarantined while deterministic SDK failure
 });
 
 test("poll cancellation is prompt and response cancellation releases an unstarted delivery", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-cancel-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-cancel-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const controller = new AbortController();
@@ -561,7 +562,7 @@ test("poll cancellation is prompt and response cancellation releases an unstarte
 });
 
 test("submission requires an active or narrowly recent authenticated source poll", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-poll-authority-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-poll-authority-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const first = ask("no-poll");
@@ -599,7 +600,7 @@ test("submission requires an active or narrowly recent authenticated source poll
 });
 
 test("delivery count and ephemeral answer-byte budgets fail closed without persisting raw answers", async () => {
-  const countDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-count-limit-"));
+  const countDirectory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-count-limit-"));
   try {
     const fixture = setup(countDirectory, 30_000);
     const pending: Array<Promise<unknown>> = [];
@@ -619,7 +620,7 @@ test("delivery count and ephemeral answer-byte budgets fail closed without persi
     fs.rmSync(countDirectory, { recursive: true, force: true });
   }
 
-  const byteDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-byte-limit-"));
+  const byteDirectory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-byte-limit-"));
   try {
     const fixture = setup(byteDirectory, 30_000);
     const sentinel = ["TRANSIENT", "BYTE", "BUDGET"].join("_");
@@ -660,7 +661,7 @@ test("delivery count and ephemeral answer-byte budgets fail closed without persi
 });
 
 test("complete empty snapshot settles buffered answer waiters and removes raw delivery", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-empty-snapshot-buffer-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-empty-snapshot-buffer-"));
   try {
     const { relay, principal, ask } = setup(directory, 3_000);
     const captured = ask("snapshot-buffered");
@@ -677,7 +678,7 @@ test("complete empty snapshot settles buffered answer waiters and removes raw de
 });
 
 test("one source exhausting its delivery quota cannot deny an unrelated source", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-input-source-delivery-isolation-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-input-source-delivery-isolation-"));
   try {
     const credentials = new AgentInputCredentialStore(path.join(directory, "credentials.json"), { hashKey: "key" });
     const requests = new AgentInputRequestStore(path.join(directory, "requests.json"), { answerDigestKey: "key" });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -66,8 +67,11 @@ async function stop(child: ChildProcessWithoutNullStreams) {
   await done;
 }
 
-test("plugin handshake crosses real HTTP and live PTY output without inherited pane identity", { timeout: 40_000 }, async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-wire-"));
+test("plugin handshake crosses real HTTP and live PTY output without inherited pane identity", {
+  timeout: 40_000,
+  skip: process.platform === "win32" ? "native-name mirror requires a private POSIX Unix socket" : false,
+}, async () => {
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-codex-wire-"));
   const home = path.join(directory, "home");
   const bin = path.join(directory, "bin");
   fs.mkdirSync(path.join(home, ".wmux"), { recursive: true, mode: 0o700 });
@@ -98,7 +102,7 @@ process.exit(99);
   const base = `http://127.0.0.1:${address.port}`;
   fs.writeFileSync(path.join(home, ".wmux", "url"), base, { mode: 0o600 });
   fs.writeFileSync(path.join(home, ".wmux", "helper-token"), helperToken, { mode: 0o600 });
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, CODEX_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
   for (const key of Object.keys(env)) if (key.startsWith("WMUX_")) delete env[key as keyof typeof env];
   env.WMUX_CODEX_SOCKET_PATH = native.socketPath;
   const client = mcp(env);
@@ -156,6 +160,6 @@ process.exit(99);
     server.close();
     await closed;
     state.flush();
-    fs.rmSync(directory, { recursive: true, force: true });
+    await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

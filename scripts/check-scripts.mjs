@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -82,7 +83,14 @@ for (const script of [
   run(process.execPath, ["--check", script]);
 }
 
-run("bash", [
+const bash = process.platform === "win32"
+  ? [process.env.WMUX_GIT_BASH,
+      path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+      path.join(process.env.LOCALAPPDATA ?? "", "Programs", "Git", "bin", "bash.exe")]
+    .find((candidate) => candidate && fs.existsSync(candidate))
+  : "bash";
+if (!bash) throw new Error("Git Bash is required for Windows shell script validation");
+run(bash, [
   "-n",
   "scripts/install-user-service.sh",
   "scripts/install-codex-observer-service.sh",

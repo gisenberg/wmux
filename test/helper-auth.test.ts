@@ -7,15 +7,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { hostShellPath } from "../src/server/host-shell.js";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const script = (name: string) => path.join(repoRoot, "scripts", name);
+const script = (name: string) => hostShellPath(path.join(repoRoot, "scripts", name));
 
 test("every POSIX helper refuses an explicit unreadable helper path without legacy fallback", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-helper-auth-"));
   const mediaFile = path.join(home, "media.txt");
-  fs.writeFileSync(mediaFile, "media");
+  fs.writeFileSync(hostShellPath(mediaFile), "media");
   let requests = 0;
   const server = http.createServer((_request, response) => {
     requests += 1;
@@ -62,7 +63,7 @@ test("wmux-media uploads file bytes and pane metadata", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-media-upload-"));
   const mediaFile = path.join(home, "render.mp4");
   const mediaBytes = Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]);
-  fs.writeFileSync(mediaFile, mediaBytes);
+  fs.writeFileSync(hostShellPath(mediaFile), mediaBytes);
   let received: {
     method: string | undefined;
     url: string | undefined;
@@ -98,7 +99,7 @@ test("wmux-media uploads file bytes and pane metadata", async () => {
     delete env.WMUX_TOKEN;
     delete env.WMUX_TOKEN_PATH;
 
-    await execFileAsync("bash", [
+    const uploadArgs = [
       script("wmux-media"),
       "--mode", "http",
       "--mime", "video/mp4",
@@ -106,8 +107,18 @@ test("wmux-media uploads file bytes and pane metadata", async () => {
       "--pane", "pane-test",
       "--workspace", "workspace-test",
       "--tab", "tab-test",
-      mediaFile,
-    ], { cwd: repoRoot, env });
+      hostShellPath(mediaFile),
+    ];
+    for (const token of ["A".repeat(32), "A".repeat(255), "A".repeat(256), helperToken]) {
+      await execFileAsync("bash", uploadArgs, { cwd: repoRoot, env: { ...env, WMUX_HELPER_TOKEN: token } });
+      assert.equal(received?.authorization, `Bearer ${token}`);
+    }
+    for (const token of ["A".repeat(31), "A".repeat(257), `${"A".repeat(32)}!`]) {
+      await assert.rejects(execFileAsync("bash", uploadArgs, {
+        cwd: repoRoot, env: { ...env, WMUX_HELPER_TOKEN: token },
+      }), /configured helper token is empty or malformed/);
+      assert.equal(received?.authorization, `Bearer ${helperToken}`, "invalid tokens make no request");
+    }
 
     assert.ok(received);
     assert.equal(received.method, "POST");

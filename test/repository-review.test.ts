@@ -68,6 +68,7 @@ const createFixture = (): Fixture => {
   git(repository, ["add", "-A", "--", "rename me.txt", "renamed ü.txt"]);
   fs.rmSync(path.join(repository, "delete me.txt"));
   fs.chmodSync(path.join(repository, "mode-only.sh"), 0o755);
+  if (process.platform === "win32") git(repository, ["update-index", "--chmod=+x", "--", "mode-only.sh"]);
   write(repository, "binary.bin", Buffer.from([0, 4, 5, 6]));
   write(repository, "space ü.txt", "unicode changed\nsafe\u001b[31m\u202etext\n");
   write(repository, "huge.txt", `${Array.from({ length: 2_000 }, (_, index) => `changed-${index}`).join("\n")}\n`);
@@ -77,14 +78,14 @@ const createFixture = (): Fixture => {
   write(repository, "empty.txt", "");
   write(repository, "long-line.txt", `${"x".repeat(512)}\n`);
   write(repository, "ignored.txt", "must remain excluded\n");
-  write(repository, "evil\u001b[31m.txt", "unsafe path\n");
+  if (process.platform !== "win32") write(repository, "evil\u001b[31m.txt", "unsafe path\n");
   write(directory, "outside-secret.txt", "must not be read\n");
-  fs.symlinkSync(path.join(directory, "outside-secret.txt"), path.join(repository, "outside-link"));
+  if (process.platform !== "win32") fs.symlinkSync(path.join(directory, "outside-secret.txt"), path.join(repository, "outside-link"));
   const nonUtf8Path = Buffer.concat([
     Buffer.from(`${repository}${path.sep}`),
     Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]),
   ]);
-  fs.writeFileSync(nonUtf8Path, "undecodable path\n");
+  if (process.platform !== "win32") fs.writeFileSync(nonUtf8Path, "undecodable path\n");
   write(path.join(repository, "submodule"), "tracked.txt", "dirty submodule\n");
   const nestedCwd = path.join(repository, "nested", "cwd");
   fs.mkdirSync(nestedCwd, { recursive: true });
@@ -274,7 +275,7 @@ test("working tree snapshots cover tracked, untracked, binary, mode, submodule, 
     const empty = first.files.find((file) => file.path === "empty.txt");
     assert.doesNotMatch(empty?.untrackedPatch?.text ?? "", /^@@/m);
     const outsideLink = first.files.find((file) => file.path === "outside-link");
-    assert.equal(outsideLink?.contentOmitted, "symlink");
+    if (process.platform !== "win32") assert.equal(outsideLink?.contentOmitted, "symlink");
     assert.doesNotMatch(JSON.stringify(first), /must not be read/);
     const longLine = first.files.find((file) => file.path === "long-line.txt");
     assert.ok(longLine?.untrackedPatch?.truncationReasons.includes("long-line"));
@@ -283,10 +284,13 @@ test("working tree snapshots cover tracked, untracked, binary, mode, submodule, 
     assert.doesNotMatch(first.workingTreePatch.text, /[\u001b\u202e]/u);
 
     const sanitized = first.files.filter((file) => file.pathEncoding !== "utf8");
-    assert.ok(sanitized.some((file) => file.pathEncoding === "sanitized"));
-    assert.ok(sanitized.some((file) => file.pathEncoding === "undecodable"));
-    assert.ok(sanitized.some((file) => file.contentOmitted === "unsafe-path"));
-    assert.ok(sanitized.some((file) => file.contentOmitted === "undecodable-path"));
+    // NTFS cannot represent these POSIX filenames; parser tests cover their bytes on every host.
+    if (process.platform !== "win32") {
+      assert.ok(sanitized.some((file) => file.pathEncoding === "sanitized"));
+      assert.ok(sanitized.some((file) => file.pathEncoding === "undecodable"));
+      assert.ok(sanitized.some((file) => file.contentOmitted === "unsafe-path"));
+      assert.ok(sanitized.some((file) => file.contentOmitted === "undecodable-path"));
+    }
     assert.doesNotMatch(JSON.stringify(first), /[\u001b\u202e]/u);
   } finally {
     state.flush();
@@ -516,11 +520,12 @@ test("non-repository, process failure, timeout, cancellation, and concurrent cha
 
 test("the Git process runner kills a timed-out or cancelled child", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-repository-runner-"));
-  const executable = path.join(directory, "git");
-  fs.writeFileSync(executable, "#!/bin/sh\nwhile :; do :; done\n", { mode: 0o700 });
+  const executable = path.join(directory, process.platform === "win32" ? "git.exe" : "git");
+  fs.copyFileSync(process.execPath, executable);
+  fs.chmodSync(executable, 0o700);
   const environment = { PATH: directory };
   try {
-    const timedOut = await spawnGitCommand(["status"], {
+    const timedOut = await spawnGitCommand(["-e", "setInterval(() => {}, 1000)"], {
       cwd: directory,
       env: environment,
       timeoutMs: 25,
@@ -530,7 +535,7 @@ test("the Git process runner kills a timed-out or cancelled child", async () => 
     assert.notEqual(timedOut.status, 0);
 
     const controller = new AbortController();
-    const cancelledPromise = spawnGitCommand(["status"], {
+    const cancelledPromise = spawnGitCommand(["-e", "setInterval(() => {}, 1000)"], {
       cwd: directory,
       env: environment,
       timeoutMs: 5_000,

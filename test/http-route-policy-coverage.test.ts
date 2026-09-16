@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs";
+import { privateTempDirectory } from "./private-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -56,7 +57,7 @@ const documentedRoutes = [
 ] as const;
 
 test("every dispatched HTTP route has one matching authorization policy", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-route-coverage-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-route-coverage-"));
   const state = new StateStore([], path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
   const server = await createHttpServer(

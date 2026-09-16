@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { hasPrivatePermissions } from "./private-permissions.js";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -320,7 +321,7 @@ export class BrowserSessionStore {
     ) {
       throw new Error("browser session parent directory must be owned by the wmux user");
     }
-    if ((parent.mode & 0o077) !== 0) {
+    if (!hasPrivatePermissions(parentPath, parent, true)) {
       throw new Error("browser session parent directory must be owner-only");
     }
   }
@@ -340,7 +341,7 @@ export class BrowserSessionStore {
     ) {
       throw new Error("browser session record must be owned by the wmux user");
     }
-    if ((file.mode & 0o777) !== 0o600) {
+    if (!hasPrivatePermissions(filePath, file)) {
       throw new Error("browser session record permissions must be 0600");
     }
   }
