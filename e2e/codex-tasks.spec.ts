@@ -170,8 +170,8 @@ test("catalog preserves identity, display associations, pagination, and disabled
       scrollWidth: element.scrollWidth,
       overflowing: Array.from(element.querySelectorAll<HTMLElement>("*")).flatMap((child) => {
         const childBounds = child.getBoundingClientRect();
-        return childBounds.right > bounds.right + 1
-          ? [{ tag: child.tagName, className: child.className, right: Math.round(childBounds.right), containerRight: Math.round(bounds.right) }]
+        return childBounds.right > bounds.right + 1 || child.scrollWidth > child.clientWidth + 1
+          ? [{ tag: child.tagName, className: child.className, right: Math.round(childBounds.right), containerRight: Math.round(bounds.right), clientWidth: child.clientWidth, scrollWidth: child.scrollWidth }]
           : [];
       }),
     };
