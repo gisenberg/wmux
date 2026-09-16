@@ -172,7 +172,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
     await dialog.evaluate(async () => {
       await document.fonts.ready;
       await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       );
     });
     const horizontalBounds = await dialog.evaluate((element) => {
