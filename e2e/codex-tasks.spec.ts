@@ -5,6 +5,7 @@ import { awaitAppShell, expect, test } from "./fixtures";
 // not claim a live native task was opened.
 test("catalog preserves identity, display associations, pagination, and disabled resume", async ({
   page,
+  request,
   createReadyWorkspace,
 }, testInfo) => {
   const calls: string[] = [];
@@ -43,6 +44,13 @@ test("catalog preserves identity, display associations, pagination, and disabled
   // The association remains browser-visible even if future fixture bootstrap
   // state changes pin/favorite fields; it is a separate HTTP resource.
   const workspace = await createReadyWorkspace();
+  const longTargetName = "選択先 👩🏽‍💻 e\u0301 ".repeat(8);
+  expect((await request.post(`/api/workspaces/${workspace.id}/title`, {
+    data: { title: longTargetName },
+  })).ok()).toBeTruthy();
+  expect((await request.post(`/api/workspaces/${workspace.id}/tabs/${workspace.activeTabId}/title`, {
+    data: { title: longTargetName },
+  })).ok()).toBeTruthy();
   const knownTarget = {
     workspaceId: workspace.id,
     tabId: workspace.activeTabId,
@@ -214,6 +222,8 @@ test("catalog preserves identity, display associations, pagination, and disabled
   expect(calls).toContain("read:thread-1:true");
   const target = dialog.getByRole("combobox", { name: "Pane target" });
   await target.selectOption({ index: 1 });
+  await expect(target.locator("option").nth(1)).toContainText("選択先");
+  await expect(target.locator("option").nth(1)).not.toContainText(longTargetName.trim());
   await expect(dialog.locator(".codex-target-identity")).toContainText(knownTarget.paneId);
   await dialog.getByRole("button", { name: "ASSOCIATE NEW" }).click();
   await expect(dialog).toContainText("Associated display target");

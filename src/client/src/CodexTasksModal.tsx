@@ -12,8 +12,19 @@ import type {
 import type { Workspace } from "./types";
 import "./CodexTasksModal.css";
 
-type TargetOption = CodexTaskTarget & { label: string };
+type TargetOption = CodexTaskTarget & { label: string; selectLabel: string };
 type LaunchRecord = CodexTaskLaunch & { acknowledgedAt?: string };
+const truncateGraphemes = (value: string, maximum: number) => {
+  const graphemes = Array.from(
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
+    ({ segment }) => segment,
+  );
+  return graphemes.length > maximum
+    ? `${graphemes.slice(0, maximum).join("")}…`
+    : value;
+};
+const compactTargetLabel = (workspace: Workspace, tab: Workspace["tabs"][number], pane: Workspace["tabs"][number]["panes"][number]) =>
+  `${truncateGraphemes(workspace.name || "Workspace", 6)} / ${truncateGraphemes(tab.title || "Tab", 6)} / ${truncateGraphemes(pane.title || "Pane", 6)} [${pane.id.slice(-8)}]`;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed";
 const taskKey = (task: Pick<CodexTask, "endpointIdentity" | "threadId">) =>
@@ -107,6 +118,7 @@ export function CodexTasksModal({
             tabId: tab.id,
             paneId: pane.id,
             label: `${workspace.name} / ${tab.title} / ${pane.title} [${pane.id}]`,
+            selectLabel: compactTargetLabel(workspace, tab, pane),
           })),
         ),
       ),
@@ -621,7 +633,7 @@ export function CodexTasksModal({
                       <option value="">Choose an exact pane</option>
                       {targets.map((target) => (
                         <option key={target.paneId} value={target.paneId}>
-                          {target.paneId}
+                          {target.selectLabel}
                         </option>
                       ))}
                     </select>
