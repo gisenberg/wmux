@@ -34,6 +34,15 @@ const routeCases: Array<[string, string, string]> = [
   ["auth-credentials", "GET", "/api/auth/credentials"],
   ["auth-credential-rotate", "POST", "/api/auth/credentials/helper/rotate"],
   ["bootstrap", "GET", "/api/bootstrap"],
+  ["codex-task-endpoints", "GET", "/api/codex-tasks/endpoints"],
+  ["codex-task-list", "POST", "/api/codex-tasks/list"],
+  ["codex-task-read", "POST", "/api/codex-tasks/read"],
+  ["codex-task-associations", "GET", "/api/codex-task-associations"],
+  ["codex-task-associate", "POST", "/api/codex-task-associations"],
+  ["codex-task-association-remove", "DELETE", "/api/codex-task-associations/association"],
+  ["codex-task-launch", "POST", "/api/codex-task-launches"],
+  ["codex-task-launches", "GET", "/api/codex-task-launches"],
+  ["codex-task-launch-read", "GET", "/api/codex-task-launches/123e4567-e89b-12d3-a456-426614174000"],
   ["codex-binding-issue", "POST", "/api/codex-bindings"],
   ["codex-binding-observation", "POST", "/api/codex-bindings/observation"],
   ["codex-binding-revoke", "POST", "/api/codex-bindings/revoke"],
@@ -118,6 +127,12 @@ test("browser, automation, helper, registration, and legacy policies are separat
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("GET", "/api/delegations/run")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", "/api/notifications")), false);
   assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", "/api/notifications")), true);
+  for (const [id, method, path] of routeCases.filter(([id]) => id.startsWith("codex-task-"))) {
+    assert.equal(authorizeHttpPrincipal(auth, principal("browser-session"), policy(method, path)), true, id);
+    for (const kind of ["automation", "helper", "registration", "registered-host"] as const) {
+      assert.equal(authorizeHttpPrincipal(auth, principal(kind), policy(method, path)), false, `${id}: ${kind}`);
+    }
+  }
   for (const route of ["/api/codex-bindings", "/api/codex-bindings/observation", "/api/codex-bindings/revoke", "/api/codex-bindings/resolve", "/api/codex-bindings/lifecycle", "/api/codex-bindings/title"]) {
     assert.equal(authorizeHttpPrincipal(auth, principal("helper"), policy("POST", route)), true);
     assert.equal(authorizeHttpPrincipal(auth, principal("automation"), policy("POST", route)), false);
