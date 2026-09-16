@@ -8,6 +8,14 @@ import type {
   CodexTaskPage,
   CodexTaskTarget,
 } from "../../shared/codex-tasks";
+export class CodexTasksApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
@@ -21,13 +29,14 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok) {
     try {
-      throw new Error(
+      throw new CodexTasksApiError(
+        response.status,
         ((await response.json()) as { error?: string }).error ??
           `HTTP ${response.status}`,
       );
     } catch (error) {
       if (error instanceof Error) throw error;
-      throw new Error(`HTTP ${response.status}`);
+      throw new CodexTasksApiError(response.status, `HTTP ${response.status}`);
     }
   }
   return response.json() as Promise<T>;

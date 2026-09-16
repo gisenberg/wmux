@@ -91,10 +91,18 @@ test("catalog preserves identity, display associations, pagination, and disabled
   await page.route("**/api/codex-task-associations", async (route) => {
     if (route.request().method() === "GET")
       return route.fulfill({ json: { associations } });
+    const input = JSON.parse(route.request().postData() || "{}") as {
+      target?: object;
+    };
+    expect(Object.keys(input.target ?? {}).sort()).toEqual([
+      "paneId",
+      "tabId",
+      "workspaceId",
+    ]);
     associations = [
       {
         id: "a1",
-        ...(JSON.parse(route.request().postData() || "{}") as object),
+        ...input,
         createdAt: "2026-01-01T00:00:00Z",
         resolved: true,
         reason: null,
@@ -102,31 +110,27 @@ test("catalog preserves identity, display associations, pagination, and disabled
     ];
     return route.fulfill({ json: { association: associations[0] } });
   });
+  let missingServerAttempt = false;
+  let recordedLaunch: Record<string, unknown> | null = null;
   await page.route("**/api/codex-task-launches**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (
       pathname === "/api/codex-task-launches" &&
       route.request().method() === "GET"
     ) {
-      return route.fulfill({ json: { launches: [] } });
+      return route.fulfill({ json: { launches: recordedLaunch ? [recordedLaunch] : [] } });
     }
     if (pathname !== "/api/codex-task-launches") {
+      if (missingServerAttempt) return route.fulfill({ status: 404, json: { error: "launch_not_found" } });
       const acknowledged = pathname.endsWith("/acknowledge");
-      return route.fulfill({
-        json: {
-          launch: {
-            requestId: "fixture-reconciled-launch",
-            endpointId: endpoint.id,
-            status: "unknown",
-            target: knownTarget,
-            reason: "fixture outcome remains unknown",
-            createdAt: new Date().toISOString(),
-            ...(acknowledged
-              ? { acknowledgedAt: new Date().toISOString() }
-              : {}),
-          },
-        },
-      });
+      const launch = {
+        requestId: pathname.split("/")[3], endpointId: endpoint.id,
+        status: "unknown", target: knownTarget,
+        reason: "fixture outcome remains unknown", createdAt: new Date().toISOString(),
+        ...(acknowledged ? { acknowledgedAt: new Date().toISOString() } : {}),
+      };
+      recordedLaunch = launch;
+      return route.fulfill({ json: { launch } });
     }
     launchBodies.push(
       JSON.parse(route.request().postData() || "{}") as {
@@ -141,22 +145,19 @@ test("catalog preserves identity, display associations, pagination, and disabled
   await page.reload();
   await awaitAppShell(page);
   const mobile = testInfo.project.name.startsWith("mobile-");
-  if (mobile) {
-    await page.getByRole("button", { name: "Open chat", exact: true }).click();
-    await page.getByRole("button", { name: "Actions", exact: true }).click();
-  } else {
-    await page.keyboard.press("Control+K");
-  }
-  const palette = page.getByRole("dialog", { name: "Command palette" });
-  await palette
-    .getByPlaceholder("Search commands, workspaces, tabs, hosts")
-    .fill("Open Codex tasks");
-  if (mobile)
-    await palette.getByRole("button", { name: /Open Codex tasks/ }).click();
-  else
-    await palette
-      .getByPlaceholder("Search commands, workspaces, tabs, hosts")
-      .press("Enter");
+  const openCatalog = async () => {
+    if (mobile) {
+      const chat = page.getByRole("button", { name: "Open chat", exact: true });
+      if (await chat.isVisible()) await chat.click();
+      await page.getByRole("button", { name: "Actions", exact: true }).click();
+    } else await page.keyboard.press("Control+K");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    const search = palette.getByPlaceholder("Search commands, workspaces, tabs, hosts");
+    await search.fill("Open Codex tasks");
+    if (mobile) await palette.getByRole("button", { name: /Open Codex tasks/ }).click();
+    else await search.press("Enter");
+  };
+  await openCatalog();
   const dialog = page.getByRole("dialog", { name: "Codex tasks" });
   await expect(dialog).toContainText("Same title");
   await expect(dialog).toContainText(`${endpoint.identity} · thread-1`);
@@ -208,4 +209,18 @@ test("catalog preserves identity, display associations, pagination, and disabled
     dialog.getByRole("button", { name: "NEW CLI VIEW" }),
   ).toBeEnabled();
   expect(launchBodies).toHaveLength(1);
+  missingServerAttempt = true;
+  await dialog.getByRole("button", { name: "NEW CLI VIEW" }).click();
+  await expect(dialog.getByRole("button", { name: "NEW CLI VIEW" })).toBeDisabled();
+  await dialog.getByRole("button", { name: /I INSPECTED THIS ATTEMPT/ }).click();
+  await expect(dialog).toContainText("No recorded server attempt was found");
+  await expect(dialog.getByRole("button", { name: "NEW CLI VIEW" })).toBeEnabled();
+  expect(launchBodies).toHaveLength(2);
+  await page.reload();
+  await awaitAppShell(page);
+  await openCatalog();
+  await expect(dialog).toContainText("Same title");
+  await dialog.getByLabel("Absolute working directory").fill("/tmp/fixture");
+  await expect(dialog.getByRole("button", { name: "NEW CLI VIEW" })).toBeEnabled();
+  expect(launchBodies).toHaveLength(2);
 });

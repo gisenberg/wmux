@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConsoleDialog } from "./useConsoleDialog";
-import { codexTasksApi } from "./codex-tasks-api";
+import { CodexTasksApiError, codexTasksApi } from "./codex-tasks-api";
 import type {
   CodexTask,
   CodexTaskAssociation,
@@ -29,7 +29,11 @@ const sampleAge = (sampledAt: string, now: number) => {
 };
 const uuid = () => globalThis.crypto?.randomUUID?.() ?? null;
 const launchIdsKey = "wmux.codex-launch-attempt-ids";
-type RememberedLaunch = { requestId: string; endpointId: string };
+type RememberedLaunch = {
+  requestId: string;
+  endpointId: string;
+  acknowledgedAt?: string;
+};
 const rememberedLaunches = (): RememberedLaunch[] => {
   try {
     const value = JSON.parse(
@@ -138,10 +142,22 @@ export function CodexTasksModal({
       if (version !== versions.current.catalog) return;
       setEndpoints(catalog.endpoints);
       setAssociations(associationResponse.associations);
+      const remembered = new Map(
+        rememberedLaunches().map((item) => [item.requestId, item]),
+      );
+      const serverLaunches = launchResponse.launches.map((item) =>
+        item.status === "unknown" &&
+        remembered.get(item.requestId)?.acknowledgedAt
+          ? {
+              ...item,
+              acknowledgedAt: remembered.get(item.requestId)!.acknowledgedAt,
+            }
+          : item,
+      );
       const known = new Set(
         launchResponse.launches.map((item) => item.requestId),
       );
-      const missing = rememberedLaunches()
+      const missing = [...remembered.values()]
         .filter((item) => !known.has(item.requestId))
         .map((item) => ({
           requestId: item.requestId,
@@ -150,8 +166,11 @@ export function CodexTasksModal({
           target: null,
           reason: "launch outcome not listed; reconcile explicitly",
           createdAt: "unknown",
+          ...(item.acknowledgedAt
+            ? { acknowledgedAt: item.acknowledgedAt }
+            : {}),
         }));
-      setLaunches([...launchResponse.launches, ...missing]);
+      setLaunches([...serverLaunches, ...missing]);
       setEndpointId((current) =>
         catalog.endpoints.some((item) => item.id === current)
           ? current
@@ -260,8 +279,13 @@ export function CodexTasksModal({
       endpoint?.status !== "available"
     )
       return;
-    const target = targets.find((item) => item.paneId === targetId);
-    if (!target) return;
+    const option = targets.find((item) => item.paneId === targetId);
+    if (!option) return;
+    const target = {
+      workspaceId: option.workspaceId,
+      tabId: option.tabId,
+      paneId: option.paneId,
+    };
     try {
       await codexTasksApi.associate({
         id: association?.id,
@@ -356,6 +380,26 @@ export function CodexTasksModal({
         ...current.filter((item) => item.requestId !== requestId),
       ]);
     } catch (nextError) {
+      if (nextError instanceof CodexTasksApiError && nextError.status === 404) {
+        const launch = launches.find((item) => item.requestId === requestId);
+        if (launch) {
+          const acknowledgedAt = new Date().toISOString();
+          rememberLaunch({
+            requestId,
+            endpointId: launch.endpointId,
+            acknowledgedAt,
+          });
+          setLaunches((current) =>
+            current.map((item) =>
+              item.requestId === requestId ? { ...item, acknowledgedAt } : item,
+            ),
+          );
+          setError(
+            "No recorded server attempt was found. This acknowledgement does not cancel delayed work or retry it.",
+          );
+          return;
+        }
+      }
       setError(errorText(nextError));
     }
   };
