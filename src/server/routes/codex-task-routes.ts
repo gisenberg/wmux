@@ -78,4 +78,9 @@ export const codexTaskRoutes: readonly ApiRoute[] = [
     if (!launch) throw new HttpError(404, "launch_not_found");
     sendJson(200, { launch });
   }),
+  route("codex-task-launch-acknowledge", "POST", /^\/api\/codex-task-launches\/([A-Za-z0-9_-]{1,128})\/acknowledge$/, async ({ deps, match, sendJson }) => {
+    const requestId = parse(z.string().uuid(), match![1]);
+    if (!deps.codexTasks.launches.get(requestId)) throw new HttpError(404, "launch_not_found");
+    sendJson(200, { launch: deps.codexTasks.launches.acknowledge(requestId) });
+  }),
 ];

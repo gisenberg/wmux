@@ -94,6 +94,14 @@ test("Codex task HTTP routes are user-only, strict, metadata-only, and preserve 
     const unknownRead = await fetch(`${base}/api/codex-task-launches/${unknownId}`, { headers: headers(legacy) });
     assert.equal((await unknownRead.json() as any).launch.status, "unknown");
     assert.equal(opens, 2, "GET reconciliation never opens another view");
+    const ack = await fetch(`${base}/api/codex-task-launches/${unknownId}/acknowledge`, { method: "POST", headers: headers(legacy) });
+    assert.equal(ack.status, 200);
+    const acknowledged = (await ack.json() as any).launch;
+    assert.equal(acknowledged.status, "unknown");
+    assert.ok(acknowledged.acknowledgedAt);
+    assert.equal(opens, 2, "Acknowledgement never retries an uncertain attempt");
+    assert.equal((await fetch(`${base}/api/codex-task-launches/${requestId}/acknowledge`, { method: "POST", headers: headers(legacy) })).status, 409);
+
     mismatch = true;
     assert.equal((await fetch(`${base}/api/codex-task-associations`, { method: "POST", headers: headers(legacy), body: JSON.stringify({ endpointId: "native", endpointIdentity: identity, threadId: "thr_one", target }) })).status, 503);
     mismatch = false; stale = true;

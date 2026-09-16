@@ -75,4 +75,5 @@ export interface CodexTaskLaunch {
   target: CodexTaskTarget | null;
   reason: string | null;
   createdAt: string;
+  acknowledgedAt?: string;
 }

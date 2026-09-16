@@ -82,4 +82,9 @@ export const codexTasksApi = {
     request<{ launch: CodexTaskLaunch }>(
       `/api/codex-task-launches/${encodeURIComponent(requestId)}`,
     ),
+  acknowledgeLaunch: (requestId: string) =>
+    request<{ launch: CodexTaskLaunch }>(
+      `/api/codex-task-launches/${encodeURIComponent(requestId)}/acknowledge`,
+      { method: "POST" },
+    ),
 };

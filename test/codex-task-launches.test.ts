@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   CURRENT_CODEX_TASK_LAUNCH_SCHEMA_VERSION,
   CodexTaskLaunchConflictError,
+  CodexCliViewUncertainError,
   CodexTaskLaunches,
   UnsupportedCodexTaskLaunchVersionError,
 } from "../src/server/codex-task-launches.js";
@@ -54,6 +55,31 @@ test("callback uncertainty is recorded as unknown and an existing request is not
   assert.equal(result.reason, "launch_outcome_unknown");
   assert.equal((await store.launch(input)).status, "unknown");
   assert.equal(calls, 1);
+});
+
+test("known display targets survive uncertain CLI outcomes and explicit acknowledgement never retries", async () => {
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-codex-launch-known-"));
+  const filePath = path.join(directory, "launches.json");
+  let calls = 0;
+  try {
+    const store = new CodexTaskLaunches({ filePath, open: async () => { calls++; throw new CodexCliViewUncertainError(target); } });
+    const uncertain = await store.launch(input);
+    assert.deepEqual(uncertain.target, target);
+    assert.equal(uncertain.status, "unknown");
+    const reloaded = new CodexTaskLaunches({ filePath, open: async () => { calls++; return target; } });
+    assert.deepEqual(reloaded.get(requestId)?.target, target);
+    const acknowledged = reloaded.acknowledge(requestId);
+    assert.ok(acknowledged.acknowledgedAt);
+    assert.equal(acknowledged.status, "unknown");
+    assert.equal(calls, 1);
+    assert.equal(reloaded.acknowledge(requestId).acknowledgedAt, acknowledged.acknowledgedAt);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("only unknown launches can be acknowledged", async () => {
+  const store = new CodexTaskLaunches({ open: async () => target });
+  await store.launch(input);
+  assert.throws(() => store.acknowledge(requestId), (error: unknown) => error instanceof CodexTaskLaunchConflictError && error.statusCode === 409);
 });
 
 test("list returns persisted recent attempts and endpoint identity participates in idempotency", async () => {

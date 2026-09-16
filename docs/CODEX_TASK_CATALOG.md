@@ -105,6 +105,12 @@ open a known pane. `opened` means the guarded view returned its exact pane;
 it does not prove a native turn ran or attribute a discovered task to that view.
 Only ordinary trusted terminal proof may establish a native binding.
 
+If native trust or login stops the controller, an exact pane returned by the
+helper remains available through **Open target**, while the outcome stays
+unknown. After inspecting it, explicitly acknowledge that attempt to allow a
+separate fresh view. Acknowledgement neither cancels the existing view nor
+retries its request, and the original attempt remains in the ledger.
+
 **Resume stays disabled in this profile.** Native loaded/idle metadata cannot
 prove exclusive client ownership or prevent another client from submitting work
 between checks. No association, cwd match, title match or preview marker grants

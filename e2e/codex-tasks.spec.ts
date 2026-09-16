@@ -41,7 +41,12 @@ test("catalog preserves identity, display associations, pagination, and disabled
   });
   // The association remains browser-visible even if future fixture bootstrap
   // state changes pin/favorite fields; it is a separate HTTP resource.
-  await createReadyWorkspace();
+  const workspace = await createReadyWorkspace();
+  const knownTarget = {
+    workspaceId: workspace.id,
+    tabId: workspace.activeTabId,
+    paneId: workspace.tabs[0]!.panes[0]!.id,
+  };
   await page.route("**/api/codex-tasks/endpoints", (route) =>
     route.fulfill({ json: { endpoints: [endpoint] } }),
   );
@@ -97,9 +102,31 @@ test("catalog preserves identity, display associations, pagination, and disabled
     ];
     return route.fulfill({ json: { association: associations[0] } });
   });
-  await page.route("**/api/codex-task-launches", async (route) => {
-    if (route.request().method() === "GET") {
+  await page.route("**/api/codex-task-launches**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (
+      pathname === "/api/codex-task-launches" &&
+      route.request().method() === "GET"
+    ) {
       return route.fulfill({ json: { launches: [] } });
+    }
+    if (pathname !== "/api/codex-task-launches") {
+      const acknowledged = pathname.endsWith("/acknowledge");
+      return route.fulfill({
+        json: {
+          launch: {
+            requestId: "fixture-reconciled-launch",
+            endpointId: endpoint.id,
+            status: "unknown",
+            target: knownTarget,
+            reason: "fixture outcome remains unknown",
+            createdAt: new Date().toISOString(),
+            ...(acknowledged
+              ? { acknowledgedAt: new Date().toISOString() }
+              : {}),
+          },
+        },
+      });
     }
     launchBodies.push(
       JSON.parse(route.request().postData() || "{}") as {
@@ -163,9 +190,22 @@ test("catalog preserves identity, display associations, pagination, and disabled
   await dialog.getByRole("button", { name: "LOAD MORE" }).click();
   await expect(dialog).toContainText(`${endpoint.identity} · thread-2`);
   await dialog.getByRole("button", { name: "NEW CLI VIEW" }).click();
-  expect(launchBodies).toEqual([expect.objectContaining({ endpointIdentity: endpoint.identity })]);
+  expect(launchBodies).toEqual([
+    expect.objectContaining({ endpointIdentity: endpoint.identity }),
+  ]);
   await expect(dialog).toContainText("Launch outcome is uncertain");
   await expect(
     dialog.getByRole("button", { name: "NEW CLI VIEW" }),
   ).toBeDisabled();
+  await dialog.getByRole("button", { name: "RECONCILE" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "OPEN TARGET" }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: /I INSPECTED THIS ATTEMPT/ })
+    .click();
+  await expect(
+    dialog.getByRole("button", { name: "NEW CLI VIEW" }),
+  ).toBeEnabled();
+  expect(launchBodies).toHaveLength(1);
 });

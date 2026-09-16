@@ -13,6 +13,7 @@ import type { Workspace } from "./types";
 import "./CodexTasksModal.css";
 
 type TargetOption = CodexTaskTarget & { label: string };
+type LaunchRecord = CodexTaskLaunch & { acknowledgedAt?: string };
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed";
 const taskKey = (task: Pick<CodexTask, "endpointIdentity" | "threadId">) =>
@@ -83,7 +84,7 @@ export function CodexTasksModal({
   const [selected, setSelected] = useState<CodexTask | null>(null);
   const [detail, setDetail] = useState<CodexTaskDetail | null>(null);
   const [associations, setAssociations] = useState<CodexTaskAssociation[]>([]);
-  const [launches, setLaunches] = useState<CodexTaskLaunch[]>([]);
+  const [launches, setLaunches] = useState<LaunchRecord[]>([]);
   const [targetId, setTargetId] = useState("");
   const [cwd, setCwd] = useState("");
   const [error, setError] = useState("");
@@ -111,7 +112,8 @@ export function CodexTasksModal({
   const unsettledLaunch = launches.some(
     (item) =>
       item.endpointId === endpointId &&
-      (item.status === "opening" || item.status === "unknown"),
+      (item.status === "opening" ||
+        (item.status === "unknown" && !item.acknowledgedAt)),
   );
   const matchingAssociations = selected
     ? associations.filter(
@@ -342,6 +344,17 @@ export function CodexTasksModal({
       ]);
       if (response.launch.status === "opened" && response.launch.target)
         onOpenTarget(response.launch.target);
+    } catch (nextError) {
+      setError(errorText(nextError));
+    }
+  };
+  const acknowledge = async (requestId: string) => {
+    try {
+      const response = await codexTasksApi.acknowledgeLaunch(requestId);
+      setLaunches((current) => [
+        response.launch,
+        ...current.filter((item) => item.requestId !== requestId),
+      ]);
     } catch (nextError) {
       setError(errorText(nextError));
     }
@@ -614,7 +627,7 @@ export function CodexTasksModal({
               </button>
               <p>
                 {unsettledLaunch
-                  ? "Unavailable until the existing launch attempt is reconciled."
+                  ? "Unavailable until the existing launch attempt is reconciled or explicitly acknowledged."
                   : endpoint?.freshLaunch
                     ? "Fresh launch opens a CLI view only; it never sends a prompt."
                     : `Unavailable: ${endpoint?.launchReason || "no selected endpoint"}`}
@@ -622,6 +635,11 @@ export function CodexTasksModal({
               <h3>RECENT LAUNCH ATTEMPTS</h3>
               {launches
                 .filter((item) => item.endpointId === endpoint?.id)
+                .sort(
+                  (first, second) =>
+                    (Date.parse(second.createdAt) || 0) -
+                    (Date.parse(first.createdAt) || 0),
+                )
                 .slice(0, 8)
                 .map((item) => (
                   <div className="codex-launch-row" key={item.requestId}>
@@ -637,13 +655,28 @@ export function CodexTasksModal({
                         RECONCILE
                       </button>
                     ) : null}
-                    {item.status === "opened" && item.target ? (
+                    {(item.status === "opened" || item.status === "unknown") &&
+                    item.target ? (
                       <button
                         type="button"
                         onClick={() => onOpenTarget(item.target!)}
                       >
                         OPEN TARGET
                       </button>
+                    ) : null}
+                    {item.status === "unknown" && !item.acknowledgedAt ? (
+                      <button
+                        type="button"
+                        onClick={() => void acknowledge(item.requestId)}
+                      >
+                        I INSPECTED THIS ATTEMPT / ALLOW ANOTHER CLI VIEW
+                      </button>
+                    ) : null}
+                    {item.status === "unknown" && item.acknowledgedAt ? (
+                      <small>
+                        Unknown attempt acknowledged; this does not cancel an
+                        existing view or retry it.
+                      </small>
                     ) : null}
                   </div>
                 ))}

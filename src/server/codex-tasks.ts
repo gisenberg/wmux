@@ -6,7 +6,7 @@ import type { StateStore } from "./state.js";
 import type { MachineConfig } from "./types.js";
 import { CodexTaskCatalog, type CodexCatalogEndpointConfig } from "./codex-task-catalog.js";
 import { CodexTaskAssociations } from "./codex-task-associations.js";
-import { CodexTaskLaunches } from "./codex-task-launches.js";
+import { CodexTaskLaunches, CodexCliViewUncertainError } from "./codex-task-launches.js";
 
 export class CodexTasksService {
   readonly catalog: CodexTaskCatalog;
@@ -79,15 +79,17 @@ export async function openCodexCliView(input: {
   const script = path.join(root, "skills/wmux/scripts/wmuxctl.py");
   const args = [script, "tui", "codex", input.machineId, "--directory", input.cwd,
     "--no-prompt", "--codex-remote", `unix://${input.socketPath}`];
-  const output = await new Promise<string>((resolve, reject) => {
+  const response = await new Promise<{ output: string; failed: boolean }>((resolve) => {
     execFile("python3", args, { timeout: 100_000, maxBuffer: 256 * 1024,
-      env: { ...process.env, WMUX_URL: input.baseUrl, WMUX_AUTOMATION_TOKEN: input.token || "wmux-auth-disabled" } },
-    (error, stdout) => error ? reject(new Error("CLI view submission uncertain; inspect the created workspace before retrying.")) : resolve(stdout));
+      env: { ...process.env, WMUX_URL: input.baseUrl, WMUX_AUTOMATION_TOKEN: input.token || "wmux-auth-disabled-placeholder-000000000000" } },
+    (error, stdout) => resolve({ output: stdout, failed: Boolean(error) }));
   });
   let result: Record<string, unknown>;
-  try { result = JSON.parse(output) as Record<string, unknown>; } catch { throw new Error("CLI view result unavailable"); }
+  try { result = JSON.parse(response.output) as Record<string, unknown>; } catch { throw new Error("CLI view result unavailable"); }
   for (const key of ["workspaceId", "tabId", "paneId"] as const) {
     if (typeof result[key] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(result[key])) throw new Error("CLI view identity unavailable");
   }
-  return { workspaceId: result.workspaceId as string, tabId: result.tabId as string, paneId: result.paneId as string };
+  const target = { workspaceId: result.workspaceId as string, tabId: result.tabId as string, paneId: result.paneId as string };
+  if (response.failed) throw new CodexCliViewUncertainError(target);
+  return target;
 }

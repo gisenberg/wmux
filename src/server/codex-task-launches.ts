@@ -21,6 +21,7 @@ const launchSchema = requestSchema.extend({
   target: targetSchema.nullable(),
   reason: z.string().max(512).nullable(),
   createdAt: z.string().datetime(),
+  acknowledgedAt: z.string().datetime().optional(),
 }).strict();
 const envelopeSchema = z.object({
   schemaVersion: z.literal(CURRENT_CODEX_TASK_LAUNCH_SCHEMA_VERSION),
@@ -38,7 +39,17 @@ export class UnsupportedCodexTaskLaunchVersionError extends Error {
 
 export class CodexTaskLaunchConflictError extends Error {
   readonly statusCode = 409;
-  constructor() { super("Codex task launch request id is already bound to different input"); this.name = "CodexTaskLaunchConflictError"; }
+  constructor(message = "Codex task launch request id is already bound to different input") { super(message); this.name = "CodexTaskLaunchConflictError"; }
+}
+
+/** The helper observed a concrete wmux display target, but cannot prove the native CLI outcome. */
+export class CodexCliViewUncertainError extends Error {
+  readonly target: CodexTaskTarget;
+  constructor(target: CodexTaskTarget) {
+    super("Codex CLI view outcome is uncertain");
+    this.name = "CodexCliViewUncertainError";
+    this.target = structuredClone(targetSchema.parse(target));
+  }
 }
 
 export interface CodexTaskLaunchesOptions {
@@ -74,6 +85,15 @@ export class CodexTaskLaunches {
     return structuredClone(this.launches);
   }
 
+  acknowledge(requestId: string): CodexTaskLaunch {
+    const id = z.string().uuid().parse(requestId);
+    const launch = this.launches.find((item) => item.requestId === id);
+    if (!launch) throw new Error("Codex task launch was not found");
+    if (launch.status !== "unknown") throw new CodexTaskLaunchConflictError("Only an unknown Codex task launch may be acknowledged");
+    if (launch.acknowledgedAt) return structuredClone(launch);
+    return this.replace({ ...launch, acknowledgedAt: new Date().toISOString() });
+  }
+
   launch(input: { requestId: string; endpointId: string; endpointIdentity?: string; cwd: string }): Promise<CodexTaskLaunch> {
     const request = requestSchema.parse(input);
     const existing = this.launches.find((item) => item.requestId === request.requestId);
@@ -102,10 +122,11 @@ export class CodexTaskLaunches {
     try {
       const target = targetSchema.parse(await this.options.open(opening.endpointId, opening.cwd, opening.requestId));
       return this.replace({ ...opening, status: "opened", target, reason: null });
-    } catch {
+    } catch (error) {
       // The child can have created a native view before a transport failure.
       // Do not retry it or infer a native task identity.
-      return this.replace({ ...opening, status: "unknown", target: null, reason: "launch_outcome_unknown" });
+      const target = error instanceof CodexCliViewUncertainError ? error.target : null;
+      return this.replace({ ...opening, status: "unknown", target, reason: "launch_outcome_unknown" });
     }
   }
 

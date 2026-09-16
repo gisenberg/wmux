@@ -42,6 +42,7 @@ const routeCases: Array<[string, string, string]> = [
   ["codex-task-association-remove", "DELETE", "/api/codex-task-associations/association"],
   ["codex-task-launch", "POST", "/api/codex-task-launches"],
   ["codex-task-launches", "GET", "/api/codex-task-launches"],
+  ["codex-task-launch-acknowledge", "POST", "/api/codex-task-launches/123e4567-e89b-12d3-a456-426614174000/acknowledge"],
   ["codex-task-launch-read", "GET", "/api/codex-task-launches/123e4567-e89b-12d3-a456-426614174000"],
   ["codex-binding-issue", "POST", "/api/codex-bindings"],
   ["codex-binding-observation", "POST", "/api/codex-bindings/observation"],
