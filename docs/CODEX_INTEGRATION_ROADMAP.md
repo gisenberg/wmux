@@ -4,9 +4,9 @@ Execution update — 2026-09-16: the user authorized M6 as the combined release
 target. M3–M5 are implemented together in a pushed, unmerged candidate now
 deployed for one combined M6 UAT checkpoint and a new mixed-task overnight soak.
 Live automation now covers native fresh views, later-turn notification
-deduplication, catalog inspection and browser association persistence. Remaining
-human checks are native trust/input decisions and personal desktop/phone
-usability; the 24-hour mixed-task gate is still running automatically.
+deduplication, catalog inspection and browser association persistence. The user
+confirmed the native trust interaction on 2026-09-16. Personal desktop/phone
+usability remains direct UAT; the 24-hour mixed-task gate is still running automatically.
 Final deployed runtime `e232290` passed the external full check and all three
 catalog browser projects after workstation maintenance; served browser and
 native read-only checks also passed. The soak's storage interruption remains

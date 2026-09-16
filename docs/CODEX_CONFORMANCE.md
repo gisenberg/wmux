@@ -59,10 +59,10 @@ Final runtime `e232290` also fixes long-name overflow in mobile catalog controls
 while retaining full selected identities. Its external full check passed 1,170
 tests with eight skips; all three catalog browser projects and final served
 desktop/mobile checks passed after workstation maintenance.
-Only personal desktop/physical-mobile usability and native trust/input decisions
-remain direct UAT; the new 24-hour mixed-task soak remains an automated pending
+The user confirmed the native trust interaction on 2026-09-16. Only personal
+desktop/physical-mobile usability remains direct UAT; the new 24-hour mixed-task soak remains an automated pending
 gate. See the [M6 acceptance ledger](CODEX_M6_UAT.md) for exact evidence and the
-two remaining human checks. Automated success does not itself accept M6.
+remaining human check. Automated success does not itself accept M6.
 
 Resume is deliberately unavailable: existing metadata cannot prove exclusive
 client ownership. A fresh view returns exact wmux pane identity, not inferred

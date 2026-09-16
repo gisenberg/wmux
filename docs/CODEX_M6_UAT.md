@@ -11,21 +11,25 @@ Open **Codex tasks** from the desktop command palette, or mobile
 **Chat → Actions → Open Codex tasks**. Configuration, authority boundaries and
 recovery details are in the [catalog runbook](CODEX_TASK_CATALOG.md).
 
-## Direct interaction still required
+## Direct interaction acceptance
 
 The functional cases below have been exercised by the agent. The user does not
 need to repeat API, persistence, deduplication, fault or layout assertions.
-Only these interaction checks remain for the combined checkpoint:
+The combined checkpoint tracks these interaction checks:
 
 | Case | User action and expected result | Decision |
 | --- | --- | --- |
-| M6-H1 — Native decision and input | Open the retained **M6 UAT — host native trust** views on each configured Linux host. Make your own trust decision; wmux must not answer it. If you continue, confirm the native prompt feels usable with your keyboard/paste workflow. In **Codex tasks**, inspect the corresponding uncertain attempt through **Open target**, then acknowledge that inspection. Acknowledgement does not retry or cancel the launch. | Pending direct interaction |
-| M6-H2 — Personal desktop/mobile workflow | On your desktop and physical phone, find a task you recognize and try the catalog's inspection/association controls. Judge whether names, host identity, status, explanations and touch targets are understandable and usable. Mobile emulation cannot establish physical keyboard, touch or assistive-technology experience. | Pending direct interaction |
+| M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
+| M6-H2 — Personal desktop/mobile workflow | On your desktop and physical phone, find a task you recognize and try the catalog's inspection/association controls, including **Open target** for an uncertain launch. Judge whether names, host identity, status, explanations, native keyboard/paste interaction and touch targets are understandable and usable. Mobile emulation cannot establish physical keyboard, touch or assistive-technology experience. | Pending direct interaction |
 
 The retained native trust prompts show the requested directories. No trust,
 login or approval response was automated. Prior M0–M2 acceptance, including
 sidebar actions, unpin, mobile appearance and diagnostics clarity, is retained;
 this checkpoint concerns the new catalog and launch flow.
+The trust confirmation records the user's interaction only; it does not imply
+acceptance of the remaining usability check or confirmation that a launch
+attempt was acknowledged. Acknowledgement behavior was already qualified by
+automation and does not retry or cancel a launch.
 
 ## Functional cases completed by automation
 
