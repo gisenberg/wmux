@@ -1497,11 +1497,14 @@ def classify_codex_attachment_surface(replay: str) -> str:
     lowered = current.lower()
     if re.search(r"conversation (?:is )?open in another app|already open in another app|(?:connection )?disconnected|failed to (?:connect|resume)|attachment (?:failed|error)", lowered):
         return "error"
-    # Resuming history can scroll the startup header above the active composer.
-    if "openai codex" not in clean_terminal_text(replay).lower():
+    # History and spinner repaints can move startup controls above the last
+    # screen rows. The bounded fresh-child replay retains that positive proof;
+    # current connection errors still veto it above.
+    rendered = clean_terminal_text(replay).lower()
+    if "openai codex" not in rendered:
         return "unknown"
-    composer = any(marker in lowered for marker in ("›", "type your message", "ask anything", "enter to send", "send message"))
-    menu = any(marker in lowered for marker in ("model", "new chat", "context", "tokens", "esc"))
+    composer = any(marker in rendered for marker in ("›", "type your message", "ask anything", "enter to send", "send message"))
+    menu = any(marker in rendered for marker in ("model", "new chat", "context", "tokens", "esc"))
     return "ready" if composer and menu else "unknown"
 
 

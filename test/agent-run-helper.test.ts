@@ -16,12 +16,12 @@ posixTest("wmuxctl attachment surface gate accepts a live Codex composer and rej
   const probe = `
 import importlib.util,json,sys
 spec=importlib.util.spec_from_file_location('wmuxctl',sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-for value in ('OpenAI Codex\\nmodel: gpt\\n› Type your message', 'OpenAI Codex\\nconversation open in another app\\n›', 'old error text\\nnot a tui'):
+for value in ('OpenAI Codex\\nmodel: gpt\\n› Type your message', 'OpenAI Codex\\nconversation open in another app\\n›', 'old error text\\nnot a tui', 'OpenAI Codex\\nmodel: gpt\\n› Type your message\\n' + 'Working repaint\\n' * 30):
  print(module.classify_codex_attachment_surface(value))
 `;
   const completed = spawnSync("python3", ["-c", probe, controller], { encoding: "utf8" });
   assert.equal(completed.status, 0, completed.stderr);
-  assert.deepEqual(completed.stdout.trim().split(/\r?\n/), ["ready", "error", "unknown"]);
+  assert.deepEqual(completed.stdout.trim().split(/\r?\n/), ["ready", "error", "unknown", "ready"]);
 });
 
 posixTest("attachment receipt selects the listening cli socket inode over a same-name accepted connection", () => {
