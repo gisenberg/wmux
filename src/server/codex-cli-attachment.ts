@@ -119,7 +119,7 @@ export async function openCodexAttachment(input: { baseUrl: string; token: strin
   catch { throw new Error("codex_attachment_descriptor_unavailable"); }
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const script = path.join(root, "skills/wmux/scripts/wmuxctl.py");
-  const args = [script, "tui", "codex", input.machineId, "--directory", proof.private.cwd, "--no-prompt", "--codex-attach-file", descriptor];
+  const args = [script, "tui", "codex", input.machineId, "--directory", proof.private.cwd, "--no-prompt", "--user-created", "--codex-attach-file", descriptor];
   const response = await new Promise<{ output: string; failed: boolean }>(resolve => execFile("python3", args, { timeout: 100_000, maxBuffer: 256 * 1024, env: { ...process.env, WMUX_URL: input.baseUrl, WMUX_AUTOMATION_TOKEN: input.token || "wmux-auth-disabled-placeholder-000000000000" } }, (error, stdout) => resolve({ output: stdout, failed: Boolean(error) })));
   const body = object((() => { try { return JSON.parse(response.output); } catch { return {}; } })());
   const opened = { ...target, workspaceId: id(body.workspaceId), tabId: id(body.tabId), paneId: id(body.paneId) };

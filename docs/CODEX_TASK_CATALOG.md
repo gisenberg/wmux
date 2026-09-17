@@ -132,11 +132,13 @@ stale attestation, a replaced endpoint, an active queue, a different server, or
 any unavailable launcher condition. The browser never supplies a trust answer.
 Browsing and display associations do not grant title ownership.
 
-Workspaces opened through **Open in CLI**, including explicit recovery opens,
+Workspaces opened through **Open in CLI** or **Start new task**, including explicit recovery opens,
 are user-created and do not show the agent **AI** badge. They do not inherit
 agent-parent context or automatic cleanup. Existing catalog attachment targets
-are corrected from their exact recorded workspace/tab/pane identities on startup;
-unrelated agent-created workspaces retain their provenance and badges.
+are corrected from their exact recorded workspace/tab/pane identities on startup,
+including removal of inherited agent-parent placement. The AI badge and automatic
+parent/child rules describe a working agent launching a workspace, not the runtime
+inside it. Unrelated agent-created workspaces retain their provenance and badges.
 
 When an attested request creates a view, wmux initializes its default
 workspace and tab titles from that task's current native name. Independent

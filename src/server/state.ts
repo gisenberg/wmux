@@ -353,8 +353,11 @@ export class StateStore extends EventEmitter {
   }
 
   markWorkspaceUserCreated(workspaceId: string): void {
+    if (this.requireWorkspace(workspaceId).createdBy !== "agent") return;
+    while (this.requireWorkspace(workspaceId).parentWorkspaceId) {
+      if (!this.reorderWorkspace(workspaceId, undefined, "out-of")) throw new Error("workspace could not leave agent ancestry");
+    }
     const workspace = this.requireWorkspace(workspaceId);
-    if (workspace.createdBy !== "agent") return;
     delete workspace.createdBy;
     delete workspace.cleanupPolicy;
     delete workspace.cleanupAt;

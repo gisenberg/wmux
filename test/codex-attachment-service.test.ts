@@ -90,8 +90,8 @@ test("uncertain startup and recovered attempts initialize only default titles, i
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attach-recover-name-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
-  const workspace = state.createWorkspace("local", undefined, "agent"), tab = workspace.tabs[0]!;
   const unrelated = state.createWorkspace("local", undefined, "agent");
+  const workspace = state.createWorkspace("local", undefined, "agent", unrelated.id), tab = workspace.tabs[0]!;
   const target = { workspaceId: workspace.id, tabId: tab.id, paneId: tab.panes[0]!.id };
   const catalog = new CodexTaskCatalog(() => machines, [{ id: "native", label: "Native", machineId: "local", transport: "local", socketPath: "/private/native.sock", managedLaunch: { launcherPath: "/private/launcher", deploymentPath: "/private/release" } }]);
   const generation = "a".repeat(64), threadId = "123e4567-e89b-12d3-a456-426614174000";
@@ -116,6 +116,7 @@ test("uncertain startup and recovered attempts initialize only default titles, i
     name = "Current native task name";
     service = new CodexTasksService(restored, () => machines, options);
     assert.notEqual(restored.findPaneContext(target.paneId)!.workspace.createdBy, "agent");
+    assert.equal(restored.findPaneContext(target.paneId)!.workspace.parentWorkspaceId, undefined);
     assert.equal(restored.snapshot().workspaces.find(w => w.id === unrelated.id)!.createdBy, "agent");
     restored.flush();
     const persisted = new StateStore(machines, path.join(directory, "state.json"));

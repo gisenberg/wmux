@@ -1783,7 +1783,7 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     public_base = safe_public_url(args.public_url, client.url)
     initial_machine = require_posix_machine(client, args.machine)
     initial_identity = machine_identity(initial_machine)
-    if args.codex_attach_file:
+    if args.user_created:
         workspace, _state = client.create_workspace(args.machine, created_by="user")
     else:
         workspace, _state = client.create_workspace(args.machine, invoking_parent_identity(), False)
@@ -2775,6 +2775,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--opencode-agent", default="", help="optional OpenCode agent name")
     tui.add_argument("--codex-remote", default="", help="existing private unix:/// Codex App Server socket (Codex only)")
     tui.add_argument("--codex-attach-file", default="", help=argparse.SUPPRESS)
+    tui.add_argument("--user-created", action="store_true", help="create a user-initiated workspace without agent ancestry or cleanup")
     tui.add_argument("--timeout", type=float, default=30, help="prompt/activity verification timeout in seconds")
     tui.add_argument("--ready-timeout", type=float, default=30, help="shell/helper readiness timeout in seconds")
     tui.add_argument("--gate-timeout", type=float, default=5, help="post-start safety-gate observation in seconds (default: 5)")

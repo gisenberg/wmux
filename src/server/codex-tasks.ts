@@ -104,9 +104,9 @@ export class CodexTasksService {
       },
     });
     // Older browser-initiated CLI views inherited the generic agent helper's
-    // provenance. Repair only exact recorded attachment targets.
+    // provenance. Repair only exact recorded catalog launch targets.
     for (const launch of this.launches.list()) {
-      if (launch.operation !== "attach" || !launch.target) continue;
+      if (!launch.target) continue;
       const found = state.findPaneContext(launch.target.paneId);
       if (found?.workspace.id === launch.target.workspaceId && found.tab.id === launch.target.tabId)
         state.markWorkspaceUserCreated(found.workspace.id);
@@ -177,7 +177,7 @@ export async function openCodexCliView(input: {
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const script = path.join(root, "skills/wmux/scripts/wmuxctl.py");
   const args = [script, "tui", "codex", input.machineId, "--directory", input.cwd,
-    "--no-prompt", "--codex-remote", `unix://${input.socketPath}`];
+    "--no-prompt", "--user-created", "--codex-remote", `unix://${input.socketPath}`];
   const response = await new Promise<{ output: string; failed: boolean }>((resolve) => {
     execFile("python3", args, { timeout: 100_000, maxBuffer: 256 * 1024,
       env: { ...process.env, WMUX_URL: input.baseUrl, WMUX_AUTOMATION_TOKEN: input.token || "wmux-auth-disabled-placeholder-000000000000" } },
