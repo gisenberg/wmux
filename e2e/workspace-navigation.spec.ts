@@ -4,6 +4,7 @@ import { e2eRegistrationToken } from "./config-auth.js";
 test("navigates, persists, targets spaces, and moves nested workspaces", async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
   const { child, root } = await createNestedWorkspacePair(request);
+  let longOptionId: string | undefined;
   const rootPath = `/workspaces/${root.id}/tabs/${root.activeTabId}`;
   const isMobile = testInfo.project.name.startsWith("mobile-");
   const openWorkspaceNavigation = async () => {
@@ -43,6 +44,17 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
   };
 
   try {
+    const longOptionResponse = await request.post("/api/workspaces", {
+      data: { machineId: "local" },
+    });
+    expect(longOptionResponse.ok()).toBeTruthy();
+    const longOption = (await longOptionResponse.json() as {
+      workspace: E2eWorkspace;
+    }).workspace;
+    longOptionId = longOption.id;
+    expect((await request.post(`/api/workspaces/${longOption.id}/title`, {
+      data: { title: "選択先 👩🏽‍💻 e\u0301 ".repeat(8) },
+    })).ok()).toBeTruthy();
     await page.goto(rootPath);
     await awaitAppShell(page);
     await openWorkspaceNavigation();
@@ -151,6 +163,7 @@ test("navigates, persists, targets spaces, and moves nested workspaces", async (
       await undoChildClose();
     }
   } finally {
+    if (longOptionId) await request.delete(`/api/workspaces/${longOptionId}`);
     await request.delete(`/api/workspaces/${child.id}`);
     await request.delete(`/api/workspaces/${root.id}`);
   }

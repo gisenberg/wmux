@@ -85,6 +85,17 @@ export const codexTasksApi = {
       method: "POST",
       body: JSON.stringify({ requestId, endpointId, endpointIdentity, cwd }),
     }),
+  attach: (input: {
+    requestId: string;
+    endpointId: string;
+    endpointIdentity: string;
+    threadId: string;
+    generation: string;
+  }) =>
+    request<{ launch: CodexTaskLaunch }>("/api/codex-task-launches", {
+      method: "POST",
+      body: JSON.stringify({ operation: "attach", ...input }),
+    }),
   launches: () =>
     request<{ launches: CodexTaskLaunch[] }>("/api/codex-task-launches"),
   reconcileLaunch: (requestId: string) =>

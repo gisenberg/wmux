@@ -6,16 +6,25 @@ import { z } from "zod";
 import type { CodexTask, CodexTaskDetail, CodexTaskEndpoint, CodexTaskPage, CodexTaskTurn } from "../shared/codex-tasks.js";
 import type { MachineConfig } from "./types.js";
 import { queryCodexCatalog } from "./codex-catalog-rpc.js";
+import { attestCodexAttachment, type AttachmentAttestation } from "./codex-attachment-route.js";
 
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/);
 const absolute = z.string().min(1).max(4096).refine(value => value.startsWith("/") && !/[\x00-\x1f\x7f]/.test(value));
+const managedLaunchSchema = z.object({
+  // These are absolute installation paths supplied by the private
+  // catalog.  They are never returned by the browser endpoint.
+  launcherPath: absolute,
+  deploymentPath: absolute,
+}).strict();
 const endpointSchema = z.object({
   id, label: z.string().min(1).max(100).regex(/^[^\x00-\x1f\x7f]+$/), machineId: id,
   transport: z.enum(["local", "ssh"]), socketPath: absolute,
   bridgePath: absolute.optional(), nodePath: absolute.optional(),
   allowFreshLaunch: z.boolean().optional(),
+  managedLaunch: managedLaunchSchema.optional(),
 }).strict();
 export type CodexCatalogEndpointConfig = z.infer<typeof endpointSchema>;
+export type CodexManagedLaunchConfig = z.infer<typeof managedLaunchSchema>;
 type Query = Parameters<typeof queryCodexCatalog>[0];
 export class CodexCatalogError extends Error {
   constructor(readonly code: string, readonly status = 503) { super(code); }
@@ -116,6 +125,22 @@ export class CodexTaskCatalog {
     const config = this.configs.get(endpointId)!;
     if (!config.allowFreshLaunch || !endpoint.freshLaunch) throw new CodexCatalogError("fresh_launch_disabled", 409);
     return structuredClone(config);
+  }
+  /** Private launch material for exact-existing-task attachment.  Callers must
+   * attest it immediately before spawning; it is never browser metadata. */
+  attachmentConfig(endpointId: string): CodexCatalogEndpointConfig {
+    this.endpoint(endpointId);
+    const config = this.configs.get(endpointId)!;
+    if (config.transport !== "local") throw new CodexCatalogError("attachment_ssh_unsupported", 409);
+    if (!config.managedLaunch) throw new CodexCatalogError("attachment_unconfigured", 409);
+    return structuredClone(config);
+  }
+  /** Private preflight for an exact existing-task launch.  This is read-only
+   * and intentionally does not resume or otherwise load a thread. */
+  async attestAttachment(endpointId: string, threadId: string): Promise<AttachmentAttestation> {
+    const config = this.attachmentConfig(endpointId);
+    return attestCodexAttachment({ endpoint: config, endpoints: [...this.configs.values()], threadId,
+      probe: value => this.localQuery({ ...value, operation: "attachment" }) });
   }
   identity(endpointId: string): string | null {
     const config = this.configs.get(endpointId), endpoint = this.endpoints.get(endpointId);

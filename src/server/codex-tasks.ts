@@ -1,12 +1,29 @@
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { CodexTaskTarget } from "../shared/codex-tasks.js";
+import type { CodexTaskTarget, CodexTaskDetail } from "../shared/codex-tasks.js";
 import type { StateStore } from "./state.js";
 import type { MachineConfig } from "./types.js";
-import { CodexTaskCatalog, type CodexCatalogEndpointConfig } from "./codex-task-catalog.js";
+import { CodexTaskCatalog, CodexCatalogError, type CodexCatalogEndpointConfig } from "./codex-task-catalog.js";
 import { CodexTaskAssociations } from "./codex-task-associations.js";
-import { CodexTaskLaunches, CodexCliViewUncertainError } from "./codex-task-launches.js";
+import { CodexTaskLaunches, CodexCliViewUncertainError, type CodexAttachmentRequest } from "./codex-task-launches.js";
+import type { AttachmentAttestation } from "./codex-attachment-route.js";
+
+export const attachmentReason = (reason: string): string => ({
+  attachment_unconfigured: "This endpoint has no qualified managed CLI route. Configure and qualify its managed launcher before attaching.",
+  attachment_ssh_unsupported: "Existing-task attachment currently requires a configured local Linux execution host. This SSH route is not qualified.",
+  attachment_platform_unsupported: "Existing-task attachment is qualified only on Linux.",
+  attachment_route_unavailable: "The managed route or guard readiness check is unavailable. Inspect the installed launcher and guard; no fallback was used.",
+  attachment_route_untrusted: "The installed guard or account does not match this endpoint. Restore a qualified route before attaching.",
+  attachment_native_unavailable: "Native ownership or queue inspection failed. Reconnect the owning server and refresh.",
+  attachment_not_loaded: "This task is saved but not loaded on this server. Open it in its owning native client; this action will not load stored work.",
+  attachment_input_unavailable: "The native server does not permit direct input to this task.",
+  attachment_queue_not_empty: "Queued input is present or its state is unknown. Review it in the native client before opening another CLI.",
+  attachment_owner_unknown: "Another configured owner could not be checked. Restore its connection and refresh; no executor was selected.",
+  attachment_owner_ambiguous: "This UUID is loaded on multiple native servers. Resolve the owning server before attaching.",
+  attachment_generation_changed: "The server or managed route changed since inspection. Refresh the task and review its current route.",
+  attachment_controller_unavailable: "The local CLI controller is unavailable. Configure a local HTTP listener before attaching.",
+}[reason] ?? "The task's managed route could not be verified. Refresh or inspect its native client.");
 
 export class CodexTasksService {
   readonly catalog: CodexTaskCatalog;
@@ -15,14 +32,19 @@ export class CodexTasksService {
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private cursor = 0;
+  private readonly attachmentDisabledReason?: string;
   constructor(state: StateStore, machines: () => MachineConfig[], options: {
     endpoints?: CodexCatalogEndpointConfig[];
     catalog?: CodexTaskCatalog;
     open?: (endpointId: string, cwd: string, requestId: string) => Promise<CodexTaskTarget>;
+    openAttached?: (request: CodexAttachmentRequest, attestation: AttachmentAttestation) => Promise<CodexTaskTarget>;
+    verifyAttached?: (request: CodexAttachmentRequest, target: CodexTaskTarget, attestation: AttachmentAttestation) => Promise<boolean>;
+    recoverAttached?: (request: CodexAttachmentRequest) => CodexTaskTarget | null;
     pollIntervalMs?: number;
     freshLaunchDisabledReason?: string;
   } = {}) {
     this.catalog = options.catalog ?? new CodexTaskCatalog(machines, options.endpoints);
+    this.attachmentDisabledReason = options.freshLaunchDisabledReason;
     if (options.freshLaunchDisabledReason) this.catalog.disableFreshLaunch(options.freshLaunchDisabledReason);
     const persistent = this.catalog.listEndpoints().length > 0;
     this.associations = new CodexTaskAssociations({
@@ -49,6 +71,21 @@ export class CodexTasksService {
         }
         return options.open(endpointId, cwd, requestId);
       },
+      openAttached: async request => {
+        const attestation = await this.requireAttachment(request);
+        if (!options.openAttached) throw new Error("Attachment controller unavailable");
+        return options.openAttached(request, attestation);
+      },
+      recoverAttached: options.recoverAttached,
+      verifyAttached: async (request, target) => {
+        try {
+          const found = state.findPaneContext(target.paneId);
+          const config = this.catalog.attachmentConfig(request.endpointId);
+          if (!found || found.workspace.id !== target.workspaceId || found.tab.id !== target.tabId || found.pane.machineId !== config.machineId) return false;
+          const attestation = await this.requireAttachment(request);
+          return await options.verifyAttached?.(request, target, attestation) === true;
+        } catch { return false; }
+      },
     });
     const poll = async (): Promise<void> => {
       try {
@@ -70,6 +107,33 @@ export class CodexTasksService {
     if (persistent) { this.timer = setTimeout(poll, options.pollIntervalMs ?? 10_000); this.timer.unref(); }
   }
   close(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); }
+
+  async requireAttachment(request: CodexAttachmentRequest): Promise<AttachmentAttestation> {
+    if (this.attachmentDisabledReason) throw new CodexCatalogError("attachment_controller_unavailable", 409);
+    if (this.catalog.identity(request.endpointId) !== request.endpointIdentity) throw new CodexCatalogError("endpoint_identity_changed", 409);
+    const attestation = await this.catalog.attestAttachment(request.endpointId, request.threadId);
+    if (!attestation.public.enabled || !attestation.private) throw new CodexCatalogError(attestation.public.reason ?? "attachment_route_unavailable", 409);
+    if (attestation.public.generation !== request.generation) throw new CodexCatalogError("attachment_generation_changed", 409);
+    return attestation;
+  }
+
+  async detail(endpointId: string, threadId: string, history = false): Promise<CodexTaskDetail> {
+    const detail = await this.catalog.read(endpointId, threadId, history);
+    if (detail.task.stale) return { ...detail, resume: { enabled: false, reason: attachmentReason("attachment_native_unavailable") } };
+    try {
+      if (this.attachmentDisabledReason) throw new CodexCatalogError("attachment_controller_unavailable");
+      const attestation = await this.catalog.attestAttachment(endpointId, threadId);
+      if (!attestation.public.enabled || !attestation.public.generation) {
+        return { ...detail, resume: { enabled: false, reason: attachmentReason(attestation.public.reason ?? "attachment_route_unavailable") } };
+      }
+      const generation = attestation.public.generation;
+      return { ...detail, resume: { enabled: true, generation,
+        reason: "This opens another view of the same loaded task. Active work continues; native input affects this shared task. Ownership and queue checks are not an atomic lock.",
+        target: await this.launches.verifiedTarget(detail.task.endpointIdentity, generation, threadId) } };
+    } catch (error) {
+      return { ...detail, resume: { enabled: false, reason: attachmentReason(error instanceof CodexCatalogError ? error.code : "attachment_route_unavailable") } };
+    }
+  }
 }
 
 export async function openCodexCliView(input: {

@@ -13,6 +13,8 @@ import os
 import posixpath
 import re
 import socket
+import stat
+import shlex
 import ssl
 import sys
 import time
@@ -1150,6 +1152,19 @@ def validate_tui_args(args: argparse.Namespace) -> None:
             or any(ord(character) < 32 or ord(character) == 127 for character in args.codex_remote)
         ):
             raise SystemExit("wmuxctl: --codex-remote must be a unix:/// absolute socket URI")
+    if args.codex_attach_file:
+        if args.runtime != "codex":
+            raise SystemExit("wmuxctl: --codex-attach-file is only valid for Codex")
+        if args.codex_remote or args.model or args.opencode_agent:
+            raise SystemExit("wmuxctl: --codex-attach-file forbids remote, model, and agent overrides")
+        attachment = Path(args.codex_attach_file)
+        try:
+            entry = attachment.lstat()
+            if (not attachment.is_absolute() or not stat.S_ISREG(entry.st_mode) or entry.st_uid != os.getuid()
+                    or entry.st_mode & 0o077 or attachment.is_symlink()):
+                raise ValueError()
+        except (OSError, ValueError):
+            raise SystemExit("wmuxctl: --codex-attach-file must name a private server-created descriptor")
     if not posixpath.isabs(args.directory) or len(args.directory) > 4096 or "\x00" in args.directory:
         raise SystemExit("wmuxctl: TUI directory must be an absolute POSIX path of at most 4096 characters")
 
@@ -1476,6 +1491,23 @@ def classify_tui_gate(replay: str) -> str:
     return ""
 
 
+def classify_codex_attachment_surface(replay: str) -> str:
+    """Prove the live native surface from the active terminal tail only."""
+    current = "\n".join(active_tui_lines(replay))
+    lowered = current.lower()
+    if re.search(r"conversation (?:is )?open in another app|already open in another app|(?:connection )?disconnected|failed to (?:connect|resume)|attachment (?:failed|error)", lowered):
+        return "error"
+    # History and spinner repaints can move startup controls above the last
+    # screen rows. The bounded fresh-child replay retains that positive proof;
+    # current connection errors still veto it above.
+    rendered = clean_terminal_text(replay).lower()
+    if "openai codex" not in rendered:
+        return "unknown"
+    composer = any(marker in rendered for marker in ("›", "type your message", "ask anything", "enter to send", "send message"))
+    menu = any(marker in rendered for marker in ("model", "new chat", "context", "tokens", "esc"))
+    return "ready" if composer and menu else "unknown"
+
+
 def wait_for_tui_snapshot(
     client: WmuxClient,
     pane_id: str,
@@ -1557,7 +1589,19 @@ def launch_posix_tui(
         if not pane_read_timed_out(error):
             raise
         raise SystemExit(f"wmuxctl: timed out after {ready_timeout:g}s reading the pre-helper pane baseline") from error
-    submit_line(client, info["paneId"], f"wmux-agent-run tui {launch_run_id}", True, cols, rows)
+    attachment_file = (request_options or {}).get("codexAttachFile")
+    if attachment_file:
+        helper = Path(__file__).resolve().parents[3] / "scripts" / "wmux-agent-run"
+        try:
+            entry = helper.lstat()
+            if not stat.S_ISREG(entry.st_mode) or helper.is_symlink() or entry.st_uid != os.getuid() or entry.st_mode & 0o022:
+                raise ValueError()
+        except (OSError, ValueError):
+            raise SystemExit("wmuxctl: managed Codex attachment helper is not a trusted local file")
+        command = f"{shlex.quote(str(helper))} tui {shlex.quote(launch_run_id)}"
+    else:
+        command = f"wmux-agent-run tui {launch_run_id}"
+    submit_line(client, info["paneId"], command, True, cols, rows)
     ready = wait_for_helper_marker(
         client,
         info["paneId"],
@@ -1624,7 +1668,112 @@ def launch_posix_tui(
             raise SystemExit("wmuxctl: TUI remained at a safety prompt after trust response")
     elif gate:
         raise SystemExit(f"wmuxctl: {gate} prompt detected; refusing to automate it")
+    if attachment_file:
+        surface = classify_codex_attachment_surface(launched)
+        if surface == "error":
+            raise SystemExit("wmuxctl: managed Codex attachment reported a native startup error")
+        if surface != "ready":
+            raise SystemExit("wmuxctl: managed Codex attachment did not prove an active native TUI surface")
+        mark_codex_attachment_started(str(attachment_file))
     return launched
+
+
+def mark_codex_attachment_started(filename: str) -> None:
+    """Only the controller's completed startup/safety gate upgrades live proof."""
+    target = Path(filename).resolve()
+    try:
+        entry = target.lstat()
+        if not stat.S_ISREG(entry.st_mode) or entry.st_uid != os.getuid() or entry.st_mode & 0o077:
+            raise ValueError()
+        descriptor = json.loads(target.read_text(encoding="utf-8"))
+        receipt = Path(descriptor["receiptFile"]).resolve()
+        receipt_entry = receipt.lstat()
+        if not stat.S_ISREG(receipt_entry.st_mode) or receipt_entry.st_uid != os.getuid() or receipt_entry.st_mode & 0o077:
+            raise ValueError()
+        live = json.loads(receipt.read_text(encoding="utf-8"))
+        target_fields = descriptor.get("target", {})
+        if live.get("status") != "launching" or any(live.get(key) != target_fields.get(key) for key in ("workspaceId", "tabId", "paneId", "requestId", "threadId", "generation")):
+            raise ValueError()
+        native_pid = live.get("nativePid")
+        if not isinstance(native_pid, int) or native_pid <= 1:
+            raise ValueError()
+        try:
+            argv = [part.decode("utf-8", errors="strict") for part in Path(f"/proc/{native_pid}/cmdline").read_bytes().split(b"\0") if part]
+        except (OSError, UnicodeError):
+            raise ValueError()
+        # The launcher may exec the native CLI, so its executable can change;
+        # retain the route's immutable launch tuple and require this native
+        # process to still carry the exact resumed UUID at the safety gate.
+        if argv[-2:] != ["resume", target_fields.get("threadId")]:
+            raise ValueError()
+        live["nativeArgv"] = argv
+        live["status"] = "startup-gated"
+        temporary = receipt.with_name(receipt.name + f".tmp-{os.getpid()}")
+        with temporary.open("x", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(live, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(receipt)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise SystemExit("wmuxctl: managed Codex attachment proof could not be startup-gated") from error
+
+
+def invalidate_codex_attachment(filename: str) -> None:
+    """A post-start input can change the loaded task, so discard reusable proof."""
+    try:
+        descriptor = json.loads(Path(filename).read_text(encoding="utf-8"))
+        receipt = Path(descriptor["receiptFile"]).resolve()
+        live = json.loads(receipt.read_text(encoding="utf-8"))
+        live["invalidated"] = True
+        temporary = receipt.with_name(receipt.name + f".tmp-{os.getpid()}")
+        with temporary.open("x", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(live, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(receipt)
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        # The receipt is proof only; input must still reach the terminal.
+        pass
+
+
+def bind_codex_attachment_target(filename: str, info: dict[str, Any]) -> None:
+    """Bind the private descriptor to the pane created by this controller."""
+    try:
+        descriptor_file = Path(filename).resolve()
+        entry = descriptor_file.lstat()
+        if not stat.S_ISREG(entry.st_mode) or entry.st_uid != os.getuid() or entry.st_mode & 0o077:
+            raise ValueError()
+        descriptor = json.loads(descriptor_file.read_text(encoding="utf-8"))
+        target = descriptor.get("target")
+        if not isinstance(target, dict) or any(target.get(key) not in ("", None) for key in ("workspaceId", "tabId", "paneId")):
+            raise ValueError()
+        for key in ("workspaceId", "tabId", "paneId"):
+            value = info.get(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError()
+            target[key] = value
+        generation = target.get("generation")
+        thread = target.get("threadId")
+        if not isinstance(generation, str) or not isinstance(thread, str) or not thread:
+            raise ValueError()
+        # Receipt lookup is target keyed, so a later coalesced browser request
+        # can prove this same pane without inheriting the original request ID.
+        key = hashlib.sha256((target["paneId"] + "\0" + thread + "\0" + generation).encode()).hexdigest()
+        receipt = Path(descriptor.get("receiptFile", "")).resolve()
+        if not receipt.parent.is_dir() or receipt.parent != descriptor_file.parent:
+            raise ValueError()
+        descriptor["receiptFile"] = str(receipt.parent / f"{key}.json")
+        temporary = descriptor_file.with_name(descriptor_file.name + f".tmp-{os.getpid()}")
+        with temporary.open("x", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(descriptor, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(descriptor_file)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise SystemExit("wmuxctl: managed Codex attachment descriptor could not be bound to this pane") from error
 
 
 def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
@@ -1647,6 +1796,8 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
         # owned would correctly, but unintentionally, reject those updates.
         if args.title:
             client.set_workspace_title(info["workspaceId"], args.title)
+        if args.codex_attach_file:
+            bind_codex_attachment_target(args.codex_attach_file, info)
         wait_for_shell_ready(client, info["paneId"], info["machineId"], args.ready_timeout, args.cols, args.rows)
         # Recheck after pane creation so a dynamic registration cannot drift.
         current_machine = require_posix_machine(client, args.machine)
@@ -1664,11 +1815,13 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
             args.gate_timeout,
             args.cols,
             args.rows,
-            {"codexRemote": args.codex_remote} if args.codex_remote else None,
+            ({"codexAttachFile": args.codex_attach_file} if args.codex_attach_file else {"codexRemote": args.codex_remote} if args.codex_remote else None),
         )
         launch_digest = hashlib.sha256(launched.encode()).hexdigest()
         info["state"] = "ready"
         if prompt is not None:
+            if args.codex_attach_file:
+                invalidate_codex_attachment(args.codex_attach_file)
             paste = "\x1b[200~" + prompt + "\x1b[201~"
             if len(paste.encode()) >= 256 * 1024:
                 raise SystemExit("wmuxctl: bracketed prompt exceeds pane input limit")
@@ -2617,6 +2770,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--model", default="", help="optional runtime model")
     tui.add_argument("--opencode-agent", default="", help="optional OpenCode agent name")
     tui.add_argument("--codex-remote", default="", help="existing private unix:/// Codex App Server socket (Codex only)")
+    tui.add_argument("--codex-attach-file", default="", help=argparse.SUPPRESS)
     tui.add_argument("--timeout", type=float, default=30, help="prompt/activity verification timeout in seconds")
     tui.add_argument("--ready-timeout", type=float, default=30, help="shell/helper readiness timeout in seconds")
     tui.add_argument("--gate-timeout", type=float, default=5, help="post-start safety-gate observation in seconds (default: 5)")

@@ -43,6 +43,10 @@ const launchIdsKey = "wmux.codex-launch-attempt-ids";
 type RememberedLaunch = {
   requestId: string;
   endpointId: string;
+  operation?: "attach";
+  endpointIdentity?: string;
+  threadId?: string;
+  generation?: string;
   acknowledgedAt?: string;
 };
 const rememberedLaunches = (): RememberedLaunch[] => {
@@ -55,7 +59,11 @@ const rememberedLaunches = (): RememberedLaunch[] => {
         Boolean(item) &&
         typeof item === "object" &&
         typeof (item as RememberedLaunch).requestId === "string" &&
-        typeof (item as RememberedLaunch).endpointId === "string",
+        typeof (item as RememberedLaunch).endpointId === "string" &&
+        ((item as RememberedLaunch).operation !== "attach" ||
+          (typeof (item as RememberedLaunch).endpointIdentity === "string" &&
+            typeof (item as RememberedLaunch).threadId === "string" &&
+            typeof (item as RememberedLaunch).generation === "string")),
     );
   } catch {
     return [];
@@ -131,6 +139,17 @@ export function CodexTasksModal({
       (item.status === "opening" ||
         (item.status === "unknown" && !item.acknowledgedAt)),
   );
+  const unsettledExistingOpen = selected
+    ? launches.some(
+        (item) =>
+          item.operation === "attach" &&
+          item.endpointId === selected.endpointId &&
+          item.endpointIdentity === selected.endpointIdentity &&
+          item.threadId === selected.threadId &&
+          (item.status === "opening" ||
+            (item.status === "unknown" && !item.acknowledgedAt)),
+      )
+    : false;
   const matchingAssociations = selected
     ? associations.filter(
         (item) =>
@@ -174,6 +193,7 @@ export function CodexTasksModal({
         .map((item) => ({
           requestId: item.requestId,
           endpointId: item.endpointId,
+          ...(item.operation ? { operation: item.operation } : {}),
           status: "unknown" as const,
           target: null,
           reason: "launch outcome not listed; reconcile explicitly",
@@ -371,6 +391,72 @@ export function CodexTasksModal({
       launchBusy.current = false;
     }
   };
+  const openExisting = async (attempt?: RememberedLaunch) => {
+    if (launchBusy.current) return;
+    const candidate = attempt
+      ? {
+          requestId: attempt.requestId,
+          endpointId: attempt.endpointId,
+          endpointIdentity: attempt.endpointIdentity,
+          threadId: attempt.threadId,
+          generation: attempt.generation,
+        }
+      : detail?.resume.enabled && selected
+        ? {
+            requestId: uuid(),
+            endpointId: selected.endpointId,
+            endpointIdentity: selected.endpointIdentity,
+            threadId: selected.threadId,
+            generation: detail.resume.generation,
+          }
+        : null;
+    if (
+      !candidate?.requestId ||
+      !candidate.endpointIdentity ||
+      !candidate.threadId ||
+      !candidate.generation
+    )
+      return;
+    launchBusy.current = true;
+    const remembered: RememberedLaunch = { ...candidate, operation: "attach" };
+    rememberLaunch(remembered);
+    try {
+      const response = await codexTasksApi.attach({
+        requestId: candidate.requestId,
+        endpointId: candidate.endpointId,
+        endpointIdentity: candidate.endpointIdentity,
+        threadId: candidate.threadId,
+        generation: candidate.generation,
+      });
+      setLaunches((current) => [
+        response.launch,
+        ...current.filter((item) => item.requestId !== candidate.requestId),
+      ]);
+      if (response.launch.status === "opened" && response.launch.target)
+        onOpenTarget(response.launch.target);
+    } catch (nextError) {
+      setError(
+        `Open outcome is uncertain for ${candidate.requestId}. Retry this same request or reconcile it; it was not submitted as a new attempt. ${errorText(nextError)}`,
+      );
+      setLaunches((current) => [
+        {
+          requestId: candidate.requestId!,
+          endpointId: candidate.endpointId,
+          endpointIdentity: candidate.endpointIdentity,
+          operation: "attach",
+          threadId: candidate.threadId,
+          generation: candidate.generation,
+          status: "unknown",
+          target: null,
+          reason: "browser did not receive an existing-task open response",
+          createdAt: new Date().toISOString(),
+        },
+        ...current.filter((item) => item.requestId !== candidate.requestId),
+      ]);
+    } finally {
+      launchBusy.current = false;
+    }
+  };
   const reconcile = async (requestId: string) => {
     try {
       const response = await codexTasksApi.reconcileLaunch(requestId);
@@ -546,9 +632,33 @@ export function CodexTasksModal({
                 </dl>
                 {detail ? (
                   <>
-                    <p className="codex-resume-disabled">
-                      Resume disabled: {detail.resume.reason}
-                    </p>
+                    {detail.resume.enabled ? (
+                      <section className="codex-existing-open">
+                        <button
+                          type="button"
+                          disabled={unsettledExistingOpen}
+                          onClick={() => void openExisting()}
+                        >
+                          {detail.resume.target
+                            ? "OPEN TERMINAL"
+                            : "OPEN IN CLI"}
+                        </button>
+                        <small>
+                          {detail.resume.target
+                            ? "The verified terminal is rechecked before it is focused."
+                            : "Opens this exact loaded task in a managed CLI view."}
+                        </small>
+                        <p>
+                          {unsettledExistingOpen
+                            ? "An earlier open request is unresolved. Inspect the terminal identity, then acknowledge it before deliberately opening another client."
+                            : "Active tasks share the original task. Native input in any client affects that same task."}
+                        </p>
+                      </section>
+                    ) : (
+                      <p className="codex-resume-disabled">
+                        Open unavailable: {detail.resume.reason}
+                      </p>
+                    )}
                     <button
                       type="button"
                       onClick={() => void read(selected, true)}
@@ -576,12 +686,12 @@ export function CodexTasksModal({
                   </button>
                 )}
                 <section className="codex-association">
-                  <h3>DISPLAY ASSOCIATIONS</h3>
+                  <h3>OPTIONAL ACTIVITY ASSOCIATIONS</h3>
                   {matchingAssociations.map((association) => (
                     <div className="codex-association-row" key={association.id}>
                       <p>
                         {association.resolved
-                          ? "Associated display target"
+                          ? "Associated activity target"
                           : "Unresolved association"}
                         : {association.target.paneId}{" "}
                         {association.reason ? `— ${association.reason}` : ""}
@@ -654,8 +764,9 @@ export function CodexTasksModal({
                     ASSOCIATE NEW
                   </button>
                   <small>
-                    Association only selects a display target. It grants no
-                    title ownership or input authority.
+                    Associations optionally monitor activity and select a
+                    display target. They do not establish a terminal binding,
+                    title ownership, or input authority.
                   </small>
                 </section>
               </>
@@ -666,7 +777,7 @@ export function CodexTasksModal({
               </p>
             )}
             <section className="codex-launch">
-              <h3>NEW CLI VIEW</h3>
+              <h3>START NEW TASK</h3>
               <label>
                 Absolute working directory{" "}
                 <input
@@ -685,13 +796,13 @@ export function CodexTasksModal({
                 }
                 onClick={() => void launch()}
               >
-                NEW CLI VIEW
+                START NEW TASK
               </button>
               <p>
                 {unsettledLaunch
                   ? "Unavailable until the existing launch attempt is reconciled or explicitly acknowledged."
                   : endpoint?.freshLaunch
-                    ? "Fresh launch opens a CLI view only; it never sends a prompt."
+                    ? "Starts a separate CLI task view; it never sends a prompt."
                     : `Unavailable: ${endpoint?.launchReason || "no selected endpoint"}`}
               </p>
               <h3>RECENT LAUNCH ATTEMPTS</h3>
@@ -709,7 +820,14 @@ export function CodexTasksModal({
                       {item.status} · {item.requestId}
                     </span>
                     <small>{item.reason || item.createdAt}</small>
-                    {item.status === "opening" || item.status === "unknown" ? (
+                    {item.operation === "attach" ? (
+                      <button
+                        type="button"
+                        onClick={() => void reconcile(item.requestId)}
+                      >
+                        INSPECT ATTACHMENT
+                      </button>
+                    ) : item.status === "opening" || item.status === "unknown" ? (
                       <button
                         type="button"
                         onClick={() => void reconcile(item.requestId)}
@@ -717,7 +835,27 @@ export function CodexTasksModal({
                         RECONCILE
                       </button>
                     ) : null}
-                    {(item.status === "opened" || item.status === "unknown") &&
+                    {item.operation === "attach" &&
+                    item.status === "unknown" &&
+                    !item.acknowledgedAt ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void openExisting({
+                            requestId: item.requestId,
+                            endpointId: item.endpointId,
+                            operation: "attach",
+                            endpointIdentity: item.endpointIdentity,
+                            threadId: item.threadId,
+                            generation: item.generation,
+                          })
+                        }
+                      >
+                        RETRY SAME OPEN REQUEST
+                      </button>
+                    ) : null}
+                    {item.operation !== "attach" &&
+                    (item.status === "opened" || item.status === "unknown") &&
                     item.target ? (
                       <button
                         type="button"
@@ -731,12 +869,14 @@ export function CodexTasksModal({
                         type="button"
                         onClick={() => void acknowledge(item.requestId)}
                       >
-                        I INSPECTED THIS ATTEMPT / ALLOW ANOTHER CLI VIEW
+                        {item.operation === "attach"
+                          ? "I INSPECTED THIS ATTACHMENT / ALLOW ANOTHER OPEN"
+                          : "I INSPECTED THIS ATTEMPT / ALLOW ANOTHER CLI VIEW"}
                       </button>
                     ) : null}
                     {item.status === "unknown" && item.acknowledgedAt ? (
                       <small>
-                        Unknown attempt acknowledged; this does not cancel an
+                        Unknown {item.operation === "attach" ? "attachment" : "attempt"} acknowledged; this does not cancel an
                         existing view or retry it.
                       </small>
                     ) : null}

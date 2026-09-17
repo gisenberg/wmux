@@ -7,7 +7,11 @@ const target = z.object({ workspaceId: id, tabId: id, paneId: id }).strict();
 const listInput = z.object({ endpointId: id, cursor: z.string().max(4096).nullable().optional(), archived: z.boolean().optional() }).strict();
 const readInput = z.object({ endpointId: id, threadId: id, history: z.boolean().optional() }).strict();
 const associateInput = z.object({ id: z.string().uuid().optional(), endpointId: id, endpointIdentity: z.string().regex(/^[0-9a-f]{64}$/), threadId: id, target }).strict();
-const launchInput = z.object({ requestId: z.string().uuid(), endpointId: id, endpointIdentity: z.string().regex(/^[0-9a-f]{64}$/), cwd: z.string().max(4096).regex(/^\/[^\x00-\x1f\x7f]*$/) }).strict();
+const launchFields = { requestId: z.string().uuid(), endpointId: id, endpointIdentity: z.string().regex(/^[0-9a-f]{64}$/) };
+const launchInput = z.union([
+  z.object({ ...launchFields, operation: z.literal("fresh").optional(), cwd: z.string().max(4096).regex(/^\/[^\x00-\x1f\x7f]*$/) }).strict(),
+  z.object({ ...launchFields, operation: z.literal("attach"), threadId: z.string().uuid(), generation: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
+]);
 const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
   const result = schema.safeParse(body);
   if (!result.success) throw new HttpError(400, "invalid_codex_task_request");
@@ -39,7 +43,7 @@ export const codexTaskRoutes: readonly ApiRoute[] = [
   }),
   route("codex-task-read", "POST", "/api/codex-tasks/read", async ({ deps, readJsonBody, sendJson }) => {
     const body = parse(readInput, await readJsonBody(16 * 1024));
-    const detail = await deps.codexTasks.catalog.read(body.endpointId, body.threadId, body.history);
+    const detail = await deps.codexTasks.detail(body.endpointId, body.threadId, body.history);
     if (!detail.task.stale) deps.codexTasks.associations.observe(detail.task);
     sendJson(200, detail);
   }),
@@ -67,16 +71,18 @@ export const codexTaskRoutes: readonly ApiRoute[] = [
   route("codex-task-launch", "POST", "/api/codex-task-launches", async ({ deps, readJsonBody, sendJson }) => {
     const body = parse(launchInput, await readJsonBody(16 * 1024));
     if (deps.codexTasks.catalog.identity(body.endpointId) !== body.endpointIdentity) throw new HttpError(409, "endpoint_identity_changed");
-    deps.codexTasks.catalog.launchConfig(body.endpointId);
+    if (body.operation === "attach") await deps.codexTasks.requireAttachment(body);
+    else deps.codexTasks.catalog.launchConfig(body.endpointId);
     sendJson(200, { launch: await deps.codexTasks.launches.launch(body) });
   }),
   route("codex-task-launches", "GET", "/api/codex-task-launches", async ({ deps, sendJson }) => {
+    // History is not live terminal proof. Reconcile one selected attempt through its GET route.
     sendJson(200, { launches: deps.codexTasks.launches.list() });
   }),
   route("codex-task-launch-read", "GET", /^\/api\/codex-task-launches\/([A-Za-z0-9_-]{1,128})$/, async ({ deps, match, sendJson }) => {
     const launch = deps.codexTasks.launches.get(parse(z.string().uuid(), match![1]));
     if (!launch) throw new HttpError(404, "launch_not_found");
-    sendJson(200, { launch });
+    sendJson(200, { launch: await deps.codexTasks.launches.reconcile(launch) });
   }),
   route("codex-task-launch-acknowledge", "POST", /^\/api\/codex-task-launches\/([A-Za-z0-9_-]{1,128})\/acknowledge$/, async ({ deps, match, sendJson }) => {
     const requestId = parse(z.string().uuid(), match![1]);

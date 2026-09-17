@@ -7,7 +7,7 @@ const DEADLINE_MS = 4_000;
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CURSOR_MAX_LENGTH = 4_096;
 
-export type CodexCatalogOperation = "list" | "read" | "turns";
+export type CodexCatalogOperation = "list" | "read" | "turns" | "attachment";
 
 export interface CodexCatalogInput {
   socketPath: string;
@@ -52,7 +52,7 @@ const validateSocket = (socketPath: unknown): string => {
 };
 
 const requestFor = (input: CodexCatalogInput): { method: string; params: Record<string, unknown> } => {
-  if (!input || typeof input !== "object" || (input.operation !== "list" && input.operation !== "read" && input.operation !== "turns")) fail("invalid_request");
+  if (!input || typeof input !== "object" || !["list", "read", "turns", "attachment"].includes(input.operation)) fail("invalid_request");
   if (input.cursor !== undefined && input.cursor !== null && (typeof input.cursor !== "string" || input.cursor.length > CURSOR_MAX_LENGTH)) fail("invalid_request");
   if (input.archived !== undefined && typeof input.archived !== "boolean") fail("invalid_request");
   if (input.operation === "list") {
@@ -61,7 +61,7 @@ const requestFor = (input: CodexCatalogInput): { method: string; params: Record<
     } };
   }
   if (typeof input.threadId !== "string" || !THREAD_ID.test(input.threadId)) fail("invalid_request");
-  if (input.operation === "read") return { method: "thread/read", params: { threadId: input.threadId, includeTurns: false } };
+  if (input.operation === "read" || input.operation === "attachment") return { method: "thread/read", params: { threadId: input.threadId, includeTurns: false } };
   return { method: "thread/turns/list", params: {
     threadId: input.threadId, cursor: input.cursor ?? null, limit: 8, sortDirection: "desc", itemsView: "summary",
   } };
@@ -130,7 +130,18 @@ export async function queryCodexCatalog(input: CodexCatalogInput): Promise<unkno
     await send("initialize", { clientInfo: { name: "wmux_catalog", version: "0.3.0" }, capabilities: { experimentalApi: true } });
     if (!socket || socket.readyState !== WebSocket.OPEN || remaining() <= 0) fail("socket_unavailable");
     socket.send(JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} }), error => { if (error) shutdown(); });
-    return await send(request.method, request.params);
+    const thread = await send(request.method, request.params);
+    // Attachment preflight is read-only.  The queue is checked before any
+    // launcher is permitted to resume a saved task, because native resume can
+    // consume pending input.  No thread/load/resume/turn method is sent here.
+    if (input.operation === "attachment") {
+      const queue = await send("thread/queue/list", { threadId: input.threadId });
+      // Explicit bounded first page makes a non-null cursor an ownership
+      // unknown rather than silently treating a partial inventory as absent.
+      const loaded = await send("thread/loaded/list", { cursor: null, limit: 200 });
+      return { thread: (thread as Record<string, unknown>).thread ?? thread, queue, loaded };
+    }
+    return thread;
   } catch (error) {
     if (error instanceof CodexCatalogRpcError) throw error;
     fail("socket_unavailable");

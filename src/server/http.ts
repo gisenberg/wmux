@@ -1,5 +1,6 @@
 import http from "node:http";
 import { CodexTasksService, openCodexCliView } from "./codex-tasks.js";
+import { isCodexAttachmentPane, openCodexAttachment, recoverCodexAttachmentTarget, verifyCodexAttachment } from "./codex-cli-attachment.js";
 import type { CodexCatalogEndpointConfig } from "./codex-task-catalog.js";
 import https from "node:https";
 import path from "node:path";
@@ -265,7 +266,21 @@ export const createHttpServer = (
       return openCodexCliView({ baseUrl: `http://${host}:${address.port}`, token: auth.automationToken || auth.token,
         machineId: config.machineId, socketPath: config.socketPath, cwd });
     },
+    openAttached: async (request, attestation) => {
+      const config = codexTasks.catalog.attachmentConfig(request.endpointId);
+      const address = server.address();
+      if (!address || typeof address === "string" || options.tls) throw new Error("CLI controller requires an available local HTTP listener");
+      const host = address.address.includes(":") ? `[${address.address}]` : address.address;
+      const target = await openCodexAttachment({ baseUrl: `http://${host}:${address.port}`, token: auth.automationToken || auth.token,
+        machineId: config.machineId, requestId: request.requestId, attestation, storageDirectory: state.storageDirectory() });
+      return { workspaceId: target.workspaceId, tabId: target.tabId, paneId: target.paneId };
+    },
+    verifyAttached: (request, target, attestation) => verifyCodexAttachment({ request,
+      target: { ...target, requestId: request.requestId, threadId: request.threadId, generation: request.generation },
+      attestation, storageDirectory: state.storageDirectory() }),
+    recoverAttached: request => recoverCodexAttachmentTarget(state.storageDirectory(), request),
   });
+  sessions.setCodexAttachmentPaneGuard?.(paneId => isCodexAttachmentPane(state.storageDirectory(), paneId));
   const serverDeps: ServerDeps = {
     codexTasks,
     bindHost,
