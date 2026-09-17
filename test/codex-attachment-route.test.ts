@@ -9,6 +9,20 @@ const endpoint = (id = "one", socketPath = "/private/native.sock") => ({ id, lab
 const receipt = (socket = "/private/native.sock", generation = "gen-a") => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket, generation, launcherHash: "l", deploymentHash: "d" });
 const native = (id = "thread_a", status = "idle", queued: unknown[] = []) => ({ thread: { id, cwd: "/work", status: { type: status }, canAcceptDirectInput: true }, queue: { data: queued, nextCursor: null }, loaded: { data: [id], nextCursor: null } });
 
+test("browser terminal identity replies preserve attachment proof but actual input invalidates it", () => {
+  const script = fileURLToPath(new URL("../scripts/wmux-agent-run", import.meta.url));
+  const result = spawnSync("python3", ["-c", `
+import importlib.machinery,importlib.util,sys
+loader=importlib.machinery.SourceFileLoader('wmux_run',sys.argv[1]);spec=importlib.util.spec_from_loader(loader.name,loader);m=importlib.util.module_from_spec(spec);loader.exec_module(m)
+reply=bytes.fromhex('1b5b3f36323b3232631b5b3e313b303b30631b503e7c6c696267686f737474791b5c')
+assert m.terminal_reply_only(reply)
+assert m.terminal_reply_only(bytes.fromhex('1b5b313b3252'))
+for value in [b'/resume another-task',b'hello',b'\\r',reply+b'/resume other',bytes.fromhex('1b5b3230307e')+b'/resume other',b'\\x1bP>|unknown-terminal\\x1b\\\\']:
+ assert not m.terminal_reply_only(value),repr(value)
+`, script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("native attestation refuses a socket replaced between stat and connect", () => {
   const script = fileURLToPath(new URL("../scripts/wmux_codex_attach.py", import.meta.url));
   const result = spawnSync("python3", ["-c", `

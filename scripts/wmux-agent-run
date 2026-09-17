@@ -366,7 +366,7 @@ def invalidate_attachment_receipt(receipt_file):
 
 def terminal_reply_only(data):
     """Known terminal capability replies are not user task input."""
-    return bool(re.fullmatch(rb"(?:\x1b\[[0-9;?]*[Rc]|\x1b\][0-9;]*[^\x1b\x07]*(?:\x07|\x1b\\))+", data))
+    return bool(re.fullmatch(rb"(?:\x1b\[[?>]?[0-9;]*[Rc]|\x1bP>\|libghostty\x1b\\|\x1b\][0-9;]*[^\x1b\x07]*(?:\x07|\x1b\\))+", data))
 
 
 def private_route_argv(descriptor):
