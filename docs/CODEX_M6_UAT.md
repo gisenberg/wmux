@@ -11,6 +11,19 @@ Tasks window should use wmux's shared font, palette and compact layout.
 Initial title seeding does not transfer the original naming receipt or claim
 continuous name mirroring after CLI input changes the view's identity.
 
+The corrections are deployed as `930e4d99523c445cc1b72e1c6ff57a09c7e5a46e`
+(2026-09-17, 15:29 UTC), pushed and unmerged. External `npm run check` passed
+**1,199 tests / 8 skips**, typechecks, scripts and build (`d411d7b773d06ab0`).
+All six catalog browser cases passed across desktop Chromium, mobile Chromium
+and mobile WebKit. Served-browser checks confirmed native Unicode workspace/tab
+names with automatic ownership, shared wmux font/panel colors and no horizontal
+overflow. Exact-task attachment, reuse and CLI continuation passed again.
+Independent-pin, unnamed-task, failed-verification and persistence cases passed
+in focused service tests. Existing workspaces/pins and native/guard/observer
+processes survived deployment. Owned live fixtures were cleaned up. Evidence:
+`test-results/m6-feedback-20260917/`. Direct confirmation of names and appearance
+remains M6-H2b; phone usability remains deferred.
+
 ## Attachment rollout candidate — 2026-09-17
 
 Deployed runtime: `d1104f29c9ff73eb9e596bfcbb5fb52f6ec9ae44`, pushed on
@@ -93,7 +106,7 @@ The combined checkpoint tracks these interaction checks:
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
 | M6-H2 — Haswell desktop attachment | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. | User confirmed Open in CLI worked as expected for Haswell sessions (2026-09-17). |
-| M6-H2b — Default title and Tasks presentation | Open a new CLI view and confirm its automatic workspace/tab names match the native task; judge the Tasks window's font, palette and layout against wmux. | Rework requested by the user; awaiting corrected rollout and confirmation. |
+| M6-H2b — Default title and Tasks presentation | Open a new CLI view and confirm its automatic workspace/tab names match the native task; judge the Tasks window's font, palette and layout against wmux. | Corrections deployed as `930e4d9`; automated checks passed, awaiting user confirmation. |
 | M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
 
 The phone deferral applies to direct physical-device usability only. Keep
@@ -228,7 +241,7 @@ the final report, all assertions and successful unit exit.
 
 ## Release decision
 
-Accept M6 only after corrective M5a/M5b qualification, M6-H1, revised M6-H2 and
+Accept M6 only after corrective M5a/M5b qualification, M6-H1, M6-H2/M6-H2b and
 the relevant overnight gate pass, with M6-H3 explicitly recorded as deferred
 rather than accepted. The original soak does not qualify newly implemented
 attachment code. Overnight qualification remains

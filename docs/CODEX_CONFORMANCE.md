@@ -1,5 +1,17 @@
 # Codex plain-start conformance matrix
 
+## Haswell UAT feedback corrections — 2026-09-17
+
+Haswell Open in CLI is user-confirmed. Runtime `930e4d9` additionally seeds
+newly verified workspace/tab titles from the native task name, preserves
+independent manual pins, and aligns the Tasks window with wmux typography,
+palette and layout. External full checks passed 1,199 tests with eight skips;
+all six focused browser cases and served title/theme/attachment/continuation
+checks passed. Default-name and appearance confirmation remains M6-H2b.
+Desktop-local ice3070 is still unsupported, with an explicit browser reason;
+physical-phone usability is deferred. Overall M6 remains unaccepted. See
+the [current UAT ledger](CODEX_M6_UAT.md).
+
 ## Existing-task attachment candidate — 2026-09-17
 
 Corrective M5a/M5b is deployed in `d1104f2` for loaded Haswell tasks through

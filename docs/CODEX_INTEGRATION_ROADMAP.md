@@ -5,7 +5,9 @@ tracks requested follow-up: seed newly verified workspace/tab titles from the
 native task name with independent pins preserved, and align the Tasks window
 with wmux typography, palette and layout. Desktop-local ice3070 remains outside
 the qualified route; physical-phone testing remains deferred. Overall M6 is
-not yet accepted. See the [acceptance ledger](CODEX_M6_UAT.md).
+not yet accepted. The corrections are deployed as `930e4d9`; automated title,
+pin, theme, browser and continuation checks passed, with M6-H2b awaiting user
+confirmation. See the [acceptance ledger](CODEX_M6_UAT.md).
 
 Rollout update — 2026-09-17: corrective M5a/M5b attachment is implemented on
 the integration branch and deployed for UAT. Runtime `d1104f2` supports **Open in CLI** for loaded

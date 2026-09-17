@@ -130,7 +130,7 @@ an opaque server-issued `generation` attestation. The server accepts only the
 same-server loaded UUID with an empty native input queue. It fails closed for a
 stale attestation, a replaced endpoint, an active queue, a different server, or
 any unavailable launcher condition. The browser never supplies a trust answer.
-Pins and naming remain unchanged.
+Browsing and display associations do not grant title ownership.
 
 Once a new view has verified its native identity, wmux seeds its automatic
 workspace and tab titles from that task's current native name. Independent
