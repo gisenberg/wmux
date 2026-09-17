@@ -1,5 +1,17 @@
 # Open an existing Codex task in wmux
 
+## Implementation update — 2026-09-17
+
+Candidate `bf2b030` implements M5a/M5b for loaded Haswell tasks using the
+qualified managed route. **Open in CLI** validates exact ownership, queue,
+route generation and terminal readiness; **Open terminal** requires fresh
+identity proof. Both navigate out of the catalog. Configured SSH peers are
+checked through the wmux read-only bridge for competing loaded ownership;
+they remain catalog-only attachment targets. No native code/configuration or
+service restart is required. Saved/unloaded and Desktop-local tasks are not
+silently loaded or migrated. See the [catalog contract](CODEX_TASK_CATALOG.md)
+and [current deployment/UAT evidence](CODEX_M6_UAT.md). M6 is not yet accepted.
+
 ## Qualification update — 2026-09-17
 
 **Desktop connected to Haswell is qualified; Desktop-local ice3070 is not.**
@@ -20,10 +32,8 @@ were not covered. Private evidence is in
 
 This supersedes the September 16 blanket description of Desktop attachment as
 blocked. The lane-readiness failures below apply specifically to Desktop's
-**local ice3070** server. Exact-task catalog implementation is now assigned in
-an isolated wmux worktree; the deployed catalog remains unchanged and M6 remains
-unaccepted. The next implementation targets loaded tasks on the qualified
-managed route, with exact owner/generation, queue, readiness and terminal checks.
+**local ice3070** server. The implementation update above supersedes the initial
+assignment; M6 remains unaccepted pending qualification and direct catalog UAT.
 
 ## Investigation — 2026-09-16
 

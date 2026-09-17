@@ -1,5 +1,22 @@
 # Codex plain-start conformance matrix
 
+## Existing-task attachment candidate — 2026-09-17
+
+Corrective M5a/M5b is implemented in `bf2b030` for loaded Haswell tasks through
+the installed managed launcher. Exact owner/generation, empty queue, native
+readiness and live terminal proof gate attachment and reuse. CLI input
+invalidates reuse proof; reconciliation never silently duplicates a view.
+Remote catalog peers remain visible and receive bounded read-only ownership
+checks, while remote attachment remains unsupported. Native policy and services
+are unchanged. M6-H2 desktop catalog UAT remains pending; M6-H3 physical-phone
+usability is explicitly deferred. This supersedes the missing-action status in
+the September 16 record below. See [current evidence](CODEX_M6_UAT.md).
+
+The original catalog/association soak completed 24 hours with all 13 assertions
+and 287 fault/recovery cycles passing, with successful unit exit. Its recorded
+workstation-maintenance/storage pause remains part of that evidence. It does
+not qualify the new attachment implementation or accept M6.
+
 ## Current M0–M2 qualification — 2026-09-16
 
 M0/M1 qualification is complete in the declared Linux scope. Its accepted

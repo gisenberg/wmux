@@ -1,5 +1,14 @@
 # Codex integration roadmap
 
+Rollout update — 2026-09-17: corrective M5a/M5b attachment is implemented on
+the integration branch. Candidate `bf2b030` supports **Open in CLI** for loaded
+Haswell tasks and **Open terminal** for freshly verified views, with managed
+route, queue and exact-task checks. Both configured catalog endpoints remain
+visible: remote ownership is checked through the read-only wmux bridge, without
+enabling remote attachment. Catalog navigation now dismisses the dialog when
+opening the terminal. See the [current rollout and UAT ledger](CODEX_M6_UAT.md).
+M6 remains unaccepted; the dated pre-attachment findings below are historical.
+
 UAT scope update — 2026-09-17: the user deferred physical-phone usability until
 the Mac Mini is running and set up for wmux mobile testing. Track it as deferred
 M6-H3, not accepted and not a blocker for the current desktop rollout. The
@@ -7,7 +16,7 @@ desktop catalog attachment workflow (M6-H2) remains the outstanding direct UAT
 check after rollout; automated mobile coverage and engineering gates remain
 required. See the [UAT decisions](CODEX_M6_UAT.md#direct-interaction-acceptance).
 
-Qualification update — 2026-09-17: the independent connection task proved
+Connection qualification — 2026-09-17, before implementation: the independent connection task proved
 **Desktop Haswell SSH → guarded persistent server ← managed wmux CLI**, including
 direct user approval and continuation UAT. No production routing or native
 service changes were required. The prior blocker applies to Desktop-local

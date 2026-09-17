@@ -1,6 +1,33 @@
 # Combined M3–M6 UAT
 
-## Candidate — 2026-09-16
+## Attachment rollout candidate — 2026-09-17
+
+Runtime candidate: `bf2b030019d73d40f08a1c73fb54bfd17083c5d4`, pushed on
+`feat/codex-m3-m6` and unmerged. M5a/M5b now provides **Open in CLI** for a
+loaded Haswell task and **Open terminal** for a freshly verified existing view.
+Both configured catalog endpoints remain visible; bounded remote loaded-owner
+inspection prevents another configured server from being ignored. Remote
+attachment and Desktop-local ice3070 remain unqualified. Haswell fresh launch
+is disabled pending separate managed-route qualification.
+
+Final external `npm run check` passed **1,197 tests / 8 skips**, typechecks,
+script validation and build (run `32399ab317f88488`). The integrated attachment
+base `df2837c` previously passed the full external browser matrix: **119 cases**,
+109 intentional skips, plus all **3 login-only cases**. The rollout adds focused
+coverage for remote ownership and dismissing the catalog on terminal navigation.
+Deployment, served-browser, rollback and final focused-browser evidence is
+retained privately under `test-results/m6-attachment-rollout-20260917/`.
+
+Direct desktop UAT after rollout: refresh wmux, use **Ctrl+K → Open Codex tasks**,
+select a familiar **loaded Haswell** task, and choose **Open in CLI**. Confirm
+history, enter a harmless continuation and see it in Desktop. Judge whether
+Open terminal and inspection explanations are usable. If a native approval
+appears, the user decides it. Phone usability is deferred below.
+
+The dated original-candidate findings below describe the earlier deployment;
+they do not imply that the new attachment action is still missing.
+
+## Original candidate — 2026-09-16
 
 The unmerged `feat/codex-m3-m6` candidate is deployed on Haswell for combined
 UAT. Runtime source is `e2322905d37c995c36fa851c7cdd317d8551553c`.
@@ -32,7 +59,7 @@ The combined checkpoint tracks these interaction checks:
 | Case | User action and expected result | Decision |
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
-| M6-H2 — Personal desktop workflow | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. See its current work/history and continue it through the native prompt; confirm the continuation appears in Desktop. Judge whether host selection, Open terminal and inspection explanations are usable. | Pending rollout and direct UAT of M5a/M5b. |
+| M6-H2 — Personal desktop workflow | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. See its current work/history and continue it through the native prompt; confirm the continuation appears in Desktop. Judge whether host selection, Open terminal and inspection explanations are usable. | Pending direct UAT of the corrective M5a/M5b rollout. |
 | M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
 
 The phone deferral applies to direct physical-device usability only. Keep
@@ -138,9 +165,17 @@ Interrupted run `34eb1dd12e12a88f` is not a pass. The runner was rebuilt and
 the final full check and native reachability checks passed after maintenance.
 The obsolete remote trust view was replaced with a fresh native trust prompt.
 
-## Overnight gate — running, not accepted
+## Original catalog overnight gate — passed, attachment excluded
 
-A new real 24-hour synthetic mixed-task soak started on **2026-09-16 at
+Reviewed on 2026-09-17: the original run ended at **04:37:47 UTC**, after
+86,401,679 ms. All **13 assertions** passed; all **287 faults** recovered, with
+287 metadata recoveries/reloads, zero unexpected errors or dropped events,
+one peak socket and peak RSS 125,308,928 bytes. The unit exited successfully
+(`ExecMainStatus=0`, `SubState=exited`). The maintenance/storage pause described
+below remains part of this qualified run. The report qualifies only its frozen
+catalog/association code, not the new attachment code or overall M6 acceptance.
+
+The real 24-hour synthetic mixed-task soak started on **2026-09-16 at
 04:37:45 UTC**. Its earliest finish is **2026-09-17 at 04:37:45 UTC**.
 The durable user unit is `wmux-codex-m6-soak-20260916.service`; its report is
 `test-results/m6-qualification-20260916/soak-24h/report.json` when complete.
@@ -161,8 +196,8 @@ the final report, all assertions and successful unit exit.
 
 Accept M6 only after corrective M5a/M5b qualification, M6-H1, revised M6-H2 and
 the relevant overnight gate pass, with M6-H3 explicitly recorded as deferred
-rather than accepted. The existing soak cannot qualify unimplemented
-attachment code. The soak remains
+rather than accepted. The original soak does not qualify newly implemented
+attachment code. Overnight qualification remains
 an automated engineering gate, not a test delegated to the user. Record any
 rework or deferred capability explicitly. The previous accepted release and
 private state/configuration backup remain available for rollback. A deployment
