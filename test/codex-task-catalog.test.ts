@@ -213,3 +213,11 @@ test("controller transport can disable fresh launch without changing endpoint id
   assert.equal(instance.listEndpoints()[0]!.launchReason, "Direct TLS controller unsupported");
   assert.throws(() => instance.launchConfig("native"), (error: unknown) => error instanceof CodexCatalogError && error.code === "fresh_launch_disabled");
 });
+
+test("existing-task attachment config stays private and requires a local managed launcher", () => {
+  const managed = { ...endpoint, managedLaunch: { launcherPath: "/release/bin/codex-guard", deploymentPath: "/release" } };
+  const instance = new CodexTaskCatalog(() => [machine()], [managed]);
+  assert.deepEqual(instance.attachmentConfig("native").managedLaunch, managed.managedLaunch);
+  const ssh = new CodexTaskCatalog(() => [machine({ kind: "ssh", host: "127.0.0.2" })], [{ ...managed, transport: "ssh" as const, bridgePath: "/release/bridge", nodePath: "/usr/bin/node" }]);
+  assert.throws(() => ssh.attachmentConfig("native"), (error: unknown) => error instanceof CodexCatalogError && error.code === "attachment_ssh_unsupported");
+});

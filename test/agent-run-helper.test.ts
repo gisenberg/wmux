@@ -11,6 +11,35 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const helper = path.join(root, "scripts", "wmux-agent-run");
 const posixTest = process.platform === "win32" ? test.skip : test;
 
+posixTest("wmuxctl attachment surface gate accepts a live Codex composer and rejects active native errors", () => {
+  const controller = path.join(root, "skills", "wmux", "scripts", "wmuxctl.py");
+  const probe = `
+import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location('wmuxctl',sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+for value in ('OpenAI Codex\\nmodel: gpt\\n› Type your message', 'OpenAI Codex\\nconversation open in another app\\n›', 'old error text\\nnot a tui'):
+ print(module.classify_codex_attachment_surface(value))
+`;
+  const completed = spawnSync("python3", ["-c", probe, controller], { encoding: "utf8" });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.deepEqual(completed.stdout.trim().split(/\r?\n/), ["ready", "error", "unknown"]);
+});
+
+posixTest("attachment receipt selects the listening cli socket inode over a same-name accepted connection", () => {
+  const probe = `
+import builtins, importlib.machinery, importlib.util, io, sys
+loader=importlib.machinery.SourceFileLoader('helper',sys.argv[1]); spec=importlib.util.spec_from_loader(loader.name,loader); module=importlib.util.module_from_spec(spec); loader.exec_module(module)
+original=builtins.open
+def fake(path,*args,**kwargs):
+ if path == '/proc/net/unix': return io.StringIO('Num RefCount Protocol Flags Type St Inode Path\\n000: 1 00000000 00000000 0001 03 22 /private/cli.sock\\n000: 1 00000000 00010000 0001 01 11 /private/cli.sock\\n')
+ return original(path,*args,**kwargs)
+builtins.open=fake
+print(module.unix_socket_inode('/private/cli.sock'))
+`;
+  const completed = spawnSync("python3", ["-c", probe, helper], { encoding: "utf8" });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.equal(completed.stdout.trim(), "11");
+});
+
 const decodeResult = (stdout: string) => {
   const line = stdout.split(/\r?\n/).find((candidate) => candidate.startsWith("WMUX_AGENT_RESULT "));
   assert.ok(line);
@@ -466,6 +495,27 @@ json.dump(sys.argv[1:],open(__import__('os').environ['CAPTURE_PATH'],'w'))
     await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+posixTest("wmux-agent-run Codex attachment refuses a descriptor before any browser-provided launch override can run", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-agent-tui-attachment-"));
+  const bin = path.join(dir, "bin");
+  const descriptor = path.join(dir, "attachment.json");
+  const started = path.join(dir, "started");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "codex"), `#!/bin/sh\nprintf started > "$CAPTURE_PATH"\n`);
+  fs.chmodSync(path.join(bin, "codex"), 0o755);
+  fs.writeFileSync(descriptor, JSON.stringify({ version: 1, attestation: {} }), { mode: 0o600 });
+  try {
+    const request = { runId: "tui-attachment", runtime: "codex", directory: dir, codexAttachFile: descriptor, model: "browser-model" };
+    const completed = spawnSync(helper, ["tui", "tui-attachment"], {
+      input: `${Buffer.from(JSON.stringify(request)).toString("base64")}\n`, encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CAPTURE_PATH: started },
+    });
+    assert.notEqual(completed.status, 0);
+    assert.match(String(decodeResult(completed.stdout).error), /forbids launch overrides/);
+    assert.equal(fs.existsSync(started), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 posixTest("wmux-agent-run tui preserves runtime-specific argv and exact cwd", () => {

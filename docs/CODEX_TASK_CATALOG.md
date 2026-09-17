@@ -27,15 +27,19 @@ disables endpoint discovery. Configuration is loaded on server startup.
       "label": "Local Codex",
       "machineId": "local",
       "transport": "local",
-      "socketPath": "/home/operator/.codex/app-server-control/app-server-control.sock",
-      "allowFreshLaunch": false
+      "socketPath": "/run/codex/app-server.sock",
+      "allowFreshLaunch": false,
+      "managedLaunch": {
+        "launcherPath": "/opt/wmux/bin/wmux-agent-run",
+        "deploymentPath": "/opt/wmux/current"
+      }
     },
     {
       "id": "native-remote",
       "label": "Remote Codex",
       "machineId": "linux-host",
       "transport": "ssh",
-      "socketPath": "/home/operator/.codex/app-server-control/app-server-control.sock",
+      "socketPath": "/run/codex/app-server.sock",
       "nodePath": "/usr/bin/node",
       "bridgePath": "/srv/wmux/scripts/codex-catalog-bridge.mjs",
       "allowFreshLaunch": false
@@ -81,7 +85,7 @@ does not generate notifications. Subsequent terminal outcomes use a deterministi
 outbox to deduplicate across display associations and restarts. This catalog
 outbox is separate from existing receipt-bound lifecycle reporting.
 
-## Fresh CLI view eligibility
+## CLI view eligibility
 
 Fresh views require explicit `allowFreshLaunch: true` for an endpoint with a
 compatible installed CLI and the existing guarded wmux TUI helper. wmux must
@@ -91,7 +95,7 @@ only after verifying that environment. The server uses its existing automation
 or shared credential internally; catalog and launch routes themselves accept
 only normal user/browser authority, never plugin/helper/automation credentials.
 
-**New CLI view** requires an absolute working directory and opens a new,
+**Start new task** requires an absolute working directory and opens a new,
 explicitly selected endpoint through `codex --remote unix:///…`. It submits no
 prompt and passes no sandbox, approval, trust-acceptance, model or naming
 override. Existing native trust and approval prompts remain interactive.
@@ -111,13 +115,54 @@ unknown. After inspecting it, explicitly acknowledge that attempt to allow a
 separate fresh view. Acknowledgement neither cancels the existing view nor
 retries its request, and the original attempt remains in the ledger.
 
-**Resume stays disabled in the deployed profile.** UAT identified existing-task
-CLI access as a required missing workflow. The [attachment investigation](CODEX_SESSION_ATTACHMENT.md)
-supersedes the original blanket exclusive-client restriction: clients can share
-the same running App Server, but a matching stored task on another server is not
-the same route. Corrective work must establish actual server ownership and
-preserve the managed launcher and native capabilities. Display associations,
-cwd matches, title matches and preview markers do not establish that route.
+## Existing-task CLI access
+
+The primary task action is **Open in CLI** when the server has attested an
+eligible exact task and no live wmux terminal is verified. If it has a verified
+terminal target, the action is **Open terminal**. Both actions submit the same
+attachment request first; the server revalidates it and returns the target to
+focus. A display association is optional activity monitoring and never replaces
+that check.
+
+The request contains the exact endpoint identity, loaded native thread UUID and
+an opaque server-issued `generation` attestation. The server accepts only the
+same-server loaded UUID with an empty native input queue. It fails closed for a
+stale attestation, a replaced endpoint, an active queue, a different server, or
+any unavailable launcher condition. The browser never supplies a trust answer.
+Pins and naming remain unchanged.
+
+Owner checking is deliberately strict and bounded: every configured endpoint,
+including an SSH endpoint, must be checked. An unavailable or incomplete owner
+scan is unknown and disables attachment rather than selecting a likely server.
+
+The managed route is configured with `managedLaunch`:
+`launcherPath` identifies the guarded installed launcher and `deploymentPath`
+identifies its matching deployment. Existing-task attach is Linux-local only;
+SSH and other platform routes remain disabled. It uses only the helper paired
+with that source deployment. A managed launcher must preserve native trust and
+approval prompts without injecting responses.
+
+Active clients share the original task. Native input from any of those clients
+affects that same task; wmux does not claim exclusive ownership. Display
+associations, cwd matches, title matches and preview markers do not establish
+an attachment route.
+
+Each attachment has a persisted request UUID. A lost response is retried only
+with that same UUID and the same attestation; reload restores it for explicit
+retry or reconciliation. The browser never silently creates another attachment
+attempt after an unknown result. Server-provided disabled reasons are rendered
+verbatim enough to explain why the primary action is unavailable.
+
+The recent-launch list is a ledger, not terminal proof. An `opened` attachment
+in that list does not expose **Open terminal**. Use **Inspect attachment** to
+perform the individual reconciliation; only that check may return a verified
+terminal target, and task detail uses the same verified result. If inspection
+reports `terminal_identity_unverified` (for example, because CLI input changed
+the terminal identity), inspect the terminal, explicitly acknowledge the
+unknown attachment, then choose **Open in CLI** for a deliberate new request.
+The receipt is conservative: CLI input invalidates it because `resume` can
+switch the task behind a terminal. Acknowledgement does not retry or focus
+anything, and the browser never makes that new request automatically.
 
 ## Persistence, disable and rollback
 
@@ -130,11 +175,14 @@ is unchanged. Associations are capped at 200. Launch attempts are also capped at
 Before deployment, back up the main state, settings, endpoint configuration and
 both new ledgers. Disable catalog endpoints by removing its environment variable
 from the wmux service configuration; retain the private ledgers for review or
-later re-enablement. To roll back, restore the previous wmux release and its
-matching backup if necessary; an older release ignores these separate files.
-Never feed a future ledger schema into an older implementation or alter native
-task stores to undo a wmux deployment. Normal wmux restart durability rules still
-apply to panes; review the actual backend mix before maintenance.
+later re-enablement. A base schema-1 runtime refuses a schema-2 launch ledger;
+it does not ignore it. To roll back, restore the pre-upgrade ledger backup with
+the previous release, or move the schema-2 ledger out of that runtime before
+starting it. Preserve the moved ledger as an archive and preserve fresh-launch
+receipts for later reconciliation. Never feed a future ledger schema into an
+older implementation or alter native task stores to undo a wmux deployment.
+Normal wmux restart durability rules still apply to panes; review the actual
+backend mix before maintenance.
 
 When deploying through an active-release symlink, ensure the installed local
 `wmux-*` helper links resolve through that symlink too. A login shell can prefer
@@ -165,16 +213,20 @@ and physical-device usability checks:
 3. Trigger a later native turn through its normal client. Confirm task activity
    updates without claiming terminal origin, and notifications do not multiply
    across display associations. Repeat with short turns and endpoint failure.
-4. Open a fresh CLI view, inspect its native trust/approval behavior and exact
-   host/cwd, then submit work explicitly from that native view if desired.
-   Double-click and uncertain-delivery fixtures must show one launch attempt.
-   Verify resume remains disabled with a specific reason.
+4. Start a new task and open an eligible existing task, inspect native
+   trust/approval behavior and exact host/cwd, then submit work explicitly from
+   that native view if desired. Double-click and uncertain-delivery fixtures
+   must show one request UUID per attempt and retry only that UUID.
 5. Check desktop and mobile layout, full Unicode names, diagnostics, component
    disable, backup/restore and rollback on an isolated candidate.
 6. Complete the actual mixed-task overnight soak using
    `node scripts/codex-integration-soak.mjs --out /absolute/private/fresh-dir`.
    A shortened/source-module run is engineering evidence only. Accept the
    24-hour gate only when the final report and successful process exit agree.
+7. After automated connection proof passes, run the smallest direct catalog UAT:
+   open the catalog, inspect one eligible loaded task, open its managed view,
+   and verify the returned terminal before entering input. Earlier user UAT is
+   context only; it is not acceptance for this route.
 
 Record source/build identity, native versions, tested hosts and user acceptance
 in the [conformance ledger](CODEX_CONFORMANCE.md). M0–M2 acceptance remains scoped

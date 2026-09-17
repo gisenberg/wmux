@@ -49,6 +49,16 @@ test("catalog RPC sends only bounded, allowlisted list/read/turns requests", { s
   assert.deepEqual(rpc[5].params, { threadId: "thr_123", cursor: null, limit: 8, sortDirection: "desc", itemsView: "summary" });
 });
 
+test("attachment preflight is read-only and checks queue plus loaded ownership", { skip: process.platform === "win32" }, async t => {
+  const f = await fixture(t, message => ({ method: message.method, params: message.params }));
+  const result = await queryCodexCatalog({ socketPath: f.socketPath, operation: "attachment", threadId: "thr_123" }) as any;
+  assert.equal(result.thread.method, "thread/read");
+  assert.equal(result.queue.method, "thread/queue/list");
+  assert.equal(result.loaded.method, "thread/loaded/list");
+  assert.deepEqual(result.loaded.params, { cursor: null, limit: 200 });
+  assert.deepEqual(f.messages.filter(message => typeof message.id === "number").map(message => message.method), ["initialize", "thread/read", "thread/queue/list", "thread/loaded/list"]);
+});
+
 test("catalog RPC validates exact thread IDs and bounded pagination before connecting", { skip: process.platform === "win32" }, async t => {
   const f = await fixture(t);
   await unavailable(queryCodexCatalog({ socketPath: f.socketPath, operation: "read" }), "invalid_request");

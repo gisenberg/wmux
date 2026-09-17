@@ -47,7 +47,7 @@ export interface CodexTaskDetail {
   task: CodexTask;
   turns: CodexTaskTurn[];
   historyReason: string | null;
-  resume: { enabled: false; reason: string };
+  resume: { enabled: boolean; reason: string; generation?: string; target?: CodexTaskTarget | null };
 }
 
 export interface CodexTaskTarget {
@@ -68,6 +68,9 @@ export interface CodexTaskAssociation {
 }
 
 export interface CodexTaskLaunch {
+  operation?: "fresh" | "attach";
+  threadId?: string;
+  generation?: string;
   requestId: string;
   endpointId: string;
   endpointIdentity?: string;

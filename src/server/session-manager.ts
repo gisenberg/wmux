@@ -232,6 +232,7 @@ export class SessionManager {
     binding: AgentInputSessionBinding,
   ) => AgentInputRegistrationCapability;
   private agentInputSourceRetirer?: (paneId: string, binding: AgentInputSessionBinding) => void;
+  private isCodexAttachmentPane: (paneId: string) => boolean = () => false;
 
   constructor(
     private readonly state: StateStore,
@@ -327,6 +328,13 @@ export class SessionManager {
     retirer: ((paneId: string, binding: AgentInputSessionBinding) => void) | undefined,
   ): void {
     this.agentInputSourceRetirer = retirer;
+  }
+
+  /** Attachment views can replay a native marker without acquiring naming authority. */
+  setCodexAttachmentPaneGuard(
+    isCodexAttachmentPane: ((paneId: string) => boolean) | undefined,
+  ): void {
+    this.isCodexAttachmentPane = isCodexAttachmentPane ?? (() => false);
   }
 
   hasLivePaneSession(paneId: string, expectedBinding?: AgentInputSessionBinding): boolean {
@@ -787,7 +795,10 @@ export class SessionManager {
       // An old durable client can drain bytes after its replacement is live.
       // Such output must never establish authority for the new incarnation.
       if (this.sessions.get(pane.id) === session && !session.isExited) {
-        codexMarkerParser.push(data, (marker) => this.codexTerminalBindings.observe(pane.id, marker));
+        codexMarkerParser.push(data, (marker) => {
+          if (!this.isCodexAttachmentPane(pane.id))
+            this.codexTerminalBindings.observe(pane.id, marker);
+        });
       }
       for (const response of colorQueryParser.push(data, currentTerminalTheme).responses) {
         backend.write(session, response, true);

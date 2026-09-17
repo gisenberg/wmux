@@ -4,6 +4,8 @@
 .codex-task-list>button{min-width:0;overflow-wrap:anywhere}
 .codex-tasks-modal select,.codex-tasks-modal input{min-width:0;max-width:100%}
 .codex-tasks-toolbar label{min-width:0;max-width:100%}
+.codex-existing-open{display:grid;gap:.5rem;border-top:1px solid #36585c;margin-top:.8rem;padding-top:.7rem}
+.codex-existing-open button{border-color:#f7d774;background:#294047;color:#fff4bd;font-weight:bold}
 .codex-tasks-toolbar select{width:100%}
 .codex-endpoint-identity{color:#9ab7b5;overflow-wrap:anywhere}
 .codex-association label{min-width:0}
