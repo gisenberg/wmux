@@ -1,4 +1,29 @@
-import { awaitAppShell, expect, test } from "./fixtures";
+import {
+  awaitAppShell,
+  expect,
+  test as baseTest,
+  type E2eWorkspace,
+} from "./fixtures";
+
+const test = baseTest.extend<{
+  createCatalogWorkspace: () => Promise<E2eWorkspace>;
+}>({
+  createCatalogWorkspace: async ({ createReadyWorkspace, request }, use) => {
+    const ids: string[] = [];
+    try {
+      await use(async () => {
+        const workspace = await createReadyWorkspace();
+        ids.push(workspace.id);
+        return workspace;
+      });
+    } finally {
+      await Promise.all(ids.map(async (id) => {
+        const response = await request.delete(`/api/workspaces/${id}`);
+        expect(response.ok()).toBeTruthy();
+      }));
+    }
+  },
+});
 
 // Browser fixture coverage only: native Codex endpoint and App Server behavior
 // is covered by the server integration suite. These responses deliberately do
@@ -6,7 +31,7 @@ import { awaitAppShell, expect, test } from "./fixtures";
 test("catalog preserves identity, display associations, pagination, and disabled resume", async ({
   page,
   request,
-  createReadyWorkspace,
+  createCatalogWorkspace,
 }, testInfo) => {
   const calls: string[] = [];
   const launchBodies: Array<{ endpointIdentity?: string }> = [];
@@ -43,7 +68,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
   });
   // The association remains browser-visible even if future fixture bootstrap
   // state changes pin/favorite fields; it is a separate HTTP resource.
-  const workspace = await createReadyWorkspace();
+  const workspace = await createCatalogWorkspace();
   const longTargetName = "選択先 👩🏽‍💻 e\u0301 ".repeat(8);
   expect((await request.post(`/api/workspaces/${workspace.id}/title`, {
     data: { title: longTargetName },
@@ -268,7 +293,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
 
 test("existing-task open revalidates its attestation, retries the same request, and keeps associations separate", async ({
   page,
-  createReadyWorkspace,
+  createCatalogWorkspace,
 }, testInfo) => {
   const sampledAt = new Date().toISOString();
   const endpoint = {
@@ -283,7 +308,7 @@ test("existing-task open revalidates its attestation, retries the same request, 
     source: "fixture", parentThreadId: null, status: "active", updatedAt: 1,
     sampledAt, stale: false, latestTurn: null,
   };
-  const workspace = await createReadyWorkspace();
+  const workspace = await createCatalogWorkspace();
   const associationTarget = {
     workspaceId: workspace.id, tabId: workspace.activeTabId,
     paneId: workspace.tabs[0]!.panes[0]!.id,
