@@ -1,11 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { attestCodexAttachment } from "../src/server/codex-attachment-route.js";
 
 const endpoint = (id = "one", socketPath = "/private/native.sock") => ({ id, label: id, machineId: "local", transport: "local" as const, socketPath,
   managedLaunch: { launcherPath: "/release/codex-guard", deploymentPath: "/release" } });
 const receipt = (socket = "/private/native.sock", generation = "gen-a") => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket, generation, launcherHash: "l", deploymentHash: "d" });
 const native = (id = "thread_a", status = "idle", queued: unknown[] = []) => ({ thread: { id, cwd: "/work", status: { type: status }, canAcceptDirectInput: true }, queue: { data: queued, nextCursor: null }, loaded: { data: [id], nextCursor: null } });
+
+test("native attestation refuses a socket replaced between stat and connect", () => {
+  const script = fileURLToPath(new URL("../scripts/wmux_codex_attach.py", import.meta.url));
+  const result = spawnSync("python3", ["-c", `
+import importlib.util,sys,types,stat,os
+s=importlib.util.spec_from_file_location('probe',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+changed=False
+def entry(p): return types.SimpleNamespace(st_mode=stat.S_IFSOCK|0o600,st_uid=os.getuid(),st_dev=1,st_ino=2 if changed else 1)
+class Client:
+ def settimeout(self,n): pass
+ def connect(self,p):
+  global changed
+  changed=True
+ def getsockopt(self,*args): raise AssertionError('peer queried for a replaced socket')
+ def close(self): pass
+m.os.lstat=entry;m.socket.socket=lambda *args:Client()
+try: m.socket_peer('/private/native.sock')
+except ValueError: print('refused')
+else: raise AssertionError('replacement accepted')
+`, script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "refused");
+});
 
 test("attests an exact loaded local task and keeps route proof private", async () => {
   const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",

@@ -30,8 +30,8 @@ disables endpoint discovery. Configuration is loaded on server startup.
       "socketPath": "/run/codex/app-server.sock",
       "allowFreshLaunch": false,
       "managedLaunch": {
-        "launcherPath": "/opt/wmux/bin/wmux-agent-run",
-        "deploymentPath": "/opt/wmux/current"
+        "launcherPath": "/home/operator/.local/bin/codex-guard",
+        "deploymentPath": "/home/operator/.local/share/codex-usage-guard/releases/qualified"
       }
     },
     {

@@ -59,6 +59,9 @@ def socket_peer(p):
     client.settimeout(1)
     try:
         client.connect(p)
+        connected = os.lstat(p)
+        if (connected.st_dev, connected.st_ino, connected.st_uid, connected.st_mode) != (s.st_dev, s.st_ino, s.st_uid, s.st_mode):
+            raise ValueError()
         creds = client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
         pid = int.from_bytes(creds[0:4], sys.byteorder)
         uid = int.from_bytes(creds[4:8], sys.byteorder)
