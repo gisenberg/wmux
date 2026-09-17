@@ -103,6 +103,14 @@ export class CodexTasksService {
         } catch { return false; }
       },
     });
+    // Older browser-initiated CLI views inherited the generic agent helper's
+    // provenance. Repair only exact recorded attachment targets.
+    for (const launch of this.launches.list()) {
+      if (launch.operation !== "attach" || !launch.target) continue;
+      const found = state.findPaneContext(launch.target.paneId);
+      if (found?.workspace.id === launch.target.workspaceId && found.tab.id === launch.target.tabId)
+        state.markWorkspaceUserCreated(found.workspace.id);
+    }
     const poll = async (): Promise<void> => {
       try {
         const unique = new Map(this.associations.list().filter(a => a.resolved).map(a => [`${a.endpointId}/${a.threadId}`, a]));

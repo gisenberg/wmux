@@ -267,14 +267,15 @@ class WmuxClient:
         machine_id: str,
         parent_identity: dict[str, str] | None = None,
         automatic_cleanup: bool = False,
+        created_by: str = "agent",
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        body = {"machineId": machine_id, "createdBy": "agent"}
+        body = {"machineId": machine_id, "createdBy": created_by}
         if parent_identity:
             body["parentContext"] = parent_identity
         if automatic_cleanup:
             body["cleanupPolicy"] = "on-success"
             body["cleanupTtlSeconds"] = DEFAULT_AGENT_WORKSPACE_CLEANUP_TTL_SECONDS
-        else:
+        elif created_by == "agent":
             body["cleanupPolicy"] = "retain"
         result = self.request("POST", "/api/workspaces", body)
         return result["workspace"], result["state"]
@@ -1782,7 +1783,10 @@ def cmd_tui(client: WmuxClient, args: argparse.Namespace) -> int:
     public_base = safe_public_url(args.public_url, client.url)
     initial_machine = require_posix_machine(client, args.machine)
     initial_identity = machine_identity(initial_machine)
-    workspace, _state = client.create_workspace(args.machine, invoking_parent_identity(), False)
+    if args.codex_attach_file:
+        workspace, _state = client.create_workspace(args.machine, created_by="user")
+    else:
+        workspace, _state = client.create_workspace(args.machine, invoking_parent_identity(), False)
     info = describe_workspace(client.url, workspace)
     info.update(urls(client.url, public_base, info["workspaceId"], info["tabId"]))
     info.update({"runId": str(uuid.uuid4()), "runtime": args.runtime, "state": "failed", "closed": False,

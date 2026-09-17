@@ -2265,6 +2265,20 @@ const startTuiFixture = async (options: TuiFixtureOptions = {}) => {
   };
 };
 
+test("catalog attachment workspaces are user-created even when startup fails", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-user-attachment-"));
+  const descriptor = path.join(directory, "attachment.json");
+  // Stop at descriptor binding, after the real workspace creation request.
+  fs.writeFileSync(descriptor, "{}", { mode: 0o600 });
+  const fixture = await startTuiFixture();
+  try {
+    await assert.rejects(cli(fixture.url, ["tui", "codex", "linux-box", "--directory", "/srv/project",
+      "--no-prompt", "--codex-attach-file", descriptor], parentEnvironment()));
+    assert.deepEqual(fixture.workspaceRequests, [{ machineId: "linux-box", createdBy: "user" }]);
+    assert.equal(fixture.inputs.length, 0);
+  } finally { await fixture.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("wmuxctl tui recognizes padded CUP/HVP helper records and safety gates but rejects marker echoes", async () => {
   const padded = await startTuiFixture({
     replayAtUpgrade: (count, runId) => {

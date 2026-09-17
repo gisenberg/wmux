@@ -352,6 +352,16 @@ export class StateStore extends EventEmitter {
     return workspace;
   }
 
+  markWorkspaceUserCreated(workspaceId: string): void {
+    const workspace = this.requireWorkspace(workspaceId);
+    if (workspace.createdBy !== "agent") return;
+    delete workspace.createdBy;
+    delete workspace.cleanupPolicy;
+    delete workspace.cleanupAt;
+    workspace.updatedAt = now();
+    this.save();
+  }
+
   configureWorkspaceCleanup(
     workspaceId: string,
     cleanup?: WorkspaceCleanupOptions,
