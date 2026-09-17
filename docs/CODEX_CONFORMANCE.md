@@ -2,6 +2,13 @@
 
 ## Haswell UAT feedback corrections — 2026-09-17
 
+Runtime `049e66e` additionally separates user-initiated catalog CLI workspaces
+from agent-launched workspaces. Browser opens have no AI badge, automatic agent
+parent placement or agent cleanup; exact legacy catalog targets are corrected.
+Actual helper-request, failed-startup, reload and unrelated-agent cases pass.
+External full checks passed 1,202 tests / eight skips. The badge describes the
+launcher, not the runtime inside the workspace.
+
 Runtime `69e3837` corrects two later UAT findings: an uncertain CLI launch kept
 its host-based default name, and a removed terminal left a hard-to-find recovery
 action. Requested native task names now initialize only default workspace/tab

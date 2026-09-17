@@ -134,7 +134,7 @@ Browsing and display associations do not grant title ownership.
 
 Workspaces opened through **Open in CLI** or **Start new task**, including explicit recovery opens,
 are user-created and do not show the agent **AI** badge. They do not inherit
-agent-parent context or automatic cleanup. Existing catalog attachment targets
+agent-parent context or automatic cleanup. Existing catalog launch targets
 are corrected from their exact recorded workspace/tab/pane identities on startup,
 including removal of inherited agent-parent placement. The AI badge and automatic
 parent/child rules describe a working agent launching a workspace, not the runtime

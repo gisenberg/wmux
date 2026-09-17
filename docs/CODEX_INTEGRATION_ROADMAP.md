@@ -1,5 +1,12 @@
 # Codex integration roadmap
 
+Workspace provenance follow-up — 2026-09-17: deployed runtime `049e66e` treats
+browser CLI launches as user workspaces, without AI badges or inherited agent
+parents. The badge and automatic parent/child behavior remain for workspaces
+launched by working agents. Exact older catalog targets are corrected; unrelated
+agents are preserved. External checks passed 1,202 tests / eight skips. This is
+part of the M6-H2b corrections in the [acceptance ledger](CODEX_M6_UAT.md).
+
 Naming/recovery UAT follow-up — 2026-09-17: runtime `69e3837` is deployed for
 M6-H2b. Uncertain startup now retains the requested native task name as an
 automatic display label, preserving existing names and pins. Inline recovery

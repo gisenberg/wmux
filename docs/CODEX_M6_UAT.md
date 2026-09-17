@@ -2,6 +2,25 @@
 
 ## User feedback — 2026-09-17
 
+Workspace provenance clarification: the **AI** badge and automatic agent
+parent/child placement apply only to workspaces launched by a working agent,
+regardless of the runtime inside. Browser **Open in CLI**, recovery opens and
+**Start new task** create user workspaces. Existing exact catalog-launch targets
+are corrected on startup, preserving names/pins and detaching inherited agent
+parents; unrelated agent workspaces retain their badges and relationships.
+Runtime `049e66eaa052130bfcc9507e627d6f2331d89048` was deployed at **17:15 UTC**,
+pushed and unmerged. Full external check `a41219610d4e668f` passed **1,202 tests /
+8 skips**, typechecks, script checks and build. Focused tests cover the actual
+helper creation request, user versus agent invocations, failed startup, persisted
+legacy correction, and preservation of unrelated agents. Deployment preserved
+workspace/tab/pane identities, names and pins, launch records, both endpoints and
+native/guard/observer processes. Evidence: `test-results/m6-user-cli-20260917/`.
+Post-deployment checks confirmed unrelated workspace provenance and names/pins
+were unchanged. The previous catalog CLI workspace had been closed before
+deployment, so no existing live catalog badge could be visually qualified.
+Creation and persisted correction are covered by the automated tests above;
+the next browser-opened CLI provides the direct badge/placement UAT check.
+
 Further feedback found a newly created CLI workspace still named after its host,
 and removed terminals left an obscure unresolved-attempt blocker. The requested
 correction initializes default workspace/tab labels from the attested native task
