@@ -20,5 +20,5 @@ test("CLI controller retains exact pane on a safety gate and never supplies a pr
     return true;
   });
   const args = fs.readFileSync(output, "utf8").trim().split("\n");
-  assert.deepEqual(args.slice(1), ["tui", "codex", "local", "--directory", "/repo with spaces", "--no-prompt", "--codex-remote", "unix:///private/native.sock"]);
+  assert.deepEqual(args.slice(1), ["tui", "codex", "local", "--directory", "/repo with spaces", "--no-prompt", "--user-created", "--codex-remote", "unix:///private/native.sock"]);
 });
