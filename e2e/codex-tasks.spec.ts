@@ -110,10 +110,10 @@ test("full catalog rows remain readable and selectable after pagination and resi
   }
   await rows.last().click();
   const detail = dialog.locator(".codex-task-detail");
-  await expect(detail.locator("h3")).toHaveText(tasks[79]!.name);
+  await expect(detail.locator("h3").first()).toHaveText(tasks[79]!.name);
   await expect(detail.locator(".codex-identity")).toContainText(tasks[79]!.threadId);
-  if (mobile) await detail.scrollIntoViewIfNeeded();
-  await expect(detail.locator("h3")).toBeInViewport();
+  if (mobile) await detail.locator("h3").first().scrollIntoViewIfNeeded();
+  await expect(detail.locator("h3").first()).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath("dense-catalog.png") });
   await dialog.getByRole("button", { name: "[ESC] CLOSE", exact: true }).click();
   await expect(dialog).toBeHidden();
