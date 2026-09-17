@@ -2,7 +2,7 @@
 
 ## Existing-task attachment candidate — 2026-09-17
 
-Corrective M5a/M5b is implemented in `bf2b030` for loaded Haswell tasks through
+Corrective M5a/M5b is deployed in `d1104f2` for loaded Haswell tasks through
 the installed managed launcher. Exact owner/generation, empty queue, native
 readiness and live terminal proof gate attachment and reuse. CLI input
 invalidates reuse proof; reconciliation never silently duplicates a view.

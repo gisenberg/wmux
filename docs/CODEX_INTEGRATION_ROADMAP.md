@@ -1,12 +1,14 @@
 # Codex integration roadmap
 
 Rollout update — 2026-09-17: corrective M5a/M5b attachment is implemented on
-the integration branch. Candidate `bf2b030` supports **Open in CLI** for loaded
+the integration branch and deployed for UAT. Runtime `d1104f2` supports **Open in CLI** for loaded
 Haswell tasks and **Open terminal** for freshly verified views, with managed
 route, queue and exact-task checks. Both configured catalog endpoints remain
 visible: remote ownership is checked through the read-only wmux bridge, without
 enabling remote attachment. Catalog navigation now dismisses the dialog when
-opening the terminal. See the [current rollout and UAT ledger](CODEX_M6_UAT.md).
+opening the terminal, and terminal capability/focus reports preserve attachment
+proof while real input invalidates it. Served attachment, reuse, continuation
+and cleanup passed. See the [current rollout and UAT ledger](CODEX_M6_UAT.md).
 M6 remains unaccepted; the dated pre-attachment findings below are historical.
 
 UAT scope update — 2026-09-17: the user deferred physical-phone usability until

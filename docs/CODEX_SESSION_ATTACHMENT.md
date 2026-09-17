@@ -2,7 +2,7 @@
 
 ## Implementation update — 2026-09-17
 
-Candidate `bf2b030` implements M5a/M5b for loaded Haswell tasks using the
+Deployed candidate `d1104f2` implements M5a/M5b for loaded Haswell tasks using the
 qualified managed route. **Open in CLI** validates exact ownership, queue,
 route generation and terminal readiness; **Open terminal** requires fresh
 identity proof. Both navigate out of the catalog. Configured SSH peers are

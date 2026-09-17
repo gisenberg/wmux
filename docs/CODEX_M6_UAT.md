@@ -2,21 +2,43 @@
 
 ## Attachment rollout candidate — 2026-09-17
 
-Runtime candidate: `bf2b030019d73d40f08a1c73fb54bfd17083c5d4`, pushed on
-`feat/codex-m3-m6` and unmerged. M5a/M5b now provides **Open in CLI** for a
+Deployed runtime: `d1104f29c9ff73eb9e596bfcbb5fb52f6ec9ae44`, pushed on
+`feat/codex-m3-m6` and unmerged, live on Haswell at **04:52 UTC**. M5a/M5b now provides **Open in CLI** for a
 loaded Haswell task and **Open terminal** for a freshly verified existing view.
 Both configured catalog endpoints remain visible; bounded remote loaded-owner
 inspection prevents another configured server from being ignored. Remote
 attachment and Desktop-local ice3070 remain unqualified. Haswell fresh launch
 is disabled pending separate managed-route qualification.
 
-Final external `npm run check` passed **1,197 tests / 8 skips**, typechecks,
-script validation and build (run `32399ab317f88488`). The integrated attachment
+Final external `npm run check` passed **1,198 tests / 8 skips**, typechecks,
+script validation and build (run `26edd07113078b47`). The integrated attachment
 base `df2837c` previously passed the full external browser matrix: **119 cases**,
 109 intentional skips, plus all **3 login-only cases**. The rollout adds focused
 coverage for remote ownership and dismissing the catalog on terminal navigation.
 Deployment, served-browser, rollback and final focused-browser evidence is
 retained privately under `test-results/m6-attachment-rollout-20260917/`.
+
+All six focused catalog cases passed in desktop Chromium, mobile Chromium and
+mobile WebKit on `bf2b030`; final client/browser-test sources are byte-identical.
+The first direct SSH browser attempt selected Node 18 and failed fixture
+startup; the corrected run used the same Node 22 installation as the full
+verification runner. This was runner setup, not an accepted browser result.
+
+The final served browser clicked **Open in CLI**, opened the exact disposable
+task without adding a turn, dismissed the catalog and navigated to its terminal.
+Live reuse proof remained valid after capability replies and focus reports.
+A real CLI continuation appeared on the same native task; actual input then
+invalidated reuse proof as intended. Only the owned test pane was closed and
+the idle, empty-queue fixture archived. Earlier failed probes are retained:
+they exposed the catalog overlay and terminal-reply/focus invalidation defects
+fixed in this release.
+
+Deployment preserved workspace/tab/pane identities, names and pins, migrated
+the launch ledger without losing records, and kept native, guard and observer
+PIDs unchanged. Both catalog endpoints and public HTTPS health passed. Private
+matching backups and per-release rollback scripts are retained with the
+Haswell deployment. Runtime/helper/build identity is fixed to the SHA above;
+later documentation-only commits do not change the served artifact.
 
 Direct desktop UAT after rollout: refresh wmux, use **Ctrl+K → Open Codex tasks**,
 select a familiar **loaded Haswell** task, and choose **Open in CLI**. Confirm
