@@ -17,7 +17,9 @@ loader=importlib.machinery.SourceFileLoader('wmux_run',sys.argv[1]);spec=importl
 reply=bytes.fromhex('1b5b3f36323b3232631b5b3e313b303b30631b503e7c6c696267686f737474791b5c')
 assert m.terminal_reply_only(reply)
 assert m.terminal_reply_only(bytes.fromhex('1b5b313b3252'))
-for value in [b'/resume another-task',b'hello',b'\\r',reply+b'/resume other',bytes.fromhex('1b5b3230307e')+b'/resume other',b'\\x1bP>|unknown-terminal\\x1b\\\\']:
+assert m.terminal_reply_only(bytes.fromhex('1b5b491b5b4f'))
+assert m.terminal_reply_only(reply+bytes.fromhex('1b5b49'))
+for value in [b'/resume another-task',b'hello',b'\\r',reply+b'/resume other',bytes.fromhex('1b5b41'),bytes.fromhex('1b5b491b5b41'),bytes.fromhex('1b5b3230307e')+b'/resume other',b'\\x1bP>|unknown-terminal\\x1b\\\\']:
  assert not m.terminal_reply_only(value),repr(value)
 `, script], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
