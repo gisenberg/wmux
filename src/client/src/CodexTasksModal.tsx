@@ -498,7 +498,12 @@ export function CodexTasksModal({
       if (!fresh.resume.enabled || !fresh.resume.generation || fresh.task.stale || fresh.task.endpointIdentity !== task.endpointIdentity)
         throw new Error(fresh.resume.reason || "The task is unavailable. Refresh before opening another CLI.");
       if (fresh.resume.target) { onOpenTarget(fresh.resume.target); return; }
-      for (const launch of checked) await codexTasksApi.acknowledgeLaunch(launch.requestId);
+      for (const launch of checked) {
+        const { launch: acknowledged } = await codexTasksApi.acknowledgeLaunch(launch.requestId);
+        rememberLaunch({ requestId: launch.requestId, endpointId: launch.endpointId,
+          operation: "attach", endpointIdentity: launch.endpointIdentity, threadId: launch.threadId,
+          generation: launch.generation, acknowledgedAt: acknowledged.acknowledgedAt });
+      }
       const current = await codexTasksApi.launches();
       setLaunches(current.launches);
       const requestId = uuid();

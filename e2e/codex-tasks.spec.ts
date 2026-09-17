@@ -522,7 +522,8 @@ test("existing-task open revalidates its attestation, retries the same request, 
   expect(acknowledgements).toBe(1);
   await expect(dialog).toBeHidden();
   await reopenCatalog();
-  await dialog.getByRole("button", { name: "INSPECT ATTACHMENT" }).click();
+  await dialog.locator(".codex-launch-row").filter({ hasText: String(attachBodies[2]!.requestId) })
+    .getByRole("button", { name: "INSPECT ATTACHMENT" }).click();
   // A late successful verification focuses the original target without another launch.
   inspectOpens = true;
   await recovery.getByRole("button", { name: "OPEN A NEW CLI", exact: true }).click();

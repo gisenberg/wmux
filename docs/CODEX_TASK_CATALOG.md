@@ -132,7 +132,7 @@ stale attestation, a replaced endpoint, an active queue, a different server, or
 any unavailable launcher condition. The browser never supplies a trust answer.
 Browsing and display associations do not grant title ownership.
 
-Once a new view has verified its native identity, wmux seeds its automatic
+When an attested request creates a view, wmux initializes its default
 workspace and tab titles from that task's current native name. Independent
 manual pins are preserved; an unnamed task retains its existing fallback title.
 Initialization also applies when startup is uncertain: the requested task label
@@ -174,6 +174,14 @@ terminal target, and task detail uses the same verified result. If inspection
 reports `terminal_identity_unverified` (for example, because CLI input changed
 the terminal identity), inspect the terminal, explicitly acknowledge the
 unknown attachment, then choose **Open in CLI** for a deliberate new request.
+The same recovery is available beside the primary action: **Check existing CLI**
+rechecks identity, **View previous terminal** shows a surviving pane without
+claiming its native identity, and **Open a new CLI** (removed terminal) or
+**Open another CLI** (uncertain surviving view) performs the explicit recovery.
+That action rechecks existing attempts, reuses any verified terminal, refreshes
+the native route, acknowledges unresolved warnings for this exact task, and
+requests a new view. Unavailable routes and still-opening attempts prevent a
+replacement. It never stops the previous CLI or the native task.
 The receipt is conservative: CLI input invalidates it because `resume` can
 switch the task behind a terminal. Acknowledgement does not retry or focus
 anything, and the browser never makes that new request automatically.
