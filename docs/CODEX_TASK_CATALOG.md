@@ -132,6 +132,13 @@ stale attestation, a replaced endpoint, an active queue, a different server, or
 any unavailable launcher condition. The browser never supplies a trust answer.
 Pins and naming remain unchanged.
 
+Once a new view has verified its native identity, wmux seeds its automatic
+workspace and tab titles from that task's current native name. Independent
+manual pins are preserved; an unnamed task retains its existing fallback title.
+Reusing or inspecting an existing view does not reseed its titles or transfer
+the original pane's naming receipt. This is an initial name, not a claim of
+continuous name synchronization after arbitrary CLI input.
+
 Owner checking is deliberately strict and bounded: every configured endpoint,
 including an SSH endpoint, must be checked. An unavailable or incomplete owner
 scan is unknown and disables attachment rather than selecting a likely server.

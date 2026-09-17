@@ -8,7 +8,7 @@ import { queryCodexCatalog } from "./codex-catalog-rpc.js";
 const THREAD = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 export type AttachmentPublic = { enabled: boolean; reason: string | null; generation: string | null };
-export type AttachmentAttestation = { public: AttachmentPublic; private: { fingerprint: string; endpointId: string; threadId: string; generation: string; cwd: string | null; route: { launcherPath: string; deploymentPath: string; managedArgv: string[] }; receipt: Record<string, unknown> } | null };
+export type AttachmentAttestation = { public: AttachmentPublic; private: { fingerprint: string; endpointId: string; threadId: string; generation: string; cwd: string | null; name?: string | null; route: { launcherPath: string; deploymentPath: string; managedArgv: string[] }; receipt: Record<string, unknown> } | null };
 export type AttachmentProbe = (input: { socketPath: string; threadId: string }) => Promise<unknown>;
 export type AttachmentInspector = (input: { socketPath: string; launcherPath: string; deploymentPath: string; cwd: string | null }) => Promise<Record<string, unknown>>;
 
@@ -90,7 +90,7 @@ export async function attestCodexAttachment(input: {
   // deployment/module tree, launcher, socket peer and effective policy facts.
   const routeGeneration = createHash("sha256").update(JSON.stringify(receipt)).digest("hex");
   const fingerprint = createHash("sha256").update(JSON.stringify([endpoint.id, threadId, routeGeneration])).digest("hex");
-  return { public: { enabled: true, reason: null, generation: routeGeneration }, private: { fingerprint, endpointId: endpoint.id, threadId, generation: routeGeneration, cwd,
+  return { public: { enabled: true, reason: null, generation: routeGeneration }, private: { fingerprint, endpointId: endpoint.id, threadId, generation: routeGeneration, cwd, name: typeof thread.name === "string" ? thread.name : null,
     route: { launcherPath: endpoint.managedLaunch.launcherPath, deploymentPath: endpoint.managedLaunch.deploymentPath,
       // Exact installed dispatcher route.  `--remote` is never present.
       managedArgv: [endpoint.managedLaunch.launcherPath, "resume", threadId] }, receipt } };

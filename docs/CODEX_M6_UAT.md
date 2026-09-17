@@ -1,5 +1,16 @@
 # Combined M3–M6 UAT
 
+## User feedback — 2026-09-17
+
+The user confirmed **Open in CLI works as expected for Haswell tasks**. This
+accepts the Haswell attachment workflow, not the unsupported Desktop-local
+ice3070 route or overall M6. Follow-up UAT covers two requested corrections:
+newly verified CLI views should begin with the native task name as their
+automatic workspace/tab title, preserving independent manual pins; and the
+Tasks window should use wmux's shared font, palette and compact layout.
+Initial title seeding does not transfer the original naming receipt or claim
+continuous name mirroring after CLI input changes the view's identity.
+
 ## Attachment rollout candidate — 2026-09-17
 
 Deployed runtime: `d1104f29c9ff73eb9e596bfcbb5fb52f6ec9ae44`, pushed on
@@ -81,7 +92,8 @@ The combined checkpoint tracks these interaction checks:
 | Case | User action and expected result | Decision |
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
-| M6-H2 — Personal desktop workflow | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. See its current work/history and continue it through the native prompt; confirm the continuation appears in Desktop. Judge whether host selection, Open terminal and inspection explanations are usable. | Pending direct UAT of the corrective M5a/M5b rollout. |
+| M6-H2 — Haswell desktop attachment | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. | User confirmed Open in CLI worked as expected for Haswell sessions (2026-09-17). |
+| M6-H2b — Default title and Tasks presentation | Open a new CLI view and confirm its automatic workspace/tab names match the native task; judge the Tasks window's font, palette and layout against wmux. | Rework requested by the user; awaiting corrected rollout and confirmation. |
 | M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
 
 The phone deferral applies to direct physical-device usability only. Keep

@@ -11,7 +11,7 @@ import type { AttachmentAttestation } from "./codex-attachment-route.js";
 
 export const attachmentReason = (reason: string): string => ({
   attachment_unconfigured: "This endpoint has no qualified managed CLI route. Configure and qualify its managed launcher before attaching.",
-  attachment_ssh_unsupported: "Existing-task attachment currently requires a configured local Linux execution host. This SSH route is not qualified.",
+  attachment_ssh_unsupported: "This task is on another host. This release opens CLI views only for tasks running on the wmux server; Desktop-local tasks on other hosts cannot be attached here.",
   attachment_platform_unsupported: "Existing-task attachment is qualified only on Linux.",
   attachment_route_unavailable: "The managed route or guard readiness check is unavailable. Inspect the installed launcher and guard; no fallback was used.",
   attachment_route_untrusted: "The installed guard or account does not match this endpoint. Restore a qualified route before attaching.",
@@ -83,7 +83,17 @@ export class CodexTasksService {
           const config = this.catalog.attachmentConfig(request.endpointId);
           if (!found || found.workspace.id !== target.workspaceId || found.tab.id !== target.tabId || found.pane.machineId !== config.machineId) return false;
           const attestation = await this.requireAttachment(request);
-          return await options.verifyAttached?.(request, target, attestation) === true;
+          if (await options.verifyAttached?.(request, target, attestation) !== true) return false;
+          const current = state.findPaneContext(target.paneId);
+          if (!current || current.workspace.id !== target.workspaceId || current.tab.id !== target.tabId || current.pane.machineId !== config.machineId) return false;
+          // Seed only a newly verified view; reuse must not claim the original
+          // receipt's naming binding or replace a later user choice.
+          const name = attestation.private?.name;
+          if (this.launches.get(request.requestId)?.status === "opening" && name?.trim()) {
+            state.setAutoTitle({ workspaceId: target.workspaceId, tabId: target.tabId,
+              sourcePaneId: target.paneId, title: name, exact: true });
+          }
+          return true;
         } catch { return false; }
       },
     });

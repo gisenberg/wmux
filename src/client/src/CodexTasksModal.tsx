@@ -515,7 +515,7 @@ export function CodexTasksModal({
       >
         <header>
           <div>
-            <span>WMUX::CODEX_CATALOG</span>
+            <span>TASK CATALOG</span>
             <h2>CODEX TASKS</h2>
           </div>
           <button type="button" onClick={onClose}>
@@ -524,7 +524,7 @@ export function CodexTasksModal({
         </header>
         <div className="codex-tasks-toolbar">
           <label>
-            Endpoint{" "}
+            Execution host{" "}
             <select
               aria-label="Codex endpoint"
               value={endpointId}
@@ -571,7 +571,7 @@ export function CodexTasksModal({
                   key={taskKey(task)}
                   onClick={() => void read(task)}
                 >
-                  <strong>{task.name || "Untitled task"}</strong>
+                  <strong title={task.name || "Untitled task"}>{task.name || "Untitled task"}</strong>
                   <small>{identity(task)}</small>
                   <span>
                     {task.status}

@@ -17,9 +17,10 @@ test("live attachment rechecks route and exact pane; deleting the pane cannot re
   const catalog = new CodexTaskCatalog(() => machines, [{ id: "native", label: "Native", machineId: "local", transport: "local", socketPath: "/private/native.sock", managedLaunch: { launcherPath: "/private/launcher", deploymentPath: "/private/release" } }]);
   const generation = "a".repeat(64), threadId = "123e4567-e89b-12d3-a456-426614174000";
   let attestations = 0, enabled = true, opened = 0, verified = 0;
+  let name = "Native task 日本語 👩🏽‍💻";
   catalog.attestAttachment = async () => { attestations++; return {
     public: { enabled, reason: enabled ? null : "attachment_route_untrusted", generation },
-    private: enabled ? { fingerprint: "f", endpointId: "native", threadId, generation, cwd: "/work", route: { launcherPath: "/private/launcher", deploymentPath: "/private/release", managedArgv: ["/private/launcher", "resume", threadId] }, receipt: {} } : null,
+    private: enabled ? { fingerprint: "f", endpointId: "native", threadId, generation, cwd: "/work", name, route: { launcherPath: "/private/launcher", deploymentPath: "/private/release", managedArgv: ["/private/launcher", "resume", threadId] }, receipt: {} } : null,
   }; };
   const service = new CodexTasksService(state, () => machines, { catalog,
     openAttached: async () => { opened++; return target; },
@@ -29,14 +30,56 @@ test("live attachment rechecks route and exact pane; deleting the pane cannot re
   try {
     assert.equal((await service.launches.launch(request)).status, "opened");
     assert.equal(opened, 1); assert.equal(verified, 1); assert.equal(attestations, 2);
+    assert.equal(state.findPaneContext(target.paneId)!.workspace.name, name);
+    assert.equal(state.findPaneContext(target.paneId)!.tab.title, name);
+    assert.equal(state.findPaneContext(target.paneId)!.workspace.nameSource, "auto");
+    assert.equal(state.findPaneContext(target.paneId)!.tab.titleSource, "auto");
+    const originalName = name;
+    name = "Later native name";
     enabled = false;
     assert.equal((await service.launches.reconcile(service.launches.get(request.requestId)!)).status, "unknown");
     assert.equal(verified, 1, "guard drift refuses even a live process receipt");
     enabled = true;
     assert.equal((await service.launches.reconcile(service.launches.get(request.requestId)!)).status, "opened");
+    assert.equal(state.findPaneContext(target.paneId)!.workspace.name, originalName, "inspection does not take over ongoing naming");
     state.removeWorkspace(workspace.id);
     assert.equal(await service.launches.verifiedTarget(request.endpointIdentity, generation, threadId), null);
     assert.equal((await service.launches.reconcile(service.launches.get(request.requestId)!)).status, "unknown");
     assert.equal(opened, 1, "reconciliation never creates a replacement pane");
   } finally { service.close(); state.flush(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("attachment default names preserve independent pins, unnamed views and unverified targets", async () => {
+  for (const scenario of [
+    { workspacePin: true, tabPin: false, name: "Native 日本語", verified: true },
+    { workspacePin: false, tabPin: true, name: "Native 日本語", verified: true },
+    { workspacePin: true, tabPin: true, name: "Native 日本語", verified: true },
+    { workspacePin: false, tabPin: false, name: null, verified: true },
+    { workspacePin: false, tabPin: false, name: "Native 日本語", verified: false },
+  ]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attach-name-"));
+    const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+    const state = new StateStore(machines, path.join(directory, "state.json"));
+    const workspace = state.createWorkspace("local"), tab = workspace.tabs[0]!;
+    const target = { workspaceId: workspace.id, tabId: tab.id, paneId: tab.panes[0]!.id };
+    if (scenario.workspacePin) state.setWorkspaceTitle(workspace.id, "Workspace pin");
+    if (scenario.tabPin) state.setTabTitle(workspace.id, tab.id, "Tab pin");
+    const before = structuredClone(state.findPaneContext(target.paneId)!);
+    const catalog = new CodexTaskCatalog(() => machines, [{ id: "native", label: "Native", machineId: "local", transport: "local", socketPath: "/private/native.sock", managedLaunch: { launcherPath: "/private/launcher", deploymentPath: "/private/release" } }]);
+    const generation = "a".repeat(64), threadId = "123e4567-e89b-12d3-a456-426614174000";
+    catalog.attestAttachment = async () => ({ public: { enabled: true, reason: null, generation },
+      private: { fingerprint: "f", endpointId: "native", threadId, generation, cwd: "/work", name: scenario.name,
+        route: { launcherPath: "/private/launcher", deploymentPath: "/private/release", managedArgv: [] }, receipt: {} } });
+    const service = new CodexTasksService(state, () => machines, { catalog, openAttached: async () => target, verifyAttached: async () => scenario.verified });
+    try {
+      await service.launches.launch({ operation: "attach", requestId: "123e4567-e89b-12d3-a456-426614174001", endpointId: "native", endpointIdentity: catalog.identity("native")!, generation, threadId });
+      const after = state.findPaneContext(target.paneId)!;
+      assert.equal(after.workspace.name, scenario.verified && scenario.name && !scenario.workspacePin ? scenario.name : before.workspace.name);
+      assert.equal(after.tab.title, scenario.verified && scenario.name && !scenario.tabPin ? scenario.name : before.tab.title);
+      state.flush();
+      const restored = new StateStore(machines, path.join(directory, "state.json")).findPaneContext(target.paneId)!;
+      assert.equal(restored.workspace.name, after.workspace.name);
+      assert.equal(restored.tab.title, after.tab.title);
+    } finally { service.close(); state.flush(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }
 });
