@@ -1,5 +1,15 @@
 # Codex plain-start conformance matrix
 
+## Desktop milestone accepted — 2026-09-17
+
+The user accepted the deployed desktop milestone through `049e66e` and requested
+the PR. This includes M6-H2b naming, recovery, Firefox layout and user-origin CLI
+workspace corrections. Full checks passed 1,202 tests / eight skips; the last
+UI-changing revision passed 12 catalog browser cases. Physical-phone usability
+is deferred, unsupported attachment routes remain excluded, and the completed
+catalog soak is not attachment-soak evidence. The [UAT decision](CODEX_M6_UAT.md)
+supersedes pending desktop-acceptance statements in the dated history below.
+
 ## Haswell UAT feedback corrections — 2026-09-17
 
 Runtime `049e66e` additionally separates user-initiated catalog CLI workspaces

@@ -1,5 +1,22 @@
 # Combined M3–M6 UAT
 
+## Accepted desktop milestone — 2026-09-17
+
+The user explicitly accepted the milestone and authorized Git completion and a
+pull request. This accepts the deployed Haswell desktop M3–M6 scope, including
+M6-H2b naming, inline recovery, Firefox catalog layout and user-origin CLI
+workspace provenance. The accepted runtime is
+`049e66eaa052130bfcc9507e627d6f2331d89048`; its full check passed 1,202 tests /
+8 skips. The last UI-changing revision passed all 12 catalog browser cases.
+
+M6-H3 physical-phone usability remains explicitly deferred. Desktop-local/remote
+CLI attachment and unqualified fresh-launch routes remain outside the accepted
+host/client matrix. The completed 24-hour soak qualifies catalog/associations;
+no additional 24-hour soak of the later attachment implementation is claimed.
+The user's milestone acceptance is recorded separately from those test limits.
+The dated feedback below preserves the pre-acceptance history; its outstanding
+desktop UAT statements are superseded by this decision.
+
 ## User feedback — 2026-09-17
 
 Workspace provenance clarification: the **AI** badge and automatic agent
@@ -185,7 +202,7 @@ The combined checkpoint tracks these interaction checks:
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
 | M6-H2 — Haswell desktop attachment | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. | User confirmed Open in CLI worked as expected for Haswell sessions (2026-09-17). |
-| M6-H2b — Default title, recovery and Tasks presentation | Confirm the automatic workspace/tab names match the requested task, including uncertain startup; recover a removed terminal using the controls beside Open in CLI; judge the full catalog layout in Firefox. | Dense layout corrected in `a24348b`; naming and inline recovery corrected in `69e3837`. Full checks and 12 browser cases passed. Awaiting user confirmation. |
+| M6-H2b — Default title, recovery, provenance and Tasks presentation | Confirm task-derived automatic names, recovery beside Open in CLI, readable Firefox layout, and AI/parent rules only for agent-launched workspaces. | Accepted by the user as part of the deployed desktop milestone on 2026-09-17. Automated evidence and its limits are recorded above. |
 | M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
 
 The phone deferral applies to direct physical-device usability only. Keep
@@ -320,11 +337,10 @@ the final report, all assertions and successful unit exit.
 
 ## Release decision
 
-Accept M6 only after corrective M5a/M5b qualification, M6-H1, M6-H2/M6-H2b and
-the relevant overnight gate pass, with M6-H3 explicitly recorded as deferred
-rather than accepted. The original soak does not qualify newly implemented
-attachment code. Overnight qualification remains
-an automated engineering gate, not a test delegated to the user. Record any
-rework or deferred capability explicitly. The previous accepted release and
-private state/configuration backup remain available for rollback. A deployment
-or passing fixture does not by itself accept a milestone or merge the branch.
+The user accepted the current desktop milestone on 2026-09-17 and requested
+the PR. M6-H1/H2/H2b are accepted; M6-H3 remains deferred. Preserve the declared
+host/client restrictions and the distinction between the completed catalog soak
+and focused attachment qualification. No unperformed attachment overnight run
+is relabeled as passed. The preceding release and private state/configuration
+backup remain available for rollback. The PR is a separate integration action;
+milestone acceptance does not mean it has already merged.

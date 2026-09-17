@@ -1,5 +1,15 @@
 # Codex integration roadmap
 
+Accepted — 2026-09-17: the user accepted the deployed Haswell desktop M3–M6
+milestone and requested Git completion and a PR. This includes the naming,
+recovery, Firefox layout and workspace-provenance corrections through runtime
+`049e66e`. Physical-phone UAT remains deferred; Desktop-local/remote attachment
+and unqualified fresh-launch routes remain outside the accepted matrix. The
+catalog soak does not claim overnight coverage of the later attachment code.
+See the [acceptance decision](CODEX_M6_UAT.md#accepted-desktop-milestone--2026-09-17).
+The dated progress entries below retain their historical status at the time;
+their pending desktop acceptance statements are superseded by this decision.
+
 Workspace provenance follow-up — 2026-09-17: deployed runtime `049e66e` treats
 browser CLI launches as user workspaces, without AI badges or inherited agent
 parents. The badge and automatic parent/child behavior remain for workspaces
