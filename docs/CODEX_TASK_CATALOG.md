@@ -175,7 +175,8 @@ reports `terminal_identity_unverified` (for example, because CLI input changed
 the terminal identity), inspect the terminal, explicitly acknowledge the
 unknown attachment, then choose **Open in CLI** for a deliberate new request.
 The same recovery is available beside the primary action: **Check existing CLI**
-rechecks identity, **View previous terminal** shows a surviving pane without
+rechecks identity, **Retry previous open** resends only the same request ID,
+**View previous terminal** shows a surviving pane without
 claiming its native identity, and **Open a new CLI** (removed terminal) or
 **Open another CLI** (uncertain surviving view) performs the explicit recovery.
 That action rechecks existing attempts, reuses any verified terminal, refreshes

@@ -14,6 +14,25 @@ acknowledging warnings; late successful verification reuses its terminal. Missin
 terminals are reported as removed, without automatic acknowledgment or relaunch.
 These naming/recovery corrections remain M6-H2b UAT, not accepted behavior yet.
 
+Deployed runtime: `69e3837bbe25222ff80d59cca8d2d6f6d1655951` at **16:17 UTC**,
+pushed and unmerged. External full check `e58d388dd259ee87` passed **1,200 tests /
+8 skips**, typechecks, script validation and production build. All **12 catalog
+browser cases** passed in Firefox, desktop/mobile Chromium and mobile WebKit.
+Coverage includes same-request inline retry, removed-terminal replacement,
+native unavailability preventing acknowledgment/relaunch, late verified reuse,
+reload recovery, naming after uncertain startup, restoration after restart,
+and preservation of pins/existing automatic names. Existing workspace state,
+launch records, catalog endpoints and native/guard/observer processes survived
+the wmux-only restart. Evidence: `test-results/m6-recovery-20260917/`.
+Post-deployment Firefox and Chromium checks exercised the actual affected task:
+both default workspace/tab labels became its current native name with automatic
+ownership, and the inline recovery controls were visible with fitting text.
+Existing manual pins were unchanged and no additional CLI was created. The old
+attempt remains `unknown` / `launch_outcome_unknown`: repairing display labels
+does not upgrade startup proof. Live evidence is `served-browser.json`,
+`live-repair.json` and private recovery screenshots. Direct user acceptance and
+physical-phone deferral are unchanged.
+
 The user rejected the revised Tasks layout in Firefox: a full catalog compressed
 each task to 32 pixels, painting its name, identity, status and preview over
 adjacent rows. Read-only live reproduction found all 40 rows affected in both
@@ -147,7 +166,7 @@ The combined checkpoint tracks these interaction checks:
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
 | M6-H2 — Haswell desktop attachment | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. | User confirmed Open in CLI worked as expected for Haswell sessions (2026-09-17). |
-| M6-H2b — Default title and Tasks presentation | Open a new CLI view and confirm its automatic workspace/tab names match the native task; judge the Tasks window's font, palette and layout against wmux, including a full list in Firefox. | Dense layout rejected in Firefox; corrected in `a24348b`, with 12 browser cases and full checks passed. Awaiting user confirmation. |
+| M6-H2b — Default title, recovery and Tasks presentation | Confirm the automatic workspace/tab names match the requested task, including uncertain startup; recover a removed terminal using the controls beside Open in CLI; judge the full catalog layout in Firefox. | Dense layout corrected in `a24348b`; naming and inline recovery corrected in `69e3837`. Full checks and 12 browser cases passed. Awaiting user confirmation. |
 | M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
 
 The phone deferral applies to direct physical-device usability only. Keep

@@ -1,5 +1,12 @@
 # Codex integration roadmap
 
+Naming/recovery UAT follow-up — 2026-09-17: runtime `69e3837` is deployed for
+M6-H2b. Uncertain startup now retains the requested native task name as an
+automatic display label, preserving existing names and pins. Inline recovery
+replaces the need to find request IDs in the launch history. Full checks passed
+1,200 tests / eight skips and all 12 catalog browser cases. Direct acceptance
+of these corrections remains open; see the [acceptance ledger](CODEX_M6_UAT.md).
+
 Firefox UAT follow-up — 2026-09-17: M6-H2b appearance was rejected because dense
 catalog rows overlap. Chromium reproduces the same defect. The correction and
 40/80-row Firefox/Chromium/WebKit regression belong to M6-H2b. Runtime `a24348b`

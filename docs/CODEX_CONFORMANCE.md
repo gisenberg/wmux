@@ -2,6 +2,15 @@
 
 ## Haswell UAT feedback corrections — 2026-09-17
 
+Runtime `69e3837` corrects two later UAT findings: an uncertain CLI launch kept
+its host-based default name, and a removed terminal left a hard-to-find recovery
+action. Requested native task names now initialize only default workspace/tab
+labels independently of startup verification; names never prove a connection.
+Recovery beside Open in CLI can check/retry the prior request, view its terminal,
+or explicitly request a replacement after fresh checks and acknowledgment. Full
+checks passed **1,200 tests / eight skips**, plus all **12 catalog browser cases**.
+The naming/recovery corrections are deployed but await direct M6-H2b acceptance.
+
 Subsequent Firefox UAT rejected the dense catalog layout. Live reproduction also
 failed in Chromium; the earlier sparse browser cases missed vertical row overlap.
 M6-H2b remains open. The corrective regression covers 40/80 task rows, Unicode,
