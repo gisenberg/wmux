@@ -112,6 +112,7 @@ export function CodexTasksModal({
   const [cwd, setCwd] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -139,8 +140,8 @@ export function CodexTasksModal({
       (item.status === "opening" ||
         (item.status === "unknown" && !item.acknowledgedAt)),
   );
-  const unsettledExistingOpen = selected
-    ? launches.some(
+  const unsettledExistingAttempts = selected
+    ? launches.filter(
         (item) =>
           item.operation === "attach" &&
           item.endpointId === selected.endpointId &&
@@ -149,7 +150,12 @@ export function CodexTasksModal({
           (item.status === "opening" ||
             (item.status === "unknown" && !item.acknowledgedAt)),
       )
-    : false;
+    : [];
+  const unsettledExistingOpen = unsettledExistingAttempts.length > 0;
+  const previousTerminal = unsettledExistingAttempts.find(item => item.target && targets.some(target =>
+    target.workspaceId === item.target!.workspaceId && target.tabId === item.target!.tabId && target.paneId === item.target!.paneId))?.target;
+  const removedTerminals = unsettledExistingOpen && unsettledExistingAttempts.every(item => item.target && !targets.some(target =>
+    target.workspaceId === item.target!.workspaceId && target.tabId === item.target!.tabId && target.paneId === item.target!.paneId));
   const matchingAssociations = selected
     ? associations.filter(
         (item) =>
@@ -193,7 +199,8 @@ export function CodexTasksModal({
         .map((item) => ({
           requestId: item.requestId,
           endpointId: item.endpointId,
-          ...(item.operation ? { operation: item.operation } : {}),
+          ...(item.operation ? { operation: item.operation, endpointIdentity: item.endpointIdentity,
+            threadId: item.threadId, generation: item.generation } : {}),
           status: "unknown" as const,
           target: null,
           reason: "launch outcome not listed; reconcile explicitly",
@@ -470,6 +477,38 @@ export function CodexTasksModal({
       setError(errorText(nextError));
     }
   };
+  const recoverExisting = async () => {
+    if (launchBusy.current || !selected) return;
+    launchBusy.current = true;
+    setRecoveryBusy(true);
+    setError("");
+    const task = selected;
+    try {
+      // Recheck every attempt for this exact task. A recovered terminal wins
+      // over creating another; a still-opening request cannot be acknowledged.
+      const checked: CodexTaskLaunch[] = [];
+      for (const attempt of unsettledExistingAttempts) {
+        const { launch } = await codexTasksApi.reconcileLaunch(attempt.requestId);
+        setLaunches(current => [launch, ...current.filter(item => item.requestId !== launch.requestId)]);
+        if (launch.status === "opened" && launch.target) { onOpenTarget(launch.target); return; }
+        if (launch.status !== "unknown") throw new Error("The earlier CLI is still opening. Check it again shortly.");
+        checked.push(launch);
+      }
+      const fresh = await codexTasksApi.read(task.endpointId, task.threadId);
+      if (!fresh.resume.enabled || !fresh.resume.generation || fresh.task.stale || fresh.task.endpointIdentity !== task.endpointIdentity)
+        throw new Error(fresh.resume.reason || "The task is unavailable. Refresh before opening another CLI.");
+      if (fresh.resume.target) { onOpenTarget(fresh.resume.target); return; }
+      for (const launch of checked) await codexTasksApi.acknowledgeLaunch(launch.requestId);
+      const current = await codexTasksApi.launches();
+      setLaunches(current.launches);
+      const requestId = uuid();
+      if (!requestId) throw new Error("A secure request ID is unavailable.");
+      launchBusy.current = false;
+      await openExisting({ requestId, endpointId: task.endpointId, endpointIdentity: task.endpointIdentity,
+        operation: "attach", threadId: task.threadId, generation: fresh.resume.generation });
+    } catch (nextError) { setError(errorText(nextError)); }
+    finally { launchBusy.current = false; setRecoveryBusy(false); }
+  };
   const acknowledge = async (requestId: string) => {
     try {
       const response = await codexTasksApi.acknowledgeLaunch(requestId);
@@ -632,11 +671,11 @@ export function CodexTasksModal({
                 </dl>
                 {detail ? (
                   <>
-                    {detail.resume.enabled ? (
+                    {detail.resume.enabled || unsettledExistingOpen ? (
                       <section className="codex-existing-open">
                         <button
                           type="button"
-                          disabled={unsettledExistingOpen}
+                          disabled={unsettledExistingOpen || recoveryBusy || !detail.resume.enabled}
                           onClick={() => void openExisting()}
                         >
                           {detail.resume.target
@@ -648,11 +687,21 @@ export function CodexTasksModal({
                             ? "The verified terminal is rechecked before it is focused."
                             : "Opens this exact loaded task in a managed CLI view."}
                         </small>
-                        <p>
-                          {unsettledExistingOpen
-                            ? "An earlier open request is unresolved. Inspect the terminal identity, then acknowledge it before deliberately opening another client."
-                            : "Active tasks share the original task. Native input in any client affects that same task."}
-                        </p>
+                        {unsettledExistingOpen ? (
+                          <div className="codex-open-recovery" role="group" aria-label="Recover CLI opening">
+                            <p>{removedTerminals
+                              ? "The previous wmux terminal was removed. Open a new CLI to continue viewing this task."
+                              : "The earlier CLI could not be verified. Check it or view its terminal before opening another. Another CLI may still be running."}</p>
+                            <button type="button" disabled={recoveryBusy}
+                              onClick={() => void reconcile(unsettledExistingAttempts.at(-1)!.requestId)}>CHECK EXISTING CLI</button>
+                            {previousTerminal ? <button type="button" disabled={recoveryBusy}
+                              onClick={() => onOpenTarget(previousTerminal)}>VIEW PREVIOUS TERMINAL</button> : null}
+                            <button type="button" disabled={recoveryBusy || !detail.resume.enabled || unsettledExistingAttempts.some(item => item.status === "opening")}
+                              onClick={() => void recoverExisting()}>{recoveryBusy ? "CHECKING CLI…" : removedTerminals ? "OPEN A NEW CLI" : "OPEN ANOTHER CLI"}</button>
+                            <small>Checks for an existing CLI first. If none can be verified, this clears the previous open warning and requests a new view. It does not stop another CLI or the task.</small>
+                            {!detail.resume.enabled ? <p>Open unavailable: {detail.resume.reason}</p> : null}
+                          </div>
+                        ) : <p>Active tasks share the original task. Native input in any client affects that same task.</p>}
                       </section>
                     ) : (
                       <p className="codex-resume-disabled">

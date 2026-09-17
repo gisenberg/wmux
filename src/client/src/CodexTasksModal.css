@@ -96,6 +96,9 @@
 .codex-launch,
 .codex-existing-open { display: grid; gap: 8px; }
 .codex-existing-open > button { border-color: var(--line-bright); color: var(--gold); font-weight: 700; }
+.codex-open-recovery { display: grid; gap: 8px; }
+.codex-open-recovery button { height: auto; min-height: 30px; white-space: normal; }
+.codex-open-recovery p { margin: 0; }
 .codex-tasks-error { color: var(--red); padding: 0 16px; }
 .codex-resume-disabled { color: var(--gold); }
 

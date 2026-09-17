@@ -67,6 +67,7 @@ export interface CodexTaskLaunchesOptions {
   openAttached?: (request: CodexAttachmentRequest) => Promise<CodexTaskTarget>;
   verifyAttached?: (request: CodexAttachmentRequest, target: CodexTaskTarget) => Promise<boolean>;
   recoverAttached?: (request: CodexAttachmentRequest) => CodexTaskTarget | null;
+  targetExists?: (target: CodexTaskTarget) => boolean;
 }
 
 /** Durable intent precedes delivery; uncertain delivery never creates an automatic retry. */
@@ -197,6 +198,9 @@ export class CodexTaskLaunches {
     }
     const target = stored.target;
     if (!target) return structuredClone(stored);
+    if (this.options.targetExists?.(target) === false) {
+      return this.replace({ ...stored, status: "unknown", reason: "attachment_target_removed" });
+    }
     const verified = await this.options.verifyAttached?.(stored, target);
     if (verified && stored.status !== "opened") return this.replace({ ...stored, status: "opened", reason: null });
     if (!verified && stored.status === "opened") return this.replace({ ...stored, status: "unknown", reason: "terminal_identity_unverified" });

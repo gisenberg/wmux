@@ -411,6 +411,8 @@ test("existing-task open revalidates its attestation, retries the same request, 
   const attachBodies: Array<Record<string, unknown>> = [];
   let firstAttach = true;
   let stale = false;
+  let inspectOpens = false;
+  let acknowledgements = 0;
   let recordedLaunch: Record<string, unknown> | null = null;
   await page.route("**/api/codex-tasks/endpoints", route => route.fulfill({ json: { endpoints: [endpoint] } }));
   await page.route("**/api/codex-tasks/list", route => route.fulfill({ json: { endpoint, tasks: [{ ...task, stale }], nextCursor: null } }));
@@ -429,19 +431,26 @@ test("existing-task open revalidates its attestation, retries the same request, 
     const pathname = new URL(route.request().url()).pathname;
     if (route.request().method() === "GET" && pathname === "/api/codex-task-launches")
       return route.fulfill({ json: { launches: recordedLaunch ? [recordedLaunch] : [] } });
-    if (route.request().method() === "GET") return route.fulfill({ json: { launch: {
+    if (route.request().method() === "GET") {
+      recordedLaunch = {
       requestId: pathname.split("/")[3], endpointId: endpoint.id,
       endpointIdentity: endpoint.identity, operation: "attach", threadId: task.threadId,
-      generation: "opaque-attestation", status: "unknown", target: openedTarget,
-      reason: "terminal_identity_unverified", createdAt: sampledAt,
-    } } });
-    if (pathname.endsWith("/acknowledge")) return route.fulfill({ json: { launch: {
+      generation: "opaque-attestation", status: inspectOpens ? "opened" : "unknown", target: openedTarget,
+      reason: inspectOpens ? null : "attachment_target_removed", createdAt: sampledAt,
+      };
+      return route.fulfill({ json: { launch: recordedLaunch } });
+    }
+    if (pathname.endsWith("/acknowledge")) {
+      acknowledgements++;
+      recordedLaunch = {
       requestId: pathname.split("/")[3], endpointId: endpoint.id,
       endpointIdentity: endpoint.identity, operation: "attach", threadId: task.threadId,
       generation: "opaque-attestation", status: "unknown", target: openedTarget,
       reason: "terminal_identity_unverified", createdAt: sampledAt,
       acknowledgedAt: new Date().toISOString(),
-    } } });
+      };
+      return route.fulfill({ json: { launch: recordedLaunch } });
+    }
     const body = JSON.parse(route.request().postData() || "{}") as Record<string, unknown>;
     attachBodies.push(body);
     if (firstAttach) {
@@ -496,14 +505,30 @@ test("existing-task open revalidates its attestation, retries the same request, 
   await reopenCatalog();
   await expect(dialog.getByRole("button", { name: "OPEN TARGET" })).toBeHidden();
   await dialog.getByRole("button", { name: "INSPECT ATTACHMENT" }).click();
-  await expect(dialog).toContainText("terminal_identity_unverified");
+  await expect(dialog).toContainText("attachment_target_removed");
   await expect(dialog.getByRole("button", { name: "OPEN TARGET" })).toBeHidden();
-  await dialog.getByRole("button", { name: /I INSPECTED THIS ATTACHMENT/ }).click();
-  await expect(dialog.getByRole("button", { name: "OPEN IN CLI" })).toBeEnabled();
-  await dialog.getByRole("button", { name: "OPEN IN CLI" }).click();
+  const recovery = dialog.getByRole("group", { name: "Recover CLI opening" });
+  await expect(recovery).toContainText("previous wmux terminal was removed");
+  // Recovery must recheck the native route before acknowledging or launching.
+  stale = true;
+  await recovery.getByRole("button", { name: "OPEN A NEW CLI", exact: true }).click();
+  await expect(dialog).toContainText("attestation expired after refresh");
+  expect(acknowledgements).toBe(0);
+  expect(attachBodies.length).toBe(2);
+  stale = false;
+  await recovery.getByRole("button", { name: "OPEN A NEW CLI", exact: true }).click();
   await expect.poll(() => attachBodies.length).toBe(3);
   expect(attachBodies[2]!.requestId).not.toBe(attachBodies[0]!.requestId);
+  expect(acknowledgements).toBe(1);
   await expect(dialog).toBeHidden();
+  await reopenCatalog();
+  await dialog.getByRole("button", { name: "INSPECT ATTACHMENT" }).click();
+  // A late successful verification focuses the original target without another launch.
+  inspectOpens = true;
+  await recovery.getByRole("button", { name: "OPEN A NEW CLI", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(attachBodies.length).toBe(3);
+  expect(acknowledgements).toBe(1);
   stale = true;
   await reopenCatalog();
   await expect(dialog).toContainText("Open unavailable: attestation expired after refresh");

@@ -135,8 +135,10 @@ Browsing and display associations do not grant title ownership.
 Once a new view has verified its native identity, wmux seeds its automatic
 workspace and tab titles from that task's current native name. Independent
 manual pins are preserved; an unnamed task retains its existing fallback title.
-Reusing or inspecting an existing view does not reseed its titles or transfer
-the original pane's naming receipt. This is an initial name, not a claim of
+Initialization also applies when startup is uncertain: the requested task label
+does not prove a successful attachment. Recovery can fill an older view's default
+placeholders, but preserves existing automatic names and independent manual pins.
+It does not transfer the original pane's naming receipt. This is an initial name, not a claim of
 continuous name synchronization after arbitrary CLI input.
 
 Owner checking is deliberately strict and bounded: every configured endpoint,

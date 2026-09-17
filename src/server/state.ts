@@ -109,6 +109,8 @@ interface SetAutoTitleInput {
   title: string;
   /** Trusted native names were already validated at the binding boundary. */
   exact?: boolean;
+  /** Initialize placeholders without replacing an automatic or manually chosen title. */
+  onlyDefault?: boolean;
   tabId?: string;
   sourcePaneId?: string;
   descriptor?: string;
@@ -681,6 +683,7 @@ export class StateStore extends EventEmitter {
     let workspaceApplied = false;
     let tabApplied = false;
     if (ownership.workspace && workspace.nameSource !== "user"
+      && (!input.onlyDefault || workspace.nameSource === "default")
       && (workspace.name !== title || workspace.nameSource !== "auto")) {
       workspace.name = title;
       workspace.nameSource = "auto";
@@ -701,6 +704,7 @@ export class StateStore extends EventEmitter {
       ? sourceTab
       : undefined;
     if (tab && ownership.tab && tab.titleSource !== "user"
+      && (!input.onlyDefault || tab.titleSource === "default")
       && (tab.title !== title || tab.titleSource !== "auto")) {
       tab.title = title;
       tab.titleSource = "auto";

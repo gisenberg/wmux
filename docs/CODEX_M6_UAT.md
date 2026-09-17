@@ -2,6 +2,18 @@
 
 ## User feedback — 2026-09-17
 
+Further feedback found a newly created CLI workspace still named after its host,
+and removed terminals left an obscure unresolved-attempt blocker. The requested
+correction initializes default workspace/tab labels from the attested native task
+even when startup remains uncertain; labels never prove attachment, and manual
+pins or existing automatic names remain untouched. Inspecting an older attempt
+may repair its default labels. Recovery controls now belong beside Open in CLI:
+check an existing attempt, view its previous terminal, or explicitly open a new
+view. The new-view action rechecks attempts and native availability before
+acknowledging warnings; late successful verification reuses its terminal. Missing
+terminals are reported as removed, without automatic acknowledgment or relaunch.
+These naming/recovery corrections remain M6-H2b UAT, not accepted behavior yet.
+
 The user rejected the revised Tasks layout in Firefox: a full catalog compressed
 each task to 32 pixels, painting its name, identity, status and preview over
 adjacent rows. Read-only live reproduction found all 40 rows affected in both

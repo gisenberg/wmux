@@ -33,7 +33,7 @@ export class CodexTasksService {
   private stopped = false;
   private cursor = 0;
   private readonly attachmentDisabledReason?: string;
-  constructor(state: StateStore, machines: () => MachineConfig[], options: {
+  constructor(private readonly state: StateStore, machines: () => MachineConfig[], options: {
     endpoints?: CodexCatalogEndpointConfig[];
     catalog?: CodexTaskCatalog;
     open?: (endpointId: string, cwd: string, requestId: string) => Promise<CodexTaskTarget>;
@@ -74,25 +74,31 @@ export class CodexTasksService {
       openAttached: async request => {
         const attestation = await this.requireAttachment(request);
         if (!options.openAttached) throw new Error("Attachment controller unavailable");
-        return options.openAttached(request, attestation);
+        try {
+          const target = await options.openAttached(request, attestation);
+          this.initializeAttachmentTitle(request, target, attestation);
+          return target;
+        } catch (error) {
+          const target = error instanceof CodexCliViewUncertainError ? error.target : options.recoverAttached?.(request);
+          if (target) this.initializeAttachmentTitle(request, target, attestation);
+          throw error;
+        }
       },
       recoverAttached: options.recoverAttached,
+      targetExists: target => {
+        const found = state.findPaneContext(target.paneId);
+        return found?.workspace.id === target.workspaceId && found.tab.id === target.tabId;
+      },
       verifyAttached: async (request, target) => {
         try {
           const found = state.findPaneContext(target.paneId);
           const config = this.catalog.attachmentConfig(request.endpointId);
           if (!found || found.workspace.id !== target.workspaceId || found.tab.id !== target.tabId || found.pane.machineId !== config.machineId) return false;
           const attestation = await this.requireAttachment(request);
+          this.initializeAttachmentTitle(request, target, attestation);
           if (await options.verifyAttached?.(request, target, attestation) !== true) return false;
           const current = state.findPaneContext(target.paneId);
           if (!current || current.workspace.id !== target.workspaceId || current.tab.id !== target.tabId || current.pane.machineId !== config.machineId) return false;
-          // Seed only a newly verified view; reuse must not claim the original
-          // receipt's naming binding or replace a later user choice.
-          const name = attestation.private?.name;
-          if (this.launches.get(request.requestId)?.status === "opening" && name?.trim()) {
-            state.setAutoTitle({ workspaceId: target.workspaceId, tabId: target.tabId,
-              sourcePaneId: target.paneId, title: name, exact: true });
-          }
           return true;
         } catch { return false; }
       },
@@ -117,6 +123,17 @@ export class CodexTasksService {
     if (persistent) { this.timer = setTimeout(poll, options.pollIntervalMs ?? 10_000); this.timer.unref(); }
   }
   close(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); }
+
+  private initializeAttachmentTitle(request: CodexAttachmentRequest, target: CodexTaskTarget, attestation: AttachmentAttestation): void {
+    const name = attestation.private?.name;
+    const found = this.state.findPaneContext(target.paneId);
+    const config = this.catalog.attachmentConfig(request.endpointId);
+    if (!name?.trim() || !found || found.workspace.id !== target.workspaceId || found.tab.id !== target.tabId || found.pane.machineId !== config.machineId) return;
+    // A requested task name is a display label, not proof that CLI startup
+    // succeeded. Recovery may initialize placeholders but never take over names.
+    this.state.setAutoTitle({ workspaceId: target.workspaceId, tabId: target.tabId,
+      sourcePaneId: target.paneId, title: name, exact: true, onlyDefault: true });
+  }
 
   async requireAttachment(request: CodexAttachmentRequest): Promise<AttachmentAttestation> {
     if (this.attachmentDisabledReason) throw new CodexCatalogError("attachment_controller_unavailable", 409);
