@@ -483,7 +483,8 @@ test("existing-task open revalidates its attestation, retries the same request, 
   await expect(dialog).toContainText("Associated activity target");
   await dialog.getByRole("button", { name: "OPEN IN CLI" }).click();
   await expect(dialog.getByRole("button", { name: "RETRY SAME OPEN REQUEST" })).toBeVisible();
-  await dialog.getByRole("button", { name: "RETRY SAME OPEN REQUEST" }).click();
+  await dialog.getByRole("group", { name: "Recover CLI opening" })
+    .getByRole("button", { name: "RETRY PREVIOUS OPEN" }).click();
   await expect.poll(() => attachBodies.length).toBe(2);
   expect(attachBodies[0]).toEqual(expect.objectContaining({
     operation: "attach", endpointId: endpoint.id, endpointIdentity: endpoint.identity,

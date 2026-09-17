@@ -113,6 +113,7 @@ export function CodexTasksModal({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [openingBusy, setOpeningBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -426,6 +427,7 @@ export function CodexTasksModal({
       return;
     launchBusy.current = true;
     const remembered: RememberedLaunch = { ...candidate, operation: "attach" };
+    setOpeningBusy(true);
     rememberLaunch(remembered);
     try {
       const response = await codexTasksApi.attach({
@@ -462,6 +464,7 @@ export function CodexTasksModal({
       ]);
     } finally {
       launchBusy.current = false;
+      setOpeningBusy(false);
     }
   };
   const reconcile = async (requestId: string) => {
@@ -680,10 +683,10 @@ export function CodexTasksModal({
                       <section className="codex-existing-open">
                         <button
                           type="button"
-                          disabled={unsettledExistingOpen || recoveryBusy || !detail.resume.enabled}
+                          disabled={unsettledExistingOpen || recoveryBusy || openingBusy || !detail.resume.enabled}
                           onClick={() => void openExisting()}
                         >
-                          {detail.resume.target
+                          {openingBusy ? "OPENING CLI…" : detail.resume.target
                             ? "OPEN TERMINAL"
                             : "OPEN IN CLI"}
                         </button>
@@ -697,11 +700,13 @@ export function CodexTasksModal({
                             <p>{removedTerminals
                               ? "The previous wmux terminal was removed. Open a new CLI to continue viewing this task."
                               : "The earlier CLI could not be verified. Check it or view its terminal before opening another. Another CLI may still be running."}</p>
-                            <button type="button" disabled={recoveryBusy}
+                            <button type="button" disabled={recoveryBusy || openingBusy}
                               onClick={() => void reconcile(unsettledExistingAttempts.at(-1)!.requestId)}>CHECK EXISTING CLI</button>
+                            <button type="button" disabled={recoveryBusy || openingBusy || !detail.resume.enabled || unsettledExistingAttempts.some(item => item.status === "opening")}
+                              onClick={() => void openExisting({ ...unsettledExistingAttempts.at(-1)!, operation: "attach" })}>RETRY PREVIOUS OPEN</button>
                             {previousTerminal ? <button type="button" disabled={recoveryBusy}
                               onClick={() => onOpenTarget(previousTerminal)}>VIEW PREVIOUS TERMINAL</button> : null}
-                            <button type="button" disabled={recoveryBusy || !detail.resume.enabled || unsettledExistingAttempts.some(item => item.status === "opening")}
+                            <button type="button" disabled={recoveryBusy || openingBusy || !detail.resume.enabled || unsettledExistingAttempts.some(item => item.status === "opening")}
                               onClick={() => void recoverExisting()}>{recoveryBusy ? "CHECKING CLI…" : removedTerminals ? "OPEN A NEW CLI" : "OPEN ANOTHER CLI"}</button>
                             <small>Checks for an existing CLI first. If none can be verified, this clears the previous open warning and requests a new view. It does not stop another CLI or the task.</small>
                             {!detail.resume.enabled ? <p>Open unavailable: {detail.resume.reason}</p> : null}
