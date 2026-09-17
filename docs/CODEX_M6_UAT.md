@@ -32,7 +32,14 @@ The combined checkpoint tracks these interaction checks:
 | Case | User action and expected result | Decision |
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
-| M6-H2 — Personal desktop/mobile workflow | Select a familiar existing task and open that exact conversation in a wmux CLI. See its current work/history and continue it through the native prompt. Judge whether host selection, explanations and desktop/phone controls are usable. | Not accepted: existing-task CLI access is missing. Repeat after M5a/M5b. |
+| M6-H2 — Personal desktop workflow | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. See its current work/history and continue it through the native prompt; confirm the continuation appears in Desktop. Judge whether host selection, Open terminal and inspection explanations are usable. | Pending rollout and direct UAT of M5a/M5b. |
+| M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
+
+The phone deferral applies to direct physical-device usability only. Keep
+automated mobile browser coverage and prior mobile acceptance intact. M6-H2 is
+the only remaining direct user check for the current desktop rollout; engineering
+qualification and deployment remain separate gates. Mac Mini setup is deferred
+follow-up work, not part of this rollout.
 
 The retained native trust prompts show the requested directories. No trust,
 login or approval response was automated. Prior M0–M2 acceptance, including
@@ -50,7 +57,7 @@ automation and does not retry or cancel a launch.
 | M6-01 — Find and inspect | Real list, exact-ID read and bounded history succeeded on both Linux endpoints; remote pagination was exercised. Duplicate identities and history-on-demand are covered by browser/server fixtures. No native resume is used for inspection. |
 | M6-02 — Associate and observe | Served desktop/mobile controls created, moved and removed the same exact task association; a second browser agreed after reload. Independent Unicode workspace and tab pins survived. A real later native CLI turn produced exactly one catalog notification across two display associations within nine seconds; another poll did not duplicate it. Exact identity came from that owned CLI's native `/status`, never a title/cwd match. |
 | M6-03 — Open a fresh view | Both hosts opened new CLI views in an already trusted directory. Native `/status` and exact-ID read verified identity, cwd and no automatic turn. An explicit harmless native turn completed. Repeating a launch UUID returned the same attempt/pane. Both untrusted-directory launches stopped at native trust with exact target links; real unknown-attempt acknowledgement preserved the outcome without retry. |
-| M6-04 — Browser and recovery | Live desktop/mobile reload, Unicode pins and natural sample expiry passed; stale selection disabled association. Isolated tests cover endpoint outages, stale identities, launch uncertainty, reload recovery, authorization and backup/rollback. Physical-device usability remains M6-H2. |
+| M6-04 — Browser and recovery | Live desktop/mobile reload, Unicode pins and natural sample expiry passed; stale selection disabled association. Isolated tests cover endpoint outages, stale identities, launch uncertainty, reload recovery, authorization and backup/rollback. Physical-device usability is deferred as M6-H3. |
 
 Private live evidence is under `test-results/m6-automation-20260916/`, including
 `catalog/root-browser-result.json`, `catalog/native-pages.json`,
@@ -153,7 +160,8 @@ the final report, all assertions and successful unit exit.
 ## Release decision
 
 Accept M6 only after corrective M5a/M5b qualification, M6-H1, revised M6-H2 and
-the relevant overnight gate pass. The existing soak cannot qualify unimplemented
+the relevant overnight gate pass, with M6-H3 explicitly recorded as deferred
+rather than accepted. The existing soak cannot qualify unimplemented
 attachment code. The soak remains
 an automated engineering gate, not a test delegated to the user. Record any
 rework or deferred capability explicitly. The previous accepted release and

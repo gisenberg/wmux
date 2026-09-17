@@ -1,5 +1,12 @@
 # Codex integration roadmap
 
+UAT scope update — 2026-09-17: the user deferred physical-phone usability until
+the Mac Mini is running and set up for wmux mobile testing. Track it as deferred
+M6-H3, not accepted and not a blocker for the current desktop rollout. The
+desktop catalog attachment workflow (M6-H2) remains the outstanding direct UAT
+check after rollout; automated mobile coverage and engineering gates remain
+required. See the [UAT decisions](CODEX_M6_UAT.md#direct-interaction-acceptance).
+
 Qualification update — 2026-09-17: the independent connection task proved
 **Desktop Haswell SSH → guarded persistent server ← managed wmux CLI**, including
 direct user approval and continuation UAT. No production routing or native
@@ -355,7 +362,9 @@ Run the accepted workflow end to end: discover a task, inspect it, associate a
 pane, observe a native rename, preserve a pin, follow a later native turn, recover
 from a wmux observer interruption, and use an eligible explicit CLI launch.
 Exercise wmux desktop and mobile browser layouts against each supported native
-client/host combination. Mobile browser support is distinct from a native host
+client/host combination through automation. Direct physical-phone usability is
+deferred as M6-H3 until the user's Mac Mini testing setup is ready; desktop UAT
+remains required for this rollout. Mobile browser support is distinct from a native host
 transport claim. macOS/remote rows require existing compatible endpoints;
 Windows native observation remains explicitly unsupported unless a wmux-only
 adapter can use an already available, verified interface.
