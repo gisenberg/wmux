@@ -13,6 +13,24 @@ Unicode names and previews, checks child containment and row overlap, resizes
 desktop viewports, selects the last task and closes the dialog. Firefox is now
 included alongside desktop/mobile Chromium and mobile WebKit for catalog tests.
 
+The row-sizing correction is deployed as
+`a24348b80f100631915872ae8d4271c4cc44e6f6` (2026-09-17, 15:49 UTC), pushed
+and unmerged. External `npm run check` passed **1,199 tests / 8 skips**, plus
+typechecks, script validation and production build (`3fd02dc754cb1418`). All
+**12 catalog browser cases** passed across Firefox, desktop/mobile Chromium and
+mobile WebKit, including 40/80-row containment, scrolling, pagination, resize,
+selection and close controls. POSIX browser qualification ran on the external
+runner; no Windows runner is configured. Workspace/tab titles and pins, launch
+records, both catalog endpoints, and native/guard/observer processes survived
+the wmux-only restart. Evidence: `test-results/m6-firefox-20260917/`.
+Post-deployment read-only checks of the actual served catalog found **zero
+overlapping rows out of 40** in both Firefox and Chromium (versus 40/40 before);
+the list scrolls and each row retains its content height. Live screenshots were
+reviewed and retained privately with `geometry-before.json` and
+`geometry-after.json`. The temporary browser credential file was removed.
+M6-H2b default-name and appearance confirmation remains with the user; physical
+phone usability is still deferred.
+
 The user confirmed **Open in CLI works as expected for Haswell tasks**. This
 accepts the Haswell attachment workflow, not the unsupported Desktop-local
 ice3070 route or overall M6. Follow-up UAT covers two requested corrections:
@@ -117,7 +135,7 @@ The combined checkpoint tracks these interaction checks:
 | --- | --- | --- |
 | M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
 | M6-H2 — Haswell desktop attachment | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. | User confirmed Open in CLI worked as expected for Haswell sessions (2026-09-17). |
-| M6-H2b — Default title and Tasks presentation | Open a new CLI view and confirm its automatic workspace/tab names match the native task; judge the Tasks window's font, palette and layout against wmux. | Corrections deployed as `930e4d9`; automated checks passed, awaiting user confirmation. |
+| M6-H2b — Default title and Tasks presentation | Open a new CLI view and confirm its automatic workspace/tab names match the native task; judge the Tasks window's font, palette and layout against wmux, including a full list in Firefox. | Dense layout rejected in Firefox; corrected in `a24348b`, with 12 browser cases and full checks passed. Awaiting user confirmation. |
 | M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
 
 The phone deferral applies to direct physical-device usability only. Keep

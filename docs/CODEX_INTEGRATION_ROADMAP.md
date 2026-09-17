@@ -2,8 +2,9 @@
 
 Firefox UAT follow-up — 2026-09-17: M6-H2b appearance was rejected because dense
 catalog rows overlap. Chromium reproduces the same defect. The correction and
-40/80-row Firefox/Chromium/WebKit regression belong to M6-H2b, with appearance
-acceptance still pending; details are in the [acceptance ledger](CODEX_M6_UAT.md).
+40/80-row Firefox/Chromium/WebKit regression belong to M6-H2b. Runtime `a24348b`
+is deployed with 12 catalog browser cases and full checks passed; appearance
+acceptance is still pending. Details are in the [acceptance ledger](CODEX_M6_UAT.md).
 
 UAT feedback — 2026-09-17: Haswell **Open in CLI** is user-confirmed. M6-H2b
 tracks requested follow-up: seed newly verified workspace/tab titles from the
