@@ -54,7 +54,8 @@ account, host key and authentication configuration with batch mode and strict
 host-key checking. Build the wmux checkout on the remote host so the bridge can
 import its matching `dist/server/codex-catalog-rpc.js`. The bridge accepts one
 bounded JSON request on stdin, permits only list/read/turn-history operations,
-and connects only to an existing private, owned Unix socket. It is not a general
+and bounded loaded-owner inventory operations, and connects only to an existing
+private, owned Unix socket. It is not a general
 RPC proxy and never starts an App Server.
 
 At most eight endpoints may be configured. A query returns at most forty tasks
@@ -134,6 +135,10 @@ Pins and naming remain unchanged.
 Owner checking is deliberately strict and bounded: every configured endpoint,
 including an SSH endpoint, must be checked. An unavailable or incomplete owner
 scan is unknown and disables attachment rather than selecting a likely server.
+SSH peers use their configured read-only bridge for a complete loaded-owner
+inventory; they do not need a managed launcher to establish absence. A loaded
+copy on another server blocks attachment. Deploy the matching wmux bridge/build
+on remote catalog hosts before enabling this check.
 
 The managed route is configured with `managedLaunch`:
 `launcherPath` identifies the guarded installed launcher and `deploymentPath`

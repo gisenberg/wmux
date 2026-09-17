@@ -7,7 +7,7 @@ const DEADLINE_MS = 4_000;
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CURSOR_MAX_LENGTH = 4_096;
 
-export type CodexCatalogOperation = "list" | "read" | "turns" | "attachment";
+export type CodexCatalogOperation = "list" | "read" | "turns" | "attachment" | "loaded";
 
 export interface CodexCatalogInput {
   socketPath: string;
@@ -52,9 +52,10 @@ const validateSocket = (socketPath: unknown): string => {
 };
 
 const requestFor = (input: CodexCatalogInput): { method: string; params: Record<string, unknown> } => {
-  if (!input || typeof input !== "object" || !["list", "read", "turns", "attachment"].includes(input.operation)) fail("invalid_request");
+  if (!input || typeof input !== "object" || !["list", "read", "turns", "attachment", "loaded"].includes(input.operation)) fail("invalid_request");
   if (input.cursor !== undefined && input.cursor !== null && (typeof input.cursor !== "string" || input.cursor.length > CURSOR_MAX_LENGTH)) fail("invalid_request");
   if (input.archived !== undefined && typeof input.archived !== "boolean") fail("invalid_request");
+  if (input.operation === "loaded") return { method: "thread/loaded/list", params: { cursor: null, limit: 200 } };
   if (input.operation === "list") {
     return { method: "thread/list", params: {
       limit: 40, cursor: input.cursor ?? null, archived: input.archived ?? false, useStateDbOnly: true, sourceKinds: [],

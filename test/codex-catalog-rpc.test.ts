@@ -49,6 +49,13 @@ test("catalog RPC sends only bounded, allowlisted list/read/turns requests", { s
   assert.deepEqual(rpc[5].params, { threadId: "thr_123", cursor: null, limit: 8, sortDirection: "desc", itemsView: "summary" });
 });
 
+test("peer ownership scan requests only the bounded loaded inventory without reading or loading a task", { skip: process.platform === "win32" }, async t => {
+  const f = await fixture(t, message => ({ method: message.method, params: message.params }));
+  const result = await queryCodexCatalog({ socketPath: f.socketPath, operation: "loaded" });
+  assert.deepEqual(result, { method: "thread/loaded/list", params: { cursor: null, limit: 200 } });
+  assert.deepEqual(f.messages.filter(message => typeof message.id === "number").map(message => message.method), ["initialize", "thread/loaded/list"]);
+});
+
 test("attachment preflight is read-only and checks queue plus loaded ownership", { skip: process.platform === "win32" }, async t => {
   const f = await fixture(t, message => ({ method: message.method, params: message.params }));
   const result = await queryCodexCatalog({ socketPath: f.socketPath, operation: "attachment", threadId: "thr_123" }) as any;
@@ -128,6 +135,9 @@ test("SSH bridge waits for complete chunked UTF-8 input and bounds incomplete in
   const result = await run([input.subarray(0, split), input.subarray(split)]);
   assert.equal(result.ok, true);
   assert.equal(((result.result as { params: { cursor: string } }).params).cursor, "分頁😀");
+  const loaded = await run([Buffer.from(JSON.stringify({ socketPath: f.socketPath, operation: "loaded" }))]);
+  assert.equal(loaded.ok, true);
+  assert.deepEqual(loaded.result, { params: { cursor: null, limit: 200 } });
   const started = Date.now();
   assert.deepEqual(await run([Buffer.from("{")], false), { ok: false, error: "invalid_request" });
   assert.ok(Date.now() - started < 6_000);

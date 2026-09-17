@@ -34,6 +34,7 @@ export const inspectManagedRoute: AttachmentInspector = async input => new Promi
 export async function attestCodexAttachment(input: {
   endpoint: CodexCatalogEndpointConfig; endpoints: CodexCatalogEndpointConfig[]; threadId: string;
   inspect?: AttachmentInspector; probe?: AttachmentProbe;
+  loadedProbe?: (endpoint: CodexCatalogEndpointConfig) => Promise<unknown>;
 }): Promise<AttachmentAttestation> {
   const { endpoint, threadId } = input;
   if (!THREAD.test(threadId)) return disabled("invalid_thread_id");
@@ -63,25 +64,25 @@ export async function attestCodexAttachment(input: {
   catch { return disabled("attachment_route_unavailable"); }
   const generation = typeof receipt.generation === "string" && receipt.generation.length <= 256 ? receipt.generation : null;
   if (!generation || receipt.ready !== true || receipt.policy !== "enforce" || receipt.account !== process.getuid?.()) return disabled("attachment_route_untrusted");
-  // Endpoint aliases to the same socket/PID/start generation are one owner;
-  // every other configured endpoint must be successfully checked before a
-  // saved task can be loaded.  A failed check stays ambiguous and fails closed.
-  if (input.endpoints.some(candidate => candidate.transport !== "local" || !candidate.managedLaunch)) return disabled("attachment_owner_unknown");
-  const candidates = input.endpoints;
-  const peers = await Promise.all(candidates.map(async candidate => {
-    try { return await inspect({ socketPath: candidate.socketPath, ...candidate.managedLaunch!, cwd }); } catch { return null; }
-  }));
-  if (peers.some(peer => peer === null)) return disabled("attachment_owner_unknown");
+  // Only the selected launch route needs managed-launch attestation. Other
+  // configured servers still require a complete read-only ownership scan,
+  // including SSH peers which cannot themselves launch an attached view.
   const same = (peer: Record<string, unknown>) => peer.socket === receipt.socket && peer.generation === generation;
-  // A loaded task in a distinct configured server is ambiguous.  We do not
-  // infer absence from catalog storage, and unavailable endpoints were refused above.
-  for (let index = 0; index < peers.length; index++) {
-    if (same(peers[index]!)) continue;
+  for (const candidate of input.endpoints) {
     try {
-      const other = record(await probe({ socketPath: candidates[index]!.socketPath, threadId }));
-      const otherLoaded = record(other.loaded);
+      if (candidate.transport === "local" && candidate.managedLaunch) {
+        const peer = await inspect({ socketPath: candidate.socketPath, ...candidate.managedLaunch, cwd });
+        if (same(peer)) continue;
+      }
+      if (!input.loadedProbe && candidate.transport !== "local") return disabled("attachment_owner_unknown");
+      const otherLoaded = record(input.loadedProbe
+        ? await input.loadedProbe(candidate)
+        : record(await probe({ socketPath: candidate.socketPath, threadId })).loaded);
       const rows = Array.isArray(otherLoaded.data) && otherLoaded.nextCursor === null ? otherLoaded.data : null;
-      if (rows === null) return disabled("attachment_owner_unknown");
+      if (rows === null || rows.length > 200 || rows.some(value => {
+        const id = typeof value === "string" ? value : record(value).id ?? record(value).threadId;
+        return typeof id !== "string" || !THREAD.test(id);
+      })) return disabled("attachment_owner_unknown");
       if (rows.some(value => value === threadId || record(value).id === threadId || record(value).threadId === threadId)) return disabled("attachment_owner_ambiguous");
     } catch { return disabled("attachment_owner_unknown"); }
   }

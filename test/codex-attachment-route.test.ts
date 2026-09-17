@@ -94,3 +94,26 @@ test("requires an exact empty queue cursor and a concrete task cwd", async () =>
     assert.equal(result.public.enabled, false);
   }
 });
+
+test("checks SSH peer ownership without requiring a remote managed launcher", async () => {
+  const first = endpoint(), remote = { ...endpoint("remote"), transport: "ssh" as const, managedLaunch: undefined };
+  const outcomes = [
+    { page: { data: [], nextCursor: null }, reason: null },
+    { page: { data: ["thread_a"], nextCursor: null }, reason: "attachment_owner_ambiguous" },
+    { page: { data: [], nextCursor: "more" }, reason: "attachment_owner_unknown" },
+    { page: { data: [{}], nextCursor: null }, reason: "attachment_owner_unknown" },
+    { page: null, reason: "attachment_owner_unknown" },
+  ];
+  for (const { page, reason } of outcomes) {
+    const checked: string[] = [];
+    const result = await attestCodexAttachment({ endpoint: first, endpoints: [first, remote], threadId: "thread_a",
+      inspect: async () => receipt(), probe: async () => native(), loadedProbe: async candidate => {
+        checked.push(candidate.id);
+        if (!page) throw new Error("peer offline");
+        return page;
+      } });
+    assert.deepEqual(checked, ["remote"]);
+    assert.equal(result.public.reason, reason);
+    assert.equal(result.public.enabled, reason === null);
+  }
+});

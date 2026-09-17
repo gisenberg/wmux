@@ -140,7 +140,8 @@ export class CodexTaskCatalog {
   async attestAttachment(endpointId: string, threadId: string): Promise<AttachmentAttestation> {
     const config = this.attachmentConfig(endpointId);
     return attestCodexAttachment({ endpoint: config, endpoints: [...this.configs.values()], threadId,
-      probe: value => this.localQuery({ ...value, operation: "attachment" }) });
+      probe: value => this.localQuery({ ...value, operation: "attachment" }),
+      loadedProbe: endpoint => this.query(endpoint.id, { operation: "loaded" }) });
   }
   identity(endpointId: string): string | null {
     const config = this.configs.get(endpointId), endpoint = this.endpoints.get(endpointId);
