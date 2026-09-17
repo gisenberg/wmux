@@ -2,6 +2,17 @@
 
 ## User feedback — 2026-09-17
 
+The user rejected the revised Tasks layout in Firefox: a full catalog compressed
+each task to 32 pixels, painting its name, identity, status and preview over
+adjacent rows. Read-only live reproduction found all 40 rows affected in both
+Firefox and Chromium. The earlier six browser cases exercised sparse catalogs
+and did **not** qualify Firefox or dense-list vertical layout. M6-H2b appearance
+acceptance is therefore explicitly open. The correction preserves intrinsic row
+height and scrolls the list. Regression coverage loads 40 then 80 tasks with long
+Unicode names and previews, checks child containment and row overlap, resizes
+desktop viewports, selects the last task and closes the dialog. Firefox is now
+included alongside desktop/mobile Chromium and mobile WebKit for catalog tests.
+
 The user confirmed **Open in CLI works as expected for Haswell tasks**. This
 accepts the Haswell attachment workflow, not the unsupported Desktop-local
 ice3070 route or overall M6. Follow-up UAT covers two requested corrections:

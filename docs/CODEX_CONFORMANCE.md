@@ -2,6 +2,12 @@
 
 ## Haswell UAT feedback corrections — 2026-09-17
 
+Subsequent Firefox UAT rejected the dense catalog layout. Live reproduction also
+failed in Chromium; the earlier sparse browser cases missed vertical row overlap.
+M6-H2b remains open. The corrective regression covers 40/80 task rows, Unicode,
+pagination, resize, selection and closing in Firefox and the existing engines;
+see the [UAT ledger](CODEX_M6_UAT.md) for deployment and verification evidence.
+
 Haswell Open in CLI is user-confirmed. Runtime `930e4d9` additionally seeds
 newly verified workspace/tab titles from the native task name, preserves
 independent manual pins, and aligns the Tasks window with wmux typography,

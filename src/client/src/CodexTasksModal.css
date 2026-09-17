@@ -68,8 +68,8 @@
 
 .codex-tasks-grid { display: grid; grid-template-columns: minmax(260px, 40%) minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .codex-tasks-grid > * { min-width: 0; overflow: auto; }
-.codex-task-list { display: grid; align-content: start; gap: 0; padding: 8px; }
-.codex-task-list > button { display: grid; gap: 3px; min-width: 0; height: auto; min-height: 32px; padding: 10px 8px; text-align: left; border-color: transparent; border-bottom-color: var(--line); background: transparent; overflow-wrap: anywhere; }
+.codex-task-list { display: flex; flex-direction: column; gap: 0; padding: 8px; }
+.codex-task-list > button { display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 3px; min-width: 0; height: auto; min-height: 32px; padding: 10px 8px; text-align: left; border-color: transparent; border-bottom-color: var(--line); background: transparent; overflow-wrap: anywhere; }
 .codex-task-list > button.selected { border-color: var(--line-bright); background: var(--panel-3); }
 .codex-task-list > button.selected strong { color: var(--gold); }
 .codex-task-list strong,

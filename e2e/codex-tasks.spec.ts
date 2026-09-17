@@ -28,6 +28,97 @@ const test = baseTest.extend<{
 // Browser fixture coverage only: native Codex endpoint and App Server behavior
 // is covered by the server integration suite. These responses deliberately do
 // not claim a live native task was opened.
+test("full catalog rows remain readable and selectable after pagination and resize", async ({
+  page,
+}, testInfo) => {
+  const sampledAt = new Date().toISOString();
+  const endpoint = {
+    id: "dense", label: "Fixture host", machineId: "local",
+    identity: "0123456789abcdef".repeat(4), transport: "local",
+    status: "available", reason: null, sampledAt, freshLaunch: false,
+    launchReason: "Read-only fixture",
+  };
+  const tasks = Array.from({ length: 80 }, (_, index) => ({
+    endpointId: endpoint.id, endpointIdentity: endpoint.identity,
+    threadId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    name: `Task ${index + 1} — 日本語 Ελληνικά e\u0301 👩🏽‍💻 ${"long title ".repeat(12)}`,
+    preview: "A preview that wraps over multiple lines. ".repeat(8),
+    cwd: "/tmp/fixture", modelProvider: "codex", source: "fixture",
+    parentThreadId: null, status: "idle", updatedAt: 1, sampledAt,
+    stale: false, latestTurn: null,
+  }));
+  await page.route("**/api/codex-tasks/endpoints", (route) =>
+    route.fulfill({ json: { endpoints: [endpoint] } }));
+  await page.route("**/api/codex-tasks/list", (route) => {
+    const { cursor } = route.request().postDataJSON() as { cursor?: string };
+    return route.fulfill({ json: {
+      endpoint, tasks: tasks.slice(cursor ? 40 : 0, cursor ? 80 : 40),
+      nextCursor: cursor ? null : "next",
+    } });
+  });
+  await page.route("**/api/codex-tasks/read", (route) => {
+    const { threadId } = route.request().postDataJSON() as { threadId: string };
+    return route.fulfill({ json: {
+      task: tasks.find((task) => task.threadId === threadId), turns: [],
+      historyReason: "Read-only fixture", resume: { enabled: false, reason: "Read-only fixture" },
+    } });
+  });
+  await page.route("**/api/codex-task-associations", (route) =>
+    route.fulfill({ json: { associations: [] } }));
+  await page.route("**/api/codex-task-launches", (route) =>
+    route.fulfill({ json: { launches: [] } }));
+  await page.reload();
+  await awaitAppShell(page);
+  const mobile = testInfo.project.name.startsWith("mobile-");
+  if (mobile) {
+    const chat = page.getByRole("button", { name: "Open chat", exact: true });
+    if (await chat.isVisible()) await chat.click();
+    await page.getByRole("button", { name: "Actions", exact: true }).click();
+  } else await page.keyboard.press("Control+K");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  const search = palette.getByPlaceholder("Search commands, workspaces, tabs, hosts");
+  await search.fill("Open Codex tasks");
+  if (mobile) await palette.getByRole("button", { name: /Open Codex tasks/ }).click();
+  else await search.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Codex tasks" });
+  const list = dialog.getByLabel("Codex task results");
+  const rows = list.locator("button:has(strong)");
+  const assertReadable = async (count: number) => {
+    await expect(rows).toHaveCount(count);
+    await dialog.evaluate(() => document.fonts.ready.then(() => undefined));
+    await expect.poll(() => rows.evaluateAll((elements) => elements.flatMap((row, index) => {
+      const bounds = row.getBoundingClientRect();
+      const children = Array.from(row.children, (child) => child.getBoundingClientRect());
+      const previous = elements[index - 1]?.getBoundingClientRect();
+      return (previous && previous.bottom > bounds.top + 1) || children.some((child, i) =>
+        child.top < bounds.top - 1 || child.bottom > bounds.bottom + 1 ||
+        child.left < bounds.left - 1 || child.right > bounds.right + 1 ||
+        (i > 0 && child.top < children[i - 1]!.bottom - 1)) ? [index] : [];
+    }))).toEqual([]);
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    if (!mobile) {
+      expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+      await expect(dialog.getByRole("button", { name: "[ESC] CLOSE", exact: true })).toBeInViewport();
+    }
+  };
+  await assertReadable(40);
+  await list.getByRole("button", { name: "LOAD MORE", exact: true }).click();
+  await assertReadable(80);
+  if (!mobile) {
+    await page.setViewportSize({ width: 900, height: 700 });
+    await assertReadable(80);
+  }
+  await rows.last().click();
+  const detail = dialog.locator(".codex-task-detail");
+  await expect(detail.locator("h3")).toHaveText(tasks[79]!.name);
+  await expect(detail.locator(".codex-identity")).toContainText(tasks[79]!.threadId);
+  if (mobile) await detail.scrollIntoViewIfNeeded();
+  await expect(detail.locator("h3")).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("dense-catalog.png") });
+  await dialog.getByRole("button", { name: "[ESC] CLOSE", exact: true }).click();
+  await expect(dialog).toBeHidden();
+});
+
 test("catalog preserves identity, display associations, pagination, and disabled resume", async ({
   page,
   request,
