@@ -1,5 +1,30 @@
 # Open an existing Codex task in wmux
 
+## Qualification update — 2026-09-17
+
+**Desktop connected to Haswell is qualified; Desktop-local ice3070 is not.**
+The installed Desktop SSH route already reaches Haswell's persistent native
+server through the guarded Desktop proxy. A managed wmux CLI can join that same
+server with `codex-guard resume EXACT_UUID`, without endpoint, prompt, cwd or
+permission overrides. No production connection changes were necessary.
+
+The independent connection task passed eight native lifecycle checks, then
+recorded direct user UAT: approval answered in Desktop completed in wmux, and a
+Desktop-submitted continuation appeared in both clients after reopening the
+Desktop task view. Server/guard processes and configuration hashes were
+preserved. Full Desktop process shutdown, host reboot and phone/catalog UI
+were not covered. Private evidence is in
+`/home/iceparrot/reports/codex-connection-cleanup-20260917/`, especially
+`HANDOFF.md`, `UAT.md`, `evidence/proof-result.json`,
+`evidence/desktop-final-result.json` and `evidence/preservation-check.json`.
+
+This supersedes the September 16 blanket description of Desktop attachment as
+blocked. The lane-readiness failures below apply specifically to Desktop's
+**local ice3070** server. Exact-task catalog implementation is now assigned in
+an isolated wmux worktree; the deployed catalog remains unchanged and M6 remains
+unaccepted. The next implementation targets loaded tasks on the qualified
+managed route, with exact owner/generation, queue, readiness and terminal checks.
+
 ## Investigation — 2026-09-16
 
 The intended workflow is **select an existing task → open that exact conversation
@@ -54,7 +79,7 @@ wmux must validate an already supported route, rather than bypass the wrapper or
 create/change a native configuration.
 Plain native CLI deployments can use the explicit remote command above.
 
-The live Desktop route is **not qualified**. The standard managed dispatcher
+The Desktop-local ice3070 route is **not qualified**. The standard managed dispatcher
 ignores the Desktop lane environment hint and selects the background server;
 the native client then reports that the conversation is open in another app.
 Using the existing `managed-cli` command with the Desktop lane's configuration
@@ -64,8 +89,8 @@ failure: native connection and trusted required hooks were good, but
 configuration, while this launch selects the Desktop lane configuration. No
 descriptor was rewritten, guard bypassed or native service restarted.
 
-Thus native same-server sharing is proven, but current Desktop → CLI access
-through the installed managed route remains blocked. An already supported,
+Thus native same-server sharing is proven, but Desktop-local ice3070 → CLI access
+through that managed route remains blocked. An already supported,
 policy-preserving route must be demonstrated before that row is enabled. Changes
 to the usage guard or Codex are outside this wmux-only task. Do not call this
 Desktop workflow deliverable merely because background-server tests passed.
@@ -89,7 +114,7 @@ unloaded-task test.
 | Task situation | Action |
 | --- | --- |
 | Already open in a verified live wmux CLI | **Open terminal** focuses that pane. A display association alone is insufficient proof. |
-| Loaded on one verified reachable server with a qualified managed CLI route, idle or active | **Open in CLI** joins that server using the exact UUID. Explain that it shares the task; an active turn continues. The current Desktop route does not yet qualify. |
+| Loaded on one verified reachable server with a qualified managed CLI route, idle or active | **Open in CLI** joins that server using the exact UUID. Explain that it shares the task; an active turn continues. Desktop's Haswell SSH route is qualified; Desktop-local ice3070 is not. |
 | Saved but not loaded on any fully checked supported server | **Continue in CLI** may load it, subject to explicit queue and route checks. |
 | Queued input exists | Explain that opening can run the existing queued work; require an explicit decision for that consequence. Do not enqueue another prompt. |
 | Owner, queue, route or capability is unknown; conflicting owners; server unavailable | Keep inspection available and explain the specific missing evidence. Do not try another executor. |
@@ -124,15 +149,15 @@ These are corrective checkpoints within M5/M6, not an accepted new release.
 
 | Checkpoint | Deliverable | Gate |
 | --- | --- | --- |
-| M5a — Exact owner and launch route | Qualified server discovery, loaded-state resolution and preserved managed launcher | Automated wrong-server, stale/replaced endpoint, ambiguous owner, queue and policy checks. Current Desktop route is blocked by managed-launch readiness; demonstrate a supported route before promising Desktop UAT. |
+| M5a — Exact owner and launch route | Qualified server discovery, loaded-state resolution and preserved managed launcher | Haswell connection dependency and native Desktop UAT passed. Implement automated wrong-server, stale/replaced endpoint, ambiguous owner, queue and policy checks. Desktop-local ice3070 remains unsupported. |
 | M5b — Existing-task CLI action | Idempotent existing-task launch, focus existing terminal, actionable uncertainty and clear catalog controls | Native and browser tests for idle/active attachment, history, continuation, duplicate clicks, failures and closing an extra client; then direct Desktop → wmux and phone UAT on a disposable task. |
 | M6 — Revised release acceptance | The real daily workflow works with naming, pins, notifications and recovery | User can select a Desktop task, open the same task in wmux, see current work and continue it; qualified rollback and relevant soak evidence remain required. |
 
-The feasible wmux-only first increment is exact-task access on the already
-qualified shared background servers. It is not a substitute for the requested
-Desktop workflow and must not be presented as completing M6. If no existing
-managed Desktop route can be qualified, retain that limitation explicitly rather
-than proposing an out-of-scope dependency or weakening the installed checks.
+The wmux-only first increment is exact-task access on the qualified Haswell
+shared server, including tasks used through Desktop's Haswell connection.
+It must not be presented as completing M6 before the catalog action and its UAT
+pass. Keep the unqualified Desktop-local route explicit rather than weakening
+the installed checks or making an out-of-scope migration a prerequisite.
 
 Required automated coverage includes a task loaded on a Desktop-owned server but
 listed as stored on another server, simultaneous native clients, no prompt on

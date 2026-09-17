@@ -1,5 +1,13 @@
 # Codex integration roadmap
 
+Qualification update — 2026-09-17: the independent connection task proved
+**Desktop Haswell SSH → guarded persistent server ← managed wmux CLI**, including
+direct user approval and continuation UAT. No production routing or native
+service changes were required. The prior blocker applies to Desktop-local
+ice3070, not Desktop's Haswell connection. Corrective M5a/M5b implementation is
+now assigned in an isolated wmux worktree. The catalog action and M6 acceptance
+remain open; see the [updated connection evidence](CODEX_SESSION_ATTACHMENT.md).
+
 Execution update — 2026-09-16: M6 UAT exposed a product gap. The user needs to
 select an existing Codex conversation and open that exact task in a wmux CLI.
 Inspection and display associations alone do not meet that need. **M6 remains
@@ -23,8 +31,8 @@ Resume remains disabled in the deployed candidate. Native tests now establish
 same-server CLI sharing on the background endpoints; the earlier blanket
 exclusive-client requirement is superseded by the investigation's route and
 capability checks. Fresh CLI views preserve native policy.
-The current Desktop managed-launch route failed readiness qualification; it is
-not a proven wmux-only delivery path. The investigation records that blocker
+The Desktop-local ice3070 managed-launch route failed readiness qualification;
+it is not a proven wmux-only delivery path. The investigation records that blocker
 separately from the successful background-server attachment tests.
 
 Status: M0, M1 and M2 are qualified in the declared Linux scope. M2's

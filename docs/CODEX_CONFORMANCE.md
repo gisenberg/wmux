@@ -70,8 +70,12 @@ deployed implementation; it cannot qualify future attachment changes. See the
 Resume is unavailable in the deployed catalog. Native investigation supersedes
 the blanket exclusive-client requirement: exact same-server CLI sharing works
 on the qualified background endpoints. Server ownership, route and native
-capability checks remain necessary. The current Desktop managed launcher failed
-readiness qualification; Desktop attachment is not accepted. A fresh view returns exact wmux pane identity, not inferred
+capability checks remain necessary. On 2026-09-17, the independent connection
+task qualified Desktop's Haswell SSH route with eight lifecycle checks and
+direct user approval/continuation UAT, preserving native services and guard
+configuration. Desktop-local ice3070 still fails managed readiness. This clears
+the Haswell connection dependency; the catalog attachment action still needs
+implementation and qualification. A fresh view returns exact wmux pane identity, not inferred
 native task identity or evidence of execution. macOS and Windows native
 transport are not qualified by this candidate. Catalog notifications deduplicate
 across display associations; they are separate from receipt-bound reporters.

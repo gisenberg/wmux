@@ -12,6 +12,13 @@ a wmux CLI. The observation-only experience does not meet the intended workflow.
 Existing-task attachment must be implemented and qualified before repeating
 catalog UAT. See the [investigation and corrective plan](CODEX_SESSION_ATTACHMENT.md).
 
+Connection update — 2026-09-17: Desktop's Haswell connection and a managed wmux
+CLI passed shared-task UAT, including an approval answered in Desktop and a
+Desktop-origin continuation visible in both clients after reopening the task
+view. This qualifies the existing connection dependency, not the missing catalog
+action. Desktop-local ice3070 remains unqualified. M5a/M5b implementation and
+revised M6-H2 remain open.
+
 Open **Codex tasks** from the desktop command palette, or mobile
 **Chat → Actions → Open Codex tasks**. Configuration, authority boundaries and
 recovery details are in the [catalog runbook](CODEX_TASK_CATALOG.md).
