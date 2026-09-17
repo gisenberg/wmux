@@ -2342,6 +2342,7 @@ export function AppShell() {
           onOpenTarget={(target) => {
             activateWorkspaceTab(target.workspaceId, target.tabId);
             void activatePaneInTab(target.tabId, target.paneId);
+            setCodexTasksOpen(false);
           }}
         />
       ) : null}

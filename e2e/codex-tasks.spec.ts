@@ -320,6 +320,7 @@ test("existing-task open revalidates its attestation, retries the same request, 
   const attachBodies: Array<Record<string, unknown>> = [];
   let firstAttach = true;
   let stale = false;
+  let recordedLaunch: Record<string, unknown> | null = null;
   await page.route("**/api/codex-tasks/endpoints", route => route.fulfill({ json: { endpoints: [endpoint] } }));
   await page.route("**/api/codex-tasks/list", route => route.fulfill({ json: { endpoint, tasks: [{ ...task, stale }], nextCursor: null } }));
   await page.route("**/api/codex-tasks/read", route => route.fulfill({ json: {
@@ -336,7 +337,7 @@ test("existing-task open revalidates its attestation, retries the same request, 
   await page.route("**/api/codex-task-launches**", async route => {
     const pathname = new URL(route.request().url()).pathname;
     if (route.request().method() === "GET" && pathname === "/api/codex-task-launches")
-      return route.fulfill({ json: { launches: [] } });
+      return route.fulfill({ json: { launches: recordedLaunch ? [recordedLaunch] : [] } });
     if (route.request().method() === "GET") return route.fulfill({ json: { launch: {
       requestId: pathname.split("/")[3], endpointId: endpoint.id,
       endpointIdentity: endpoint.identity, operation: "attach", threadId: task.threadId,
@@ -356,11 +357,12 @@ test("existing-task open revalidates its attestation, retries the same request, 
       firstAttach = false;
       return route.fulfill({ status: 503, json: { error: "lost response" } });
     }
-    return route.fulfill({ json: { launch: {
+    recordedLaunch = {
       requestId: body.requestId, endpointId: endpoint.id, endpointIdentity: endpoint.identity,
       operation: "attach", threadId: task.threadId, generation: "opaque-attestation",
       status: "opened", target: openedTarget, reason: null, createdAt: sampledAt,
-    } } });
+    };
+    return route.fulfill({ json: { launch: recordedLaunch } });
   });
   await page.reload();
   await awaitAppShell(page);
@@ -388,6 +390,19 @@ test("existing-task open revalidates its attestation, retries the same request, 
     threadId: task.threadId, generation: "opaque-attestation",
   }));
   expect(attachBodies[1]).toEqual(attachBodies[0]);
+  await expect(dialog).toBeHidden();
+  const reopenCatalog = async () => {
+    if (testInfo.project.name.startsWith("mobile-")) {
+      const chat = page.getByRole("button", { name: "Open chat", exact: true });
+      if (await chat.isVisible()) await chat.click();
+      await page.getByRole("button", { name: "Actions", exact: true }).click();
+    } else await page.keyboard.press("Control+K");
+    await search.fill("Open Codex tasks");
+    if (testInfo.project.name.startsWith("mobile-")) await palette.getByRole("button", { name: /Open Codex tasks/ }).click();
+    else await search.press("Enter");
+    await dialog.getByRole("button", { name: "Shared task" }).click();
+  };
+  await reopenCatalog();
   await expect(dialog.getByRole("button", { name: "OPEN TARGET" })).toBeHidden();
   await dialog.getByRole("button", { name: "INSPECT ATTACHMENT" }).click();
   await expect(dialog).toContainText("terminal_identity_unverified");
@@ -397,8 +412,8 @@ test("existing-task open revalidates its attestation, retries the same request, 
   await dialog.getByRole("button", { name: "OPEN IN CLI" }).click();
   await expect.poll(() => attachBodies.length).toBe(3);
   expect(attachBodies[2]!.requestId).not.toBe(attachBodies[0]!.requestId);
+  await expect(dialog).toBeHidden();
   stale = true;
-  await dialog.getByRole("button", { name: "REFRESH" }).click();
-  await dialog.getByRole("button", { name: "Shared task" }).click();
+  await reopenCatalog();
   await expect(dialog).toContainText("Open unavailable: attestation expired after refresh");
 });
