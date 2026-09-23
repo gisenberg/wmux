@@ -909,6 +909,60 @@ with tempfile.TemporaryDirectory() as home:
   });
 });
 
+test("Windows callback refresh survives transient file locks and bounds permanent failures", () => {
+  const source = String.raw`
+import json
+import os
+import runpy
+import tempfile
+from unittest.mock import patch
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+replace = os.replace
+results = []
+with tempfile.TemporaryDirectory() as home:
+    os.environ["HOME"] = home
+    os.environ["USERPROFILE"] = home
+    root = os.path.join(home, ".wmux")
+    os.makedirs(root)
+    target = os.path.join(root, "url")
+    for winerror, failures in [(5, 2), (32, 1), (33, 1), (5, 99), (None, 1)]:
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("old-value\n")
+        calls = []
+        def locked_replace(source, destination):
+            calls.append(destination)
+            if len(calls) <= failures:
+                with open(target, encoding="utf-8") as handle:
+                    assert handle.read() == "old-value\n"
+                error = PermissionError("destination is locked")
+                if winerror is not None:
+                    error.winerror = winerror
+                raise error
+            return replace(source, destination)
+        failed = False
+        with patch.object(os, "replace", locked_replace), patch("time.sleep") as sleep:
+            try:
+                module["refresh_callback_state"]({"env": {"WMUX_URL": "new-value"}})
+            except PermissionError:
+                failed = True
+        with open(target, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        assert os.listdir(root) == ["url"], "temporary callback files must be removed"
+        results.append([len(calls), sleep.call_count, failed, value])
+print(json.dumps(results))
+`;
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    [3, 2, false, "new-value"],
+    [2, 1, false, "new-value"],
+    [2, 1, false, "new-value"],
+    [5, 4, true, "old-value"],
+    [1, 0, true, "old-value"],
+  ]);
+});
+
 test("Windows agent job ownership kills the full pane process tree on close", () => {
   const source = String.raw`
 import json
