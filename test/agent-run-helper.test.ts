@@ -11,6 +11,66 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const helper = path.join(root, "scripts", "wmux-agent-run");
 const posixTest = process.platform === "win32" ? test.skip : test;
 
+test("delegation helper loads without POSIX-only terminal modules on Windows", () => {
+  const probe = `
+import builtins, importlib.machinery, importlib.util, sys
+original_import = builtins.__import__
+def windows_import(name, *args, **kwargs):
+ if name in ('pty', 'tty', 'termios'): raise ModuleNotFoundError(name)
+ return original_import(name, *args, **kwargs)
+builtins.__import__ = windows_import
+loader = importlib.machinery.SourceFileLoader('helper', sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec); loader.exec_module(module)
+assert callable(module.prepare_windows_command)
+print('Windows helper loaded')
+`;
+  const completed = spawnSync(process.platform === "win32" ? "python" : "python3", ["-c", probe, helper], { encoding: "utf8" });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /Windows helper loaded/);
+});
+
+posixTest("attachment PTY preserves a large paste under backpressure and final child output", () => {
+  const probe = `
+import hashlib, importlib.machinery, importlib.util, os, pty, select, signal, sys, time
+payload = b'0123456789abcdef' * 16384
+pid, master = pty.fork()
+if pid == 0:
+ loader = importlib.machinery.SourceFileLoader('helper', sys.argv[1])
+ spec = importlib.util.spec_from_loader(loader.name, loader)
+ module = importlib.util.module_from_spec(spec); loader.exec_module(module)
+ child = "import os,tty,time,hashlib; tty.setraw(0); print('READY',flush=True); time.sleep(.3); data=b''\\nwhile len(data)<262144: data+=os.read(0,262144-len(data))\\nprint('DIGEST:'+hashlib.sha256(data).hexdigest(),flush=True)"
+ code = module.supervise_tui([sys.executable, '-c', child], os.getcwd(), os.environ.copy(), on_input=lambda: print('INVALIDATED',flush=True))
+ os._exit(code)
+os.set_blocking(master, False)
+output = b''; offset = 0; ready = False; ended = False
+try:
+ deadline = time.monotonic() + 10
+ while time.monotonic() < deadline:
+  readable, writable, _ = select.select([master], [master] if ready and offset < len(payload) else [], [], .02)
+  if readable:
+   try: chunk = os.read(master, 65536)
+   except OSError: break
+   if not chunk: break
+   output += chunk; ready = b'READY' in output
+  if writable:
+   try: offset += os.write(master, payload[offset:offset+8192])
+   except BlockingIOError: pass
+  if b'DIGEST:' + hashlib.sha256(payload).hexdigest().encode() in output:
+   ended = True; break
+ assert ended, output.decode(errors='replace')[-2000:]
+ assert output.count(b'INVALIDATED') == 1, output[-2000:]
+ print('paste preserved')
+finally:
+ try: os.kill(pid, signal.SIGTERM)
+ except ProcessLookupError: pass
+ os.close(master); os.waitpid(pid, 0)
+`;
+  const completed = spawnSync("python3", ["-c", probe, helper], { encoding: "utf8", timeout: 15_000 });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /paste preserved/);
+});
+
 posixTest("wmuxctl attachment surface gate accepts a live Codex composer and rejects active native errors", () => {
   const controller = path.join(root, "skills", "wmux", "scripts", "wmuxctl.py");
   const probe = `
