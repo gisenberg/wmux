@@ -25,6 +25,7 @@ export const browserOnlyE2eSpecs = [
   "codex-sidebar-lifecycle.spec.ts",
   "codex-diagnostics.spec.ts",
   "codex-title-failures.spec.ts",
+  "codex-tasks.spec.ts",
   "smoke.spec.ts",
   "terminal-graphics.spec.ts",
   "workspace-navigation.spec.ts",

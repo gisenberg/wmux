@@ -51,6 +51,11 @@ export default defineConfig({
       use: { ...devices["Pixel 7"] },
     },
     {
+      name: "firefox",
+      testMatch: "codex-tasks.spec.ts",
+      use: { ...devices["Desktop Firefox"], viewport: { width: 1440, height: 900 } },
+    },
+    {
       name: "mobile-webkit",
       use: { ...devices["iPhone 14"] },
     },

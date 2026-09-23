@@ -1,0 +1,388 @@
+# Combined M3–M6 UAT
+
+## Saved-task opening correction — 2026-09-23
+
+The user reported that most Haswell catalog tasks could not open in CLI and
+requested the fix. The live diagnostic found 37 of 39 tasks rejected by the
+loaded-only eligibility rule. This follow-up allows saved tasks through the
+same qualified managed route after a complete configured-owner scan and a
+verified empty queue. Browsing stays read-only. Opening sends no new prompt.
+
+An isolated wmux service against the existing managed Haswell server passed a
+real disposable-task test: archive/unarchive established native `notLoaded`,
+browsing left it unloaded, Open in CLI restored the exact history without a
+new turn, native names and user workspace provenance were retained, and a
+second request reused the same terminal. The owned task and pane were cleaned
+up. Private evidence: `test-results/saved-resume-20260923/live.json`.
+
+Regression coverage includes saved/loaded generation continuity, queue changes
+after inspection, input refusal, incomplete ownership inventory, unavailable
+or competing servers, and refusal to reuse an unloaded terminal. Browser
+coverage exercises saved-task labels, opening, recovery and request reuse.
+Runtime `bca11a0` passed the external full check (1,206 passed / 8 skipped;
+run `addc2131a629aa95`) and all 16 catalog browser tests across desktop
+Chromium, Firefox, mobile Chromium and mobile WebKit. It deployed on Haswell
+at 2026-09-23T15:23:46Z. Workspace/pane identities, names, pins and provenance
+were preserved, the catalog configuration was unchanged, and native/guard/
+observer PIDs were unchanged. Private evidence is under
+`test-results/saved-resume-20260923/`, including `deployment.json` and
+`browser-result.json`. Rollback selects the previous release without rewinding
+workspace or native state; no persisted schema changed.
+
+The deployed disposable test encountered a native CLI update prompt. Initial
+opening correctly remained unknown; the test operator chose **Skip** (no native
+upgrade or trust/permission response). The same saved history then appeared,
+with exactly the original single completed turn, correct names and user-origin
+workspace. Input invalidated its receipt as intended; recovery did not silently
+retry. The owned task and pane were cleaned up. See `deployed-live.json`.
+The earlier isolated test separately verified successful startup and reuse
+without a native prompt. These results do not claim automated native decisions.
+
+Direct UAT remaining: open a previously unavailable saved Haswell task and
+confirm the expected history and normal CLI interaction. This correction has
+not yet received user acceptance. Physical-phone usability remains deferred.
+
+## Accepted desktop milestone — 2026-09-17
+
+The user explicitly accepted the milestone and authorized Git completion and a
+pull request. This accepts the deployed Haswell desktop M3–M6 scope, including
+M6-H2b naming, inline recovery, Firefox catalog layout and user-origin CLI
+workspace provenance. The accepted runtime is
+`049e66eaa052130bfcc9507e627d6f2331d89048`; its full check passed 1,202 tests /
+8 skips. The last UI-changing revision passed all 12 catalog browser cases.
+
+M6-H3 physical-phone usability remains explicitly deferred. Desktop-local/remote
+CLI attachment and unqualified fresh-launch routes remain outside the accepted
+host/client matrix. The completed 24-hour soak qualifies catalog/associations;
+no additional 24-hour soak of the later attachment implementation is claimed.
+The user's milestone acceptance is recorded separately from those test limits.
+The dated feedback below preserves the pre-acceptance history; its outstanding
+desktop UAT statements are superseded by this decision.
+
+## User feedback — 2026-09-17
+
+Workspace provenance clarification: the **AI** badge and automatic agent
+parent/child placement apply only to workspaces launched by a working agent,
+regardless of the runtime inside. Browser **Open in CLI**, recovery opens and
+**Start new task** create user workspaces. Existing exact catalog-launch targets
+are corrected on startup, preserving names/pins and detaching inherited agent
+parents; unrelated agent workspaces retain their badges and relationships.
+Runtime `049e66eaa052130bfcc9507e627d6f2331d89048` was deployed at **17:15 UTC**,
+pushed and unmerged. Full external check `a41219610d4e668f` passed **1,202 tests /
+8 skips**, typechecks, script checks and build. Focused tests cover the actual
+helper creation request, user versus agent invocations, failed startup, persisted
+legacy correction, and preservation of unrelated agents. Deployment preserved
+workspace/tab/pane identities, names and pins, launch records, both endpoints and
+native/guard/observer processes. Evidence: `test-results/m6-user-cli-20260917/`.
+Post-deployment checks confirmed unrelated workspace provenance and names/pins
+were unchanged. The previous catalog CLI workspace had been closed before
+deployment, so no existing live catalog badge could be visually qualified.
+Creation and persisted correction are covered by the automated tests above;
+the next browser-opened CLI provides the direct badge/placement UAT check.
+
+Further feedback found a newly created CLI workspace still named after its host,
+and removed terminals left an obscure unresolved-attempt blocker. The requested
+correction initializes default workspace/tab labels from the attested native task
+even when startup remains uncertain; labels never prove attachment, and manual
+pins or existing automatic names remain untouched. Inspecting an older attempt
+may repair its default labels. Recovery controls now belong beside Open in CLI:
+check an existing attempt, view its previous terminal, or explicitly open a new
+view. The new-view action rechecks attempts and native availability before
+acknowledging warnings; late successful verification reuses its terminal. Missing
+terminals are reported as removed, without automatic acknowledgment or relaunch.
+These naming/recovery corrections remain M6-H2b UAT, not accepted behavior yet.
+
+Deployed runtime: `69e3837bbe25222ff80d59cca8d2d6f6d1655951` at **16:17 UTC**,
+pushed and unmerged. External full check `e58d388dd259ee87` passed **1,200 tests /
+8 skips**, typechecks, script validation and production build. All **12 catalog
+browser cases** passed in Firefox, desktop/mobile Chromium and mobile WebKit.
+Coverage includes same-request inline retry, removed-terminal replacement,
+native unavailability preventing acknowledgment/relaunch, late verified reuse,
+reload recovery, naming after uncertain startup, restoration after restart,
+and preservation of pins/existing automatic names. Existing workspace state,
+launch records, catalog endpoints and native/guard/observer processes survived
+the wmux-only restart. Evidence: `test-results/m6-recovery-20260917/`.
+Post-deployment Firefox and Chromium checks exercised the actual affected task:
+both default workspace/tab labels became its current native name with automatic
+ownership, and the inline recovery controls were visible with fitting text.
+Existing manual pins were unchanged and no additional CLI was created. The old
+attempt remains `unknown` / `launch_outcome_unknown`: repairing display labels
+does not upgrade startup proof. Live evidence is `served-browser.json`,
+`live-repair.json` and private recovery screenshots. Direct user acceptance and
+physical-phone deferral are unchanged.
+
+The user rejected the revised Tasks layout in Firefox: a full catalog compressed
+each task to 32 pixels, painting its name, identity, status and preview over
+adjacent rows. Read-only live reproduction found all 40 rows affected in both
+Firefox and Chromium. The earlier six browser cases exercised sparse catalogs
+and did **not** qualify Firefox or dense-list vertical layout. M6-H2b appearance
+acceptance is therefore explicitly open. The correction preserves intrinsic row
+height and scrolls the list. Regression coverage loads 40 then 80 tasks with long
+Unicode names and previews, checks child containment and row overlap, resizes
+desktop viewports, selects the last task and closes the dialog. Firefox is now
+included alongside desktop/mobile Chromium and mobile WebKit for catalog tests.
+
+The row-sizing correction is deployed as
+`a24348b80f100631915872ae8d4271c4cc44e6f6` (2026-09-17, 15:49 UTC), pushed
+and unmerged. External `npm run check` passed **1,199 tests / 8 skips**, plus
+typechecks, script validation and production build (`3fd02dc754cb1418`). All
+**12 catalog browser cases** passed across Firefox, desktop/mobile Chromium and
+mobile WebKit, including 40/80-row containment, scrolling, pagination, resize,
+selection and close controls. POSIX browser qualification ran on the external
+runner; no Windows runner is configured. Workspace/tab titles and pins, launch
+records, both catalog endpoints, and native/guard/observer processes survived
+the wmux-only restart. Evidence: `test-results/m6-firefox-20260917/`.
+Post-deployment read-only checks of the actual served catalog found **zero
+overlapping rows out of 40** in both Firefox and Chromium (versus 40/40 before);
+the list scrolls and each row retains its content height. Live screenshots were
+reviewed and retained privately with `geometry-before.json` and
+`geometry-after.json`. The temporary browser credential file was removed.
+M6-H2b default-name and appearance confirmation remains with the user; physical
+phone usability is still deferred.
+
+The user confirmed **Open in CLI works as expected for Haswell tasks**. This
+accepts the Haswell attachment workflow, not the unsupported Desktop-local
+ice3070 route or overall M6. Follow-up UAT covers two requested corrections:
+newly verified CLI views should begin with the native task name as their
+automatic workspace/tab title, preserving independent manual pins; and the
+Tasks window should use wmux's shared font, palette and compact layout.
+Initial title seeding does not transfer the original naming receipt or claim
+continuous name mirroring after CLI input changes the view's identity.
+
+The corrections are deployed as `930e4d99523c445cc1b72e1c6ff57a09c7e5a46e`
+(2026-09-17, 15:29 UTC), pushed and unmerged. External `npm run check` passed
+**1,199 tests / 8 skips**, typechecks, scripts and build (`d411d7b773d06ab0`).
+All six catalog browser cases passed across desktop Chromium, mobile Chromium
+and mobile WebKit. Served-browser checks confirmed native Unicode workspace/tab
+names with automatic ownership, shared wmux font/panel colors and no horizontal
+overflow. Exact-task attachment, reuse and CLI continuation passed again.
+Independent-pin, unnamed-task, failed-verification and persistence cases passed
+in focused service tests. Existing workspaces/pins and native/guard/observer
+processes survived deployment. Owned live fixtures were cleaned up. Evidence:
+`test-results/m6-feedback-20260917/`. Direct confirmation of names and appearance
+remains M6-H2b; phone usability remains deferred.
+
+## Attachment rollout candidate — 2026-09-17
+
+Deployed runtime: `d1104f29c9ff73eb9e596bfcbb5fb52f6ec9ae44`, pushed on
+`feat/codex-m3-m6` and unmerged, live on Haswell at **04:52 UTC**. M5a/M5b now provides **Open in CLI** for a
+loaded Haswell task and **Open terminal** for a freshly verified existing view.
+Both configured catalog endpoints remain visible; bounded remote loaded-owner
+inspection prevents another configured server from being ignored. Remote
+attachment and Desktop-local ice3070 remain unqualified. Haswell fresh launch
+is disabled pending separate managed-route qualification.
+
+Final external `npm run check` passed **1,198 tests / 8 skips**, typechecks,
+script validation and build (run `26edd07113078b47`). The integrated attachment
+base `df2837c` previously passed the full external browser matrix: **119 cases**,
+109 intentional skips, plus all **3 login-only cases**. The rollout adds focused
+coverage for remote ownership and dismissing the catalog on terminal navigation.
+Deployment, served-browser, rollback and final focused-browser evidence is
+retained privately under `test-results/m6-attachment-rollout-20260917/`.
+
+All six focused catalog cases passed in desktop Chromium, mobile Chromium and
+mobile WebKit on `bf2b030`; final client/browser-test sources are byte-identical.
+The first direct SSH browser attempt selected Node 18 and failed fixture
+startup; the corrected run used the same Node 22 installation as the full
+verification runner. This was runner setup, not an accepted browser result.
+
+The final served browser clicked **Open in CLI**, opened the exact disposable
+task without adding a turn, dismissed the catalog and navigated to its terminal.
+Live reuse proof remained valid after capability replies and focus reports.
+A real CLI continuation appeared on the same native task; actual input then
+invalidated reuse proof as intended. Only the owned test pane was closed and
+the idle, empty-queue fixture archived. Earlier failed probes are retained:
+they exposed the catalog overlay and terminal-reply/focus invalidation defects
+fixed in this release.
+
+Deployment preserved workspace/tab/pane identities, names and pins, migrated
+the launch ledger without losing records, and kept native, guard and observer
+PIDs unchanged. Both catalog endpoints and public HTTPS health passed. Private
+matching backups and per-release rollback scripts are retained with the
+Haswell deployment. Runtime/helper/build identity is fixed to the SHA above;
+later documentation-only commits do not change the served artifact.
+
+Direct desktop UAT after rollout: refresh wmux, use **Ctrl+K → Open Codex tasks**,
+select a familiar **loaded Haswell** task, and choose **Open in CLI**. Confirm
+history, enter a harmless continuation and see it in Desktop. Judge whether
+Open terminal and inspection explanations are usable. If a native approval
+appears, the user decides it. Phone usability is deferred below.
+
+The dated original-candidate findings below describe the earlier deployment;
+they do not imply that the new attachment action is still missing.
+
+## Original candidate — 2026-09-16
+
+The unmerged `feat/codex-m3-m6` candidate is deployed on Haswell for combined
+UAT. Runtime source is `e2322905d37c995c36fa851c7cdd317d8551553c`.
+M0–M2 retain their prior acceptance; **M3–M6 are not yet accepted**.
+No Codex/App Server source, configuration or lifecycle changes were made.
+
+**UAT finding:** the user could not use the catalog to open an existing task in
+a wmux CLI. The observation-only experience does not meet the intended workflow.
+Existing-task attachment must be implemented and qualified before repeating
+catalog UAT. See the [investigation and corrective plan](CODEX_SESSION_ATTACHMENT.md).
+
+Connection update — 2026-09-17: Desktop's Haswell connection and a managed wmux
+CLI passed shared-task UAT, including an approval answered in Desktop and a
+Desktop-origin continuation visible in both clients after reopening the task
+view. This qualifies the existing connection dependency, not the missing catalog
+action. Desktop-local ice3070 remains unqualified. M5a/M5b implementation and
+revised M6-H2 remain open.
+
+Open **Codex tasks** from the desktop command palette, or mobile
+**Chat → Actions → Open Codex tasks**. Configuration, authority boundaries and
+recovery details are in the [catalog runbook](CODEX_TASK_CATALOG.md).
+
+## Direct interaction acceptance
+
+The functional cases below have been exercised by the agent. The user does not
+need to repeat API, persistence, deduplication, fault or layout assertions.
+The combined checkpoint tracks these interaction checks:
+
+| Case | User action and expected result | Decision |
+| --- | --- | --- |
+| M6-H1 — Native trust decision | Make your own trust decision in the retained native views; wmux must not answer it. | User confirmed: “did the trust interaction” (2026-09-16) |
+| M6-H2 — Haswell desktop attachment | Select a familiar loaded Haswell task and open that exact conversation in a wmux CLI. | User confirmed Open in CLI worked as expected for Haswell sessions (2026-09-17). |
+| M6-H2b — Default title, recovery, provenance and Tasks presentation | Confirm task-derived automatic names, recovery beside Open in CLI, readable Firefox layout, and AI/parent rules only for agent-launched workspaces. | Accepted by the user as part of the deployed desktop milestone on 2026-09-17. Automated evidence and its limits are recorded above. |
+| M6-H3 — Physical-phone usability | Use the catalog attachment flow on a phone and judge controls, terminal input and navigation. | Deferred by the user on 2026-09-17 until the Mac Mini is running and set up for wmux mobile testing. Not accepted; does not block the current desktop rollout. |
+
+The phone deferral applies to direct physical-device usability only. Keep
+automated mobile browser coverage and prior mobile acceptance intact. M6-H2 is
+the only remaining direct user check for the current desktop rollout; engineering
+qualification and deployment remain separate gates. Mac Mini setup is deferred
+follow-up work, not part of this rollout.
+
+The retained native trust prompts show the requested directories. No trust,
+login or approval response was automated. Prior M0–M2 acceptance, including
+sidebar actions, unpin, mobile appearance and diagnostics clarity, is retained;
+this checkpoint concerns the new catalog and launch flow.
+The trust confirmation records the user's interaction only; it does not imply
+acceptance of the remaining usability check or confirmation that a launch
+attempt was acknowledged. Acknowledgement behavior was already qualified by
+automation and does not retry or cancel a launch.
+
+## Functional cases completed by automation
+
+| Original case | Qualification and limits |
+| --- | --- |
+| M6-01 — Find and inspect | Real list, exact-ID read and bounded history succeeded on both Linux endpoints; remote pagination was exercised. Duplicate identities and history-on-demand are covered by browser/server fixtures. No native resume is used for inspection. |
+| M6-02 — Associate and observe | Served desktop/mobile controls created, moved and removed the same exact task association; a second browser agreed after reload. Independent Unicode workspace and tab pins survived. A real later native CLI turn produced exactly one catalog notification across two display associations within nine seconds; another poll did not duplicate it. Exact identity came from that owned CLI's native `/status`, never a title/cwd match. |
+| M6-03 — Open a fresh view | Both hosts opened new CLI views in an already trusted directory. Native `/status` and exact-ID read verified identity, cwd and no automatic turn. An explicit harmless native turn completed. Repeating a launch UUID returned the same attempt/pane. Both untrusted-directory launches stopped at native trust with exact target links; real unknown-attempt acknowledgement preserved the outcome without retry. |
+| M6-04 — Browser and recovery | Live desktop/mobile reload, Unicode pins and natural sample expiry passed; stale selection disabled association. Isolated tests cover endpoint outages, stale identities, launch uncertainty, reload recovery, authorization and backup/rollback. Physical-device usability is deferred as M6-H3. |
+
+Private live evidence is under `test-results/m6-automation-20260916/`, including
+`catalog/root-browser-result.json`, `catalog/native-pages.json`,
+`cli/notification-result.json`, `cli-final/result.json`,
+`final-native-smoke.json` and `audit/coverage-audit.md`. Failed browser harness
+attempts were corrected and rerun; only completed assertions are counted.
+Test associations and ordinary test workspaces were removed. Only the two
+native trust views remain deliberately retained for direct interaction; the
+immutable launch ledger retains test attempt history by design.
+
+Resume is disabled in this deployed build. The original blanket ownership
+restriction is under correction: same-server multi-client attachment is natively
+supported, while wrong-server resume is a different operation. The attachment
+investigation defines the required routing and capability gates. Windows native observation and unqualified macOS transports
+remain unsupported. Existing receipt-bound naming is independent of display
+associations. Catalog notification deduplication applies across associations;
+its outbox is separate from receipt-bound lifecycle reporting.
+
+## Engineering qualification
+
+- Final runtime `e232290`: external `npm run check` passed **1,170 tests / 8
+  skips**, typechecks, script validation and production build (run
+  `32a8ebffbd064796`). The exact checked build was deployed, and served
+  desktop/mobile association create/move/remove/reload and natural expiry
+  passed again. Both retained native trust prompts survived deployment.
+- Long Unicode names exposed mobile overflow in catalog controls. Compact,
+  recognizable option labels now fit while full selected names and exact
+  identities remain visible below. The complete catalog browser fixture passed
+  **3/3** on the final runtime in desktop Chromium, mobile Chromium and mobile
+  WebKit, including geometry checks before and after opening association controls.
+- Live automation found and corrected two fresh-view deployment problems:
+  installed local helpers referenced an old release, and remote CLI argv lacked
+  explicit `--cd`. Local helper links now follow the active release; the wmux
+  launcher passes the validated cwd explicitly. Both hosts were requalified
+  through their real native clients. External `npm run check` on `e24c127`
+  passed **1,170 tests / 8 skips**, typechecks, script validation and build
+  (run `416bcc5ee525049d`). Native services and the soak retained their PIDs.
+- An additional isolated catalog/association/launch/API/CLI-boundary run passed
+  **36/36**. It includes strict authorization, uncertain-attempt recovery,
+  endpoint failure, persistence and notification deduplication.
+- Earlier runtime `ff524a4`: external `npm run check` passed **1,170 tests**, with
+  **8 skips**, plus TypeScript, script validation and production build.
+- Full browser run on `ce6ee74`: **116 passed / 109 intentional skips**, followed
+  by **3 passed** login-only tests. Subsequent changes affected the launcher and
+  catalog browser code; final full checks, native launches and the complete
+  catalog fixture above qualify those changes.
+- Live served desktop/mobile Chromium smoke used the real native catalog and
+  real association route. Both returned HTTP 200 and preserved independent
+  workspace/tab pins. Temporary associations/workspaces were removed afterward.
+  This is agent-run qualification, not direct user acceptance.
+- Native read-only probes on two existing Linux endpoints returned exact-ID
+  metadata and bounded turn information, fetched a real second remote page,
+  and queried archived tasks. Stored tasks remained `notLoaded` after history
+  reads. The installed CLI/App Server contract is 0.154.0. No task was resumed
+  for inspection. These probes passed again after workstation maintenance.
+- Isolated disable/rollback/backup-restore qualification passed. Both releases
+  use main state schema 10; the prior release ignores the separate new ledgers.
+- Deployment preserved existing workspace/tab identities, names and pins.
+  Codex App Server and the naming observer retained their existing processes.
+
+Full checks ran on the external POSIX runner through visible wmux workspaces.
+The complete POSIX browser fallback was used because no Windows browser runner
+was configured. Haswell lacked the local WebKit executable, so final WebKit
+qualification ran on the external runner.
+
+Earlier private evidence is retained under `test-results/m6-qualification-20260916/`.
+Earlier remote full-check IDs are `53a35d2d694e4ec2` (`ff524a4`) and
+`12cbff5194aab931` (preceding runtime); full browser ID is `159d4a86616ec8c4`.
+Final checks and deployment records are under
+`test-results/m6-automation-20260916/`; final full-check ID is
+`32a8ebffbd064796` (`e232290`).
+The deployment record includes the exact artifact hashes and predeployment
+backup; live inventories and credentials are not committed.
+
+The external workstation rebooted for user-confirmed maintenance around
+15:45 and 15:50 UTC. Shared storage paused and the disposable runner was lost.
+Interrupted run `34eb1dd12e12a88f` is not a pass. The runner was rebuilt and
+the final full check and native reachability checks passed after maintenance.
+The obsolete remote trust view was replaced with a fresh native trust prompt.
+
+## Original catalog overnight gate — passed, attachment excluded
+
+Reviewed on 2026-09-17: the original run ended at **04:37:47 UTC**, after
+86,401,679 ms. All **13 assertions** passed; all **287 faults** recovered, with
+287 metadata recoveries/reloads, zero unexpected errors or dropped events,
+one peak socket and peak RSS 125,308,928 bytes. The unit exited successfully
+(`ExecMainStatus=0`, `SubState=exited`). The maintenance/storage pause described
+below remains part of this qualified run. The report qualifies only its frozen
+catalog/association code, not the new attachment code or overall M6 acceptance.
+
+The real 24-hour synthetic mixed-task soak started on **2026-09-16 at
+04:37:45 UTC**. Its earliest finish is **2026-09-17 at 04:37:45 UTC**.
+The durable user unit is `wmux-codex-m6-soak-20260916.service`; its report is
+`test-results/m6-qualification-20260916/soak-24h/report.json` when complete.
+
+It exercises twenty exact task identities across two private socket fixtures,
+endpoint faults/recovery, association persistence, notification deduplication
+and resource bounds. It does not fault or modify native services. The frozen
+soak source is `ce6ee74`; the candidate's 97 server/harness artifacts were
+verified byte-identical. The CLI wrapper correction is qualified separately by
+live launch tests; it does not change the backend exercised by this soak.
+The soak process survived workstation maintenance without a restart; shared
+storage access paused and fault/recovery events resumed afterward. Review that
+interruption in the final evidence rather than claiming an uninterrupted run.
+Short fixture runs and elapsed wall time alone do not accept the gate: inspect
+the final report, all assertions and successful unit exit.
+
+## Release decision
+
+The user accepted the current desktop milestone on 2026-09-17 and requested
+the PR. M6-H1/H2/H2b are accepted; M6-H3 remains deferred. Preserve the declared
+host/client restrictions and the distinction between the completed catalog soak
+and focused attachment qualification. No unperformed attachment overnight run
+is relabeled as passed. The preceding release and private state/configuration
+backup remain available for rollback. The PR is a separate integration action;
+milestone acceptance does not mean it has already merged.

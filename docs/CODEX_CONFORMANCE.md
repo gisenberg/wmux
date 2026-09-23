@@ -1,9 +1,85 @@
 # Codex plain-start conformance matrix
 
+## Saved-task CLI opening correction — 2026-09-23
+
+Runtime `bca11a0` adds saved-task opening on the existing qualified managed
+Haswell route, with empty-queue and complete configured-owner checks. Full
+checks passed 1,206 tests / eight skips; all 16 catalog browser cases passed.
+Real isolated and deployed disposable tests verified saved history without a
+new turn, native title initialization and user workspace provenance. Native
+update prompts remain visible and uncertain startup remains recoverable.
+Deployment preserved existing workspaces and native service processes.
+See the [follow-up UAT and evidence](CODEX_M6_UAT.md#saved-task-opening-correction--2026-09-23).
+Direct user acceptance of this correction is pending; phone UAT remains deferred.
+
+## Desktop milestone accepted — 2026-09-17
+
+The user accepted the deployed desktop milestone through `049e66e` and requested
+the PR. This includes M6-H2b naming, recovery, Firefox layout and user-origin CLI
+workspace corrections. Full checks passed 1,202 tests / eight skips; the last
+UI-changing revision passed 12 catalog browser cases. Physical-phone usability
+is deferred, unsupported attachment routes remain excluded, and the completed
+catalog soak is not attachment-soak evidence. The [UAT decision](CODEX_M6_UAT.md)
+supersedes pending desktop-acceptance statements in the dated history below.
+
+## Haswell UAT feedback corrections — 2026-09-17
+
+Runtime `049e66e` additionally separates user-initiated catalog CLI workspaces
+from agent-launched workspaces. Browser opens have no AI badge, automatic agent
+parent placement or agent cleanup; exact legacy catalog targets are corrected.
+Actual helper-request, failed-startup, reload and unrelated-agent cases pass.
+External full checks passed 1,202 tests / eight skips. The badge describes the
+launcher, not the runtime inside the workspace.
+
+Runtime `69e3837` corrects two later UAT findings: an uncertain CLI launch kept
+its host-based default name, and a removed terminal left a hard-to-find recovery
+action. Requested native task names now initialize only default workspace/tab
+labels independently of startup verification; names never prove a connection.
+Recovery beside Open in CLI can check/retry the prior request, view its terminal,
+or explicitly request a replacement after fresh checks and acknowledgment. Full
+checks passed **1,200 tests / eight skips**, plus all **12 catalog browser cases**.
+The naming/recovery corrections are deployed but await direct M6-H2b acceptance.
+
+Subsequent Firefox UAT rejected the dense catalog layout. Live reproduction also
+failed in Chromium; the earlier sparse browser cases missed vertical row overlap.
+M6-H2b remains open. The corrective regression covers 40/80 task rows, Unicode,
+pagination, resize, selection and closing in Firefox and the existing engines;
+all 12 catalog cases passed. Corrective runtime `a24348b` is deployed, with full
+checks passing 1,199 tests / eight skips. See the [UAT ledger](CODEX_M6_UAT.md)
+for deployment and verification evidence. User appearance acceptance is pending.
+
+Haswell Open in CLI is user-confirmed. Runtime `930e4d9` additionally seeds
+newly verified workspace/tab titles from the native task name, preserves
+independent manual pins, and aligns the Tasks window with wmux typography,
+palette and layout. External full checks passed 1,199 tests with eight skips;
+all six focused browser cases and served title/theme/attachment/continuation
+checks passed. Default-name and appearance confirmation remains M6-H2b.
+Desktop-local ice3070 is still unsupported, with an explicit browser reason;
+physical-phone usability is deferred. Overall M6 remains unaccepted. See
+the [current UAT ledger](CODEX_M6_UAT.md).
+
+## Existing-task attachment candidate — 2026-09-17
+
+Corrective M5a/M5b is deployed in `d1104f2` for loaded Haswell tasks through
+the installed managed launcher. Exact owner/generation, empty queue, native
+readiness and live terminal proof gate attachment and reuse. CLI input
+invalidates reuse proof; reconciliation never silently duplicates a view.
+Remote catalog peers remain visible and receive bounded read-only ownership
+checks, while remote attachment remains unsupported. Native policy and services
+are unchanged. M6-H2 desktop catalog UAT remains pending; M6-H3 physical-phone
+usability is explicitly deferred. This supersedes the missing-action status in
+the September 16 record below. See [current evidence](CODEX_M6_UAT.md).
+
+The original catalog/association soak completed 24 hours with all 13 assertions
+and 287 fault/recovery cycles passing, with successful unit exit. Its recorded
+workstation-maintenance/storage pause remains part of that evidence. It does
+not qualify the new attachment implementation or accept M6.
+
 ## Current M0–M2 qualification — 2026-09-16
 
-M0/M1 qualification is complete in the declared Linux scope, deployed on Haswell
-at `09525913b6f27a058396e31c0d8878e19dc0793c`. M2 functional recovery and its
+M0/M1 qualification is complete in the declared Linux scope. Its accepted
+deployment baseline is `09525913b6f27a058396e31c0d8878e19dc0793c`; the
+[new combined candidate](CODEX_M6_UAT.md) is deployed for a separate UAT decision. M2 functional recovery and its
 supplemental actual 24-hour load soak are accepted: all 287 controlled faults
 recovered, all twelve assertions passed, and the unit exited successfully.
 The user accepted Desktop name syncing,
@@ -29,11 +105,55 @@ pin/reset and reload passed against the served final bundle.
 See [soak acceptance](CODEX_M1_M2_UAT.md#soak-acceptance--2026-09-16) and
 [final qualification](CODEX_M1_M2_UAT.md#final-qualification--2026-09-14)
 for evidence scope and final candidate/deployment checks. Immediate shared-client
-CLI exit cleanup remains excluded; M3–M6 remain proposed. Milestone qualification
-does not imply green hosted CI or upstream merge: PR #130 remains open with
-the recorded browser transport flake. Historical pending
+CLI exit cleanup remains excluded. M3–M6 are now authorized as a combined
+implementation and UAT checkpoint, not accepted. PR #130 remains open; its
+replacement CI run 35051523412 passed. Neither that CI result nor M0–M2
+acceptance qualifies the new M6 candidate. Historical pending
 statuses below describe their dated baselines and are superseded only by these
 explicit current results.
+
+## Combined M3–M6 candidate — 2026-09-16
+
+Implementation lives on the isolated `feat/codex-m3-m6` branch. It adds a
+bounded local/SSH native catalog, exact-identity display associations and
+persisted, explicit fresh CLI-view attempts. Normal browser authority controls
+these routes; receipt-bound plugin tools retain their existing scope. See the
+[catalog runbook](CODEX_TASK_CATALOG.md) for configuration, limits and the
+combined UAT procedure.
+
+Read-only probes of two existing Linux endpoints returned paginated task
+metadata and exact-ID details through CLI/App Server 0.154.0. These probes did
+not resume tasks or change native services. Full checks, browser qualification, live browser association smoke and isolated
+rollback qualification passed. The new candidate is deployed with existing
+names/pins preserved and native processes unchanged. Additional live automation
+verified cross-browser association create/move/remove/reload, independent pins,
+and one notification for a real later CLI turn across two display associations.
+Fresh native views on both Linux hosts verified requested cwd and no automatic
+turn. Testing corrected stale deployed helper links and missing remote `--cd`.
+Final runtime `e232290` also fixes long-name overflow in mobile catalog controls
+while retaining full selected identities. Its external full check passed 1,170
+tests with eight skips; all three catalog browser projects and final served
+desktop/mobile checks passed after workstation maintenance.
+The user confirmed the native trust interaction on 2026-09-16, then identified
+that the catalog cannot open an existing conversation in a CLI. This is an
+unaccepted product gap, not merely an outstanding cosmetic check. The
+[attachment investigation](CODEX_SESSION_ATTACHMENT.md) defines corrective M5a/M5b
+work and revised UAT. The new mixed-task soak remains an automated gate for the
+deployed implementation; it cannot qualify future attachment changes. See the
+[M6 acceptance ledger](CODEX_M6_UAT.md). Automated success does not itself accept M6.
+
+Resume is unavailable in the deployed catalog. Native investigation supersedes
+the blanket exclusive-client requirement: exact same-server CLI sharing works
+on the qualified background endpoints. Server ownership, route and native
+capability checks remain necessary. On 2026-09-17, the independent connection
+task qualified Desktop's Haswell SSH route with eight lifecycle checks and
+direct user approval/continuation UAT, preserving native services and guard
+configuration. Desktop-local ice3070 still fails managed readiness. This clears
+the Haswell connection dependency; the catalog attachment action still needs
+implementation and qualification. A fresh view returns exact wmux pane identity, not inferred
+native task identity or evidence of execution. macOS and Windows native
+transport are not qualified by this candidate. Catalog notifications deduplicate
+across display associations; they are separate from receipt-bound reporters.
 
 ## M0 acceptance tooling — 2026-09-12
 
