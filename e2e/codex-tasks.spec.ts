@@ -382,7 +382,7 @@ test("catalog preserves identity, display associations, pagination, and disabled
   expect(launchBodies).toHaveLength(2);
 });
 
-test("existing-task open revalidates its attestation, retries the same request, and keeps associations separate", async ({
+for (const status of ["active", "notLoaded"]) test(`${status} task open revalidates its attestation, retries the same request, and keeps associations separate`, async ({
   page,
   createCatalogWorkspace,
 }, testInfo) => {
@@ -396,7 +396,7 @@ test("existing-task open revalidates its attestation, retries the same request, 
     endpointId: endpoint.id, endpointIdentity: endpoint.identity,
     threadId: "123e4567-e89b-42d3-a456-426614174000", name: "Shared task",
     preview: "active task", cwd: "/tmp/task", modelProvider: "codex",
-    source: "fixture", parentThreadId: null, status: "active", updatedAt: 1,
+    source: "fixture", parentThreadId: null, status, updatedAt: 1,
     sampledAt, stale: false, latestTurn: null,
   };
   const workspace = await createCatalogWorkspace();
@@ -420,7 +420,7 @@ test("existing-task open revalidates its attestation, retries the same request, 
     task: { ...task, stale }, turns: [], historyReason: "History loads only on request",
     resume: stale
       ? { enabled: false, reason: "attestation expired after refresh" }
-      : { enabled: true, reason: "eligible", generation: "opaque-attestation", target: null },
+      : { enabled: true, reason: status === "notLoaded" ? "Loads this saved task on the selected server. No new prompt is sent." : "eligible", mode: status === "notLoaded" ? "resume" : "attach", generation: "opaque-attestation", target: null },
   } }));
   await page.route("**/api/codex-task-associations", route => route.fulfill({ json: { associations: [{
     id: "association-1", endpointId: endpoint.id, endpointIdentity: endpoint.identity,
@@ -479,6 +479,10 @@ test("existing-task open revalidates its attestation, retries the same request, 
   const dialog = page.getByRole("dialog", { name: "Codex tasks" });
   await dialog.getByRole("button", { name: "Shared task" }).click();
   await expect(dialog.getByRole("button", { name: "OPEN IN CLI" })).toBeVisible();
+  if (status === "notLoaded") {
+    await expect(dialog).toContainText("saved · not running on this server");
+    await expect(dialog.locator(".codex-existing-open")).toContainText("Loads this saved task");
+  }
   await expect(dialog).toContainText("Active tasks share the original task");
   await expect(dialog).toContainText("Associated activity target");
   await dialog.getByRole("button", { name: "OPEN IN CLI" }).click();

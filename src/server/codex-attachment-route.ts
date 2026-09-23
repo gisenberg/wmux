@@ -7,7 +7,7 @@ import { queryCodexCatalog } from "./codex-catalog-rpc.js";
 
 const THREAD = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-export type AttachmentPublic = { enabled: boolean; reason: string | null; generation: string | null };
+export type AttachmentPublic = { enabled: boolean; reason: string | null; generation: string | null; mode?: "attach" | "resume" };
 export type AttachmentAttestation = { public: AttachmentPublic; private: { fingerprint: string; endpointId: string; threadId: string; generation: string; cwd: string | null; name?: string | null; route: { launcherPath: string; deploymentPath: string; managedArgv: string[] }; receipt: Record<string, unknown> } | null };
 export type AttachmentProbe = (input: { socketPath: string; threadId: string }) => Promise<unknown>;
 export type AttachmentInspector = (input: { socketPath: string; launcherPath: string; deploymentPath: string; cwd: string | null }) => Promise<Record<string, unknown>>;
@@ -52,10 +52,17 @@ export async function attestCodexAttachment(input: {
   const loaded = record(native.loaded);
   // A partial loaded page cannot prove absence on another endpoint.  Native
   // currently returns UUID strings, but accept its documented object form too.
-  const loadedRows = Array.isArray(loaded.data) && loaded.nextCursor === null ? loaded.data : [];
+  const loadedRows = Array.isArray(loaded.data) && loaded.nextCursor === null ? loaded.data : null;
+  if (!loadedRows || loadedRows.length > 200 || loadedRows.some(value => {
+    const id = typeof value === "string" ? value : record(value).id ?? record(value).threadId;
+    return typeof id !== "string" || !THREAD.test(id);
+  })) return disabled("attachment_state_unavailable");
   const loadedExact = loadedRows.some(value => value === threadId || record(value).id === threadId || record(value).threadId === threadId);
-  if (thread.id !== threadId || !loadedExact || (status !== "idle" && status !== "active")) return disabled("attachment_not_loaded");
-  if (thread.canAcceptDirectInput !== true) return disabled("attachment_input_unavailable");
+  const saved = status === "notLoaded";
+  if (thread.id !== threadId || (!saved && (!loadedExact || (status !== "idle" && status !== "active")))) return disabled("attachment_state_unavailable");
+  // Native reports null capability while a saved task is unloaded. A managed
+  // resume establishes input capability; explicit refusal still blocks launch.
+  if (thread.canAcceptDirectInput !== true && !(saved && thread.canAcceptDirectInput === null)) return disabled("attachment_input_unavailable");
   if (queued !== 0) return disabled("attachment_queue_not_empty");
   const cwd = typeof thread.cwd === "string" && thread.cwd.startsWith("/") ? thread.cwd : null;
   if (!cwd) return disabled("attachment_cwd_unavailable");
@@ -90,7 +97,7 @@ export async function attestCodexAttachment(input: {
   // deployment/module tree, launcher, socket peer and effective policy facts.
   const routeGeneration = createHash("sha256").update(JSON.stringify(receipt)).digest("hex");
   const fingerprint = createHash("sha256").update(JSON.stringify([endpoint.id, threadId, routeGeneration])).digest("hex");
-  return { public: { enabled: true, reason: null, generation: routeGeneration }, private: { fingerprint, endpointId: endpoint.id, threadId, generation: routeGeneration, cwd, name: typeof thread.name === "string" ? thread.name : null,
+  return { public: { enabled: true, reason: null, generation: routeGeneration, mode: saved ? "resume" : "attach" }, private: { fingerprint, endpointId: endpoint.id, threadId, generation: routeGeneration, cwd, name: typeof thread.name === "string" ? thread.name : null,
     route: { launcherPath: endpoint.managedLaunch.launcherPath, deploymentPath: endpoint.managedLaunch.deploymentPath,
       // Exact installed dispatcher route.  `--remote` is never present.
       managedArgv: [endpoint.managedLaunch.launcherPath, "resume", threadId] }, receipt } };

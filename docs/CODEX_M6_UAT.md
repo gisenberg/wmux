@@ -1,5 +1,29 @@
 # Combined M3–M6 UAT
 
+## Saved-task opening correction — 2026-09-23
+
+The user reported that most Haswell catalog tasks could not open in CLI and
+requested the fix. The live diagnostic found 37 of 39 tasks rejected by the
+loaded-only eligibility rule. This follow-up allows saved tasks through the
+same qualified managed route after a complete configured-owner scan and a
+verified empty queue. Browsing stays read-only. Opening sends no new prompt.
+
+An isolated wmux service against the existing managed Haswell server passed a
+real disposable-task test: archive/unarchive established native `notLoaded`,
+browsing left it unloaded, Open in CLI restored the exact history without a
+new turn, native names and user workspace provenance were retained, and a
+second request reused the same terminal. The owned task and pane were cleaned
+up. Private evidence: `test-results/saved-resume-20260923/live.json`.
+
+Regression coverage includes saved/loaded generation continuity, queue changes
+after inspection, input refusal, incomplete ownership inventory, unavailable
+or competing servers, and refusal to reuse an unloaded terminal. Browser
+coverage exercises saved-task labels, opening, recovery and request reuse.
+Full-check, browser and deployment results are recorded below when complete.
+Direct UAT remaining: open a previously unavailable saved Haswell task and
+confirm the expected history and normal CLI interaction. This correction has
+not yet received user acceptance. Physical-phone usability remains deferred.
+
 ## Accepted desktop milestone — 2026-09-17
 
 The user explicitly accepted the milestone and authorized Git completion and a

@@ -16,11 +16,12 @@ export const attachmentReason = (reason: string): string => ({
   attachment_route_unavailable: "The managed route or guard readiness check is unavailable. Inspect the installed launcher and guard; no fallback was used.",
   attachment_route_untrusted: "The installed guard or account does not match this endpoint. Restore a qualified route before attaching.",
   attachment_native_unavailable: "Native ownership or queue inspection failed. Reconnect the owning server and refresh.",
-  attachment_not_loaded: "This task is saved but not loaded on this server. Open it in its owning native client; this action will not load stored work.",
+  attachment_state_unavailable: "The native task state could not be verified. Refresh the task before opening its CLI.",
+  attachment_cwd_unavailable: "This task has no usable working directory. Inspect it in its native client before opening a CLI.",
   attachment_input_unavailable: "The native server does not permit direct input to this task.",
   attachment_queue_not_empty: "Queued input is present or its state is unknown. Review it in the native client before opening another CLI.",
   attachment_owner_unknown: "Another configured owner could not be checked. Restore its connection and refresh; no executor was selected.",
-  attachment_owner_ambiguous: "This UUID is loaded on multiple native servers. Resolve the owning server before attaching.",
+  attachment_owner_ambiguous: "This task is loaded on another native server. Open it through that server or resolve its ownership before continuing here.",
   attachment_generation_changed: "The server or managed route changed since inspection. Refresh the task and review its current route.",
   attachment_controller_unavailable: "The local CLI controller is unavailable. Configure a local HTTP listener before attaching.",
 }[reason] ?? "The task's managed route could not be verified. Refresh or inspect its native client.");
@@ -95,6 +96,7 @@ export class CodexTasksService {
           const config = this.catalog.attachmentConfig(request.endpointId);
           if (!found || found.workspace.id !== target.workspaceId || found.tab.id !== target.tabId || found.pane.machineId !== config.machineId) return false;
           const attestation = await this.requireAttachment(request);
+          if (attestation.public.mode === "resume") return false;
           this.initializeAttachmentTitle(request, target, attestation);
           if (await options.verifyAttached?.(request, target, attestation) !== true) return false;
           const current = state.findPaneContext(target.paneId);
@@ -162,8 +164,10 @@ export class CodexTasksService {
         return { ...detail, resume: { enabled: false, reason: attachmentReason(attestation.public.reason ?? "attachment_route_unavailable") } };
       }
       const generation = attestation.public.generation;
-      return { ...detail, resume: { enabled: true, generation,
-        reason: "This opens another view of the same loaded task. Active work continues; native input affects this shared task. Ownership and queue checks are not an atomic lock.",
+      return { ...detail, resume: { enabled: true, generation, mode: attestation.public.mode,
+        reason: attestation.public.mode === "resume"
+          ? "Loads this saved task on the selected server and opens its history in CLI. No new prompt is sent. Pending input blocks opening; another client can still queue input after this check."
+          : "Opens another view of the same task. Active work continues; CLI input affects this shared task.",
         target: await this.launches.verifiedTarget(detail.task.endpointIdentity, generation, threadId) } };
     } catch (error) {
       return { ...detail, resume: { enabled: false, reason: attachmentReason(error instanceof CodexCatalogError ? error.code : "attachment_route_unavailable") } };

@@ -125,12 +125,26 @@ attachment request first; the server revalidates it and returns the target to
 focus. A display association is optional activity monitoring and never replaces
 that check.
 
-The request contains the exact endpoint identity, loaded native thread UUID and
+The request contains the exact endpoint identity, native thread UUID and
 an opaque server-issued `generation` attestation. The server accepts only the
-same-server loaded UUID with an empty native input queue. It fails closed for a
+selected server's loaded or saved UUID with a verified empty native input queue.
+Saved tasks are labelled **saved · not running**. **Open in CLI** loads their
+existing history on that server through the same managed `resume` launcher;
+it does not create a new task or submit a new prompt. Native input capability is
+null while unloaded; an explicit refusal still blocks opening. Unknown native
+states, incomplete inventories and unknown queues also remain blocked.
+Browsing never resumes a task. It fails closed for a
 stale attestation, a replaced endpoint, an active queue, a different server, or
 any unavailable launcher condition. The browser never supplies a trust answer.
 Browsing and display associations do not grant title ownership.
+
+Saved-task eligibility is rechecked immediately before the launcher runs.
+After launch, verified terminal reuse requires the task to be loaded and input
+capable, plus the existing live terminal receipt. Saved and loaded states share
+the same route generation so the transition does not invalidate the launch.
+These checks are not an atomic queue/ownership lock: a different client can
+enqueue work after preflight, and native resume may consume it. wmux never
+silently clears, cancels or submits queued work to make an opening succeed.
 
 Workspaces opened through **Open in CLI** or **Start new task**, including explicit recovery opens,
 are user-created and do not show the agent **AI** badge. They do not inherit

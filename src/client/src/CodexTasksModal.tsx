@@ -621,7 +621,7 @@ export function CodexTasksModal({
                   <strong title={task.name || "Untitled task"}>{task.name || "Untitled task"}</strong>
                   <small>{identity(task)}</small>
                   <span>
-                    {task.status}
+                    {task.status === "notLoaded" ? "saved · not running" : task.status}
                     {task.stale || sampleAge(task.sampledAt, now).stale
                       ? " · stale"
                       : ""}{" "}
@@ -662,7 +662,7 @@ export function CodexTasksModal({
                   </dd>
                   <dt>Source/status</dt>
                   <dd>
-                    {selected.source} / {selected.status}
+                    {selected.source} / {selected.status === "notLoaded" ? "saved · not running on this server" : selected.status}
                   </dd>
                   <dt>Working directory</dt>
                   <dd>{selected.cwd || "not reported"}</dd>
@@ -693,7 +693,7 @@ export function CodexTasksModal({
                         <small>
                           {detail.resume.target
                             ? "The verified terminal is rechecked before it is focused."
-                            : "Opens this exact loaded task in a managed CLI view."}
+                            : detail.resume.reason}
                         </small>
                         {unsettledExistingOpen ? (
                           <div className="codex-open-recovery" role="group" aria-label="Recover CLI opening">

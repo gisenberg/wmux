@@ -4,10 +4,54 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CodexTaskCatalog } from "../src/server/codex-task-catalog.js";
+import { attestCodexAttachment } from "../src/server/codex-attachment-route.js";
 import { CodexTasksService } from "../src/server/codex-tasks.js";
 import { CodexCliViewUncertainError } from "../src/server/codex-task-launches.js";
 import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
+
+test("saved opening rechecks queues and verifies loaded state before reusing the terminal", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-saved-service-"));
+  const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
+  const state = new StateStore(machines, path.join(directory, "state.json"));
+  const endpoint = { id: "native", label: "Native", machineId: "local", transport: "local" as const, socketPath: "/private/native.sock",
+    managedLaunch: { launcherPath: "/private/launcher", deploymentPath: "/private/release" } };
+  const threadId = "123e4567-e89b-12d3-a456-426614174000";
+  let status = "notLoaded", queue: unknown[] = [], opens = 0;
+  const native = () => ({ thread: { id: threadId, name: "Saved task", cwd: "/work", status: { type: status }, canAcceptDirectInput: status === "notLoaded" ? null : true },
+    queue: { data: queue, nextCursor: null }, loaded: { data: status === "notLoaded" ? [] : [threadId], nextCursor: null } });
+  const catalog = new CodexTaskCatalog(() => machines, [endpoint], async input => input.operation === "turns" ? { data: [] } : native());
+  catalog.attestAttachment = async () => attestCodexAttachment({ endpoint, endpoints: [endpoint], threadId,
+    probe: async () => native(), inspect: async () => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket: endpoint.socketPath, generation: "fixed" }) });
+  const service = new CodexTasksService(state, () => machines, { catalog,
+    openAttached: async () => {
+      opens++; status = "idle";
+      const w = state.createWorkspace("local");
+      return { workspaceId: w.id, tabId: w.tabs[0]!.id, paneId: w.tabs[0]!.panes[0]!.id };
+    }, verifyAttached: async () => true,
+  });
+  try {
+    const detail = await service.detail("native", threadId);
+    assert.equal(detail.resume.mode, "resume");
+    assert.equal(status, "notLoaded");
+    assert.equal(opens, 0);
+    const request = { operation: "attach" as const, requestId: "123e4567-e89b-12d3-a456-426614174001", endpointId: "native", endpointIdentity: catalog.identity("native")!, threadId, generation: detail.resume.generation! };
+    queue = [{}];
+    await assert.rejects(service.requireAttachment(request), /attachment_queue_not_empty/);
+    assert.equal(opens, 0);
+    queue = [];
+    const opened = await service.launches.launch(request);
+    assert.equal(opened.status, "opened");
+    assert.equal(opens, 1);
+    assert.equal(state.findPaneContext(opened.target!.paneId)!.workspace.name, "Saved task");
+    assert.equal((await service.detail("native", threadId)).resume.mode, "attach");
+    const reused = await service.launches.launch({ ...request, requestId: "123e4567-e89b-12d3-a456-426614174002" });
+    assert.deepEqual(reused.target, opened.target);
+    assert.equal(opens, 1);
+    status = "notLoaded";
+    assert.equal((await service.launches.reconcile(opened)).status, "unknown", "an unloaded task cannot retain verified terminal status");
+  } finally { service.close(); state.flush(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("live attachment rechecks route and exact pane; deleting the pane cannot reuse its launch receipt", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attach-service-"));

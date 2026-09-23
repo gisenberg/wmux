@@ -8,6 +8,61 @@ const endpoint = (id = "one", socketPath = "/private/native.sock") => ({ id, lab
   managedLaunch: { launcherPath: "/release/codex-guard", deploymentPath: "/release" } });
 const receipt = (socket = "/private/native.sock", generation = "gen-a") => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket, generation, launcherHash: "l", deploymentHash: "d" });
 const native = (id = "thread_a", status = "idle", queued: unknown[] = []) => ({ thread: { id, cwd: "/work", status: { type: status }, canAcceptDirectInput: true }, queue: { data: queued, nextCursor: null }, loaded: { data: [id], nextCursor: null } });
+const saved = () => ({ ...native(), thread: { ...native().thread, status: { type: "notLoaded" }, canAcceptDirectInput: null }, loaded: { data: [] as string[], nextCursor: null } });
+
+test("saved tasks can resume through the exact managed route without changing route generation", async () => {
+  const attest = (response: unknown) => attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",
+    inspect: async () => receipt(), probe: async () => response });
+  const result = await attest(saved());
+  assert.equal(result.public.enabled, true);
+  assert.equal(result.public.mode, "resume");
+  assert.deepEqual(result.private?.route.managedArgv, ["/release/codex-guard", "resume", "thread_a"]);
+  const loaded = await attest(native());
+  assert.equal(loaded.public.mode, "attach");
+  assert.equal(result.public.generation, loaded.public.generation);
+  assert.equal(result.private?.fingerprint, loaded.private?.fingerprint);
+  // Native can retain an unloaded actor in its loaded inventory.
+  assert.equal((await attest({ ...saved(), loaded: native().loaded })).public.mode, "resume");
+});
+
+test("saved resume refuses queued or unknown input, malformed inventory and unknown capabilities", async () => {
+  const responses = [
+    { ...saved(), queue: { data: [{}], nextCursor: null } },
+    { ...saved(), queue: { data: [], nextCursor: "more" } },
+    { ...saved(), queue: {} },
+    { ...saved(), loaded: { data: [], nextCursor: "more" } },
+    { ...saved(), loaded: { data: [{}], nextCursor: null } },
+    { ...saved(), thread: { ...saved().thread, canAcceptDirectInput: false } },
+    { ...saved(), thread: { ...saved().thread, canAcceptDirectInput: undefined } },
+    { ...saved(), thread: { ...saved().thread, id: "other" } },
+    { ...saved(), thread: { ...saved().thread, status: { type: "unknown" } } },
+    { ...native(), loaded: saved().loaded },
+  ];
+  for (const response of responses) {
+    const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",
+      inspect: async () => { throw new Error("ineligible task reached launcher inspection"); }, probe: async () => response });
+    assert.equal(result.public.enabled, false);
+    assert.notEqual(result.public.reason, "attachment_route_unavailable");
+  }
+});
+
+test("saved resume checks other servers and never takes over their loaded task", async () => {
+  const remote = { ...endpoint("remote"), transport: "ssh" as const, managedLaunch: undefined };
+  for (const [page, reason] of [
+    [{ data: [], nextCursor: null }, null],
+    [{ data: ["thread_a"], nextCursor: null }, "attachment_owner_ambiguous"],
+    [{ data: [], nextCursor: "more" }, "attachment_owner_unknown"],
+    [null, "attachment_owner_unknown"],
+  ] as const) {
+    const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint(), remote], threadId: "thread_a",
+      inspect: async () => receipt(), probe: async () => saved(), loadedProbe: async () => {
+        if (!page) throw new Error("offline");
+        return page;
+      } });
+    assert.equal(result.public.reason, reason);
+    assert.equal(result.public.enabled, reason === null);
+  }
+});
 
 test("browser terminal identity replies preserve attachment proof but actual input invalidates it", () => {
   const script = fileURLToPath(new URL("../scripts/wmux-agent-run", import.meta.url));
@@ -77,7 +132,7 @@ test("requires a complete loaded-owner page and does not mistake stored metadata
   const first = endpoint("one"), other = endpoint("other", "/private/other.sock");
   const partial = { ...native(), loaded: { data: ["thread_a"], nextCursor: "more" } };
   const incomplete = await attestCodexAttachment({ endpoint: first, endpoints: [first], threadId: "thread_a", inspect: async () => receipt(), probe: async () => partial });
-  assert.equal(incomplete.public.reason, "attachment_not_loaded");
+  assert.equal(incomplete.public.reason, "attachment_state_unavailable");
   const storedElsewhere = await attestCodexAttachment({ endpoint: first, endpoints: [first, other], threadId: "thread_a",
     inspect: async input => input.socketPath.includes("other") ? receipt("/private/other.sock", "gen-b") : receipt(),
     probe: async input => input.socketPath.includes("other") ? { ...native(), loaded: { data: [], nextCursor: null } } : native() });

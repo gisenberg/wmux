@@ -55,7 +55,7 @@ test("existing-task HTTP launch is user-only, strict, and passes only an eligibl
     generationCurrent = generation;
     enabled = false;
     assert.equal((await fetch(url, { method: "POST", headers: headers("L".repeat(43)), body: JSON.stringify(body) })).status, 409);
-    assert.equal(launches, 0, "queue/saved ineligible tasks never invoke a launcher");
+    assert.equal(launches, 0, "queued tasks never invoke a launcher");
     enabled = true;
     const response = await fetch(url, { method: "POST", headers: headers("L".repeat(43)), body: JSON.stringify(body) });
     assert.equal(response.status, 200);

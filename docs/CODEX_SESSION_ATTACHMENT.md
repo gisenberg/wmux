@@ -121,11 +121,21 @@ unloaded-task test.
 
 ## Recommended wmux implementation
 
+Saved-task correction (2026-09-23): **Open in CLI** covers both loaded tasks
+and saved tasks on the qualified local managed route. The catalog labels saved
+tasks and explains that opening loads existing history without submitting a
+prompt. Empty-queue, complete configured-owner inventory, exact UUID and
+managed-route checks apply again at launch. Native `notLoaded` with null input
+capability is eligible; explicit input refusal remains blocked. Post-launch
+receipt verification still requires a loaded, input-capable task. The earlier
+loaded-only desktop acceptance does not qualify this correction; separate
+engineering and deployment evidence is recorded in the UAT ledger.
+
 | Task situation | Action |
 | --- | --- |
 | Already open in a verified live wmux CLI | **Open terminal** focuses that pane. A display association alone is insufficient proof. |
 | Loaded on one verified reachable server with a qualified managed CLI route, idle or active | **Open in CLI** joins that server using the exact UUID. Explain that it shares the task; an active turn continues. Desktop's Haswell SSH route is qualified; Desktop-local ice3070 is not. |
-| Saved but not loaded on any fully checked supported server | **Continue in CLI** may load it, subject to explicit queue and route checks. |
+| Saved with no competing owner in the complete configured inventory | **Open in CLI** loads its existing history through the selected managed route, subject to empty-queue and route checks. |
 | Queued input exists | Explain that opening can run the existing queued work; require an explicit decision for that consequence. Do not enqueue another prompt. |
 | Owner, queue, route or capability is unknown; conflicting owners; server unavailable | Keep inspection available and explain the specific missing evidence. Do not try another executor. |
 

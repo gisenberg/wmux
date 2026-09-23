@@ -47,7 +47,7 @@ export interface CodexTaskDetail {
   task: CodexTask;
   turns: CodexTaskTurn[];
   historyReason: string | null;
-  resume: { enabled: boolean; reason: string; generation?: string; target?: CodexTaskTarget | null };
+  resume: { enabled: boolean; reason: string; generation?: string; mode?: "attach" | "resume"; target?: CodexTaskTarget | null };
 }
 
 export interface CodexTaskTarget {
