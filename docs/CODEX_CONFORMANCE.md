@@ -1,5 +1,17 @@
 # Codex plain-start conformance matrix
 
+## Saved-task CLI opening correction — 2026-09-23
+
+Runtime `bca11a0` adds saved-task opening on the existing qualified managed
+Haswell route, with empty-queue and complete configured-owner checks. Full
+checks passed 1,206 tests / eight skips; all 16 catalog browser cases passed.
+Real isolated and deployed disposable tests verified saved history without a
+new turn, native title initialization and user workspace provenance. Native
+update prompts remain visible and uncertain startup remains recoverable.
+Deployment preserved existing workspaces and native service processes.
+See the [follow-up UAT and evidence](CODEX_M6_UAT.md#saved-task-opening-correction--2026-09-23).
+Direct user acceptance of this correction is pending; phone UAT remains deferred.
+
 ## Desktop milestone accepted — 2026-09-17
 
 The user accepted the deployed desktop milestone through `049e66e` and requested

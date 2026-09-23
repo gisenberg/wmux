@@ -1,5 +1,15 @@
 # Codex integration roadmap
 
+M6 follow-up — 2026-09-23: saved-task opening is deployed as `bca11a0` on
+Haswell. **Open in CLI** can now load saved history through the qualified
+managed route, retaining empty-queue and configured-owner checks. Full checks
+and the 16-case catalog browser matrix passed; disposable tests verified exact
+saved history without a new turn. The remaining direct UAT is opening a
+previously unavailable saved task and confirming history and CLI interaction.
+See the [follow-up ledger](CODEX_M6_UAT.md#saved-task-opening-correction--2026-09-23).
+This expands the loaded-only scope accepted below; no new acceptance or soak
+is implied, and phone usability remains deferred.
+
 Accepted — 2026-09-17: the user accepted the deployed Haswell desktop M3–M6
 milestone and requested Git completion and a PR. This includes the naming,
 recovery, Firefox layout and workspace-provenance corrections through runtime

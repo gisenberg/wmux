@@ -19,7 +19,25 @@ Regression coverage includes saved/loaded generation continuity, queue changes
 after inspection, input refusal, incomplete ownership inventory, unavailable
 or competing servers, and refusal to reuse an unloaded terminal. Browser
 coverage exercises saved-task labels, opening, recovery and request reuse.
-Full-check, browser and deployment results are recorded below when complete.
+Runtime `bca11a0` passed the external full check (1,206 passed / 8 skipped;
+run `addc2131a629aa95`) and all 16 catalog browser tests across desktop
+Chromium, Firefox, mobile Chromium and mobile WebKit. It deployed on Haswell
+at 2026-09-23T15:23:46Z. Workspace/pane identities, names, pins and provenance
+were preserved, the catalog configuration was unchanged, and native/guard/
+observer PIDs were unchanged. Private evidence is under
+`test-results/saved-resume-20260923/`, including `deployment.json` and
+`browser-result.json`. Rollback selects the previous release without rewinding
+workspace or native state; no persisted schema changed.
+
+The deployed disposable test encountered a native CLI update prompt. Initial
+opening correctly remained unknown; the test operator chose **Skip** (no native
+upgrade or trust/permission response). The same saved history then appeared,
+with exactly the original single completed turn, correct names and user-origin
+workspace. Input invalidated its receipt as intended; recovery did not silently
+retry. The owned task and pane were cleaned up. See `deployed-live.json`.
+The earlier isolated test separately verified successful startup and reuse
+without a native prompt. These results do not claim automated native decisions.
+
 Direct UAT remaining: open a previously unavailable saved Haswell task and
 confirm the expected history and normal CLI interaction. This correction has
 not yet received user acceptance. Physical-phone usability remains deferred.
