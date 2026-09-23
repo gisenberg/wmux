@@ -1,5 +1,23 @@
 # Combined M3–M6 UAT
 
+## CLI package-update launch correction — 2026-09-23
+
+Later user UAT exposed `native Codex attachment child was not observed` after
+an installed CLI update. The persistent server retained its earlier executable,
+whose package path had been unlinked; the installed guard rejected the newer
+CLI version before creating a child. The wrapper hid that diagnostic while
+waiting for startup proof. Catalog eligibility had not tested native client
+version qualification, so its earlier 39/39 result did not prove launch success.
+
+The wmux correction pins managed CLI views to the attested running-server image
+through the guard's existing `managed-cli` interface. It retains native version,
+readiness and enforcement checks; validates executable inode identity; and
+relays native stderr on startup failure. A fixed per-process update-check
+override suppresses optional upgrade prompts only for these qualified views.
+No Codex or guard files, policy, or service lifecycle are changed. Verification
+and deployment evidence is under `test-results/codex-client-image-20260923/`.
+User acceptance of this correction is pending.
+
 ## Saved-task opening correction — 2026-09-23
 
 The user reported that most Haswell catalog tasks could not open in CLI and

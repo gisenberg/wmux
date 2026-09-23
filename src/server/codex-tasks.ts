@@ -15,6 +15,7 @@ export const attachmentReason = (reason: string): string => ({
   attachment_platform_unsupported: "Existing-task attachment is qualified only on Linux.",
   attachment_route_unavailable: "The managed route or guard readiness check is unavailable. Inspect the installed launcher and guard; no fallback was used.",
   attachment_route_untrusted: "The installed guard or account does not match this endpoint. Restore a qualified route before attaching.",
+  attachment_native_version_unqualified: "The installed usage guard does not support the running Codex server version. Qualify that version with the guard before opening a CLI; no unguarded client was launched.",
   attachment_native_unavailable: "Native ownership or queue inspection failed. Reconnect the owning server and refresh.",
   attachment_state_unavailable: "The native task state could not be verified. Refresh the task before opening its CLI.",
   attachment_cwd_unavailable: "This task has no usable working directory. Inspect it in its native client before opening a CLI.",
