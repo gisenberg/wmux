@@ -669,19 +669,43 @@ def supervise_tui(argv, directory, env, on_started=None, on_input=None):
             os.set_blocking(master, False)
             selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ); selector.register(tty_fd, selectors.EVENT_READ)
             invalidated = False
-            while child.poll() is None:
-                for key, _ in selector.select(.05):
+            pending_input = bytearray()
+            master_open = True
+            while master_open:
+                exited = child.poll() is not None
+                events = selector.select(0 if exited else .05)
+                if exited and not events:
+                    break
+                for key, mask in events:
+                    if key.fileobj == master and mask & selectors.EVENT_WRITE:
+                        try:
+                            written = os.write(master, pending_input)
+                            del pending_input[:written]
+                        except BlockingIOError:
+                            pass
+                        if not pending_input:
+                            selector.modify(master, selectors.EVENT_READ)
+                            selector.register(tty_fd, selectors.EVENT_READ)
+                    if not mask & selectors.EVENT_READ:
+                        continue
                     try: chunk = os.read(key.fileobj, 8192)
                     except BlockingIOError: continue
                     except OSError: chunk = b""
                     if key.fileobj == tty_fd:
                         if chunk:
                             if not invalidated and not terminal_reply_only(chunk): on_input(); invalidated = True
-                            os.write(master, chunk)
+                            # Stop reading the outer PTY until this bounded chunk
+                            # drains. A busy child must not truncate a paste or
+                            # turn EAGAIN into termination of the managed view.
+                            pending_input.extend(chunk)
+                            selector.unregister(tty_fd)
+                            selector.modify(master, selectors.EVENT_READ | selectors.EVENT_WRITE)
                         else: selector.unregister(tty_fd)
                     elif chunk:
                         os.write(sys.stdout.fileno(), chunk)
-                    else: selector.unregister(master)
+                    else:
+                        selector.unregister(master)
+                        master_open = False
             selector.close(); os.close(master)
             signal.signal(signal.SIGWINCH, previous_winch)
             termios.tcsetattr(tty_fd, termios.TCSADRAIN, outer_state)
