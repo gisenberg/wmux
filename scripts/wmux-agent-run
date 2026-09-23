@@ -13,8 +13,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import pty
-import tty
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
@@ -629,6 +627,9 @@ def supervise_tui(argv, directory, env, on_started=None, on_input=None):
             previous_handlers[signum] = signal.signal(signum, forward_signal)
         master = slave = None
         if on_input is not None and tty_fd is not None:
+            import pty
+            import tty
+
             master, slave = pty.openpty()
             def prepare_attachment_child():
                 os.setsid()

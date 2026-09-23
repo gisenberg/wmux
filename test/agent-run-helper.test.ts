@@ -11,6 +11,25 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const helper = path.join(root, "scripts", "wmux-agent-run");
 const posixTest = process.platform === "win32" ? test.skip : test;
 
+test("delegation helper loads without POSIX-only terminal modules on Windows", () => {
+  const probe = `
+import builtins, importlib.machinery, importlib.util, sys
+original_import = builtins.__import__
+def windows_import(name, *args, **kwargs):
+ if name in ('pty', 'tty', 'termios'): raise ModuleNotFoundError(name)
+ return original_import(name, *args, **kwargs)
+builtins.__import__ = windows_import
+loader = importlib.machinery.SourceFileLoader('helper', sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec); loader.exec_module(module)
+assert callable(module.prepare_windows_command)
+print('Windows helper loaded')
+`;
+  const completed = spawnSync(process.platform === "win32" ? "python" : "python3", ["-c", probe, helper], { encoding: "utf8" });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /Windows helper loaded/);
+});
+
 posixTest("attachment PTY preserves a large paste under backpressure and final child output", () => {
   const probe = `
 import hashlib, importlib.machinery, importlib.util, os, pty, select, signal, sys, time
