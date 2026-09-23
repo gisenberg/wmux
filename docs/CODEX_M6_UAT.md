@@ -30,6 +30,13 @@ Evidence: `live.json`, `deployed-live.json`, `deployment.json` and
 PTY input-backpressure and Windows lazy-import corrections. Rollback selects
 the previous release without restoring old workspace/native state.
 
+All 16 catalog browser cases passed on the external runner across Chromium,
+Firefox, mobile Chromium and mobile WebKit. Two accidentally overlapping runs
+shared a fixture and produced association-target failures; those results are
+excluded. The final single-run matrix passed. Private evidence:
+`browser-final.log` and `browser-result.json`. Follow-up [PR #133](https://github.com/gisenberg/wmux/pull/133)
+contains this correction; the original integration PR #131 has already merged.
+
 Direct UAT remaining: refresh the browser, open a previously failing Haswell
 task, and confirm history and normal CLI interaction. An exited terminal stays
 exited; use the catalog's explicit recovery action to open another CLI view
