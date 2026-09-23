@@ -18,6 +18,24 @@ No Codex or guard files, policy, or service lifecycle are changed. Verification
 and deployment evidence is under `test-results/codex-client-image-20260923/`.
 User acceptance of this correction is pending.
 
+Runtime `2e3a146` passed the external full check (1,210 passed / eight skips;
+run `fa680c5b12be4e99`) and deployed at 2026-09-23T22:53:10Z. Both isolated
+and deployed disposable tests verified saved-task opening, exact unchanged
+history, native workspace/tab names, user provenance and second-click reuse.
+No update-prompt interaction was needed. Both fixtures were cleaned up.
+Deployment preserved existing workspace/pane identities, names, pins and
+provenance, catalog configuration, and native/guard/observer service PIDs.
+Evidence: `live.json`, `deployed-live.json`, `deployment.json` and
+`remote-check.log` in the directory above. The release includes the maintainer's
+PTY input-backpressure and Windows lazy-import corrections. Rollback selects
+the previous release without restoring old workspace/native state.
+
+Direct UAT remaining: refresh the browser, open a previously failing Haswell
+task, and confirm history and normal CLI interaction. An exited terminal stays
+exited; use the catalog's explicit recovery action to open another CLI view
+when an earlier uncertain attempt remains. Existing failed user panes were
+preserved. Physical-phone usability remains deferred.
+
 ## Saved-task opening correction — 2026-09-23
 
 The user reported that most Haswell catalog tasks could not open in CLI and

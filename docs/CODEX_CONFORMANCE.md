@@ -1,5 +1,18 @@
 # Codex plain-start conformance matrix
 
+## CLI package-update correction — 2026-09-23
+
+Runtime `2e3a146` is deployed on the qualified Haswell route. Managed CLI views
+use the attested running-server executable through the existing guard's version
+and readiness checks; inode proof survives an unlinked package path, startup
+errors remain visible, and optional update prompts are suppressed per process.
+No native source, configuration, guard policy or service lifecycle changed.
+External full check: 1,210 passed / eight skips. Isolated and deployed real
+disposable-task tests passed exact history, naming, user provenance and reuse
+checks. Existing panes and native service processes survived deployment.
+Direct user acceptance remains pending; phone UAT remains deferred. See the
+[qualification ledger](CODEX_M6_UAT.md#cli-package-update-launch-correction--2026-09-23).
+
 ## Saved-task CLI opening correction — 2026-09-23
 
 Runtime `bca11a0` adds saved-task opening on the existing qualified managed
