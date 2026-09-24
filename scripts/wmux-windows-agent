@@ -83,6 +83,15 @@ DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30
 DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 15
 DEFAULT_STREAM_RESTART_MAX_SECONDS = 30
 POSIX_RUNTIME_FILE_CAPABILITY = "posix-runtime-files-v1"
+CONSOLE_SCREEN_CAPABILITY = "console-screen-v1"
+
+
+def agent_capability_available(capability: str, backend: str) -> bool:
+    if capability == POSIX_RUNTIME_FILE_CAPABILITY:
+        return os.name != "nt"
+    if capability == CONSOLE_SCREEN_CAPABILITY:
+        return os.name == "nt" and backend == BACKEND_CONPTY
+    return True
 
 
 def agent_program_name() -> str:
@@ -1237,6 +1246,8 @@ namespace WmuxConsoleTheme {
     static extern bool SetConsoleScreenBufferInfoEx(IntPtr output, ref ScreenBufferInfoEx info);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool SetConsoleTextAttribute(IntPtr output, ushort attributes);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetConsoleWindowInfo(IntPtr output, bool absolute, ref SmallRect window);
 
     public static bool Apply(uint[] colors) {
       if (colors == null || colors.Length != 16) return false;
@@ -1249,7 +1260,23 @@ namespace WmuxConsoleTheme {
       info.ColorTable = colors;
       info.Attributes = (ushort)((info.Attributes & 0xff00) | 0x07);
       info.PopupAttributes = (ushort)((info.PopupAttributes & 0xff00) | 0x07);
-      return SetConsoleScreenBufferInfoEx(output, ref info) && SetConsoleTextAttribute(output, info.Attributes);
+      var window = info.Window;
+      if (!SetConsoleScreenBufferInfoEx(output, ref info)) return false;
+      // SetConsoleScreenBufferInfoEx reads the window rectangle one cell
+      // smaller than GetConsoleScreenBufferInfoEx reports it, so writing the
+      // info back shrinks the console. Under ConPTY that leaves the console a
+      // row shorter than the terminal it renders into, and every absolute
+      // cursor move lands one row off. Restore the exact pane geometry.
+      var applied = new ScreenBufferInfoEx {
+        Size = (uint)Marshal.SizeOf<ScreenBufferInfoEx>(),
+        ColorTable = new uint[16],
+      };
+      if (GetConsoleScreenBufferInfoEx(output, ref applied)
+        && (applied.Window.Right - applied.Window.Left != window.Right - window.Left
+          || applied.Window.Bottom - applied.Window.Top != window.Bottom - window.Top)) {
+        SetConsoleWindowInfo(output, true, ref window);
+      }
+      return SetConsoleTextAttribute(output, info.Attributes);
     }
   }
 }
@@ -1553,8 +1580,199 @@ def terminalize_stdio_output(data: bytes, previous_ended_with_cr: bool = False) 
     return bytes(output), previous_was_cr
 
 
+COMMON_LVB_LEADING_BYTE = 0x0100
+COMMON_LVB_TRAILING_BYTE = 0x0200
+CONSOLE_SCREEN_READ_TIMEOUT_SECONDS = 5
+# A screen read is exact only while the console is quiet: wait briefly for a
+# pause in output, and retry when output raced the read.
+SCREEN_CAPTURE_ATTEMPTS = 8
+SCREEN_CAPTURE_QUIET_SECONDS = 0.05
+SCREEN_CAPTURE_QUIET_LIMIT_SECONDS = 0.75
+SCREEN_CAPTURE_SETTLE_SECONDS = 0.02
+SCREEN_EVENT_LIMIT = 8
+# Replay applies every recorded resize in order; bound a long output-free drag.
+RESIZE_EVENT_LIMIT = 4096
+# ReadConsoleOutputW copies through a bounded server buffer; keep each read
+# comfortably below its 64 KiB limit.
+CONSOLE_SCREEN_READ_CELLS = 12000
+
+
+def read_console_screen(pid: int) -> dict[str, Any]:
+    """Read ConPTY's own screen buffer for the console that owns `pid`.
+
+    This runs in a detached helper process, never in the agent: attaching makes
+    the caller a client of the pane's console, and the agent must stay free of
+    every pane console. The helper ignores console control events while it is
+    attached so a Ctrl+C typed into the pane cannot terminate it mid-read.
+    """
+    if os.name != "nt":
+        raise RuntimeError("console screen reads require Windows")
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class Coord(ctypes.Structure):
+        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+    class SmallRect(ctypes.Structure):
+        _fields_ = [
+            ("Left", wintypes.SHORT),
+            ("Top", wintypes.SHORT),
+            ("Right", wintypes.SHORT),
+            ("Bottom", wintypes.SHORT),
+        ]
+
+    class ScreenBufferInfoEx(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.ULONG),
+            ("dwSize", Coord),
+            ("dwCursorPosition", Coord),
+            ("wAttributes", wintypes.WORD),
+            ("srWindow", SmallRect),
+            ("dwMaximumWindowSize", Coord),
+            ("wPopupAttributes", wintypes.WORD),
+            ("bFullscreenSupported", wintypes.BOOL),
+            ("ColorTable", wintypes.DWORD * 16),
+        ]
+
+    class CharInfo(ctypes.Structure):
+        _fields_ = [("Char", wintypes.WCHAR), ("Attributes", wintypes.WORD)]
+
+    class CursorInfo(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("bVisible", wintypes.BOOL)]
+
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.GetConsoleScreenBufferInfoEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(ScreenBufferInfoEx)]
+    kernel32.GetConsoleCursorInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(CursorInfo)]
+    kernel32.ReadConsoleOutputW.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(CharInfo),
+        Coord,
+        Coord,
+        ctypes.POINTER(SmallRect),
+    ]
+
+    def failure(operation: str) -> OSError:
+        code = ctypes.get_last_error()
+        return OSError(code, f"{operation} failed with Windows error {code}")
+
+    kernel32.FreeConsole()
+    if not kernel32.AttachConsole(wintypes.DWORD(pid)):
+        raise failure("AttachConsole")
+    try:
+        kernel32.SetConsoleCtrlHandler(None, True)
+        # Inherited standard handles are stale after attaching; open the
+        # attached console's active output buffer explicitly.
+        handle = kernel32.CreateFileW("CONOUT$", 0xC0000000, 0x3, None, 3, 0, None)
+        if not handle or handle == wintypes.HANDLE(-1).value:
+            raise failure("CreateFileW(CONOUT$)")
+        try:
+            info = ScreenBufferInfoEx()
+            info.cbSize = ctypes.sizeof(ScreenBufferInfoEx)
+            if not kernel32.GetConsoleScreenBufferInfoEx(handle, ctypes.byref(info)):
+                raise failure("GetConsoleScreenBufferInfoEx")
+            cursor_info = CursorInfo()
+            cursor_visible = True
+            if kernel32.GetConsoleCursorInfo(handle, ctypes.byref(cursor_info)):
+                cursor_visible = bool(cursor_info.bVisible)
+            window = info.srWindow
+            cols = window.Right - window.Left + 1
+            rows = window.Bottom - window.Top + 1
+            if cols <= 0 or rows <= 0:
+                raise RuntimeError("console window has no visible cells")
+            chunk_rows = max(1, CONSOLE_SCREEN_READ_CELLS // cols)
+            lines: list[dict[str, Any]] = []
+            for first_row in range(window.Top, window.Bottom + 1, chunk_rows):
+                count = min(chunk_rows, window.Bottom + 1 - first_row)
+                cells = (CharInfo * (cols * count))()
+                region = SmallRect(window.Left, first_row, window.Right, first_row + count - 1)
+                if not kernel32.ReadConsoleOutputW(handle, cells, Coord(cols, count), Coord(0, 0), ctypes.byref(region)):
+                    raise failure("ReadConsoleOutputW")
+                for row in range(count):
+                    lines.append(console_screen_line(cells[row * cols:(row + 1) * cols]))
+            return {
+                "cols": cols,
+                "rows": rows,
+                "cursorX": info.dwCursorPosition.X - window.Left,
+                "cursorY": info.dwCursorPosition.Y - window.Top,
+                "cursorVisible": cursor_visible,
+                "lines": lines,
+            }
+        finally:
+            kernel32.CloseHandle(handle)
+    finally:
+        kernel32.FreeConsole()
+
+
+def console_screen_line(cells: Any) -> dict[str, Any]:
+    """Encode one console row as text, wide-glyph starts, and attribute runs."""
+    text: list[str] = []
+    wide: list[int] = []
+    attrs: list[list[int]] = []
+    count = len(cells)
+    for column, cell in enumerate(cells):
+        attribute = int(cell.Attributes)
+        visible_attribute = attribute & ~(COMMON_LVB_LEADING_BYTE | COMMON_LVB_TRAILING_BYTE)
+        if attrs and attrs[-1][0] == visible_attribute:
+            attrs[-1][1] += 1
+        else:
+            attrs.append([visible_attribute, 1])
+        character = cell.Char if cell.Char not in ("", "\x00") else " "
+        if wide and wide[-1] == column - 1:
+            # The second half of a wide glyph already emitted with its start.
+            continue
+        if (
+            attribute & COMMON_LVB_LEADING_BYTE
+            and column + 1 < count
+            and int(cells[column + 1].Attributes) & COMMON_LVB_TRAILING_BYTE
+        ):
+            wide.append(column)
+        elif attribute & COMMON_LVB_TRAILING_BYTE:
+            # An orphaned half still occupies one blank cell.
+            character = " "
+        text.append(character)
+    line: dict[str, Any] = {"text": "".join(text)}
+    if wide:
+        line["wide"] = wide
+    if attrs:
+        line["attrs"] = attrs
+    return line
+
+
+def console_screen_helper_command(pid: int) -> list[str]:
+    return [sys.executable, os.path.abspath(__file__), "--read-console-screen", str(int(pid))]
+
+
+def valid_console_screen(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for key in ("cols", "rows", "cursorX", "cursorY"):
+        if not isinstance(value.get(key), int) or isinstance(value.get(key), bool):
+            return False
+    lines = value.get("lines")
+    return (
+        value["cols"] > 0
+        and value["rows"] > 0
+        and isinstance(value.get("cursorVisible"), bool)
+        and isinstance(lines, list)
+        and len(lines) == value["rows"]
+        and all(isinstance(line, dict) and isinstance(line.get("text"), str) for line in lines)
+    )
+
+
 class ConptyBackend:
     name = BACKEND_CONPTY
+    supports_screen = os.name == "nt"
 
     def __init__(self, config: dict[str, Any], payload: dict[str, Any], cwd: str, cols: int, rows: int):
         if not conpty_available():
@@ -1659,6 +1877,24 @@ class ConptyBackend:
             self._close()
         return exit_code
 
+    def read_screen(self) -> dict[str, Any]:
+        pid = self.pid
+        if self.closed or pid <= 0:
+            raise RuntimeError("pseudoconsole is closed")
+        result = subprocess.run(
+            console_screen_helper_command(pid),
+            capture_output=True,
+            timeout=CONSOLE_SCREEN_READ_TIMEOUT_SECONDS,
+            creationflags=0x00000008,  # DETACHED_PROCESS: no console of its own
+        )
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"console screen read failed: {detail or result.returncode}")
+        screen = json.loads(result.stdout.decode("utf-8"))
+        if not valid_console_screen(screen):
+            raise RuntimeError("console screen read returned an invalid screen")
+        return screen
+
     def _answer_terminal_queries(self, data: bytes) -> None:
         replies = self.query_responder.feed(data)
         if not replies:
@@ -1711,7 +1947,15 @@ class Session:
         self.condition = threading.Condition()
         self.cols = max(2, int(payload.get("cols") or 80))
         self.rows = max(1, int(payload.get("rows") or 24))
-        self.resize_events: list[dict[str, int]] = [{"cursor": 0, "cols": self.cols, "rows": self.rows}]
+        # Resize and screen events share one sequence: several resizes can land
+        # at one byte position, and ConPTY's reflow depends on every step.
+        self.event_seq = 0
+        self.resize_events: list[dict[str, int]] = [{"seq": 0, "cursor": 0, "cols": self.cols, "rows": self.rows}]
+        self.screen_events: list[dict[str, Any]] = []
+        self.last_output_at = time.monotonic()
+        self.screen_capture_lock = threading.Lock()
+        self.screen_capture_pending: str | None = None
+        self.screen_capture_running = False
         self.cwd_reporter = CwdReporter()
         self.exited = False
         self.exit_code: int | None = None
@@ -1763,22 +2007,102 @@ class Session:
             self.backend.resize(cols, rows)
             self.cols = cols
             self.rows = rows
-            event = {"cursor": self.cursor, "cols": cols, "rows": rows}
-            if self.resize_events and self.resize_events[-1]["cursor"] == event["cursor"]:
-                self.resize_events[-1] = event
-            else:
-                self.resize_events.append(event)
+            # Record every step, even without output between them: ConPTY
+            # reflows its own buffer on each resize, so 38 -> 37 -> 38 rows
+            # leaves content one row higher than never resizing at all.
+            self.event_seq += 1
+            self.resize_events.append({"seq": self.event_seq, "cursor": self.cursor, "cols": cols, "rows": rows})
+            if len(self.resize_events) > RESIZE_EVENT_LIMIT:
+                del self.resize_events[1:len(self.resize_events) - RESIZE_EVENT_LIMIT + 1]
             self.condition.notify_all()
+        # ConPTY emits nothing when it reflows its buffer, so report the result
+        # it actually produced for consumers to verify their own reflow.
+        self.request_screen("resize")
+
+    @property
+    def supports_screen(self) -> bool:
+        return bool(getattr(self.backend, "supports_screen", False))
+
+    def request_screen(self, reason: str) -> bool:
+        """Schedule an ordered read of the console's own screen buffer."""
+        if self.exited or not self.supports_screen:
+            return False
+        with self.screen_capture_lock:
+            # A resize and a verification read observe the same screen; keep
+            # the more specific reason when both are pending.
+            if self.screen_capture_pending != "resize":
+                self.screen_capture_pending = reason
+            if self.screen_capture_running:
+                return True
+            self.screen_capture_running = True
+        threading.Thread(
+            target=self._run_screen_captures,
+            name=f"wmux-agent-screen-{self.id}",
+            daemon=True,
+        ).start()
+        return True
+
+    def _run_screen_captures(self) -> None:
+        while True:
+            with self.screen_capture_lock:
+                reason = self.screen_capture_pending
+                self.screen_capture_pending = None
+                if reason is None or self.exited:
+                    self.screen_capture_running = False
+                    return
+            try:
+                self._capture_screen(reason)
+            except Exception as error:
+                print(f"{agent_program_name()}: screen read failed for {self.id}: {error}", file=sys.stderr)
+
+    def _capture_screen(self, reason: str) -> None:
+        for _attempt in range(SCREEN_CAPTURE_ATTEMPTS):
+            if self.exited:
+                return
+            self._wait_for_quiet_output()
+            with self.condition:
+                start = self.cursor
+                geometry = (self.cols, self.rows)
+            screen = self.backend.read_screen()
+            # Output the console produced before the read may still be in the
+            # pipe. Give the reader a moment to surface it before trusting the
+            # read as exact at `start`.
+            time.sleep(SCREEN_CAPTURE_SETTLE_SECONDS)
+            with self.condition:
+                if self.exited:
+                    return
+                if (
+                    self.cursor == start
+                    and (self.cols, self.rows) == geometry == (screen["cols"], screen["rows"])
+                ):
+                    self.event_seq += 1
+                    self.screen_events.append({"seq": self.event_seq, "cursor": start, "reason": reason, **screen})
+                    del self.screen_events[:-SCREEN_EVENT_LIMIT]
+                    self.condition.notify_all()
+                    return
+
+    def _wait_for_quiet_output(self) -> None:
+        deadline = time.monotonic() + SCREEN_CAPTURE_QUIET_LIMIT_SECONDS
+        while True:
+            now = time.monotonic()
+            idle = now - self.last_output_at
+            if idle >= SCREEN_CAPTURE_QUIET_SECONDS or now >= deadline:
+                return
+            time.sleep(min(SCREEN_CAPTURE_QUIET_SECONDS - idle, deadline - now))
 
     def terminate(self) -> None:
         if self.exited:
             return
         self.backend.terminate()
 
-    def read_from(self, cursor: int, timeout_ms: int) -> dict[str, Any]:
+    def read_from(self, cursor: int, timeout_ms: int, event_seq: int | None = None) -> dict[str, Any]:
         deadline = time.monotonic() + max(0, timeout_ms) / 1000
         with self.condition:
-            while cursor >= self.cursor and not self.exited:
+            while (
+                cursor >= self.cursor
+                and not self.exited
+                and (event_seq is None or self.event_seq <= event_seq)
+            ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -1787,23 +2111,44 @@ class Session:
             offset = cursor - self.base
             data = bytes(self.buffer[offset:])
             end_cursor = self.cursor
-            geometry = self.resize_events[0]
-            for event in self.resize_events:
-                if event["cursor"] > cursor:
-                    break
-                geometry = event
-            return {
+            if event_seq is None:
+                # Consumers that predate event sequences address resizes by
+                # byte range alone.
+                resizes = [event for event in self.resize_events if cursor < event["cursor"] <= end_cursor]
+                earlier = [event for event in self.resize_events if event["cursor"] <= cursor]
+            else:
+                # Events are ordered by sequence rather than byte range: an
+                # event recorded at the current cursor is newer than bytes the
+                # consumer already holds, yet still applies at that position.
+                resizes = [
+                    event for event in self.resize_events
+                    if event["seq"] > event_seq and cursor <= event["cursor"] <= end_cursor
+                ]
+                returned = {event["seq"] for event in resizes}
+                earlier = [
+                    event for event in self.resize_events
+                    if event["cursor"] <= cursor and event["seq"] not in returned
+                ]
+            geometry = earlier[-1] if earlier else self.resize_events[0]
+            response = {
                 "base": self.base,
                 "startCursor": cursor,
                 "cursor": end_cursor,
                 "cols": geometry["cols"],
                 "rows": geometry["rows"],
-                "resizes": [event for event in self.resize_events if cursor < event["cursor"] <= end_cursor],
+                "resizes": [{key: event[key] for key in ("seq", "cursor", "cols", "rows")} for event in resizes],
                 "dataBase64": base64.b64encode(data).decode("ascii") if data else "",
                 "exited": self.exited,
                 "exitCode": self.exit_code,
                 "cwd": self.cwd,
             }
+            if event_seq is not None:
+                response["screens"] = [
+                    event for event in self.screen_events
+                    if event["seq"] > event_seq and cursor <= event["cursor"] <= end_cursor
+                ]
+                response["eventSeq"] = self.event_seq
+            return response
 
     def _create_backend(self, payload: dict[str, Any]) -> StdioBackend | ConptyBackend | PosixPtyBackend:
         backend = configured_backend(self.config)
@@ -1838,6 +2183,7 @@ class Session:
         if reported_cwds:
             self.cwd = reported_cwds[-1]
         with self.condition:
+            self.last_output_at = time.monotonic()
             self.buffer.extend(data)
             if len(self.buffer) > self.max_replay:
                 overflow = len(self.buffer) - self.max_replay
@@ -2030,7 +2376,7 @@ class Handler(BaseHTTPRequestHandler):
                     "releaseVersion": release_version,
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": [capability for capability in WINDOWS_AGENT_CAPABILITIES
-                                     if capability != POSIX_RUNTIME_FILE_CAPABILITY or os.name != "nt"],
+                                     if agent_capability_available(capability, self.state.backend)],
                     "machine": config_string(self.state.config, "machine", "windows"),
                     "pid": os.getpid(),
                     **lifecycle,
@@ -2064,7 +2410,9 @@ class Handler(BaseHTTPRequestHandler):
                 int(query.get("timeoutMs", [str(WINDOWS_AGENT_LONG_POLL_DEFAULT_MS)])[0]
                     or str(WINDOWS_AGENT_LONG_POLL_DEFAULT_MS)),
             )
-            self.send_json(session.read_from(cursor, timeout_ms))
+            event_seq_values = query.get("eventSeq")
+            event_seq = int(event_seq_values[0]) if event_seq_values and event_seq_values[0] else None
+            self.send_json(session.read_from(cursor, timeout_ms, event_seq))
             return
         self.send_json({"error": "not_found"}, status=404)
 
@@ -2103,6 +2451,12 @@ class Handler(BaseHTTPRequestHandler):
             data = base64.b64decode(str(body.get("dataBase64") or ""))
             session.write(data, terminal_response=body.get("terminalResponse") is True)
             self.send_json({"ok": True})
+            return
+        if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "screen":
+            session = self.require_session(parts[1])
+            if not session:
+                return
+            self.send_json({"scheduled": session.request_screen("verify")}, status=202)
             return
         if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "resize":
             session = self.require_session(parts[1])
@@ -2204,7 +2558,12 @@ def main() -> int:
     parser.add_argument("--host", default="")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument("--read-console-screen", type=int, metavar="PID", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.read_console_screen is not None:
+        sys.stdout.write(json.dumps(read_console_screen(args.read_console_screen), separators=(",", ":")))
+        sys.stdout.flush()
+        return 0
     config = load_config(args.config)
     host = args.host or config_string(config, "host", "127.0.0.1")
     port = args.port or config_int(config, "port", 3481)

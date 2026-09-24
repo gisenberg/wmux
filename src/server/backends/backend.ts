@@ -1,4 +1,5 @@
 import type { AttachReplay } from "../terminal-checkpoint.js";
+import type { TerminalResizeMode } from "../../shared/conpty-resize.js";
 import type { MachineConfig, PaneStartupPhase, PaneState } from "../types.js";
 import type { StagedPasteImage } from "../paste-image-staging.js";
 
@@ -11,6 +12,12 @@ export interface BackendSession {
   readonly attachReplay?: AttachReplay;
   readonly restoredAttachReplay?: AttachReplay;
   readonly screenCheckpoint?: AttachReplay;
+  /**
+   * Present when the pane's geometry is sequenced: the size the remote side
+   * has applied, which changes only through `geometry` events emitted at the
+   * exact output position, and the reflow a browser model must reproduce.
+   */
+  readonly geometry?: { cols: number; rows: number; mode: TerminalResizeMode };
   write(data: string): void;
   writeTerminalResponse?(data: string): void;
   resize(cols: number, rows: number): void;
@@ -20,6 +27,7 @@ export interface BackendSession {
   resume(): void;
   on(event: "output" | "screen" | "title" | "cwd", listener: (data: string) => void): this;
   on(event: "agentPort", listener: (port: number, agentUrl: string) => void): this;
+  on(event: "geometry", listener: (cols: number, rows: number) => void): this;
   on(event: "phase", listener: (phase: PaneStartupPhase, label: string) => void): this;
   on(event: "exit", listener: (code: number | null) => void): this;
 }

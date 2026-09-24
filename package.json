@@ -20,6 +20,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
     "audit:sessions": "node scripts/wmux-session-audit",
+    "trace:agent": "node --import tsx scripts/agent-trace.ts",
     "test": "node scripts/run-tests.mjs",
     "test:codex:m0": "node --import tsx --test test/codex-*.test.ts test/wmux-binding-store.test.ts test/wmux-plugin-mcp.test.ts test/wmux-lock.test.ts test/hooks-installer.test.ts",
     "codex:baseline": "node scripts/codex-baseline.mjs",

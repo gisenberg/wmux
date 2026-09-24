@@ -1693,3 +1693,118 @@ test(
     }
   },
 );
+
+test("session-agent panes announce geometry where the agent applied it, not where a browser asked", async () => {
+  let cursor = 4;
+  let size = { cols: 80, rows: 24 };
+  let pendingResize: { cols: number; rows: number } | undefined;
+  const resizeRequests: Array<{ cols: number; rows: number }> = [];
+  const agent = http.createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://agent.invalid");
+    const reply = (body: unknown) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
+    if (request.method === "POST" && url.pathname.endsWith("/resize")) {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk.toString(); });
+      request.on("end", () => {
+        const requested = JSON.parse(body) as { cols: number; rows: number };
+        resizeRequests.push(requested);
+        // Like the agent, a request for the current size changes nothing.
+        if (requested.cols !== size.cols || requested.rows !== size.rows) {
+          size = requested;
+          pendingResize = requested;
+        }
+        reply({ ok: true });
+      });
+      return;
+    }
+    if (request.method === "POST" && /^\/sessions\/[^/]+$/.test(url.pathname)) {
+      reply({ id: url.pathname.split("/")[2], pid: 7, base: 0, cursor: 0, cols: 80, rows: 24, backend: "conpty" });
+      return;
+    }
+    if (request.method === "GET" && url.pathname.endsWith("/output")) {
+      const from = Number(url.searchParams.get("cursor") ?? "0");
+      if (from === 0) {
+        reply({ base: 0, startCursor: 0, cursor, cols: 80, rows: 24, resizes: [], dataBase64: Buffer.from("PS> ").toString("base64"), exited: false });
+        return;
+      }
+      setTimeout(() => {
+        const applied = pendingResize;
+        pendingResize = undefined;
+        const start = cursor;
+        if (applied) cursor += 2;
+        reply({
+          base: 0,
+          startCursor: start,
+          cursor,
+          cols: 80,
+          rows: 24,
+          resizes: applied ? [{ cursor: start + 1, cols: applied.cols, rows: applied.rows }] : [],
+          dataBase64: applied ? Buffer.from("ab").toString("base64") : "",
+          exited: false,
+        });
+      }, 30);
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  agent.listen(0, "127.0.0.1");
+  await once(agent, "listening");
+  const address = agent.address();
+  assert.ok(address && typeof address === "object");
+  const machine: MachineConfig = {
+    id: "windows-sequenced",
+    name: "Windows",
+    kind: "powershell-ssh",
+    host: "127.0.0.1",
+    sessionBackend: "agent",
+    agentUrl: `http://127.0.0.1:${address.port}`,
+  };
+  try {
+    await withState(machine, async (state) => {
+      const pane = state.snapshot().workspaces[0].tabs[0].panes[0];
+      const manager = new SessionManager(state, [machine]);
+      const client = socket();
+      try {
+        manager.attach(pane.id, client, 80, 24);
+        const ready = await waitForMessage(client, (message) => message.type === "ready");
+        assert.deepEqual(
+          { cols: ready.cols, rows: ready.rows, geometry: ready.geometry, resizeMode: ready.resizeMode },
+          { cols: 80, rows: 24, geometry: "sequenced", resizeMode: "conpty" },
+        );
+        fake(client).sent.length = 0;
+        fake(client).message({ type: "activate", cols: 100, rows: 30, foreground: true });
+        // Until the agent applies the resize, browsers keep the applied grid.
+        const ownership = await waitForMessage(client, (message) => message.type === "size");
+        assert.deepEqual({ cols: ownership.cols, rows: ownership.rows }, { cols: 80, rows: 24 });
+        const applied = await waitForMessage(client, (message) => message.type === "size" && message.cols === 100);
+        assert.deepEqual(applied, {
+          type: "size",
+          paneId: pane.id,
+          cols: 100,
+          rows: 30,
+          resizeOwner: true,
+          geometry: "sequenced",
+          resizeMode: "conpty",
+        });
+        // The announcement sits between the bytes before and after the resize.
+        const order = fake(client).sent
+          .filter((message) => message.type === "output" || (message.type === "size" && message.cols === 100))
+          .map((message) => message.type === "output" ? message.data : `size:${message.cols}x${message.rows}`);
+        const first = order.indexOf("a");
+        assert.ok(first >= 0, JSON.stringify(order));
+        assert.deepEqual(order.slice(first, first + 3), ["a", "size:100x30", "b"]);
+        assert.deepEqual(resizeRequests.at(-1), { cols: 100, rows: 30 });
+      } finally {
+        manager.disposeAll();
+      }
+    });
+  } finally {
+    agent.close();
+    agent.closeAllConnections();
+    await once(agent, "close");
+  }
+});

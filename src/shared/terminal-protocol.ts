@@ -1,3 +1,14 @@
+/**
+ * A full terminal reset issued by wmux itself.
+ *
+ * RIS returns a terminal to its power-on modes, and Ghostty's power-on state
+ * disables the grapheme clustering (DEC 2027) that ghostty-web enables for
+ * every terminal it creates. Restore it so a reset terminal measures text
+ * exactly like a freshly created one, and like ConPTY, which always clusters
+ * graphemes.
+ */
+export const TERMINAL_RESET = "\x1bc\x1b[?2027h";
+
 // ghostty-web emits terminal-generated answers through the same onData event as
 // keyboard input. Tag only the bounded reply forms we understand so transports
 // do not mistake ordinary escape-prefixed key sequences for terminal responses.
