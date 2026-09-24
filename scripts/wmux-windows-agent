@@ -1065,7 +1065,17 @@ def refresh_callback_state(payload: dict[str, Any]) -> None:
                 handle.write(raw_value.strip())
                 handle.write("\n")
             os.chmod(temporary, 0o600)
-            os.replace(temporary, path)
+            # Windows readers may briefly open the destination without delete
+            # sharing. Keep the old complete value until replacement succeeds,
+            # and bound retries so a permanent ACL error still fails closed.
+            for attempt in range(5):
+                try:
+                    os.replace(temporary, path)
+                    break
+                except PermissionError as error:
+                    if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == 4:
+                        raise
+                    time.sleep(0.05 * (2 ** attempt))
         finally:
             try:
                 os.unlink(temporary)

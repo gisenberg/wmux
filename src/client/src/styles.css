@@ -5977,6 +5977,7 @@ button.active-tool {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
     max-height: min(78dvh, 620px);
     overflow: auto;
     padding-bottom: max(16px, env(safe-area-inset-bottom));

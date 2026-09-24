@@ -7,6 +7,8 @@ import re
 import selectors
 import shutil
 import signal
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -165,7 +167,7 @@ def validate(request, tui=False):
     if tui:
         if "prompt" in request:
             raise ValueError("interactive request must not contain prompt")
-        allowed = {"runId", "runtime", "directory", "model", "agent", "unattended", "writeAccess", "sandboxMode"}
+        allowed = {"runId", "runtime", "directory", "model", "agent", "unattended", "writeAccess", "sandboxMode", "codexRemote", "codexAttachFile"}
         unknown = sorted(set(request) - allowed)
         if unknown:
             raise ValueError("interactive request contains forbidden key: %s" % unknown[0])
@@ -175,10 +177,277 @@ def validate(request, tui=False):
             raise ValueError("interactive sandbox mode is only valid for codex")
         if request.get("unattended") is True and runtime != "codex":
             raise ValueError("interactive unattended mode is only valid for codex")
+        if "codexRemote" in request:
+            if runtime != "codex":
+                raise ValueError("interactive Codex remote is only valid for codex")
+            validate_codex_remote(request["codexRemote"])
+        if "codexAttachFile" in request:
+            if runtime != "codex" or not isinstance(request["codexAttachFile"], str):
+                raise ValueError("interactive Codex attachment is only valid for codex")
+            if any(key in request for key in ("model", "agent", "unattended", "writeAccess", "sandboxMode", "codexRemote")):
+                raise ValueError("interactive Codex attachment forbids launch overrides")
     return run_id, runtime, prompt, directory
 
 
-def tui_command_for(request, runtime):
+def private_regular(pathname):
+    entry = os.lstat(pathname)
+    return stat.S_ISREG(entry.st_mode) and not stat.S_ISLNK(entry.st_mode) and entry.st_uid == os.getuid() and not (entry.st_mode & 0o077)
+
+
+def proc_start(pid):
+    try:
+        with open("/proc/%d/stat" % pid, "r", encoding="utf-8") as handle:
+            # comm is parenthesized and may contain spaces; field 22 is the
+            # twentieth field following that closing parenthesis.
+            fields = handle.read().rsplit(")", 1)[1].split()
+            return fields[19]
+    except (OSError, IndexError):
+        return ""
+
+
+def proc_argv(pid):
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as handle:
+            return [part.decode("utf-8", errors="strict") for part in handle.read().split(b"\0") if part]
+    except (OSError, UnicodeError):
+        return []
+
+
+def proc_parent(pid):
+    try:
+        fields = open("/proc/%d/stat" % pid, encoding="utf-8").read().rsplit(")", 1)[1].split()
+        return int(fields[1])
+    except (OSError, IndexError, ValueError):
+        return 0
+
+
+def native_child(managed_pid, thread_id, expected_exe, deadline):
+    """Find the guard's actual native CLI descendant and its private cli.sock."""
+    while time.monotonic() < deadline:
+        children = {}
+        try:
+            for name in os.listdir("/proc"):
+                if name.isdigit():
+                    parent = proc_parent(int(name))
+                    children.setdefault(parent, []).append(int(name))
+        except OSError:
+            pass
+        pending, seen = list(children.get(managed_pid, [])), set()
+        while pending:
+            pid = pending.pop()
+            if pid in seen: continue
+            seen.add(pid); pending.extend(children.get(pid, []))
+            argv = proc_argv(pid)
+            if os.path.realpath("/proc/%d/exe" % pid) != expected_exe: continue
+            if len(argv) >= 4 and argv[-2:] == ["resume", thread_id] and "--remote" in argv:
+                remote = argv[argv.index("--remote") + 1] if argv.index("--remote") + 1 < len(argv) else ""
+                if remote.startswith("unix:///"):
+                    sock = remote[len("unix://"):]
+                    try:
+                        entry = os.lstat(sock)
+                        if stat.S_ISSOCK(entry.st_mode) and entry.st_uid == os.getuid() and not (entry.st_mode & 0o077):
+                            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                            probe.settimeout(.5); probe.connect(sock)
+                            credentials = probe.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12); probe.close()
+                            peer_pid = int.from_bytes(credentials[:4], sys.byteorder)
+                            if peer_pid <= 1 or not process_descends(peer_pid, managed_pid): continue
+                            return pid, proc_start(pid), argv, sock, peer_pid, proc_start(peer_pid)
+                    except OSError:
+                        pass
+        time.sleep(.025)
+    raise ValueError("native Codex attachment child was not observed")
+
+
+def managed_attachment(request, supplied_directory):
+    """Load only a server-created, owner-only descriptor; browser fields cannot set argv."""
+    filename = request.get("codexAttachFile")
+    if not isinstance(filename, str) or not filename.startswith("/") or len(filename) > 4096:
+        raise ValueError("invalid Codex attachment descriptor")
+    filename = os.path.realpath(filename)
+    if not private_regular(filename):
+        raise ValueError("invalid Codex attachment descriptor")
+    with open(filename, "r", encoding="utf-8") as handle:
+        descriptor = json.load(handle)
+    if not isinstance(descriptor, dict) or descriptor.get("version") != 1:
+        raise ValueError("invalid Codex attachment descriptor")
+    private = descriptor.get("attestation")
+    if not isinstance(private, dict):
+        raise ValueError("invalid Codex attachment descriptor")
+    route = private.get("route")
+    argv = route.get("managedArgv") if isinstance(route, dict) else None
+    thread = private.get("threadId")
+    fingerprint = private.get("fingerprint")
+    cwd = private.get("cwd")
+    receipt_file = descriptor.get("receiptFile")
+    if (not isinstance(argv, list) or len(argv) != 3 or not all(isinstance(value, str) and value for value in argv)
+            or argv[1] != "resume" or argv[2] != thread or not isinstance(fingerprint, str) or not fingerprint
+            or not isinstance(cwd, str) or not cwd.startswith("/") or os.path.realpath(cwd) != os.path.realpath(supplied_directory)
+            or not isinstance(receipt_file, str) or not receipt_file.startswith("/")):
+        raise ValueError("invalid Codex attachment descriptor")
+    receipt_file = os.path.realpath(receipt_file)
+    parent = os.path.dirname(receipt_file)
+    try:
+        parent_stat = os.lstat(parent)
+        if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode) or parent_stat.st_uid != os.getuid() or parent_stat.st_mode & 0o077:
+            raise ValueError()
+    except OSError as error:
+        raise ValueError("invalid Codex attachment receipt") from error
+    helper = os.path.join(SCRIPT_DIR, "wmux_codex_attach.py")
+    # The route must be inspected a second time directly before its only child
+    # is created.  The expected fingerprint binds this launch to catalog proof.
+    receipt = private.get("receipt") if isinstance(private.get("receipt"), dict) else {}
+    check = subprocess.run([sys.executable, helper, "attest"], input=json.dumps({
+        "socketPath": receipt.get("socket"), "launcherPath": route.get("launcherPath"),
+        "deploymentPath": route.get("deploymentPath"), "cwd": cwd, "expectedFingerprint": fingerprint,
+        "expectedReceipt": receipt,
+    }), text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False)
+    try:
+        verified = json.loads(check.stdout)
+    except json.JSONDecodeError:
+        verified = {}
+    if check.returncode != 0 or verified.get("ok") is not True:
+        raise ValueError("Codex attachment reattestation failed")
+    return argv, cwd, receipt_file, descriptor, fingerprint
+
+
+def write_attachment_receipt(receipt_file, descriptor, fingerprint, child_pid):
+    target = descriptor.get("target") if isinstance(descriptor.get("target"), dict) else {}
+    values = {key: target.get(key) for key in ("workspaceId", "tabId", "paneId", "requestId", "threadId", "generation")}
+    if not all(isinstance(value, str) and value for value in values.values()):
+        raise ValueError("invalid Codex attachment receipt")
+    private = descriptor.get("attestation") if isinstance(descriptor.get("attestation"), dict) else {}
+    expected_exe = (private.get("receipt") or {}).get("peerExe") if isinstance(private.get("receipt"), dict) else None
+    if not isinstance(expected_exe, str) or not expected_exe.startswith("/"): raise ValueError("native executable unavailable")
+    native_pid, native_start, native_argv, cli_socket, peer_pid, peer_start = native_child(child_pid, values["threadId"], expected_exe, time.monotonic() + 5)
+    cli_stat = os.lstat(cli_socket)
+    listener_inode = unix_socket_inode(cli_socket)
+    native_exe = os.path.realpath("/proc/%d/exe" % native_pid)
+    if native_exe != expected_exe or not process_descends(native_pid, child_pid) or not process_descends(peer_pid, child_pid) or not listener_owned_by(peer_pid, listener_inode):
+        raise ValueError("native Codex attachment identity was not observed")
+    receipt = {**values, "fingerprint": fingerprint, "endpointId": descriptor.get("endpointId"),
+               "wrapperPid": os.getpid(), "wrapperStart": proc_start(os.getpid()),
+               "managedPid": child_pid, "managedStart": proc_start(child_pid),
+               # The managed launcher is the initial native CLI ancestor. The
+               # server verifier additionally proves the native descendant.
+               "nativePid": native_pid, "nativeStart": native_start, "nativeExe": native_exe, "nativeArgv": native_argv, "cliSocket": cli_socket,
+               "cliSocketDev": cli_stat.st_dev, "cliSocketIno": cli_stat.st_ino, "cliListenerIno": listener_inode, "cliPeerPid": peer_pid, "cliPeerStart": peer_start,
+               "managedArgv": private_route_argv(descriptor), "status": "launching"}
+    temporary = receipt_file + ".tmp-%d" % os.getpid()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        descriptor_stat = os.lstat(receipt_file)
+        if not private_regular(receipt_file): raise ValueError("invalid Codex attachment receipt")
+        os.unlink(receipt_file)
+    except FileNotFoundError:
+        pass
+    fd = os.open(temporary, flags, 0o600)
+    try:
+        os.write(fd, json.dumps(receipt, separators=(",", ":")).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(temporary, receipt_file)
+
+
+def invalidate_attachment_receipt(receipt_file):
+    try:
+        if not private_regular(receipt_file): return
+        receipt = json.load(open(receipt_file, encoding="utf-8"))
+        receipt["invalidated"] = True
+        temporary = receipt_file + ".input-%d" % os.getpid()
+        with open(temporary, "x", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600); json.dump(receipt, handle, separators=(",", ":")); handle.flush(); os.fsync(handle.fileno())
+        os.replace(temporary, receipt_file)
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+
+
+def terminal_reply_only(data):
+    """Known terminal capability replies and focus reports are not task input."""
+    return bool(re.fullmatch(rb"(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[Rc]|\x1bP>\|libghostty\x1b\\|\x1b\][0-9;]*[^\x1b\x07]*(?:\x07|\x1b\\))+", data))
+
+
+def private_route_argv(descriptor):
+    private = descriptor.get("attestation") if isinstance(descriptor.get("attestation"), dict) else {}
+    route = private.get("route") if isinstance(private.get("route"), dict) else {}
+    return route.get("managedArgv") if isinstance(route.get("managedArgv"), list) else []
+
+
+def process_descends(pid, ancestor):
+    while pid > 1:
+        if pid == ancestor: return True
+        pid = proc_parent(pid)
+    return False
+
+
+def listener_owned_by(root, inode):
+    pending, seen = [root], set()
+    while pending:
+        pid = pending.pop()
+        if pid in seen: continue
+        seen.add(pid)
+        try:
+            for entry in os.listdir("/proc/%d/fd" % pid):
+                try:
+                    if os.readlink("/proc/%d/fd/%s" % (pid, entry)) == "socket:[%d]" % inode: return True
+                except OSError: pass
+        except OSError: pass
+        try:
+            for name in os.listdir("/proc"):
+                if name.isdigit() and proc_parent(int(name)) == pid: pending.append(int(name))
+        except OSError: pass
+    return False
+
+
+def unix_socket_inode(pathname):
+    for line in open("/proc/net/unix", encoding="utf-8"):
+        fields = line.split()
+        # A connected accepted socket can share the pathname. Pin only the
+        # listening SOCK_STREAM entry (Flags 00010000), whose FD belongs to
+        # the guard frontend rather than a transient client connection.
+        if len(fields) >= 8 and fields[-1] == pathname and fields[3] == "00010000" and fields[4] == "0001":
+            return int(fields[-2])
+    raise ValueError("CLI socket inode unavailable")
+
+
+def validate_codex_remote(remote):
+    """Accept only an already-running, private, canonical Unix App Server socket."""
+    if os.name == "nt" or not isinstance(remote, str) or len(remote) > 4096:
+        raise ValueError("invalid Codex remote")
+    if not remote.startswith("unix:///") or any(ord(char) < 32 or ord(char) == 127 for char in remote):
+        raise ValueError("invalid Codex remote")
+    socket_path = remote[len("unix://"):]
+    if (
+        not os.path.isabs(socket_path)
+        or socket_path.startswith("//")
+        or any(character in socket_path for character in "?#")
+        or remote != "unix://" + socket_path
+    ):
+        raise ValueError("invalid Codex remote")
+    try:
+        resolved = os.path.abspath(socket_path)
+        parent = os.path.dirname(resolved)
+        socket_stat = os.lstat(resolved)
+        parent_stat = os.lstat(parent)
+        private_owner = lambda value: value.st_uid == os.getuid() and not (value.st_mode & 0o077)
+        if (
+            resolved != socket_path
+            or os.path.realpath(parent) != parent
+            or os.path.realpath(resolved) != resolved
+            or not stat.S_ISDIR(parent_stat.st_mode)
+            or stat.S_ISLNK(parent_stat.st_mode)
+            or not stat.S_ISSOCK(socket_stat.st_mode)
+            or stat.S_ISLNK(socket_stat.st_mode)
+            or not private_owner(parent_stat)
+            or not private_owner(socket_stat)
+        ):
+            raise ValueError("invalid Codex remote")
+    except OSError as error:
+        raise ValueError("invalid Codex remote") from error
+    return remote
+
+
+def tui_command_for(request, runtime, directory):
     executable = shutil.which(runtime)
     if not executable:
         raise FileNotFoundError("%s executable not found" % runtime)
@@ -196,6 +465,11 @@ def tui_command_for(request, runtime):
         argv.extend(["--config", "check_for_update_on_startup=false", "--sandbox", sandbox_mode])
         if request.get("unattended") is True:
             argv.extend(["--ask-for-approval", "never"])
+    if runtime == "codex" and request.get("codexRemote"):
+        # A remote App Server selects its own working directory unless Codex is
+        # told explicitly.  The launcher process cwd only governs this local
+        # wrapper, so preserve the validated directory in the remote TUI too.
+        argv.extend(["--remote", request["codexRemote"], "--cd", directory])
     if runtime == "opencode" and request.get("agent"):
         argv.extend(["--agent", request["agent"]])
     if model:
@@ -214,7 +488,12 @@ def tui_main(expected_run_id):
         if expected_run_id and request_run_id != expected_run_id:
             raise ValueError("runId does not match TUI launch marker")
         run_id = request_run_id
-        argv = tui_command_for(request, runtime)
+        attachment = None
+        if request.get("codexAttachFile"):
+            argv, directory, receipt_file, descriptor, fingerprint = managed_attachment(request, directory)
+            attachment = (receipt_file, descriptor, fingerprint)
+        else:
+            argv = tui_command_for(request, runtime, directory)
     except FileNotFoundError as error:
         return fail(run_id, str(error), 127)
     except (OSError, ValueError) as error:
@@ -229,8 +508,15 @@ def tui_main(expected_run_id):
             return code
         env = os.environ.copy()
         env["WMUX_INTERACTIVE_TUI"] = "1"
-        code = supervise_tui(argv, directory, env)
-    except OSError as error:
+        if attachment:
+            receipt_file, descriptor, fingerprint = attachment
+            code = supervise_tui(argv, directory, env, lambda child: write_attachment_receipt(receipt_file, descriptor, fingerprint, child.pid), lambda: invalidate_attachment_receipt(receipt_file))
+        else:
+            code = supervise_tui(argv, directory, env)
+    except (OSError, ValueError) as error:
+        # Receipt creation is part of the managed launch gate. Do not leave a
+        # wrapper running or return raw traceback text to the terminal.
+        stop_process_group(locals().get("child"), signal.SIGKILL, 0)
         code = fail(run_id, str(error), 127)
         quarantine_tui(run_id)
         return code
@@ -312,7 +598,7 @@ def control_line(marker):
     return line.rstrip(b"\r\n").decode("ascii", errors="replace")
 
 
-def supervise_tui(argv, directory, env):
+def supervise_tui(argv, directory, env, on_started=None, on_input=None):
     child = None
     previous_handlers = {}
     tty_fd = sys.stdin.fileno() if sys.stdin.isatty() else None
@@ -339,21 +625,91 @@ def supervise_tui(argv, directory, env):
             tty_state = termios.tcgetattr(tty_fd)
         for signum in termination_signals:
             previous_handlers[signum] = signal.signal(signum, forward_signal)
-        child = subprocess.Popen(
-            argv,
-            cwd=directory,
-            env=env,
-            preexec_fn=prepare_child,
-        )
+        master = slave = None
+        if on_input is not None and tty_fd is not None:
+            import pty
+            import tty
+
+            master, slave = pty.openpty()
+            def prepare_attachment_child():
+                os.setsid()
+                import fcntl
+                import termios
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+                for signum in termination_signals: signal.signal(signum, signal.SIG_DFL)
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            child = subprocess.Popen(argv, cwd=directory, env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=prepare_attachment_child)
+            os.close(slave); slave = None
+        else:
+            child = subprocess.Popen(argv, cwd=directory, env=env, preexec_fn=prepare_child)
+        if on_started is not None:
+            on_started(child)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         mask_restored = True
-        if tty_fd is not None:
+        if tty_fd is not None and master is None:
             previous_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
             try:
                 os.tcsetpgrp(tty_fd, child.pid)
             except OSError:
                 if child.poll() is None:
                     raise
+        if master is not None:
+            # The outer terminal must be raw too: the child owns a separate
+            # slave PTY, so canonical outer input would otherwise line-buffer
+            # keystrokes and echo them outside the TUI.
+            outer_state = termios.tcgetattr(tty_fd)
+            tty.setraw(tty_fd)
+            import fcntl
+            try: fcntl.ioctl(master, termios.TIOCSWINSZ, fcntl.ioctl(tty_fd, termios.TIOCGWINSZ, b"\0" * 8))
+            except OSError: pass
+            previous_winch = signal.getsignal(signal.SIGWINCH)
+            def resize(_signum, _frame):
+                try: fcntl.ioctl(master, termios.TIOCSWINSZ, fcntl.ioctl(tty_fd, termios.TIOCGWINSZ, b"\0" * 8))
+                except OSError: pass
+            signal.signal(signal.SIGWINCH, resize)
+            os.set_blocking(master, False)
+            selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ); selector.register(tty_fd, selectors.EVENT_READ)
+            invalidated = False
+            pending_input = bytearray()
+            master_open = True
+            while master_open:
+                exited = child.poll() is not None
+                events = selector.select(0 if exited else .05)
+                if exited and not events:
+                    break
+                for key, mask in events:
+                    if key.fileobj == master and mask & selectors.EVENT_WRITE:
+                        try:
+                            written = os.write(master, pending_input)
+                            del pending_input[:written]
+                        except BlockingIOError:
+                            pass
+                        if not pending_input:
+                            selector.modify(master, selectors.EVENT_READ)
+                            selector.register(tty_fd, selectors.EVENT_READ)
+                    if not mask & selectors.EVENT_READ:
+                        continue
+                    try: chunk = os.read(key.fileobj, 8192)
+                    except BlockingIOError: continue
+                    except OSError: chunk = b""
+                    if key.fileobj == tty_fd:
+                        if chunk:
+                            if not invalidated and not terminal_reply_only(chunk): on_input(); invalidated = True
+                            # Stop reading the outer PTY until this bounded chunk
+                            # drains. A busy child must not truncate a paste or
+                            # turn EAGAIN into termination of the managed view.
+                            pending_input.extend(chunk)
+                            selector.unregister(tty_fd)
+                            selector.modify(master, selectors.EVENT_READ | selectors.EVENT_WRITE)
+                        else: selector.unregister(tty_fd)
+                    elif chunk:
+                        os.write(sys.stdout.fileno(), chunk)
+                    else:
+                        selector.unregister(master)
+                        master_open = False
+            selector.close(); os.close(master)
+            signal.signal(signal.SIGWINCH, previous_winch)
+            termios.tcsetattr(tty_fd, termios.TCSADRAIN, outer_state)
         code = child.wait()
         return 128 - code if code < 0 else code
     except KeyboardInterrupt:
@@ -362,7 +718,7 @@ def supervise_tui(argv, directory, env):
     except ForwardedSignal as forwarded:
         stop_process_group(child, forwarded.signum)
         return 128 + forwarded.signum
-    except OSError:
+    except (OSError, ValueError):
         stop_process_group(child, signal.SIGKILL, 0)
         raise
     finally:

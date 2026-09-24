@@ -109,6 +109,8 @@ interface SetAutoTitleInput {
   title: string;
   /** Trusted native names were already validated at the binding boundary. */
   exact?: boolean;
+  /** Initialize placeholders without replacing an automatic or manually chosen title. */
+  onlyDefault?: boolean;
   tabId?: string;
   sourcePaneId?: string;
   descriptor?: string;
@@ -348,6 +350,19 @@ export class StateStore extends EventEmitter {
     this.bumpWorkspaceTreeRevision();
     this.save();
     return workspace;
+  }
+
+  markWorkspaceUserCreated(workspaceId: string): void {
+    if (this.requireWorkspace(workspaceId).createdBy !== "agent") return;
+    while (this.requireWorkspace(workspaceId).parentWorkspaceId) {
+      if (!this.reorderWorkspace(workspaceId, undefined, "out-of")) throw new Error("workspace could not leave agent ancestry");
+    }
+    const workspace = this.requireWorkspace(workspaceId);
+    delete workspace.createdBy;
+    delete workspace.cleanupPolicy;
+    delete workspace.cleanupAt;
+    workspace.updatedAt = now();
+    this.save();
   }
 
   configureWorkspaceCleanup(
@@ -681,6 +696,7 @@ export class StateStore extends EventEmitter {
     let workspaceApplied = false;
     let tabApplied = false;
     if (ownership.workspace && workspace.nameSource !== "user"
+      && (!input.onlyDefault || workspace.nameSource === "default")
       && (workspace.name !== title || workspace.nameSource !== "auto")) {
       workspace.name = title;
       workspace.nameSource = "auto";
@@ -701,6 +717,7 @@ export class StateStore extends EventEmitter {
       ? sourceTab
       : undefined;
     if (tab && ownership.tab && tab.titleSource !== "user"
+      && (!input.onlyDefault || tab.titleSource === "default")
       && (tab.title !== title || tab.titleSource !== "auto")) {
       tab.title = title;
       tab.titleSource = "auto";

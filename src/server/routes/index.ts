@@ -3,6 +3,7 @@ import { agentInputRoutes } from "./agent-input-routes.js";
 import { authRoutes } from "./auth-routes.js";
 import { bootstrapRoutes } from "./bootstrap-routes.js";
 import { codexBindingRoutes } from "./codex-binding-routes.js";
+import { codexTaskRoutes } from "./codex-task-routes.js";
 import { eventIngestRoutes } from "./event-ingest-routes.js";
 import { mediaRoutes } from "./media-routes.js";
 import { machineRoutes } from "./machine-routes.js";
@@ -18,6 +19,7 @@ export const apiRoutes = [
   ...authRoutes,
   ...bootstrapRoutes,
   ...codexBindingRoutes,
+  ...codexTaskRoutes,
   ...eventIngestRoutes,
   ...mediaRoutes,
   ...machineRoutes,

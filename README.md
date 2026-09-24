@@ -49,6 +49,7 @@ See [retro boot fidelity](docs/RETRO_BOOT_FIDELITY.md) for historical references
 | Node.js service | Private-network boundary, bearer authentication, bounded REST uploads, event WebSocket, and canonical workspace state |
 | Agent sessions | `AgentSessionService` owns persisted delegation transitions and side effects; the versioned timeline store retains prompts, outcomes, touched files, and archived working-tree snapshots; Codex, Claude, and OpenCode adapters own runtime-specific TUI and optional headless behavior |
 | Optional Codex wmux plugin | A trusted prompt hook emits a short-lived marker; the live backend binds its private receipt and native turn to the pane. Native names remain canonical; workspace/tab reset controls independently restore automatic eligibility. The Linux wmux-owned observer user service supervises a bounded sampler with connections scoped to each receipt's existing private native socket and exact roots. It mirrors names and reports prompt-bound activity without driving Codex or answering requests. Kernel locks serialize plugin reads/writes; the server withdraws stale activity. Binding authority is memory-only; wmux server restart requires fresh terminal proof. See the conformance matrix for acceptance limits. |
+| Optional Codex task catalog | Explicit private endpoint configuration enables bounded read-only local/SSH discovery independently of panes. Separate versioned ledgers retain display associations, deduplicated task notifications and idempotent fresh CLI-view attempts. Associations confer no title/input authority; unsafe resume remains disabled. See [catalog setup and UAT](docs/CODEX_TASK_CATALOG.md). |
 | Session manager | One live client per pane, persisted registered-host disposal snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
 | Execution backends | Raw PTY, durable `tmux`/`screen`, and native session-agent adapters; POSIX and Windows agents own pane processes, replay, dynamic-registration heartbeat, and view-only capture supervision; the Windows agent also reports ConPTY's own screen through a detached console-reader helper so the server and browsers stay in lockstep with ConPTY ([Windows terminal model](docs/WINDOWS_TERMINAL_MODEL.md)) |
@@ -598,6 +599,10 @@ on desktop/mobile; each action identifies its target and preserves the other pin
 Doctor and the session inspector show binding/observation health and sample age.
 The Linux supervised profile adds a wmux-owned user service for idle worker
 recovery; see [M1–M2 qualification and rollout](docs/CODEX_M1_M2_UAT.md).
+The optional [native task catalog](docs/CODEX_TASK_CATALOG.md) discovers tasks
+without panes and supports display associations and explicit fresh CLI views.
+It uses separately configured endpoints and normal user authorization; it does
+not broaden the naming plugin's receipt-scoped tools.
 Each prompt emits a small visible binding marker; the live backend must observe
 it. No terminal focus, cwd or recent-session search determines the target.
 Desktop-only tasks without an observed marker have no automatic wmux binding.

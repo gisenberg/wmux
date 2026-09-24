@@ -1,4 +1,7 @@
 import http from "node:http";
+import { CodexTasksService, openCodexCliView } from "./codex-tasks.js";
+import { isCodexAttachmentPane, openCodexAttachment, recoverCodexAttachmentTarget, verifyCodexAttachment } from "./codex-cli-attachment.js";
+import type { CodexCatalogEndpointConfig } from "./codex-task-catalog.js";
 import https from "node:https";
 import path from "node:path";
 import type { ViteDevServer } from "vite";
@@ -92,6 +95,8 @@ export const createHttpServer = (
     agentInputRequests?: AgentInputRequestStore;
     agentInputRelay?: AgentInputRelay;
     agentInputEnabled?: boolean;
+    codexTasks?: CodexTasksService;
+    codexCatalogEndpoints?: CodexCatalogEndpointConfig[];
   },
 ): Promise<WmuxHttpServer> => {
   const {
@@ -250,7 +255,34 @@ export const createHttpServer = (
     delegation: options.delegation,
     refreshIntervals: options.healthRefreshIntervals,
   });
+  const codexTasks: CodexTasksService = options.codexTasks ?? new CodexTasksService(state, currentMachines, {
+    endpoints: options.codexCatalogEndpoints,
+    freshLaunchDisabledReason: options.tls ? "Fresh CLI views require a local HTTP controller listener; this server uses direct TLS." : undefined,
+    open: async (endpointId, cwd) => {
+      const config = codexTasks.catalog.launchConfig(endpointId);
+      const address = server.address();
+      if (!address || typeof address === "string" || options.tls) throw new Error("CLI controller requires an available local HTTP listener");
+      const host = address.address.includes(":") ? `[${address.address}]` : address.address;
+      return openCodexCliView({ baseUrl: `http://${host}:${address.port}`, token: auth.automationToken || auth.token,
+        machineId: config.machineId, socketPath: config.socketPath, cwd });
+    },
+    openAttached: async (request, attestation) => {
+      const config = codexTasks.catalog.attachmentConfig(request.endpointId);
+      const address = server.address();
+      if (!address || typeof address === "string" || options.tls) throw new Error("CLI controller requires an available local HTTP listener");
+      const host = address.address.includes(":") ? `[${address.address}]` : address.address;
+      const target = await openCodexAttachment({ baseUrl: `http://${host}:${address.port}`, token: auth.automationToken || auth.token,
+        machineId: config.machineId, requestId: request.requestId, attestation, storageDirectory: state.storageDirectory() });
+      return { workspaceId: target.workspaceId, tabId: target.tabId, paneId: target.paneId };
+    },
+    verifyAttached: (request, target, attestation) => verifyCodexAttachment({ request,
+      target: { ...target, requestId: request.requestId, threadId: request.threadId, generation: request.generation },
+      attestation, storageDirectory: state.storageDirectory() }),
+    recoverAttached: request => recoverCodexAttachmentTarget(state.storageDirectory(), request),
+  });
+  sessions.setCodexAttachmentPaneGuard?.(paneId => isCodexAttachmentPane(state.storageDirectory(), paneId));
   const serverDeps: ServerDeps = {
+    codexTasks,
     bindHost,
     auth,
     browserSessions,
@@ -355,6 +387,7 @@ export const createHttpServer = (
   });
 
   server.on("close", () => {
+    codexTasks.close();
     hostRegistry?.off("change", onRegistryChange);
     state.off("change", reconcileAgentInputSources);
     agentFollowUps.dispose();
@@ -364,6 +397,7 @@ export const createHttpServer = (
     events.dispose();
   });
   server.on("wmux-shutdown", () => {
+    codexTasks.close();
     agentFollowUps.dispose();
     agentInputRelay.dispose();
     agentInputRequests.dispose();

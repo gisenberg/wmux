@@ -1,15 +1,118 @@
 # Codex integration roadmap
 
+M6 follow-up — 2026-09-23: saved-task opening is deployed as `bca11a0` on
+Haswell. **Open in CLI** can now load saved history through the qualified
+managed route, retaining empty-queue and configured-owner checks. Full checks
+and the 16-case catalog browser matrix passed; disposable tests verified exact
+saved history without a new turn. The remaining direct UAT is opening a
+previously unavailable saved task and confirming history and CLI interaction.
+See the [follow-up ledger](CODEX_M6_UAT.md#saved-task-opening-correction--2026-09-23).
+This expands the loaded-only scope accepted below; no new acceptance or soak
+is implied, and phone usability remains deferred.
+
+Accepted — 2026-09-17: the user accepted the deployed Haswell desktop M3–M6
+milestone and requested Git completion and a PR. This includes the naming,
+recovery, Firefox layout and workspace-provenance corrections through runtime
+`049e66e`. Physical-phone UAT remains deferred; Desktop-local/remote attachment
+and unqualified fresh-launch routes remain outside the accepted matrix. The
+catalog soak does not claim overnight coverage of the later attachment code.
+See the [acceptance decision](CODEX_M6_UAT.md#accepted-desktop-milestone--2026-09-17).
+The dated progress entries below retain their historical status at the time;
+their pending desktop acceptance statements are superseded by this decision.
+
+Workspace provenance follow-up — 2026-09-17: deployed runtime `049e66e` treats
+browser CLI launches as user workspaces, without AI badges or inherited agent
+parents. The badge and automatic parent/child behavior remain for workspaces
+launched by working agents. Exact older catalog targets are corrected; unrelated
+agents are preserved. External checks passed 1,202 tests / eight skips. This is
+part of the M6-H2b corrections in the [acceptance ledger](CODEX_M6_UAT.md).
+
+Naming/recovery UAT follow-up — 2026-09-17: runtime `69e3837` is deployed for
+M6-H2b. Uncertain startup now retains the requested native task name as an
+automatic display label, preserving existing names and pins. Inline recovery
+replaces the need to find request IDs in the launch history. Full checks passed
+1,200 tests / eight skips and all 12 catalog browser cases. Direct acceptance
+of these corrections remains open; see the [acceptance ledger](CODEX_M6_UAT.md).
+
+Firefox UAT follow-up — 2026-09-17: M6-H2b appearance was rejected because dense
+catalog rows overlap. Chromium reproduces the same defect. The correction and
+40/80-row Firefox/Chromium/WebKit regression belong to M6-H2b. Runtime `a24348b`
+is deployed with 12 catalog browser cases and full checks passed; appearance
+acceptance is still pending. Details are in the [acceptance ledger](CODEX_M6_UAT.md).
+
+UAT feedback — 2026-09-17: Haswell **Open in CLI** is user-confirmed. M6-H2b
+tracks requested follow-up: seed newly verified workspace/tab titles from the
+native task name with independent pins preserved, and align the Tasks window
+with wmux typography, palette and layout. Desktop-local ice3070 remains outside
+the qualified route; physical-phone testing remains deferred. Overall M6 is
+not yet accepted. The corrections are deployed as `930e4d9`; automated title,
+pin, theme, browser and continuation checks passed, with M6-H2b awaiting user
+confirmation. See the [acceptance ledger](CODEX_M6_UAT.md).
+
+Rollout update — 2026-09-17: corrective M5a/M5b attachment is implemented on
+the integration branch and deployed for UAT. Runtime `d1104f2` supports **Open in CLI** for loaded
+Haswell tasks and **Open terminal** for freshly verified views, with managed
+route, queue and exact-task checks. Both configured catalog endpoints remain
+visible: remote ownership is checked through the read-only wmux bridge, without
+enabling remote attachment. Catalog navigation now dismisses the dialog when
+opening the terminal, and terminal capability/focus reports preserve attachment
+proof while real input invalidates it. Served attachment, reuse, continuation
+and cleanup passed. See the [current rollout and UAT ledger](CODEX_M6_UAT.md).
+M6 remains unaccepted; the dated pre-attachment findings below are historical.
+
+UAT scope update — 2026-09-17: the user deferred physical-phone usability until
+the Mac Mini is running and set up for wmux mobile testing. Track it as deferred
+M6-H3, not accepted and not a blocker for the current desktop rollout. The
+desktop catalog attachment workflow (M6-H2) remains the outstanding direct UAT
+check after rollout; automated mobile coverage and engineering gates remain
+required. See the [UAT decisions](CODEX_M6_UAT.md#direct-interaction-acceptance).
+
+Connection qualification — 2026-09-17, before implementation: the independent connection task proved
+**Desktop Haswell SSH → guarded persistent server ← managed wmux CLI**, including
+direct user approval and continuation UAT. No production routing or native
+service changes were required. The prior blocker applies to Desktop-local
+ice3070, not Desktop's Haswell connection. Corrective M5a/M5b implementation is
+now assigned in an isolated wmux worktree. The catalog action and M6 acceptance
+remain open; see the [updated connection evidence](CODEX_SESSION_ATTACHMENT.md).
+
+Execution update — 2026-09-16: M6 UAT exposed a product gap. The user needs to
+select an existing Codex conversation and open that exact task in a wmux CLI.
+Inspection and display associations alone do not meet that need. **M6 remains
+unaccepted; existing-task attachment in M5 requires implementation.** See the
+[native attachment investigation and corrective checkpoints](CODEX_SESSION_ATTACHMENT.md).
+The user authorized M6 as the combined release target. The current pushed,
+unmerged candidate provides M3/M4 and fresh CLI launch for combined testing.
+Live automation now covers native fresh views, later-turn notification
+deduplication, catalog inspection and browser association persistence. The user
+confirmed the native trust interaction on 2026-09-16. The catalog usability
+check identified the missing continuation workflow; repeat it after that work.
+The 24-hour mixed-task gate is still running automatically.
+Final deployed runtime `e232290` passed the external full check and all three
+catalog browser projects after workstation maintenance; served browser and
+native read-only checks also passed. The soak's storage interruption remains
+part of its final evidence review.
+See the [current M6 handoff](CODEX_M6_UAT.md). Existing
+M0–M2 acceptance below remains attached to its qualified release. See
+[catalog configuration, limits and combined UAT](CODEX_TASK_CATALOG.md).
+Resume remains disabled in the deployed candidate. Native tests now establish
+same-server CLI sharing on the background endpoints; the earlier blanket
+exclusive-client requirement is superseded by the investigation's route and
+capability checks. Fresh CLI views preserve native policy.
+The Desktop-local ice3070 managed-launch route failed readiness qualification;
+it is not a proven wmux-only delivery path. The investigation records that blocker
+separately from the successful background-server attachment tests.
+
 Status: M0, M1 and M2 are qualified in the declared Linux scope. M2's
 supplemental actual 24-hour load soak passed and was accepted on 2026-09-16. M0–M2 is
-deployed and in use on Haswell. The final fixes and qualification
+the accepted baseline for the M6 candidate deployed on Haswell. The earlier fixes and qualification
 are tracked in [PR #130](https://github.com/gisenberg/wmux/pull/130), following
 [PR #127](https://github.com/gisenberg/wmux/pull/127). Naming
 [PR #126](https://github.com/gisenberg/wmux/pull/126) is the fixed baseline at
 `d3be8801f4b3b4e6f6d6ad34de4d66dec4cc34a3`. M1 closes the observed unpin gap;
-M2 adds bounded recovery. M3–M6 remain proposed. Immediate shared-client CLI
+M2 adds bounded recovery. M3–M6 are authorized for combined implementation;
+their native UAT and release acceptance remain pending. Immediate shared-client CLI
 exit cleanup is excluded. The qualified implementation remains unmerged;
-PR #130's hosted browser CI flake and maintainer merge remain separate gates.
+PR #130's replacement CI run passed; upstream merge remains a separate gate.
 Updated: 2026-09-16.
 
 Direct UAT update: Desktop → wmux name syncing (N04), unpin behavior, mobile
@@ -291,10 +394,11 @@ Deliverables:
 - Support a fresh task on a configured existing server and an explicit resume
   for eligible tasks. Preserve native sandbox/approval behavior; pass prompts
   through supported structured input or protected files, not shell interpolation.
-- Before resume, inspect available runtime/queue state and wmux's own launch
-  records. These checks cannot prove ownership across arbitrary standalone
-  processes: ambiguous or foreign-active cases must remain unavailable for
-  automatic launch. Show the reason and retain inspection access.
+- Before resume, resolve the actual running App Server and inspect runtime/queue
+  state and wmux's own launch records. Another client on that same verified server
+  is not by itself a blocker. A stored task visible on a different server does
+  not prove ownership. Ambiguous owners, unsupported native client capabilities
+  and arbitrary standalone processes remain unavailable; explain the reason.
 - Track one wmux launch attempt and its resulting native identity. A successful
   process spawn or queued input is not successful execution. After uncertain
   submission, reconcile and show unknown rather than automatically resubmitting.
@@ -308,7 +412,9 @@ approval prompts. Confirm one intended submission, the correct host/cwd, no
 automatic retry after uncertain delivery, and no silent permission changes.
 
 Exit: the supported eligibility matrix is precise. Seamless desktop/CLI takeover
-is not claimed. A capability may be deferred without blocking M1–M4 release.
+is not claimed. M5a/M5b in the [attachment plan](CODEX_SESSION_ATTACHMENT.md)
+define the corrective implementation and UAT gates. M1–M4 can retain their
+qualified scope, but the user's M6 workflow requires existing-task CLI access.
 
 ## M6 — Integrated UAT and release
 
@@ -316,7 +422,9 @@ Run the accepted workflow end to end: discover a task, inspect it, associate a
 pane, observe a native rename, preserve a pin, follow a later native turn, recover
 from a wmux observer interruption, and use an eligible explicit CLI launch.
 Exercise wmux desktop and mobile browser layouts against each supported native
-client/host combination. Mobile browser support is distinct from a native host
+client/host combination through automation. Direct physical-phone usability is
+deferred as M6-H3 until the user's Mac Mini testing setup is ready; desktop UAT
+remains required for this rollout. Mobile browser support is distinct from a native host
 transport claim. macOS/remote rows require existing compatible endpoints;
 Windows native observation remains explicitly unsupported unless a wmux-only
 adapter can use an already available, verified interface.

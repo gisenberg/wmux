@@ -2265,6 +2265,34 @@ const startTuiFixture = async (options: TuiFixtureOptions = {}) => {
   };
 };
 
+test("catalog attachment workspaces are user-created even when startup fails", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-user-attachment-"));
+  const descriptor = path.join(directory, "attachment.json");
+  // Stop at descriptor binding, after the real workspace creation request.
+  fs.writeFileSync(descriptor, "{}", { mode: 0o600 });
+  const fixture = await startTuiFixture();
+  try {
+    await assert.rejects(cli(fixture.url, ["tui", "codex", "linux-box", "--directory", "/srv/project",
+      "--no-prompt", "--user-created", "--codex-attach-file", descriptor], parentEnvironment()));
+    assert.deepEqual(fixture.workspaceRequests, [{ machineId: "linux-box", createdBy: "user" }]);
+    assert.equal(fixture.inputs.length, 0);
+  } finally { await fixture.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("TUI workspace provenance follows the launcher, not the Codex runtime", async () => {
+  for (const userCreated of [true, false]) {
+    const fixture = await startTuiFixture();
+    try {
+      await cli(fixture.url, ["tui", "codex", "linux-box", "--directory", "/srv/project", "--no-prompt",
+        ...fastTuiGate, ...(userCreated ? ["--user-created"] : [])], parentEnvironment());
+      const request = fixture.workspaceRequests[0]!;
+      assert.equal(request.createdBy, userCreated ? "user" : "agent");
+      assert.equal(Boolean(request.parentContext), !userCreated);
+      assert.equal(request.cleanupPolicy, userCreated ? undefined : "retain");
+    } finally { await fixture.stop(); }
+  }
+});
+
 test("wmuxctl tui recognizes padded CUP/HVP helper records and safety gates but rejects marker echoes", async () => {
   const padded = await startTuiFixture({
     replayAtUpgrade: (count, runId) => {
