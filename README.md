@@ -51,7 +51,7 @@ See [retro boot fidelity](docs/RETRO_BOOT_FIDELITY.md) for historical references
 | Optional Codex wmux plugin | A trusted prompt hook emits a short-lived marker; the live backend binds its private receipt and native turn to the pane. Native names remain canonical; workspace/tab reset controls independently restore automatic eligibility. The Linux wmux-owned observer user service supervises a bounded sampler with connections scoped to each receipt's existing private native socket and exact roots. It mirrors names and reports prompt-bound activity without driving Codex or answering requests. Kernel locks serialize plugin reads/writes; the server withdraws stale activity. Binding authority is memory-only; wmux server restart requires fresh terminal proof. See the conformance matrix for acceptance limits. |
 | Session manager | One live client per pane, persisted registered-host disposal snapshots, temporary image staging, bounded replay, VT checkpoints, resize ownership, and dispatch through the shared `SessionBackend` contract |
 | Machine catalog | Merges static `wmux.config.json` machines with dynamically registered heartbeat hosts |
-| Execution backends | Raw PTY, durable `tmux`/`screen`, and native session-agent adapters; POSIX and Windows agents own pane processes, replay, dynamic-registration heartbeat, and view-only capture supervision |
+| Execution backends | Raw PTY, durable `tmux`/`screen`, and native session-agent adapters; POSIX and Windows agents own pane processes, replay, dynamic-registration heartbeat, and view-only capture supervision; the Windows agent also reports ConPTY's own screen through a detached console-reader helper so the server and browsers stay in lockstep with ConPTY ([Windows terminal model](docs/WINDOWS_TERMINAL_MODEL.md)) |
 | Shared contracts | TypeScript browser/server protocol plus generated Python delegation and Windows-agent constants checked by `npm run check:contracts` |
 | Persistent state | Workspace layout, delegation outcomes, registered-host disposal endpoints, settings, persistent mobile attachments, and metadata under `~/.wmux`; expiring paste-image stages are not workspace state |
 | Optional streaming | Native-agent-supervised, lease-driven MediaMTX capture for view-only streams, plus a separate Moonlight/Sunshine gateway for Moonlight-native interaction |
@@ -470,6 +470,7 @@ Automation, helper, registration, and registered-host credentials cannot access 
   Programs that render explicit RGB colors still own those colors and are not recolored by the terminal palette.
   Windows panes also seed their isolated ConPTY color table from the selected scheme.
   The server-side VT checkpoint uses that same palette, so size-aware Windows replay preserves semantic default colors instead of repainting them black.
+  Windows agent panes change size only where ConPTY applied the resize, reproduce ConPTY's reflow, and converge on ConPTY's own screen; see the [Windows terminal model](docs/WINDOWS_TERMINAL_MODEL.md).
 - Pasting a PNG, JPEG, WebP, or GIF into a connected terminal stages a private
   temporary file in that pane's target filesystem and pastes its quoted native
   path. Local, POSIX SSH, PowerShell-over-SSH, and current Windows-agent panes

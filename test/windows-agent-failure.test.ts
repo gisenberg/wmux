@@ -1826,7 +1826,8 @@ test("Windows agent output decodes UTF-8 across poll and resize boundaries and r
   session.on("output", (data) => outputs.push(data));
   await waitUntil(() => outputs.join("").includes("new"), 3000);
   const joined = outputs.join("");
-  assert.equal(joined, "ok é ─ end\x1bcnew");
+  // The rejoin reset restores grapheme clustering, which RIS disables.
+  assert.equal(joined, "ok é ─ end\x1bc\x1b[?2027hnew");
   assert.doesNotMatch(joined, /�/);
   assert.ok(requestedCursors.includes(0) && requestedCursors.includes(13));
   assert.equal(requestedCursors.filter((cursor) => cursor === 0).length >= 2, true);

@@ -631,7 +631,9 @@ session.base = 0
 session.condition = threading.Condition()
 session.cols = 80
 session.rows = 24
-session.resize_events = [{"cursor": 0, "cols": 80, "rows": 24}]
+session.resize_events = [{"seq": 0, "cursor": 0, "cols": 80, "rows": 24}]
+session.event_seq = 0
+session.screen_events = []
 session.exited = False
 session.exit_code = None
 session.cwd = "C:/work"
@@ -653,7 +655,7 @@ print(json.dumps({
   assert.equal(payload.snapshot.cols, 100);
   assert.equal(payload.snapshot.rows, 40);
   assert.deepEqual(payload.backendResizes, [[100, 40]]);
-  assert.deepEqual(payload.full.resizes, [{ cursor: 3, cols: 100, rows: 40 }]);
+  assert.deepEqual(payload.full.resizes, [{ seq: 1, cursor: 3, cols: 100, rows: 40 }]);
   assert.equal(payload.full.cols, 80);
   assert.equal(payload.full.rows, 24);
   assert.equal(payload.tail.cols, 100);
@@ -1111,4 +1113,227 @@ print(json.dumps({
     health: { sessions: 0, activeSessions: 0, draining: true, updatePending: false, restartWhenIdle: true },
     restartRequested: true,
   });
+});
+
+const runAgentPython = (source: string): unknown => {
+  const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+};
+
+const fakeSessionPrelude = String.raw`
+import json
+import runpy
+import threading
+import time
+
+module = runpy.run_path("scripts/wmux-windows-agent")
+
+def screen(cols, rows, text="PS> "):
+    return {
+        "cols": cols, "rows": rows, "cursorX": len(text), "cursorY": 0, "cursorVisible": True,
+        "lines": [{"text": (text if row == 0 else "").ljust(cols)} for row in range(rows)],
+    }
+
+def make_session(backend):
+    session = object.__new__(module["Session"])
+    session.id = "pane_screen"
+    session.backend = backend
+    session.buffer = bytearray(b"PS> ")
+    session.base = 0
+    session.condition = threading.Condition()
+    session.cols = 20
+    session.rows = 4
+    session.resize_events = [{"seq": 0, "cursor": 0, "cols": 20, "rows": 4}]
+    session.screen_events = []
+    session.event_seq = 0
+    session.last_output_at = 0
+    session.screen_capture_lock = threading.Lock()
+    session.screen_capture_pending = None
+    session.screen_capture_running = False
+    session.exited = False
+    session.exit_code = None
+    session.cwd = "C:/work"
+    session.cwd_reporter = module["CwdReporter"]()
+    session.max_replay = 65536
+    return session
+`;
+
+test("Windows agent reports console screens exact at a quiet output position", () => {
+  const payload = runAgentPython(fakeSessionPrelude + String.raw`
+class RacingBackend:
+    name = "conpty"
+    supports_screen = True
+    pid = 123
+    def __init__(self):
+        self.reads = 0
+        self.session = None
+    def resize(self, cols, rows):
+        pass
+    def read_screen(self):
+        self.reads += 1
+        if self.reads == 1:
+            # Output lands while the first read is in flight.
+            self.session._append(b"x")
+        if self.reads == 2:
+            return screen(30, 4)  # still the old console geometry
+        return screen(self.session.cols, self.session.rows, "PS> x")
+
+backend = RacingBackend()
+session = make_session(backend)
+backend.session = session
+session._capture_screen("verify")
+events = session.screen_events
+print(json.dumps({
+    "reads": backend.reads,
+    "events": [{k: event[k] for k in ("seq", "cursor", "reason", "cols", "rows")} for event in events],
+    "withoutSeq": "screens" in session.read_from(0, 0),
+    "newer": [event["seq"] for event in session.read_from(0, 0, 0)["screens"]],
+    "none": session.read_from(0, 0, 1)["screens"],
+    "eventSeq": session.read_from(0, 0, 1)["eventSeq"],
+}))
+`) as {
+    reads: number;
+    events: Array<{ seq: number; cursor: number; reason: string; cols: number; rows: number }>;
+    withoutSeq: boolean;
+    newer: number[];
+    none: unknown[];
+    eventSeq: number;
+  };
+  assert.equal(payload.reads, 3);
+  assert.deepEqual(payload.events, [{ seq: 1, cursor: 5, reason: "verify", cols: 20, rows: 4 }]);
+  assert.equal(payload.withoutSeq, false, "servers that do not ask for screens receive none");
+  assert.deepEqual(payload.newer, [1]);
+  assert.deepEqual(payload.none, []);
+  assert.equal(payload.eventSeq, 1);
+});
+
+test("Windows agent long polls wake for a new console screen without new output", () => {
+  const payload = runAgentPython(fakeSessionPrelude + String.raw`
+class Backend:
+    name = "conpty"
+    supports_screen = True
+    pid = 123
+    def resize(self, cols, rows):
+        pass
+    def read_screen(self):
+        return screen(20, 4)
+
+session = make_session(Backend())
+threading.Timer(0.05, lambda: session.request_screen("verify")).start()
+started = time.monotonic()
+response = session.read_from(4, 5000, 0)
+print(json.dumps({"elapsed": time.monotonic() - started, "screens": len(response["screens"]), "cursor": response["cursor"]}))
+`) as { elapsed: number; screens: number; cursor: number };
+  assert.equal(payload.screens, 1);
+  assert.equal(payload.cursor, 4);
+  assert.ok(payload.elapsed < 2, `long poll waited ${payload.elapsed}s`);
+});
+
+test("Windows agent resizes schedule a console screen only for ConPTY sessions", () => {
+  const payload = runAgentPython(fakeSessionPrelude + String.raw`
+class Conpty:
+    name = "conpty"
+    supports_screen = True
+    pid = 123
+    def resize(self, cols, rows):
+        pass
+    def read_screen(self):
+        return screen(30, 6)
+
+class Pipe:
+    name = "stdio"
+    pid = 123
+    def resize(self, cols, rows):
+        pass
+
+conpty = make_session(Conpty())
+conpty.resize(30, 6)
+deadline = time.monotonic() + 3
+while not conpty.screen_events and time.monotonic() < deadline:
+    time.sleep(0.01)
+pipe = make_session(Pipe())
+pipe.resize(30, 6)
+print(json.dumps({
+    "conpty": [event["reason"] for event in conpty.screen_events],
+    "pipeRequested": pipe.request_screen("verify"),
+    "capability": [
+        module["agent_capability_available"]("console-screen-v1", "conpty"),
+        module["agent_capability_available"]("console-screen-v1", "stdio"),
+    ],
+}))
+`) as { conpty: string[]; pipeRequested: boolean; capability: boolean[] };
+  assert.deepEqual(payload.conpty, ["resize"]);
+  assert.equal(payload.pipeRequested, false);
+  // The console screen capability is Windows-only; this runs on POSIX.
+  assert.deepEqual(payload.capability, [process.platform === "win32", false]);
+});
+
+test("Windows agent encodes console rows with wide glyphs and attribute runs", () => {
+  const payload = runAgentPython(fakeSessionPrelude + String.raw`
+class Cell:
+    def __init__(self, char, attributes):
+        self.Char = char
+        self.Attributes = attributes
+
+LEAD = module["COMMON_LVB_LEADING_BYTE"]
+TRAIL = module["COMMON_LVB_TRAILING_BYTE"]
+cells = [
+    Cell("a", 7), Cell("\u7f8a", 7 | LEAD), Cell("\u7f8a", 7 | TRAIL), Cell("\x00", 0x0c),
+    Cell("z", 0x0c), Cell("\u7f8a", 7 | TRAIL), Cell("\u7f8a", 7 | LEAD),
+]
+print(json.dumps(module["console_screen_line"](cells)))
+`) as { text: string; wide?: number[]; attrs?: Array<[number, number]> };
+  // The orphaned trailing half and the unpaired leading half at the row end
+  // each occupy one ordinary cell.
+  assert.deepEqual(payload, { text: "a羊 z 羊", wide: [1], attrs: [[7, 3], [0x0c, 2], [7, 2]] });
+});
+
+test("Windows agent reports every resize at one byte position in order", () => {
+  const payload = runAgentPython(fakeSessionPrelude + String.raw`
+class Backend:
+    name = "stdio"
+    pid = 123
+    def __init__(self):
+        self.resizes = []
+    def resize(self, cols, rows):
+        self.resizes.append([cols, rows])
+
+session = make_session(Backend())
+consumed = session.read_from(0, 0, 0)
+session.resize(20, 3)
+session.resize(20, 4)
+session.resize(20, 4)
+after = session.read_from(consumed["cursor"], 0, consumed["eventSeq"])
+legacy = session.read_from(consumed["cursor"], 0)
+replay = session.read_from(0, 0, 0)
+print(json.dumps({
+    "backend": session.backend.resizes,
+    "after": after["resizes"],
+    "afterGeometry": [after["cols"], after["rows"]],
+    "legacy": legacy["resizes"],
+    "legacyGeometry": [legacy["cols"], legacy["rows"]],
+    "replay": [event["seq"] for event in replay["resizes"]],
+    "replayGeometry": [replay["cols"], replay["rows"]],
+}))
+`) as {
+    backend: number[][];
+    after: Array<{ seq: number; cursor: number; cols: number; rows: number }>;
+    afterGeometry: number[];
+    legacy: unknown[];
+    legacyGeometry: number[];
+    replay: number[];
+    replayGeometry: number[];
+  };
+  assert.deepEqual(payload.backend, [[20, 3], [20, 4]]);
+  assert.deepEqual(payload.after, [
+    { seq: 1, cursor: 4, cols: 20, rows: 3 },
+    { seq: 2, cursor: 4, cols: 20, rows: 4 },
+  ]);
+  // The geometry precedes the returned events rather than following them.
+  assert.deepEqual(payload.afterGeometry, [20, 4]);
+  assert.deepEqual(payload.legacy, []);
+  assert.deepEqual(payload.legacyGeometry, [20, 4]);
+  assert.deepEqual(payload.replay, [1, 2]);
+  assert.deepEqual(payload.replayGeometry, [20, 4]);
 });

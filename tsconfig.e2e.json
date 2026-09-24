@@ -15,6 +15,7 @@
   },
   "include": [
     "e2e",
+    "scripts/agent-trace.ts",
     "playwright.config.ts",
     "playwright.auth.config.ts",
     "playwright.server.config.ts",

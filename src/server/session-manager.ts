@@ -28,6 +28,7 @@ import { streamPathForMachine } from "./streams.js";
 import { resolveHelperUrl } from "./helper-url.js";
 import type { AttachReplay } from "./terminal-checkpoint.js";
 import { TerminalCheckpointStore } from "./terminal-checkpoint-store.js";
+import type { TerminalResizeMode } from "../shared/conpty-resize.js";
 import {
   PasteImageStageError,
   PasteImageStaging,
@@ -494,7 +495,7 @@ export class SessionManager {
       const codexCheckpoint = this.sessions.get(paneId) === session && backend?.capabilities.refreshClient
         && this.codexTerminalBindings.hasLiveBinding(paneId) ? backend.checkpoint(session) : undefined;
       const attachReplay = codexCheckpoint ?? this.replayOutputFor(pane, session);
-      const size = this.paneSizes.get(paneId) ?? initialSize;
+      const size = this.displaySize(paneId, session) ?? initialSize;
       this.send(socket, {
         type: "ready",
         paneId,
@@ -505,6 +506,7 @@ export class SessionManager {
         resizeOwner: this.resizeOwners.get(paneId) === socket,
         replay: attachReplay.data,
         replayKind: attachReplay.kind,
+        ...this.geometryFields(session),
         ...(this.shouldUseDurableClientRefresh(pane) && attachReplay.kind === "raw" && attachReplay.data === ""
           ? { waitForRefresh: true as const }
           : {}),
@@ -534,7 +536,7 @@ export class SessionManager {
     const sendReady = () => {
       if (socket.readyState !== socket.OPEN || !this.outputWatchers.get(paneId)?.has(socket)) return;
       const replay = this.outputReplayFor(session);
-      const authoritativeSize = this.paneSizes.get(paneId) ?? size;
+      const authoritativeSize = this.displaySize(paneId, session) ?? size;
       this.send(socket, {
         type: "ready",
         paneId,
@@ -800,6 +802,8 @@ export class SessionManager {
       });
     });
     session.on("screen", (data) => this.broadcastScreen(pane.id, data));
+    // Sequenced geometry changes reach browsers in output order.
+    session.on("geometry", () => this.broadcastPaneSize(pane.id));
     session.on("title", (title) => {
       this.state.updatePane(pane.id, { title });
       this.broadcast(pane.id, { type: "title", paneId: pane.id, title });
@@ -1177,7 +1181,8 @@ export class SessionManager {
   }
 
   private broadcastPaneSize(paneId: string): void {
-    const size = this.paneSizes.get(paneId);
+    const session = this.sessions.get(paneId);
+    const size = this.displaySize(paneId, session);
     if (!size) return;
     const owner = this.resizeOwners.get(paneId);
     for (const socket of this.sockets.get(paneId) ?? []) {
@@ -1186,8 +1191,24 @@ export class SessionManager {
         paneId,
         ...size,
         resizeOwner: owner === socket,
+        ...(session ? this.geometryFields(session) : {}),
       });
     }
+  }
+
+  /**
+   * The grid browsers render. A sequenced session reports the geometry its
+   * remote side has applied; the owner's requested size is only a request.
+   */
+  private displaySize(paneId: string, session?: BackendSession): { cols: number; rows: number } | undefined {
+    const geometry = session?.geometry;
+    if (geometry) return { cols: geometry.cols, rows: geometry.rows };
+    return this.paneSizes.get(paneId);
+  }
+
+  private geometryFields(session: BackendSession): { geometry?: "sequenced"; resizeMode?: TerminalResizeMode } {
+    const geometry = session.geometry;
+    return geometry ? { geometry: "sequenced", resizeMode: geometry.mode } : {};
   }
 
   private deleteEmptySocketSet(paneId: string): void {

@@ -655,6 +655,21 @@ export type PaneClientMessage =
   | { type: "activate"; cols: number; rows: number; foreground?: boolean };
 
 export type PaneReplayKind = "raw" | "checkpoint";
+
+/**
+ * How a pane's geometry reaches the browser.
+ *
+ * `local`: the browser resizes its terminal as soon as its container changes,
+ * because the remote application redraws after the resize.
+ * `sequenced`: the pane's size changes only at the exact output position where
+ * the remote side applied it, announced by a `size` message in stream order,
+ * and the terminal model reproduces the remote reflow selected by
+ * `resizeMode`. Session-agent panes use this: ConPTY emits nothing when it
+ * resizes, so a browser that resizes early renders old-geometry output into
+ * the new grid.
+ */
+export type PaneGeometryMode = "local" | "sequenced";
+export type PaneResizeMode = "native" | "conpty";
 export type PaneStartupPhase =
   | "connecting"
   | "checking-agent"
@@ -676,10 +691,20 @@ export type PaneServerMessage =
       resizeOwner: boolean;
       replay: string;
       replayKind: PaneReplayKind;
+      geometry?: PaneGeometryMode;
+      resizeMode?: PaneResizeMode;
       outputOnly?: boolean;
       waitForRefresh?: true;
     }
-  | { type: "size"; paneId: string; cols: number; rows: number; resizeOwner: boolean }
+  | {
+      type: "size";
+      paneId: string;
+      cols: number;
+      rows: number;
+      resizeOwner: boolean;
+      geometry?: PaneGeometryMode;
+      resizeMode?: PaneResizeMode;
+    }
   | { type: "output"; paneId: string; data: string; inputSequence?: number }
   | { type: "title"; paneId: string; title: string }
   | { type: "exit"; paneId: string; code: number | null }

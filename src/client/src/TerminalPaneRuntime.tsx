@@ -59,6 +59,7 @@ import {
   safeRows,
   sendInput,
   createTerminalFitter,
+  resizeTerminalLike,
   sendResizeDimensions,
   isForegroundTerminal,
   inputMayLeaveShellPrompt,
@@ -72,6 +73,7 @@ import {
   resetAlternateScreenState,
   resetSynchronizedOutput,
   drainSynchronizedOutput,
+  takeSynchronizedOutput,
   pushSynchronizedOutput,
   pushAlternateScreenState,
   terminalOutputDelay,
@@ -101,6 +103,8 @@ import {
 import type {
   MachineStatus,
   KeybindingMap,
+  PaneResizeMode,
+  PaneServerMessage,
   PaneState,
   SplitDirection,
   TerminalMedia,
@@ -331,7 +335,10 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
     let predictionProbeAcknowledgedSequence: number | undefined;
     let pendingLatencyKeyEvent: { eventAt: number; observedAt: number } | undefined;
     let replayChunks: string[] = [];
-    let replayBufferedOutput: string[] = [];
+    // Live output and sequenced geometry changes that arrive mid-drain, in
+    // stream order.
+    let replayBufferedOutput: Array<string | (() => void)> = [];
+    let resizeMode: PaneResizeMode = "native";
     let replayDrainTimer: number | undefined;
     let replayingTerminalOutput = false;
     let outputGeneration = 0;
@@ -944,10 +951,7 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         }
         flushQueuedTerminalText(term);
         finishReplay();
-        const buffered = replayBufferedOutput;
-        replayBufferedOutput = [];
-        for (const data of buffered) handleOutput(term, data);
-        flushQueuedTerminalText(term);
+        drainReplayBufferedOutput(term);
         revealTerminal();
       }, 0);
     };
@@ -962,11 +966,51 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
       for (const chunk of chunks) handleOutput(term, chunk);
       flushQueuedTerminalText(term);
       finishReplay();
+      drainReplayBufferedOutput(term);
+      if (reveal) revealTerminal();
+    };
+
+    const drainReplayBufferedOutput = (term: Terminal) => {
       const buffered = replayBufferedOutput;
       replayBufferedOutput = [];
-      for (const data of buffered) handleOutput(term, data);
+      for (const entry of buffered) {
+        if (typeof entry === "string") handleOutput(term, entry);
+        else entry();
+      }
       flushQueuedTerminalText(term);
-      if (reveal) revealTerminal();
+    };
+
+    // A sequenced geometry change takes effect between the output written
+    // before it and the output after it, exactly where the remote side
+    // resized. Everything already received is written first, including the
+    // held part of an open synchronized frame and queued graphics work.
+    const applySequencedSize = (
+      term: Terminal,
+      message: Extract<PaneServerMessage, { type: "size" }>,
+    ) => {
+      const apply = () => {
+        const held = takeSynchronizedOutput(synchronizedOutputRef.current);
+        if (held) queueTerminalText(term, held);
+        flushQueuedTerminalText(term);
+        rectangularSelection?.clear();
+        disarmPrediction();
+        resizeMode = message.resizeMode ?? resizeMode;
+        fitAddonRef.current?.setSequencedGeometry(true);
+        fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
+        refreshMetrics(term);
+      };
+      if (replayDraining()) {
+        replayBufferedOutput.push(apply);
+        return;
+      }
+      if (pendingGraphicsWork > 0) {
+        const generation = outputGeneration;
+        enqueueGraphicsWork(() => {
+          if (!cancelled && generation === outputGeneration) apply();
+        });
+        return;
+      }
+      apply();
     };
 
     const foreground = () => isForegroundTerminal(activeRef.current);
@@ -1046,6 +1090,8 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             setStartupLabel(message.label);
           }
           if (message.type === "ready") {
+            resizeMode = message.resizeMode ?? "native";
+            fitAddonRef.current?.setSequencedGeometry(message.geometry === "sequenced");
             fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
             setStartupLabel(message.replay ? "Restoring terminal state…" : "Preparing terminal…");
             setTerminalReady(false);
@@ -1057,7 +1103,9 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
             else if (shouldWaitForDurableRefresh(message)) durableRefreshRevealGate?.begin();
             else revealTerminal();
           }
-          if (message.type === "size") {
+          if (message.type === "size" && message.geometry === "sequenced") {
+            applySequencedSize(term, message);
+          } else if (message.type === "size") {
             rectangularSelection?.clear();
             disarmPrediction();
             fitAddonRef.current?.setAuthoritativeSize(message.cols, message.rows, message.resizeOwner);
@@ -1200,9 +1248,14 @@ export const TerminalPaneRuntime = memo(function TerminalPaneRuntime({
         });
       }
       await waitForVisibleBox(containerRef.current);
-      fitAddon = createTerminalFitter(term, containerRef.current, (dimensions) => {
-        sendResizeDimensions(socketRef.current, "resize", dimensions, foreground());
-      });
+      fitAddon = createTerminalFitter(
+        term,
+        containerRef.current,
+        (dimensions) => {
+          sendResizeDimensions(socketRef.current, "resize", dimensions, foreground());
+        },
+        (cols, rows) => resizeTerminalLike(term, cols, rows, resizeMode),
+      );
       fitAddonRef.current = fitAddon;
       fitAddon.setForeground(foreground());
       fitAddon.fit();

@@ -1,6 +1,7 @@
 import type { MutableRefObject } from "react";
 import { Terminal } from "ghostty-web";
-import type { PaneClientMessage, TerminalRun } from "./types";
+import type { PaneClientMessage, PaneResizeMode, TerminalRun } from "./types";
+import { ghosttyResizeModel, resizeTerminalModel } from "../../shared/conpty-resize";
 
 export interface CellMetrics {
   width: number;
@@ -38,6 +39,12 @@ export interface TerminalFitter {
   fit: () => void;
   proposedDimensions: () => { cols: number; rows: number } | undefined;
   setAuthoritativeSize: (cols: number, rows: number, resizeOwner: boolean) => void;
+  /**
+   * In sequenced geometry the terminal takes only the authoritative size,
+   * even for the resize owner: the container's proposed size is a request
+   * that the server confirms at the output position where it took effect.
+   */
+  setSequencedGeometry: (sequenced: boolean) => void;
   setForeground: (foreground: boolean) => void;
   dispose: () => void;
 }
@@ -64,6 +71,7 @@ export const createTerminalFitter = (
   term: Terminal,
   element: HTMLElement,
   onProposedDimensions?: (dimensions: { cols: number; rows: number }) => void,
+  resizeTerminal: (cols: number, rows: number) => void = (cols, rows) => term.resize(cols, rows),
 ): TerminalFitter => {
   let frame: number | undefined;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -71,6 +79,8 @@ export const createTerminalFitter = (
   let authoritative: { cols: number; rows: number } | undefined;
   let resizeOwner = true;
   let foreground = true;
+  let sequenced = false;
+  const followsProposal = () => !authoritative || (resizeOwner && foreground && !sequenced);
   const proposedDimensions = () => {
     const metrics = term.renderer?.getMetrics();
     if (!metrics?.width || !metrics.height || !element.clientWidth || !element.clientHeight) return undefined;
@@ -84,7 +94,7 @@ export const createTerminalFitter = (
   };
   const applySize = (dimensions: { cols: number; rows: number }) => {
     if (dimensions.cols !== term.cols || dimensions.rows !== term.rows) {
-      term.resize(dimensions.cols, dimensions.rows);
+      resizeTerminal(dimensions.cols, dimensions.rows);
     }
   };
   const fit = () => {
@@ -94,8 +104,8 @@ export const createTerminalFitter = (
       proposed = next;
       onProposedDimensions?.(next);
     }
-    if (!authoritative || (resizeOwner && foreground)) applySize(next);
-    else applySize(authoritative);
+    if (followsProposal()) applySize(next);
+    else if (authoritative) applySize(authoritative);
   };
   const scheduleFit = () => {
     if (frame !== undefined) cancelAnimationFrame(frame);
@@ -116,12 +126,15 @@ export const createTerminalFitter = (
     setAuthoritativeSize: (cols, rows, nextResizeOwner) => {
       authoritative = { cols: safeCols(cols), rows: safeRows(rows) };
       resizeOwner = nextResizeOwner;
-      if (resizeOwner && foreground) fit();
+      if (followsProposal()) fit();
       else applySize(authoritative);
+    },
+    setSequencedGeometry: (nextSequenced) => {
+      sequenced = nextSequenced;
     },
     setForeground: (nextForeground) => {
       foreground = nextForeground;
-      if (authoritative && !(resizeOwner && foreground)) applySize(authoritative);
+      if (authoritative && !followsProposal()) applySize(authoritative);
     },
     dispose: () => {
       observer.disconnect();
@@ -129,6 +142,35 @@ export const createTerminalFitter = (
       if (frame !== undefined) cancelAnimationFrame(frame);
     },
   };
+};
+
+/** Resize a browser terminal with the reflow semantics of its remote side. */
+export const resizeTerminalLike = (term: Terminal, cols: number, rows: number, mode: PaneResizeMode): void => {
+  const wasm = term.wasmTerm;
+  if (!wasm || mode === "native") {
+    term.resize(cols, rows);
+    return;
+  }
+  resizeTerminalModel(ghosttyResizeModel({
+    get cols() {
+      return term.cols;
+    },
+    get rows() {
+      return term.rows;
+    },
+    resize: (nextCols, nextRows) => term.resize(nextCols, nextRows),
+    write: (data) => term.write(data),
+    isAlternateScreen: () => wasm.isAlternateScreen(),
+    cursor: () => {
+      const cursor = wasm.getCursor();
+      return { x: cursor.x, y: cursor.y };
+    },
+    viewport: () => {
+      wasm.update();
+      return wasm.getViewport();
+    },
+    isRowWrapped: (row) => wasm.isRowWrapped(row),
+  }), cols, rows, mode);
 };
 
 export const sendResizeDimensions = (
@@ -389,6 +431,16 @@ export const resetSynchronizedOutput = (state: SynchronizedOutputState): void =>
   state.pending = "";
   state.carry = "";
   state.flushTimer = undefined;
+};
+
+/**
+ * Take the text an open synchronized-output frame holds so far without ending
+ * the frame: its remaining bytes stay held until the frame closes.
+ */
+export const takeSynchronizedOutput = (state: SynchronizedOutputState): string => {
+  const output = state.pending;
+  state.pending = "";
+  return output;
 };
 
 export const drainSynchronizedOutput = (state: SynchronizedOutputState): string => {

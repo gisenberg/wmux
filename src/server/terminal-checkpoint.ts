@@ -1,6 +1,14 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { CellFlags, Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghostty-web";
+import {
+  ghosttyResizeModel,
+  resizeTerminalModel,
+  type ResizableTerminalModel,
+  type TerminalResizeMode,
+} from "../shared/conpty-resize.js";
+import type { WindowsAgentConsoleScreen, WindowsAgentScreenLine } from "../shared/windows-agent-protocol.js";
+import { TERMINAL_RESET } from "../shared/terminal-protocol.js";
 
 export type AttachReplayKind = "raw" | "checkpoint";
 
@@ -10,7 +18,8 @@ export interface AttachReplay {
 }
 
 const require = createRequire(import.meta.url);
-const excludedPrivateModes = new Set([7, 25, 47, 1047, 1049, 2026]);
+// 2027 is restored from the live model rather than from captured output.
+const excludedPrivateModes = new Set([7, 25, 47, 1047, 1049, 2026, 2027]);
 const privateModePattern = /\x1b\[\?([0-9;]+)([hl])/g;
 const modeCarryLimit = 96;
 const maxCheckpointScrollbackLines = 10_000;
@@ -95,7 +104,7 @@ export class TerminalCheckpoint {
     if (!this.terminal || !data) return;
     this.capturePrivateModes(data);
     // Windows agent polls and resize boundaries split output at arbitrary
-    // byte offsets. Hold back a trailing partial sequence so a reframe between
+    // byte offsets. Hold back a trailing partial sequence so a resize between
     // chunks cannot hand its continuation to a fresh parser as plain text.
     const combined = this.sequenceCarry + data;
     const carryLength = partialTerminalSequenceLength(combined);
@@ -109,49 +118,18 @@ export class TerminalCheckpoint {
     }
   }
 
-  resize(cols: number, rows: number): void {
-    if (!this.terminal) return;
+  resize(cols: number, rows: number, mode: TerminalResizeMode = "native"): void {
+    const terminal = this.terminal;
+    if (!terminal) return;
     try {
-      this.terminal.resize(normalizeCols(cols), normalizeRows(rows));
-    } catch (error) {
-      this.disable(error);
-    }
-  }
-
-  /**
-   * Resize a Windows-style screen without Ghostty's bottom-anchored reflow.
-   * ConPTY keeps the existing viewport rows and cursor anchored from the top,
-   * so repaint the old absolute screen into a fresh grid of the target size.
-   */
-  reframe(cols: number, rows: number): void {
-    if (!this.terminal) return;
-    const targetCols = normalizeCols(cols);
-    const targetRows = normalizeRows(rows);
-    if (this.terminal.isAlternateScreen()) {
-      // A repainted snapshot only carries the active screen. Full-screen apps
-      // redraw after ConPTY resizes them anyway, so resize in place and keep
-      // the inactive primary screen for when the app exits.
-      this.resize(targetCols, targetRows);
-      return;
-    }
-    const snapshot = this.snapshotForDimensions(targetCols, targetRows, { reset: true, seedHistory: true });
-    if (!snapshot || !this.terminal) return;
-    try {
-      const next = loadGhostty()?.createTerminal(targetCols, targetRows, this.themeConfig);
-      if (!next) return;
-      this.terminal.free();
-      this.terminal = next;
-      this.modeCarry = "";
-      this.terminal.write(snapshot);
+      resizeTerminalModel(checkpointResizeModel(terminal), normalizeCols(cols), normalizeRows(rows), mode);
     } catch (error) {
       this.disable(error);
     }
   }
 
   snapshot(): string {
-    const terminal = this.terminal;
-    if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows, { reset: true, seedHistory: false });
+    return this.paint({ reset: true, seedHistory: false });
   }
 
   /**
@@ -159,9 +137,7 @@ export class TerminalCheckpoint {
    * scrollback first, then the authoritative screen painted in place.
    */
   snapshotWithScrollbackSeed(): string {
-    const terminal = this.terminal;
-    if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows, { reset: true, seedHistory: true });
+    return this.paint({ reset: true, seedHistory: true });
   }
 
   /**
@@ -170,16 +146,80 @@ export class TerminalCheckpoint {
    * scrollback and the modes it restored on attach.
    */
   repaint(): string {
-    const terminal = this.terminal;
-    if (!terminal) return "";
-    return this.snapshotForDimensions(terminal.cols, terminal.rows, { reset: false, seedHistory: false });
+    return this.paint({ reset: false, seedHistory: false });
   }
 
-  private snapshotForDimensions(
-    targetCols: number,
-    targetRows: number,
-    options: SnapshotOptions,
-  ): string {
+  /**
+   * Converge this model on the screen ConPTY itself holds.
+   *
+   * The console screen is authoritative for text and cursor placement, but its
+   * legacy API reduces colors to the 16-color console palette and reports
+   * wider graphemes as U+FFFD. Cells whose text already agrees keep this
+   * model's exact style and grapheme; only disagreeing cells fall back to the
+   * console's own attributes. Returns the repaint applied to this model, which
+   * an attached browser must apply at the same stream position, or "" when the
+   * model already matched.
+   */
+  reconcileConsoleScreen(screen: WindowsAgentConsoleScreen): string {
+    const terminal = this.terminal;
+    if (!terminal || this.sequenceCarry) return "";
+    if (terminal.cols !== screen.cols || terminal.rows !== screen.rows) return "";
+    try {
+      terminal.update();
+      // Origin mode addresses rows relative to the scroll region; a repaint
+      // cannot safely assume absolute rows there.
+      if (terminal.getMode(6)) return "";
+      const cells = terminal.getViewport();
+      const cursor = terminal.getCursor();
+      const truth = screen.lines.map((line) => decodeConsoleLine(line, screen.cols));
+      const mismatchedRows: number[] = [];
+      for (let row = 0; row < screen.rows; row += 1) {
+        const expected = truth[row];
+        for (let col = 0; col < screen.cols; col += 1) {
+          if (!consoleCellMatches(expected?.[col], cells, terminal, row, col)) {
+            mismatchedRows.push(row);
+            break;
+          }
+        }
+      }
+      const cursorMatches = cursorAgrees(cursor, screen, terminal.cols);
+      if (mismatchedRows.length === 0 && cursorMatches) return "";
+
+      const synchronized = !terminal.getMode(2026);
+      const output: string[] = synchronized ? ["\x1b[?2026h"] : [];
+      output.push("\x1b[?7l");
+      let activeStyle = "";
+      for (const row of mismatchedRows) {
+        output.push(`\x1b[${row + 1};1H`);
+        const expected = truth[row] ?? [];
+        for (let col = 0; col < screen.cols; col += 1) {
+          const cell = expected[col];
+          if (!cell || cell.width === 0) continue;
+          const modelCell = cells[row * terminal.cols + col];
+          const agrees = consoleCellMatches(cell, cells, terminal, row, col);
+          const style = agrees && modelCell ? `m:${cellStyleKey(modelCell)}` : `c:${cell.attribute}`;
+          if (style !== activeStyle) {
+            output.push(agrees && modelCell ? cellStyleSequence(modelCell) : consoleAttributeSequence(cell.attribute));
+            activeStyle = style;
+          }
+          if (agrees && modelCell) output.push(cellText(terminal, modelCell, row, col));
+          else output.push(cell.width === 2 && cell.text === "\uFFFD" ? "\uFFFD " : cell.text);
+        }
+      }
+      output.push("\x1b[0m");
+      output.push(terminal.getMode(7) ? "\x1b[?7h" : "\x1b[?7l");
+      output.push(`\x1b[${screen.cursorY + 1};${screen.cursorX + 1}H`);
+      if (synchronized) output.push("\x1b[?2026l");
+      const repaint = output.join("");
+      terminal.write(repaint);
+      return repaint;
+    } catch (error) {
+      this.disable(error);
+      return "";
+    }
+  }
+
+  private paint(options: SnapshotOptions): string {
     const terminal = this.terminal;
     if (!terminal) return "";
     try {
@@ -187,53 +227,51 @@ export class TerminalCheckpoint {
       const cursor = terminal.getCursor();
       const cells = terminal.getViewport();
       const alternateScreen = terminal.isAlternateScreen();
-      const paintCols = Math.min(terminal.cols, targetCols);
-      // conhost keeps the cursor row visible when the viewport shrinks and
-      // scrolls the rows above it into history, so anchor the paint window on
-      // the cursor instead of blindly clipping the bottom of the screen.
-      const rowOffset = !alternateScreen && cursor.y >= targetRows ? cursor.y - targetRows + 1 : 0;
-      const paintRows = Math.min(terminal.rows - rowOffset, targetRows);
-      const output: string[] = options.reset ? ["\x1bc"] : [];
+      const output: string[] = options.reset ? [TERMINAL_RESET] : [];
       if (alternateScreen && options.reset) output.push("\x1b[?1049h");
 
       if (options.seedHistory && !alternateScreen) {
-        const scrolledLines = Array.from({ length: rowOffset }, (_, row) =>
-          cellsToText(cells.slice(row * terminal.cols, (row + 1) * terminal.cols), terminal.cols));
-        const scrolledBytes = scrolledLines.reduce((total, line) => total + Buffer.byteLength(line) + 2, 0);
-        // Seed with wrapping enabled so history longer than the target width
-        // reflows the way conhost reflows its buffer on a narrower resize.
+        // Seed with wrapping enabled so history longer than the browser's
+        // width reflows the way it would have been written.
         output.push("\x1b[?7h", "\x1b[2J", "\x1b[H");
-        output.push(...this.scrollbackSeedLines(Math.max(0, maxCheckpointScrollbackBytes - scrolledBytes))
-          .flatMap((line) => [line, "\r\n"]));
-        output.push(...scrolledLines.flatMap((line) => [line, "\r\n"]));
-        output.push("\r\n".repeat(Math.max(0, targetRows - 1)));
+        output.push(...this.scrollbackSeedLines(maxCheckpointScrollbackBytes).flatMap((line) => [line, "\r\n"]));
+        output.push("\r\n".repeat(Math.max(0, terminal.rows - 1)));
       }
 
-      // Disable wrapping while painting absolute rows so a glyph in the final
-      // column cannot introduce an extra scroll or line wrap.
-      output.push("\x1b[?7l", "\x1b[2J", "\x1b[H");
+      // Paint with autowrap enabled so soft-wrapped rows are recreated as
+      // wraps rather than hard lines: a continuation row flows from the
+      // pending wrap left by the full row above it, and every other row starts
+      // with an absolute cursor move. A glyph in the final column only sets the
+      // pending wrap, so painting never scrolls.
+      output.push("\x1b[?7h", "\x1b[2J", "\x1b[H");
       let activeStyle = "";
-      for (let row = 0; row < paintRows; row += 1) {
-        output.push(`\x1b[${row + 1};1H`);
-        for (let col = 0; col < paintCols; col += 1) {
-          const cell = cells[(row + rowOffset) * terminal.cols + col];
+      for (let row = 0; row < terminal.rows; row += 1) {
+        const continuation = row > 0 && terminal.isRowWrapped(row);
+        const wrapsIntoNext = row + 1 < terminal.rows && terminal.isRowWrapped(row + 1);
+        if (!continuation) output.push(`\x1b[${row + 1};1H`);
+        let painted = 0;
+        for (let col = 0; col < terminal.cols; col += 1) {
+          const cell = cells[row * terminal.cols + col];
           if (!cell || cell.width === 0) continue;
-          if (col + cell.width > paintCols) continue;
+          const width = Math.max(1, cell.width);
+          if (col + width > terminal.cols) continue;
           const style = cellStyleKey(cell);
           if (style !== activeStyle) {
             output.push(cellStyleSequence(cell));
             activeStyle = style;
           }
-          output.push(cell.codepoint === 0 ? " " : String.fromCodePoint(cell.codepoint));
+          output.push(cellText(terminal, cell, row, col));
+          painted = col + width;
         }
+        // A wrapped row must reach the right margin for its continuation to
+        // wrap; pad a trailing wide-glyph gap with blanks.
+        if (wrapsIntoNext && painted < terminal.cols) output.push(" ".repeat(terminal.cols - painted));
       }
 
       output.push("\x1b[0m");
       this.restorePrivateModes(output, terminal);
       output.push(cursorStyleSequence(cursor.style, cursor.blinking));
-      output.push(
-        `\x1b[${Math.min(cursor.y - rowOffset, targetRows - 1) + 1};${Math.min(cursor.x, targetCols - 1) + 1}H`,
-      );
+      output.push(`\x1b[${cursor.y + 1};${cursor.x + 1}H`);
       output.push(cursor.visible ? "\x1b[?25h" : "\x1b[?25l");
       return output.join("");
     } catch (error) {
@@ -253,7 +291,7 @@ export class TerminalCheckpoint {
       for (let col = 0; col < terminal.cols; col += 1) {
         const cell = cells[row * terminal.cols + col];
         if (!cell || cell.width === 0) continue;
-        line += cell.codepoint === 0 ? " " : String.fromCodePoint(cell.codepoint);
+        line += cellText(terminal, cell, row, col);
       }
       lines.push(line);
     }
@@ -268,7 +306,7 @@ export class TerminalCheckpoint {
     let retainedBytes = 0;
     const oldest = Math.max(0, available - maxCheckpointScrollbackLines);
     for (let offset = available - 1; offset >= oldest; offset -= 1) {
-      const line = cellsToText(terminal.getScrollbackLine(offset), terminal.cols);
+      const line = scrollbackLineText(terminal, offset);
       const lineBytes = Buffer.byteLength(line) + 2;
       if (retainedBytes + lineBytes > byteLimit) break;
       retained.push(line);
@@ -309,6 +347,7 @@ export class TerminalCheckpoint {
       output.push(`\x1b[?${mode}${enabled ? "h" : "l"}`);
     }
     output.push(`\x1b[?7${modes.get(7) === false ? "l" : "h"}`);
+    output.push(`\x1b[?2027${terminal.getMode(2027) ? "h" : "l"}`);
   }
 
   private disable(error: unknown): void {
@@ -391,16 +430,137 @@ export const partialTerminalSequenceLength = (data: string): number => {
   return 0;
 };
 
-const cellsToText = (cells: GhosttyCell[] | null, cols: number): string => {
+/** The full grapheme of a viewport cell, not just its first code point. */
+const cellText = (terminal: GhosttyTerminal, cell: GhosttyCell, row: number, col: number): string => {
+  if (cell.codepoint === 0) return " ";
+  if (cell.grapheme_len > 0) return terminal.getGraphemeString(row, col) || String.fromCodePoint(cell.codepoint);
+  return String.fromCodePoint(cell.codepoint);
+};
+
+const scrollbackLineText = (terminal: GhosttyTerminal, offset: number): string => {
+  const cells = terminal.getScrollbackLine(offset);
   if (!cells) return "";
   let line = "";
-  for (let col = 0; col < Math.min(cols, cells.length); col += 1) {
+  for (let col = 0; col < Math.min(terminal.cols, cells.length); col += 1) {
     const cell = cells[col];
     if (!cell || cell.width === 0) continue;
-    if (col + cell.width > cols) continue;
-    line += cell.codepoint === 0 ? " " : String.fromCodePoint(cell.codepoint);
+    if (col + cell.width > terminal.cols) continue;
+    if (cell.codepoint === 0) line += " ";
+    // Scrollback cells carry only their first code point; resolve the full
+    // grapheme for anything beyond ASCII, where clusters can occur.
+    else if (cell.codepoint < 0x80) line += String.fromCodePoint(cell.codepoint);
+    else line += terminal.getScrollbackGraphemeString(offset, col) || String.fromCodePoint(cell.codepoint);
   }
   return line.trimEnd();
+};
+
+const checkpointResizeModel = (terminal: GhosttyTerminal): ResizableTerminalModel =>
+  ghosttyResizeModel({
+    get cols() {
+      return terminal.cols;
+    },
+    get rows() {
+      return terminal.rows;
+    },
+    resize: (cols, rows) => terminal.resize(cols, rows),
+    write: (data) => terminal.write(data),
+    isAlternateScreen: () => terminal.isAlternateScreen(),
+    cursor: () => {
+      const cursor = terminal.getCursor();
+      return { x: cursor.x, y: cursor.y };
+    },
+    viewport: () => {
+      terminal.update();
+      return terminal.getViewport();
+    },
+    isRowWrapped: (row) => terminal.isRowWrapped(row),
+  });
+
+interface ConsoleCell {
+  text: string;
+  width: 0 | 1 | 2;
+  attribute: number;
+}
+
+const decodeConsoleLine = (line: WindowsAgentScreenLine, cols: number): ConsoleCell[] => {
+  const attributes: number[] = [];
+  for (const [attribute, count] of line.attrs ?? []) {
+    for (let index = 0; index < count && attributes.length < cols; index += 1) attributes.push(attribute);
+  }
+  const wide = new Set(line.wide ?? []);
+  const cells: ConsoleCell[] = [];
+  let col = 0;
+  // Console cells hold single UTF-16 units; ConPTY substitutes U+FFFD for
+  // anything wider, so indexing code units cannot split a surrogate pair.
+  for (let index = 0; index < line.text.length && col < cols; index += 1) {
+    const text = line.text[index] ?? " ";
+    const attribute = attributes[col] ?? 7;
+    if (wide.has(col) && col + 1 < cols) {
+      cells.push({ text, width: 2, attribute });
+      cells.push({ text: "", width: 0, attribute: attributes[col + 1] ?? attribute });
+      col += 2;
+    } else {
+      cells.push({ text, width: 1, attribute });
+      col += 1;
+    }
+  }
+  while (cells.length < cols) cells.push({ text: " ", width: 1, attribute: attributes[cells.length] ?? 7 });
+  return cells;
+};
+
+const consoleCellMatches = (
+  expected: ConsoleCell | undefined,
+  cells: GhosttyCell[],
+  terminal: GhosttyTerminal,
+  row: number,
+  col: number,
+): boolean => {
+  const cell = cells[row * terminal.cols + col];
+  if (!expected || !cell) return !expected && !cell;
+  // Width 0 marks both the second half of a wide glyph and the spacer left
+  // where a wide glyph did not fit before a wrap. The console shows the
+  // latter as an ordinary blank cell.
+  const tail = cell.width === 0 && col > 0 && (cells[row * terminal.cols + col - 1]?.width ?? 0) >= 2;
+  const width = tail ? 0 : cell.width >= 2 ? 2 : 1;
+  if (expected.width !== width) return false;
+  if (width === 0) return true;
+  const text = cell.width === 0 ? " " : cellText(terminal, cell, row, col);
+  if (expected.text === text) return true;
+  // The console reports graphemes beyond one UTF-16 unit as U+FFFD.
+  if (expected.text === "\uFFFD") return text.length > 1 || cell.codepoint > 0xffff;
+  return false;
+};
+
+const cursorAgrees = (
+  cursor: { x: number; y: number },
+  screen: WindowsAgentConsoleScreen,
+  cols: number,
+): boolean => {
+  if (cursor.x === screen.cursorX && cursor.y === screen.cursorY) return true;
+  // Ghostty holds a glyph written in the final column as a pending wrap, and
+  // the console reports the same state as the start of the next row.
+  return cursor.x === cols - 1 && screen.cursorX === 0 && screen.cursorY === cursor.y + 1;
+};
+
+// Console attribute bits are BGR; ANSI palette indexes are RGB.
+const consoleColorToAnsi = (value: number): number =>
+  ((value & 0x4) ? 1 : 0) | ((value & 0x2) ? 2 : 0) | ((value & 0x1) ? 4 : 0);
+
+/**
+ * SGR for a legacy console attribute. ConPTY maps the terminal's default
+ * colors onto console slots 7 and 0, so those stay semantic defaults.
+ */
+export const consoleAttributeSequence = (attribute: number): string => {
+  const codes = [0];
+  const foreground = attribute & 0xf;
+  const background = (attribute >> 4) & 0xf;
+  if (attribute & 0x8000) codes.push(4);
+  if (attribute & 0x4000) codes.push(7);
+  if (foreground === 7) codes.push(39);
+  else codes.push((foreground & 0x8 ? 90 : 30) + consoleColorToAnsi(foreground));
+  if (background === 0) codes.push(49);
+  else codes.push((background & 0x8 ? 100 : 40) + consoleColorToAnsi(background));
+  return `\x1b[${codes.join(";")}m`;
 };
 
 const cursorStyleSequence = (style: string, blinking: boolean): string => {
