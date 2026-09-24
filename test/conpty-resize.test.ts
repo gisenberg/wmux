@@ -334,3 +334,17 @@ test("ConPTY resizes place the cursor exactly after wide glyphs a shell redrew",
     assert.deepEqual(checkpoint.cursor(), { x: end, y: 2, visible: true });
   });
 });
+
+test("ConPTY widening keeps a top row whose line start already scrolled away as its own line", () => {
+  withCheckpoint(20, 4, (checkpoint) => {
+    // The first 20 cells of the long line scroll into history; ConPTY, which
+    // keeps no history, discards them and treats the rest as a new line.
+    checkpoint.write(`${"L".repeat(20)}${"t".repeat(10)}\r\nnext 1\r\nnext 2\r\n\x1b[31mPS>\x1b[0m `);
+    assert.deepEqual(trimmed(checkpoint), ["t".repeat(10), "next 1", "next 2", "PS>"]);
+    checkpoint.resize(60, 4, "conpty");
+    assert.deepEqual(trimmed(checkpoint), ["t".repeat(10), "next 1", "next 2", "PS>"]);
+    assert.deepEqual(checkpoint.cursor(), { x: 4, y: 3, visible: true });
+    // The repaint keeps the model's own styles.
+    assert.match(checkpoint.snapshot(), /38;2;\d+;\d+;\d+;49mPS>/);
+  });
+});

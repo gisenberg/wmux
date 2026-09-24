@@ -11,6 +11,7 @@ This document describes how they stay aligned and how drift is detected and repa
 These facts were verified against OpenConsole 1.24 on Windows 11 by reading ConPTY's screen buffer after each operation, and against the microsoft/terminal source.
 
 - ConPTY keeps no scrollback: its buffer is exactly the viewport.
+  A top row that continues a line whose start scrolled away becomes the start of a line of its own.
 - A resize emits no output at all, and the host has no supported way to request a repaint.
 - Width changes reflow soft-wrapped lines, moving a wide glyph that no longer fits to the next row.
 - Height growth keeps the content anchored at the top and adds blank rows below it.
@@ -21,6 +22,7 @@ These facts were verified against OpenConsole 1.24 on Windows 11 by reading ConP
 Ghostty matches ConPTY's text reflow, but it differs in three ways that matter:
 
 - It keeps scrollback and pulls it back into view when rows grow or when a widened line needs fewer rows.
+- It rejoins a top row with the start of its line from scrollback, and can push more rows into history than ConPTY discards.
 - It can misplace a cursor that sits past the end of a rewrapped line, which is the normal state of a shell prompt.
 - A full reset (RIS) returns it to its power-on modes, which disables the grapheme clustering (DEC 2027) that ghostty-web enables for every terminal it creates.
 
@@ -40,6 +42,8 @@ Resizing early would render bytes produced for the old geometry into the new gri
 
 `src/shared/conpty-resize.ts` holds the one algorithm that both the server checkpoint and the browser use for `conpty` panes.
 It computes ConPTY's resulting viewport and cursor from the pre-resize cells, lets Ghostty reflow, finds where the expected viewport landed by content, returns any rows Ghostty pulled down to history, and places the cursor where ConPTY put it.
+When Ghostty's viewport cannot be aligned with ConPTY's, the model paints ConPTY's viewport over it with its own graphemes and styles, reproducing soft wraps.
+History then keeps Ghostty's reflow, so rows near the viewport boundary can differ from what scrolled away; this boundary is inherent to a terminal that has scrollback while ConPTY does not.
 A cursor in the final column may be a pending wrap, which Ghostty does not expose, so it is left to Ghostty.
 POSIX session agents and every other backend keep Ghostty's native reflow, because their applications redraw after a resize.
 
@@ -66,6 +70,12 @@ Checkpoint snapshots serialize whole graphemes and soft wraps, so a restored scr
 The PowerShell bootstrap seeds ConPTY's color table with `SetConsoleScreenBufferInfoEx`.
 That call reads the window rectangle one cell smaller than `GetConsoleScreenBufferInfoEx` reports it, so writing the structure back shrank the console by a row.
 The bootstrap now restores the exact window afterward; without that, every themed pane ran one row shorter than the terminal rendering it.
+
+## Conformance on Windows
+
+`test/windows-conpty-model.test.ts` drives a themed ConPTY session through the Windows agent, resizes it through phone and desktop geometries with wide glyphs and emoji on screen, and requires every console screen ConPTY reports to agree with the model without a repair.
+It runs in the Windows test lane with pywinpty and skips elsewhere.
+Set `WMUX_CONPTY_TRACE_OUT` to save its trace for `npm run trace:agent -- replay`.
 
 ## Diagnosing a rendering defect
 

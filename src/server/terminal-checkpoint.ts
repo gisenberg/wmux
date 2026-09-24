@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import { CellFlags, Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghostty-web";
+import { Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghostty-web";
+import { cellStyleKey, cellStyleSequence } from "../shared/terminal-cell-style.js";
 import {
   ghosttyResizeModel,
   resizeTerminalModel,
@@ -203,7 +204,9 @@ export class TerminalCheckpoint {
             activeStyle = style;
           }
           if (agrees && modelCell) output.push(cellText(terminal, modelCell, row, col));
-          else output.push(cell.width === 2 && cell.text === "\uFFFD" ? "\uFFFD " : cell.text);
+          // The console hides wider graphemes behind U+FFFD; keep the cell
+          // width with a double-width placeholder rather than two cells.
+          else output.push(cell.width === 2 && cell.text === "\uFFFD" ? WIDE_UNKNOWN_GLYPH : cell.text);
         }
       }
       output.push("\x1b[0m");
@@ -369,29 +372,6 @@ export const selectAttachReplay = (
   return { data: rawReplay, kind: "raw" };
 };
 
-const cellStyleKey = (cell: GhosttyCell): string =>
-  `${cell.flags}:${cell.fgIsDefault ? "default" : `${cell.fg_r},${cell.fg_g},${cell.fg_b}`}`
-  + `:${cell.bgIsDefault ? "default" : `${cell.bg_r},${cell.bg_g},${cell.bg_b}`}`;
-
-const cellStyleSequence = (cell: GhosttyCell): string => {
-  const codes = [0];
-  if (cell.flags & CellFlags.BOLD) codes.push(1);
-  if (cell.flags & CellFlags.FAINT) codes.push(2);
-  if (cell.flags & CellFlags.ITALIC) codes.push(3);
-  if (cell.flags & CellFlags.UNDERLINE) codes.push(4);
-  if (cell.flags & CellFlags.BLINK) codes.push(5);
-  if (cell.flags & CellFlags.INVERSE) codes.push(7);
-  if (cell.flags & CellFlags.INVISIBLE) codes.push(8);
-  if (cell.flags & CellFlags.STRIKETHROUGH) codes.push(9);
-  // Keep semantic defaults as defaults so a restored screen still follows a
-  // later color-scheme change instead of freezing the palette of one theme.
-  if (cell.fgIsDefault) codes.push(39);
-  else codes.push(38, 2, cell.fg_r, cell.fg_g, cell.fg_b);
-  if (cell.bgIsDefault) codes.push(49);
-  else codes.push(48, 2, cell.bg_r, cell.bg_g, cell.bg_b);
-  return `\x1b[${codes.join(";")}m`;
-};
-
 /**
  * Length of an unterminated escape, CSI, or control-string fragment at the end
  * of `data`, or 0 when the tail is complete. Bounded so a runaway payload can
@@ -473,8 +453,13 @@ const checkpointResizeModel = (terminal: GhosttyTerminal): ResizableTerminalMode
       terminal.update();
       return terminal.getViewport();
     },
+    grapheme: (row, col) => terminal.getGraphemeString(row, col),
     isRowWrapped: (row) => terminal.isRowWrapped(row),
+    mode: (mode) => terminal.getMode(mode),
   });
+
+// A double-width stand-in for a grapheme the console reported only as U+FFFD.
+const WIDE_UNKNOWN_GLYPH = "\uFF1F";
 
 interface ConsoleCell {
   text: string;
@@ -527,7 +512,7 @@ const consoleCellMatches = (
   const text = cell.width === 0 ? " " : cellText(terminal, cell, row, col);
   if (expected.text === text) return true;
   // The console reports graphemes beyond one UTF-16 unit as U+FFFD.
-  if (expected.text === "\uFFFD") return text.length > 1 || cell.codepoint > 0xffff;
+  if (expected.text === "\uFFFD") return text.length > 1 || cell.codepoint > 0xffff || text === WIDE_UNKNOWN_GLYPH;
   return false;
 };
 

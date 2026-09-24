@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import test from "node:test";
 import { TerminalCheckpoint } from "../src/server/terminal-checkpoint.js";
 import type { WindowsAgentOutputResponse } from "../src/shared/windows-agent-protocol.js";
@@ -89,6 +90,11 @@ test("Windows ConPTY screens agree with wmux's terminal model through resizes", 
     initial: { cols: number; rows: number };
     trace: WindowsAgentOutputResponse;
   };
+  // Replay a failure offline with `npm run trace:agent -- replay <file>`.
+  const traceOut = process.env.WMUX_CONPTY_TRACE_OUT;
+  if (traceOut) {
+    fs.writeFileSync(traceOut, JSON.stringify({ version: 1, pane: "pane_conformance", backend: "conpty", capturedAt: new Date().toISOString(), output: trace }));
+  }
   // The themed console keeps the pane's exact geometry: before any resize, a
   // console one row short never produces an exact screen at the pane's size.
   assert.deepEqual(initial, { cols: 137, rows: 38 });

@@ -169,7 +169,9 @@ export const resizeTerminalLike = (term: Terminal, cols: number, rows: number, m
       wasm.update();
       return wasm.getViewport();
     },
+    grapheme: (row, col) => wasm.getGraphemeString(row, col),
     isRowWrapped: (row) => wasm.isRowWrapped(row),
+    mode: (value) => wasm.getMode(value),
   }), cols, rows, mode);
 };
 
