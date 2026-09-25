@@ -6,9 +6,46 @@ import { attestCodexAttachment } from "../src/server/codex-attachment-route.js";
 
 const endpoint = (id = "one", socketPath = "/private/native.sock") => ({ id, label: id, machineId: "local", transport: "local" as const, socketPath,
   managedLaunch: { launcherPath: "/release/codex-guard", deploymentPath: "/release" } });
-const receipt = (socket = "/private/native.sock", generation = "gen-a") => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket, generation, launcherHash: "l", deploymentHash: "d" });
+const receipt = (socket = "/private/native.sock", generation = "gen-a") => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket, generation, launcherHash: "l", deploymentHash: "d", peerPid: 123, nativePath: "/proc/123/exe", peerExeDev: 1, peerExeIno: 2 });
+const managedArgv = ["/release/venv/bin/python", "-I", "-m", "codex_usage_guard", "managed-cli", "--config", "/release/etc/enforce.json", "--native", "/proc/123/exe", "--", "-c", "check_for_update_on_startup=false", "resume", "thread_a"];
 const native = (id = "thread_a", status = "idle", queued: unknown[] = []) => ({ thread: { id, cwd: "/work", status: { type: status }, canAcceptDirectInput: true }, queue: { data: queued, nextCursor: null }, loaded: { data: [id], nextCursor: null } });
 const saved = () => ({ ...native(), thread: { ...native().thread, status: { type: "notLoaded" }, canAcceptDirectInput: null }, loaded: { data: [] as string[], nextCursor: null } });
+
+test("rejects unqualified server versions and receipts without an exact server executable", async () => {
+  for (const inspected of [null, { ...receipt(), nativePath: "/new/installed/codex" }, { ...receipt(), peerExeIno: undefined }]) {
+    const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a", probe: async () => native(),
+      inspect: async () => { if (!inspected) throw new Error("attachment_native_version_unqualified"); return inspected; } });
+    assert.equal(result.public.enabled, false);
+    assert.equal(result.public.reason, inspected ? "attachment_route_untrusted" : "attachment_native_version_unqualified");
+  }
+});
+
+test("startup attestation failure preserves the child's PTY diagnostic", () => {
+  const script = fileURLToPath(new URL("../scripts/wmux-agent-run", import.meta.url));
+  const result = spawnSync("python3", ["-c", `
+import importlib.machinery,importlib.util,os,pty,sys
+loader=importlib.machinery.SourceFileLoader('wmux_run',sys.argv[1]);spec=importlib.util.spec_from_loader(loader.name,loader);m=importlib.util.module_from_spec(spec);loader.exec_module(m)
+pid,master=pty.fork()
+if pid==0:
+ def reject(child):
+  child.wait(timeout=3)
+  raise ValueError('expected attestation failure')
+ try: m.supervise_tui([sys.executable,'-c',"import sys; print('NATIVE_QUALIFICATION_REFUSED',file=sys.stderr); sys.exit(73)"],os.getcwd(),dict(os.environ),reject,lambda:None)
+ except ValueError: print('EXPECTED_FAILURE',flush=True);os._exit(0)
+ os._exit(1)
+output=b''
+while True:
+ try: part=os.read(master,8192)
+ except OSError: break
+ if not part: break
+ output+=part
+os.close(master)
+assert os.waitpid(pid,0)[1]==0
+assert b'NATIVE_QUALIFICATION_REFUSED' in output,repr(output)
+assert b'EXPECTED_FAILURE' in output,repr(output)
+`, script], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("saved tasks can resume through the exact managed route without changing route generation", async () => {
   const attest = (response: unknown) => attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",
@@ -16,7 +53,7 @@ test("saved tasks can resume through the exact managed route without changing ro
   const result = await attest(saved());
   assert.equal(result.public.enabled, true);
   assert.equal(result.public.mode, "resume");
-  assert.deepEqual(result.private?.route.managedArgv, ["/release/codex-guard", "resume", "thread_a"]);
+  assert.deepEqual(result.private?.route.managedArgv, managedArgv);
   const loaded = await attest(native());
   assert.equal(loaded.public.mode, "attach");
   assert.equal(result.public.generation, loaded.public.generation);
@@ -110,7 +147,7 @@ test("attests an exact loaded local task and keeps route proof private", async (
   assert.equal(result.public.reason, null);
   assert.equal(result.public.generation?.length, 64);
   assert.equal(result.private?.cwd, "/work");
-  assert.deepEqual(result.private?.route.managedArgv, ["/release/codex-guard", "resume", "thread_a"]);
+  assert.deepEqual(result.private?.route.managedArgv, managedArgv);
   assert.equal(result.private?.fingerprint.length, 64);
 });
 

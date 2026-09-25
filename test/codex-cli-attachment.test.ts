@@ -8,7 +8,7 @@ import test from "node:test";
 import { isCodexAttachmentPane, recoverCodexAttachmentTarget, verifyCodexAttachment } from "../src/server/codex-cli-attachment.js";
 
 const start = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8").trim().split(" ")[21]!;
-const proof = (generation = "generation", peerExe = "") => ({ public: { enabled: true, reason: null, generation }, private: { fingerprint: "fingerprint", endpointId: "endpoint", threadId: "thread", generation, cwd: "/work", route: { launcherPath: "/launcher", deploymentPath: "/deploy", managedArgv: ["/launcher", "resume", "thread"] }, receipt: { peerExe } } });
+const proof = (generation = "generation", peerExe = "") => ({ public: { enabled: true, reason: null, generation }, private: { fingerprint: "fingerprint", endpointId: "endpoint", threadId: "thread", generation, cwd: "/work", route: { launcherPath: "/launcher", deploymentPath: "/deploy", managedArgv: ["/launcher", "resume", "thread"] }, receipt: { peerExe, ...(peerExe ? { peerExeDev: fs.statSync(peerExe).dev, peerExeIno: fs.statSync(peerExe).ino } : {}) } } });
 
 test("marks only private bound descriptors as attachment panes and fails closed for a malformed store", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attachment-registry-"));
@@ -51,7 +51,7 @@ test("verifies a target-keyed owner-only receipt across coalesced request aliase
   const key = (await import("node:crypto")).createHash("sha256").update("pane\0thread\0generation").digest("hex");
   const file = path.join(receipts, `${key}.json`);
   const cliSocket = path.join(directory, "cli.sock");
-  const native = spawn(process.execPath, ["-e", "require('net').createServer().listen(process.env.CLI_SOCKET);setTimeout(() => {}, 10000)", "--", "--remote", `unix://${cliSocket}`, "resume", "thread"], { env: { ...process.env, CLI_SOCKET: cliSocket } });
+  const native = spawn(process.execPath, ["-e", "require('net').createServer().listen(process.env.CLI_SOCKET);setTimeout(() => {}, 10000)", "--", "--remote", `unix://${cliSocket}`, "-c", "check_for_update_on_startup=false", "resume", "thread"], { env: { ...process.env, CLI_SOCKET: cliSocket } });
   for (let index = 0; index < 100 && !fs.existsSync(cliSocket); index++) await new Promise(resolve => setTimeout(resolve, 10)); fs.chmodSync(cliSocket, 0o600);
   const nativeStart = fs.readFileSync(`/proc/${native.pid}/stat`, "utf8").trim().split(" ")[21]!;
   const nativeExe = fs.realpathSync(`/proc/${native.pid}/exe`); const socket = fs.lstatSync(cliSocket);
@@ -59,6 +59,11 @@ test("verifies a target-keyed owner-only receipt across coalesced request aliase
   fs.writeFileSync(file, JSON.stringify({ ...target, fingerprint: "fingerprint", endpointId: "endpoint", wrapperPid: process.pid, wrapperStart: start, managedPid: native.pid, managedStart: nativeStart, nativePid: native.pid, nativeStart, nativeExe, cliSocket, cliSocketDev: socket.dev, cliSocketIno: socket.ino, cliListenerIno: listener, cliPeerPid: native.pid, cliPeerStart: nativeStart, status: "startup-gated" }), { mode: 0o600 });
   try {
     assert.equal(await verifyCodexAttachment({ request: { endpointId: "endpoint", threadId: "thread" }, target: { ...target, requestId: "coalesced-request" }, storageDirectory: directory, attestation: proof("generation", nativeExe) }), true);
+    const movedImage = proof("generation", nativeExe);
+    movedImage.private.receipt.peerExe = "/old/npm/package/codex (deleted)";
+    assert.equal(await verifyCodexAttachment({ request: { endpointId: "endpoint", threadId: "thread" }, target, storageDirectory: directory, attestation: movedImage }), true, "live executable identity survives a deleted or renamed installation path");
+    movedImage.private.receipt.peerExeIno!++;
+    assert.equal(await verifyCodexAttachment({ request: { endpointId: "endpoint", threadId: "thread" }, target, storageDirectory: directory, attestation: movedImage }), false, "a different executable inode cannot reuse the receipt");
     fs.chmodSync(file, 0o644);
     assert.equal(await verifyCodexAttachment({ request: { endpointId: "endpoint", threadId: "thread" }, target, storageDirectory: directory, attestation: proof("generation", nativeExe) }), false);
   } finally { native.kill(); fs.rmSync(directory, { recursive: true, force: true }); }

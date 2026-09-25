@@ -22,7 +22,7 @@ test("saved opening rechecks queues and verifies loaded state before reusing the
     queue: { data: queue, nextCursor: null }, loaded: { data: status === "notLoaded" ? [] : [threadId], nextCursor: null } });
   const catalog = new CodexTaskCatalog(() => machines, [endpoint], async input => input.operation === "turns" ? { data: [] } : native());
   catalog.attestAttachment = async () => attestCodexAttachment({ endpoint, endpoints: [endpoint], threadId,
-    probe: async () => native(), inspect: async () => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket: endpoint.socketPath, generation: "fixed" }) });
+    probe: async () => native(), inspect: async () => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket: endpoint.socketPath, generation: "fixed", peerPid: 123, nativePath: "/proc/123/exe", peerExeDev: 1, peerExeIno: 2 }) });
   const service = new CodexTasksService(state, () => machines, { catalog,
     openAttached: async () => {
       opens++; status = "idle";

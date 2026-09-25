@@ -221,7 +221,7 @@ def proc_parent(pid):
         return 0
 
 
-def native_child(managed_pid, thread_id, expected_exe, deadline):
+def native_child(managed_pid, thread_id, expected_identity, deadline):
     """Find the guard's actual native CLI descendant and its private cli.sock."""
     while time.monotonic() < deadline:
         children = {}
@@ -238,7 +238,10 @@ def native_child(managed_pid, thread_id, expected_exe, deadline):
             if pid in seen: continue
             seen.add(pid); pending.extend(children.get(pid, []))
             argv = proc_argv(pid)
-            if os.path.realpath("/proc/%d/exe" % pid) != expected_exe: continue
+            try:
+                executable = os.stat("/proc/%d/exe" % pid)
+                if (executable.st_dev, executable.st_ino) != expected_identity: continue
+            except OSError: continue
             if len(argv) >= 4 and argv[-2:] == ["resume", thread_id] and "--remote" in argv:
                 remote = argv[argv.index("--remote") + 1] if argv.index("--remote") + 1 < len(argv) else ""
                 if remote.startswith("unix:///"):
@@ -279,8 +282,16 @@ def managed_attachment(request, supplied_directory):
     fingerprint = private.get("fingerprint")
     cwd = private.get("cwd")
     receipt_file = descriptor.get("receiptFile")
-    if (not isinstance(argv, list) or len(argv) != 3 or not all(isinstance(value, str) and value for value in argv)
-            or argv[1] != "resume" or argv[2] != thread or not isinstance(fingerprint, str) or not fingerprint
+    receipt = private.get("receipt") if isinstance(private.get("receipt"), dict) else {}
+    deployment = route.get("deploymentPath") if isinstance(route, dict) else None
+    native_path = receipt.get("nativePath")
+    if not isinstance(deployment, str) or not deployment.startswith("/") or native_path != "/proc/%s/exe" % receipt.get("peerPid"):
+        raise ValueError("invalid Codex attachment route")
+    expected_argv = [os.path.join(deployment, "venv/bin/python"), "-I", "-m", "codex_usage_guard", "managed-cli",
+                     "--config", os.path.join(deployment, "etc/enforce.json"), "--native", native_path, "--",
+                     "-c", "check_for_update_on_startup=false", "resume", thread]
+    if (argv != expected_argv or not all(isinstance(value, str) and value for value in argv)
+            or not isinstance(fingerprint, str) or not fingerprint
             or not isinstance(cwd, str) or not cwd.startswith("/") or os.path.realpath(cwd) != os.path.realpath(supplied_directory)
             or not isinstance(receipt_file, str) or not receipt_file.startswith("/")):
         raise ValueError("invalid Codex attachment descriptor")
@@ -295,7 +306,6 @@ def managed_attachment(request, supplied_directory):
     helper = os.path.join(SCRIPT_DIR, "wmux_codex_attach.py")
     # The route must be inspected a second time directly before its only child
     # is created.  The expected fingerprint binds this launch to catalog proof.
-    receipt = private.get("receipt") if isinstance(private.get("receipt"), dict) else {}
     check = subprocess.run([sys.executable, helper, "attest"], input=json.dumps({
         "socketPath": receipt.get("socket"), "launcherPath": route.get("launcherPath"),
         "deploymentPath": route.get("deploymentPath"), "cwd": cwd, "expectedFingerprint": fingerprint,
@@ -316,20 +326,22 @@ def write_attachment_receipt(receipt_file, descriptor, fingerprint, child_pid):
     if not all(isinstance(value, str) and value for value in values.values()):
         raise ValueError("invalid Codex attachment receipt")
     private = descriptor.get("attestation") if isinstance(descriptor.get("attestation"), dict) else {}
-    expected_exe = (private.get("receipt") or {}).get("peerExe") if isinstance(private.get("receipt"), dict) else None
-    if not isinstance(expected_exe, str) or not expected_exe.startswith("/"): raise ValueError("native executable unavailable")
-    native_pid, native_start, native_argv, cli_socket, peer_pid, peer_start = native_child(child_pid, values["threadId"], expected_exe, time.monotonic() + 5)
+    proof = private.get("receipt") if isinstance(private.get("receipt"), dict) else {}
+    expected_identity = (proof.get("peerExeDev"), proof.get("peerExeIno"))
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in expected_identity): raise ValueError("native executable unavailable")
+    native_pid, native_start, native_argv, cli_socket, peer_pid, peer_start = native_child(child_pid, values["threadId"], expected_identity, time.monotonic() + 5)
     cli_stat = os.lstat(cli_socket)
     listener_inode = unix_socket_inode(cli_socket)
     native_exe = os.path.realpath("/proc/%d/exe" % native_pid)
-    if native_exe != expected_exe or not process_descends(native_pid, child_pid) or not process_descends(peer_pid, child_pid) or not listener_owned_by(peer_pid, listener_inode):
+    executable = os.stat("/proc/%d/exe" % native_pid)
+    if (executable.st_dev, executable.st_ino) != expected_identity or not process_descends(native_pid, child_pid) or not process_descends(peer_pid, child_pid) or not listener_owned_by(peer_pid, listener_inode):
         raise ValueError("native Codex attachment identity was not observed")
     receipt = {**values, "fingerprint": fingerprint, "endpointId": descriptor.get("endpointId"),
                "wrapperPid": os.getpid(), "wrapperStart": proc_start(os.getpid()),
                "managedPid": child_pid, "managedStart": proc_start(child_pid),
                # The managed launcher is the initial native CLI ancestor. The
                # server verifier additionally proves the native descendant.
-               "nativePid": native_pid, "nativeStart": native_start, "nativeExe": native_exe, "nativeArgv": native_argv, "cliSocket": cli_socket,
+               "nativePid": native_pid, "nativeStart": native_start, "nativeExe": native_exe, "nativeExeDev": executable.st_dev, "nativeExeIno": executable.st_ino, "nativeArgv": native_argv, "cliSocket": cli_socket,
                "cliSocketDev": cli_stat.st_dev, "cliSocketIno": cli_stat.st_ino, "cliListenerIno": listener_inode, "cliPeerPid": peer_pid, "cliPeerStart": peer_start,
                "managedArgv": private_route_argv(descriptor), "status": "launching"}
     temporary = receipt_file + ".tmp-%d" % os.getpid()
@@ -600,6 +612,7 @@ def control_line(marker):
 
 def supervise_tui(argv, directory, env, on_started=None, on_input=None):
     child = None
+    master = slave = None
     previous_handlers = {}
     tty_fd = sys.stdin.fileno() if sys.stdin.isatty() else None
     parent_pgrp = os.getpgrp()
@@ -707,7 +720,7 @@ def supervise_tui(argv, directory, env, on_started=None, on_input=None):
                     else:
                         selector.unregister(master)
                         master_open = False
-            selector.close(); os.close(master)
+            selector.close(); os.close(master); master = None
             signal.signal(signal.SIGWINCH, previous_winch)
             termios.tcsetattr(tty_fd, termios.TCSADRAIN, outer_state)
         code = child.wait()
@@ -720,8 +733,20 @@ def supervise_tui(argv, directory, env, on_started=None, on_input=None):
         return 128 + forwarded.signum
     except (OSError, ValueError):
         stop_process_group(child, signal.SIGKILL, 0)
+        if master is not None:
+            # Startup attestation precedes the relay. Preserve the child's
+            # actual error instead of replacing it with a generic timeout.
+            os.set_blocking(master, False)
+            remaining = 64 * 1024
+            while remaining > 0:
+                try: chunk = os.read(master, min(8192, remaining))
+                except OSError: break
+                if not chunk: break
+                os.write(sys.stdout.fileno(), chunk); remaining -= len(chunk)
         raise
     finally:
+        if master is not None: os.close(master)
+        if slave is not None: os.close(slave)
         for signum, previous in previous_handlers.items():
             signal.signal(signum, previous)
         if not mask_restored:
