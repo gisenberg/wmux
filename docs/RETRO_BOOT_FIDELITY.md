@@ -28,8 +28,15 @@ They must not be described as original firmware output.
 | BBC Micro | Default MODE 7 character grid, 40 columns by 25 rows, using the bundled SAA5050-style face | [BBC BASIC implementer's MODE 7 reference](https://www.bbcbasic.uk/bbcwin/manual/bbcwinh.html); the retained 320:256 presentation aspect is not a claim that teletext is a 320-pixel bitmap mode |
 | ZX Spectrum 48K | Copyright in the lower editor area, cleared on command entry; LOAD arrives as a keyword; red/cyan pilots, short header data, a quiet gap with program name, second pilot and blue/yellow program data | [Sinclair Introduction, chapter 1](https://worldofspectrum.org/ZXSpectrumIntroduction/chapter_one.html), [chapter 6](https://worldofspectrum.org/ZXSpectrumIntroduction/chapter_six.html) and [BASIC manual, chapter 20](https://worldofspectrum.org/ZXBasicManual/zxmanchap20.html); timings are condensed, bands are horizontal and move upward, one BASIC program is loaded rather than unexplained successive CODE files |
 | 386-class PC | Memory count rewrites one line from zero to 16 MiB, then a short POST cue precedes DOS startup | [GVC 386SX board manual](https://www.infania.net/misc/moboarchive/Systemax/Manuals/isa/gvc_386_sx.pdf) documents the power-on memory test; this is a generic period-compatible scene, not an exact AMI BIOS revision or diagnostic beep-code implementation |
-| Amiga Guru | Left click acknowledges the displayed failure and enters the existing disk-boot sequence | The existing alert's instruction is now functional; keyboard activation and a two-second automatic continuation are wmux accessibility/convenience additions, not hardware behavior |
-| NeXTSTEP | Separate vertically stacked main menu in the upper-left corner, with the dock on the right | [NeXTstep Concepts, December 1990, chapter 2, Main Menu / Placement](https://www.bitsavers.org/pdf/next/Release_1_Dec90/NEXTstep_Concepts_Dec90.pdf); menu labels and the wmux login scene are illustrative, not a functional Workspace Manager |
+| Amiga Guru | Exec's 40-line alert across the top of a 640x200 screen, with the failure, button prompt and meditation number at their exec positions and a blinking red frame; left click acknowledges it and enters the disk-boot sequence | [Exec disassembly](https://wandel.ca/homepage/execdis/exec_disassembly.txt); keyboard activation and a two-second automatic continuation are wmux accessibility/convenience additions, not hardware behavior |
+| Amiga power-on | Dark grey, then medium grey, before the insert-disk hand | [Exec disassembly](https://wandel.ca/homepage/execdis/exec_disassembly.txt) colours $0444 and $0888; timings are condensed |
+| MSX2 title | The MSX logo scrolls up on V9938 blue before `VRAM:128Kbytes` appears, then MSX BASIC uses colour 4 | [MSX2 boot screens](http://www.geocities.ws/marmsx/boot/english.html) and [openMSX discussion of the two blues](https://www.msx.org/forum/msx-talk/openmsx/openmsx-msx2-color-hue-shift-default-blue-background); the free-RAM line some models print is omitted |
+| Acorn Archimedes | Purple, blue, purple and green POST phases, the black `RISC OS 2048K` banner, the RISC OS 3 initialising box, then the flat grey backdrop with the icon bar and a NetFS-style Logon window with a cream input-focus title bar | [Application Note 225](https://www.retro-kit.co.uk/user/custom/Acorn/32bit/documentation/RISCOS-POST-AppNote225.pdf), the RISC OS Open Kernel and Wimp palette sources, and the [RISC OS 3 user guide's network logon](http://www.riscos.com/support/users/userguide3/book1b/c_4.html); POST colour values and the startup box layout are approximate |
+| Atari ST | White screen and busy bee, then the TOS 1.04 low-resolution desktop: solid green, `Desk File View Options`, two `FLOPPY DISK` icons at the top left and `TRASH` at the bottom left, with a GEM dialog whose fields underline their template characters | [Reconstructed TOS 1.x source](https://github.com/th-otto/tos1x) default palette, desktop fill and built-in DESKTOP.INF; the bee and icon artwork are drawn approximations |
+| Apple Lisa | ROM self-test with `H/88`, the TESTING box and its four checked icons, the Office System 3.1 Wait splash, then the 50% desktop pattern, the `Desk File/Print Edit Housekeeping` menu and the default bottom-row icons | [Lisa Boot ROM listing](https://www.apple.asimov.net/documentation/applelisa/AppleLisa-BootROMListing.pdf) and [toastytech Lisa captures](http://toastytech.com/guis/lisa.html); icon artwork is simplified and the LisaTerminal login is invented |
+| SGI Indigo2 | PROM gradient with `WELCOME TO INDIGO²` and the yellow `Silicon Graphics Computer Systems` line, the diagnostics, start-up and coming-up notifiers, then a clogin window with the user icon pane, name-first entry and `IRIS` host label | [Indigo2 IMPACT Owner's Guide](http://www.sgistuff.net/hardware/systems/documents/007-2849-004-indigo2impact.pdf), [reverse-engineered PROM artwork](https://github.com/tyfighter/sgibootscreen) and [clogin(1)](https://help.graphica.com.au/irix-6.5.30/man/1/clogin); the clogin root blue and the wordmark typeface are approximate |
+| NeXTcube | ROM panel on dark grey with the white cube and `Testing system ...` then `Loading from disk ...`, the NEXTSTEP initializing panel, then loginwindow without the Workspace menu or dock, which appear only after login | [NeXT ROM source](https://github.com/johnsonjh/NeXTROM); a default 3.3 install logs in automatically, so showing loginwindow is a wmux authentication requirement |
+| OS/2 Warp 3 | Corner box, then the bevelled white logo box over the Version 3 copyright, then the dark cyan Workplace Shell with its default folders, LaunchPad and a LAN Logon dialog | [toastytech OS/2 Warp 3 gallery](http://toastytech.com/guis/os23.html) and [Redbook GG24-4505](http://ps-2.kev009.com/basil.holloway/ALL%20PDF/gg244505.pdf); icon and LaunchPad artwork are simplified |
 
 The Spectrum border phases retain the internal `header` and `data` names for compatibility.
 `header` means a red/cyan pilot, including the pilot before the data block, not every byte of a tape header.
@@ -57,10 +64,8 @@ It does not certify every ROM banner, font or boot sequence as an exact reproduc
 | 386 PC | Generic BIOS/DOS composition; no vendor-exact logo, copyright, memory-test cadence or device detection |
 | BBC Micro | Teletext face and grid are selected, but control-code attributes and hardware cursor shape are not emulated |
 | Spectrum | No K/L cursor-state emulation, tape waveform decoding or SCREEN$ loading graphic; reduced motion skips artificial waits |
-| Atari ST | Existing licensed TOS 1.04 screenshot followed by a simplified GEM-style desktop; the text profile is not executed by the graphical renderer |
-| Amiga Workbench, Amiga Guru | Retained insert-disk image and stylized shell chrome; no model-specific diagnostic color sequence or ROM execution |
-| Acorn Archimedes, Apple Lisa | Simplified graphical desktops; exact ROM self-test graphics and model-specific disk startup remain unimplemented |
-| SGI IRIX, NeXTcube, OS/2 Warp | Existing logos and simplified graphical shells; hardware-specific startup animation and sound remain unverified |
+| Atari ST, Acorn Archimedes, Apple Lisa, SGI IRIX, NeXTcube, OS/2 Warp | Startup and desktop layouts are traced at native resolution, but icons, bitmaps and proportional fonts are drawn approximations and startup sounds are not reproduced |
+| Amiga Workbench, Amiga Guru | Retained insert-disk image and stylized shell chrome; the AmigaShell is opened for authentication although Workbench 1.3 closes its boot CLI |
 | TRS-80 Model 4, Osborne 1 | Interpreter/OS-themed text rather than traced machine boot output |
 | Sinclair QL | Copyright and display-choice text are traced, but the QL windows, colours and font are not reproduced |
 | Amstrad CPC, Oric Atmos, MSX2 | Sign-on text is traced; machine-specific logo animation, palettes and loader timing remain approximate |
@@ -72,17 +77,24 @@ It does not certify every ROM banner, font or boot sequence as an exact reproduc
 
 Graphical profiles use `RetroGraphicalBootScreen`, not the `boot` text steps in the profile table.
 Changing those text steps alone cannot improve the visible graphical boot.
+Their scenes, startup timelines and login dialogs live in `RetroGraphicalDesktop.tsx` and `retro-graphical-desktop.css`, which werdr copies unchanged.
+Each scene is laid out in the machine's native pixels and scaled to the displayed picture.
+
+Displayed shape and pixel grid are separate.
+`displayAspect` records the picture's shape when pixels are not square, as for 80-column text, RISC OS 640x256 modes and the Amiga, Lisa, PC-98 and X68000 displays.
+Terminal and raster canvases stretch to that shape, as the monitor did, rather than letterboxing.
 Prefer small, verified improvements over adding plausible-looking but undocumented firmware output.
 
 ## Artwork and verification
 
 Reuse the existing assets and preserve [font/screenshot provenance](../src/client/src/assets/retro/UPSTREAM.md), [logo provenance](../src/client/src/assets/retro/logos/UPSTREAM.md) and [third-party notices](../THIRD_PARTY_NOTICES.md).
-No additional historical screenshots, ROMs, recordings or vendor artwork were imported for this fidelity pass.
+No historical screenshots, ROMs, recordings or vendor artwork were imported for the graphical scenes; they are drawn in HTML and CSS from the cited descriptions.
+The TOS 1.04 screenshot was removed because it showed the localized Desktop Info dialog rather than startup, and the lowercase SGI logo was removed because it postdates the Indigo2 era.
 The retained Workbench insert-disk screenshot still has no identified source-redistribution license and remains outside MIT.
 Do not use its presence as permission to add more unlicensed screenshots.
 
-The Amstrad CPC and Tatung Einstein faces store a machine glyph in the U+00A9 slot instead of a copyright sign.
-Their font faces therefore exclude U+00A9 with `unicode-range`, and the profiles that use them fall back to the Spectrum face's copyright sign.
+Several faces draw a machine glyph in the copyright or pound slot: Amstrad CPC, Tatung Einstein and SAA 5050 for the copyright sign, and IBM CGA, Lisa Console and Memotech MTX for both.
+Their font faces exclude those characters with `unicode-range`, and the profiles and scenes that print them fall back to the Spectrum face.
 
 Structured boot steps keep positioning, inverse video and in-place updates separate from text so line-width guards remain meaningful.
 Keep all positions inside the profile's declared grid and make animation completion independent of real bootstrap/authentication completion.
@@ -90,5 +102,6 @@ The Guru interaction must never dismiss a required authentication gate.
 Service polling retains its bounded interval even under reduced motion.
 
 Run focused `test/retro-boot-*.test.ts` checks during editing and use [external verification](VERIFICATION.md) for full checks.
-The `canvas-chrome.spec.ts` browser tests capture Spectrum desktop/mobile borders, PC POST, BBC teletext, NeXT menu placement and Guru recovery.
+The `canvas-chrome.spec.ts` browser tests capture Spectrum desktop/mobile borders, PC POST, C64 inverse video, BBC teletext, the NeXT loginwindow and Guru recovery.
+Werdr's `web/test/profiles.spec.ts` steps a fixed clock through every graphical startup scene and saves a screenshot of each.
 Inspect these images when changing geometry or artwork; passing text assertions alone cannot establish visual fidelity.

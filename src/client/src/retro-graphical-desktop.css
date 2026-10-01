@@ -1,0 +1,1087 @@
+/* Shared by wmux and the werdr boot console. Every length is a native pixel
+   of the emulated display; GraphicalScene scales the screen to the picture. */
+
+.retro-gx {
+  display: block;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.retro-gx-screen {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  transform-origin: 0 0;
+  font-synthesis: none;
+}
+
+.retro-gx-fill {
+  position: absolute;
+  inset: 0;
+}
+
+/* Acorn Archimedes, RISC OS 3.11 in MODE 12 (640x256, double-height pixels). */
+
+.retro-gx-risc-os {
+  color: #000;
+  font: 8px/8px "Retro BBC Micro", monospace;
+}
+
+/* POST phases; Application Note 225 names the colours, not their exact values. */
+.retro-riscos-post-purple,
+.retro-riscos-post-purple-again { background: #a000c0; }
+.retro-riscos-post-blue { background: #0000c0; }
+.retro-riscos-post-green { background: #00c000; }
+
+.retro-riscos-banner {
+  background: #000;
+  color: #fff;
+  white-space: pre;
+}
+
+.retro-riscos-backdrop { background: #777; }
+
+.retro-riscos-startup {
+  position: absolute;
+  top: 78px;
+  left: 190px;
+  display: grid;
+  justify-items: center;
+  width: 260px;
+  height: 92px;
+  box-sizing: border-box;
+  border: 1px solid #000;
+  background: #ddd;
+  box-shadow: 4px 2px 0 #333;
+  padding-top: 8px;
+}
+
+/* Outline text is drawn at half height so the double-height pixels restore its proportions. */
+.retro-riscos-startup strong,
+.retro-riscos-startup span,
+.retro-riscos-startup b {
+  display: block;
+  transform: scaleY(0.5);
+  transform-origin: top;
+  white-space: nowrap;
+}
+
+.retro-riscos-startup strong {
+  height: 20px;
+  font: 40px/40px "Times New Roman", Times, serif;
+}
+
+.retro-riscos-startup span {
+  height: 8px;
+  font: 16px/16px "Times New Roman", Times, serif;
+}
+
+.retro-riscos-startup b {
+  height: 10px;
+  margin-top: 4px;
+  font: bold 18px/18px "Times New Roman", Times, serif;
+}
+
+.retro-riscos-acorn-logo,
+.retro-riscos-taskmanager i {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 14px;
+  border-radius: 45% 45% 50% 50% / 40% 40% 60% 60%;
+  background: #00cc00;
+  box-shadow: inset 0 4px 0 #558800;
+}
+
+.retro-riscos-iconbar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  height: 34px;
+  box-sizing: border-box;
+  border-top: 1px solid #000;
+  background: #ddd;
+  padding: 0 12px 3px;
+}
+
+.retro-riscos-icon {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: 32px;
+  white-space: nowrap;
+}
+
+.retro-riscos-floppy i {
+  width: 28px;
+  height: 18px;
+  border: 1px solid #000;
+  background: linear-gradient(#bbb 0 6px, #333 6px);
+}
+
+.retro-riscos-apps i {
+  width: 28px;
+  height: 18px;
+  border: 1px solid #000;
+  background: linear-gradient(90deg, #dd0000 0 33%, #eeee00 33% 66%, #004499 66%);
+}
+
+.retro-riscos-palette {
+  margin-left: auto;
+}
+
+.retro-riscos-palette i {
+  width: 24px;
+  height: 22px;
+  border: 1px solid #000;
+  background:
+    linear-gradient(90deg, #004499 0 25%, #eeee00 25% 50%, #00cc00 50% 75%, #dd0000 75%) top / 100% 50% no-repeat,
+    linear-gradient(90deg, #eeeebb 0 25%, #558800 25% 50%, #ffbb00 50% 75%, #00bbff 75%) bottom / 100% 50% no-repeat;
+}
+
+.retro-riscos-taskmanager i {
+  width: 26px;
+  height: 22px;
+}
+
+/* Atari 1040ST, TOS 1.04 in ST low resolution (320x200). */
+
+.retro-gx-atari-st {
+  color: #000;
+  font: 8px/8px "Retro Atari ST", monospace;
+}
+
+.retro-atari-blank { background: #fff; }
+
+.retro-atari-bee {
+  position: absolute;
+  top: 92px;
+  left: 152px;
+  width: 16px;
+  height: 16px;
+}
+
+/* TOS 1.04 fills the colour desktop with solid palette colour 3 ($070). */
+.retro-atari-desktop { background: #00ff00; }
+
+.retro-atari-menu {
+  height: 10px;
+  border-bottom: 1px solid #000;
+  background: #fff;
+  padding: 1px 0 0 4px;
+  white-space: pre;
+}
+
+.retro-atari-icon {
+  position: absolute;
+  left: 4px;
+  display: grid;
+  justify-items: center;
+  width: 88px;
+}
+
+.retro-atari-drive-a { top: 18px; }
+.retro-atari-drive-b { top: 58px; }
+.retro-atari-trash { bottom: 6px; }
+
+.retro-atari-icon i {
+  display: grid;
+  place-items: end center;
+  width: 30px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 1px solid #000;
+  background: linear-gradient(#000 0 0) center 4px / 18px 1px no-repeat, #fff;
+  font-style: normal;
+  padding-bottom: 2px;
+}
+
+.retro-atari-trash i {
+  width: 20px;
+  height: 22px;
+  background: repeating-linear-gradient(90deg, #fff 0 3px, #000 3px 4px);
+}
+
+.retro-atari-icon small {
+  margin-top: 1px;
+  background: #fff;
+  padding: 0 1px;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+/* Apple Lisa 2/10, Office System 3.1 (720x364, tall pixels). */
+
+.retro-gx-lisa {
+  color: #000;
+  font: 8px/8px "Retro Lisa Console", "Retro Spectrum", monospace;
+}
+
+.retro-lisa-pattern {
+  background: repeating-conic-gradient(#000 0 25%, #fff 0 50%) 0 0 / 2px 2px;
+}
+
+.retro-lisa-rom-strip {
+  height: 16px;
+  background: #fff;
+}
+
+.retro-lisa-rom-strip span {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+}
+
+.retro-lisa-testing {
+  position: absolute;
+  top: 40px;
+  left: 240px;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: 240px;
+  box-sizing: border-box;
+  border: 2px solid #000;
+  background: #fff;
+  padding: 8px;
+}
+
+.retro-lisa-test-icons {
+  display: flex;
+  gap: 18px;
+}
+
+.retro-lisa-test-icons > span {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+
+.retro-lisa-test-icons i {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 20px;
+  border: 2px solid #000;
+}
+
+.retro-lisa-test-icons .is-passed i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 6px;
+  width: 6px;
+  height: 11px;
+  border: solid #000;
+  border-width: 0 3px 3px 0;
+  transform: rotate(45deg);
+}
+
+.retro-lisa-office {
+  position: absolute;
+  top: 24px;
+  left: 70px;
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  width: 580px;
+  height: 72px;
+  box-sizing: border-box;
+  border: 2px solid #000;
+  background: #fff;
+  padding: 0 24px;
+}
+
+.retro-lisa-wait {
+  display: grid;
+  place-items: start center;
+  width: 64px;
+  height: 52px;
+  padding-top: 8px;
+  box-sizing: border-box;
+  background: #000;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  color: #fff;
+  font-style: italic;
+}
+
+.retro-lisa-release {
+  display: grid;
+  gap: 6px;
+}
+
+.retro-lisa-release em {
+  font: italic bold 16px/16px "Times New Roman", Times, serif;
+}
+
+.retro-lisa-menu {
+  border-bottom: 1px solid #000;
+  background: #fff;
+  padding: 4px 0 0 20px;
+  box-sizing: border-box;
+  height: 16px;
+  white-space: nowrap;
+}
+
+.retro-lisa-icon {
+  position: absolute;
+  bottom: 8px;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+}
+
+.retro-lisa-preferences { left: 16px; }
+.retro-lisa-wastebasket { left: 112px; }
+.retro-lisa-clipboard { left: 208px; }
+.retro-lisa-disk { right: 16px; }
+
+.retro-lisa-icon i {
+  display: block;
+  width: 30px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 2px solid #000;
+  background: #fff;
+}
+
+.retro-lisa-wastebasket i {
+  width: 22px;
+  background: repeating-linear-gradient(90deg, #fff 0 3px, #000 3px 5px);
+}
+
+.retro-lisa-icon small {
+  background: #fff;
+  padding: 1px 2px;
+  font-size: 8px;
+}
+
+/* SGI Indigo2, PROM and IRIX 6.5 clogin (1280x1024). */
+
+.retro-gx-irix {
+  color: #000;
+  font: 18px/1.2 Helvetica, Arial, sans-serif;
+}
+
+/* Gradient and wordmark placement follow the reverse-engineered Indigo2 PROM artwork. */
+.retro-irix-prom {
+  background: linear-gradient(#afd1fe, #5f5f8f);
+}
+
+.retro-irix-welcome {
+  position: absolute;
+  top: 680px;
+  left: 160px;
+  color: #4b0083;
+  font: 22px/1 Helvetica, Arial, sans-serif;
+  letter-spacing: 6px;
+}
+
+.retro-irix-indigo {
+  position: absolute;
+  top: 700px;
+  left: 150px;
+  color: #4b0083;
+  font: italic bold 190px/1 "Brush Script MT", "Segoe Script", cursive;
+  text-shadow: 6px 6px 0 #5f5f92;
+}
+
+.retro-irix-indigo sup {
+  font-size: 0.45em;
+}
+
+.retro-irix-sgi {
+  position: absolute;
+  top: 922px;
+  left: 733px;
+  color: #ff0;
+  font: italic 24px/1 Helvetica, Arial, sans-serif;
+}
+
+.retro-irix-notifier {
+  position: absolute;
+  top: 300px;
+  left: 390px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 500px;
+  min-height: 110px;
+  box-sizing: border-box;
+  border: 3px solid;
+  border-color: #eee #666 #666 #eee;
+  background: #c4c4c4;
+  padding: 18px 28px;
+  color: #333;
+  text-shadow: 1px 1px 0 #fff;
+}
+
+.retro-irix-coming-up {
+  justify-content: center;
+  font-size: 30px;
+}
+
+.retro-irix-hourglass {
+  width: 30px;
+  height: 46px;
+  flex: none;
+  background: #444;
+  clip-path: polygon(0 0, 100% 0, 55% 50%, 100% 100%, 0 100%, 45% 50%);
+}
+
+.retro-irix-button {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  border: 2px solid;
+  border-color: #eee #666 #666 #eee;
+  padding: 3px 10px;
+  font-size: 15px;
+}
+
+/* The clogin root colour is described only as blue; this value is approximate. */
+.retro-irix-root { background: #4f6fa8; }
+
+/* NeXTcube ROM monitor and NeXTSTEP 3.3 loginwindow (1120x832, 2-bit grey). */
+
+.retro-gx-nextstep {
+  color: #000;
+  font: 18px/1.2 Helvetica, Arial, sans-serif;
+}
+
+.retro-next-screen { background: #555; }
+
+.retro-next-rom {
+  position: absolute;
+  top: 308px;
+  left: 340px;
+  width: 440px;
+  height: 176px;
+  box-sizing: border-box;
+  border: 1px solid #000;
+  background: #555;
+  box-shadow: inset 0 0 0 5px #555, inset 0 0 0 6px #aaa;
+  color: #fff;
+}
+
+.retro-next-rom img {
+  position: absolute;
+  top: 24px;
+  left: 36px;
+  width: 108px;
+  /* The ROM panel draws the cube white with dark lettering. */
+  filter: grayscale(1) invert(1);
+}
+
+.retro-next-rom span {
+  position: absolute;
+  top: 44px;
+  left: 210px;
+  font-size: 22px;
+  white-space: pre;
+}
+
+.retro-next-scsi {
+  position: absolute;
+  top: 60px;
+  left: 300px;
+  width: 70px;
+  height: 44px;
+  border: 2px solid #fff;
+  background: linear-gradient(#fff 0 0) 8px 30px / 16px 4px no-repeat;
+}
+
+.retro-next-panel,
+.retro-gx-nextstep .retro-graphical-login {
+  position: absolute;
+  top: 260px;
+  left: 310px;
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  width: 500px;
+  box-sizing: border-box;
+  border: 1px solid #000;
+  background: #aaa;
+  box-shadow: inset 1px 1px 0 #fff, 3px 3px 0 #000;
+  padding: 24px;
+}
+
+.retro-next-wordmark {
+  color: #aaa;
+  font: bold 46px/1 Helvetica, Arial, sans-serif;
+  letter-spacing: 8px;
+  text-shadow: -1px -1px 0 #fff, 2px 2px 0 #000;
+}
+
+.retro-next-progress {
+  width: 300px;
+  height: 12px;
+  border: 1px solid #000;
+  background: #fff;
+}
+
+.retro-next-progress i {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: #555;
+}
+
+.retro-next-panel img,
+.retro-gx-nextstep .retro-graphical-actions img {
+  width: 56px;
+}
+
+/* IBM OS/2 Warp 3 (640x480, VGA). */
+
+.retro-gx-os2 {
+  color: #000;
+  font: 9px/1.2 Helvetica, Arial, sans-serif;
+}
+
+.retro-os2-black { background: #000; }
+
+.retro-os2-corner {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 54px;
+  height: 40px;
+  background: #fff;
+}
+
+.retro-os2-logo {
+  position: absolute;
+  top: 81px;
+  left: 167px;
+  display: grid;
+  place-items: center;
+  width: 304px;
+  height: 304px;
+  box-sizing: border-box;
+  border: 4px solid;
+  border-color: #eee #888 #888 #eee;
+  background: #fff;
+}
+
+.retro-os2-logo span {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  color: #1f3fbf;
+  font: bold 22px/1 Helvetica, Arial, sans-serif;
+  letter-spacing: 1px;
+}
+
+.retro-os2-logo img {
+  width: 260px;
+}
+
+.retro-os2-copyright {
+  position: absolute;
+  top: 400px;
+  left: 0;
+  margin: 0;
+  color: #d7d7d7;
+  font: 16px/19px "Retro IBM CGA", monospace;
+  transform: scaleX(0.5);
+  transform-origin: left;
+}
+
+.retro-os2-desktop { background: #008284; }
+
+.retro-os2-icon {
+  position: absolute;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  width: 64px;
+  color: #fff;
+  text-align: center;
+}
+
+.retro-os2-icon i {
+  display: block;
+  width: 28px;
+  height: 22px;
+  border: 1px solid #000;
+  background: #ffd94a;
+}
+
+.retro-os2-system { top: 16px; left: 12px; }
+.retro-os2-information { top: 76px; left: 12px; }
+.retro-os2-templates { top: 404px; left: 12px; }
+.retro-os2-dos { top: 16px; left: 96px; }
+.retro-os2-winos2 { top: 16px; left: 176px; }
+.retro-os2-windows { top: 16px; left: 256px; }
+.retro-os2-multimedia { top: 16px; left: 336px; }
+
+.retro-os2-system i { background: #c0c0c0; }
+.retro-os2-information i { background: #fff; }
+
+.retro-os2-launchpad {
+  position: absolute;
+  top: 418px;
+  left: 120px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 400px;
+  height: 46px;
+  box-sizing: border-box;
+  border: 2px solid;
+  border-color: #fff #555 #555 #fff;
+  background: #c0c0c0;
+  padding: 4px;
+}
+
+.retro-os2-launchpad > span:not(.retro-os2-drawers) {
+  border: 1px solid;
+  border-color: #fff #555 #555 #fff;
+  padding: 2px 3px;
+  white-space: nowrap;
+}
+
+.retro-os2-drawers {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.retro-os2-drawers i {
+  display: block;
+  width: 22px;
+  height: 26px;
+  border: 1px solid #555;
+  background: #e8e8e8;
+}
+
+/* Login dialogs, styled per system. */
+
+.retro-gx-screen .retro-graphical-login {
+  position: absolute;
+  display: grid;
+  align-content: start;
+  box-sizing: border-box;
+}
+
+.retro-gx-screen .retro-graphical-field-row {
+  display: grid;
+  grid-template-columns: var(--retro-login-label, 1fr) minmax(0, 1.6fr);
+  align-items: center;
+}
+
+/* Empty fields keep one line of height, as their native controls did. */
+.retro-gx-screen .retro-graphical-field,
+.retro-gx-screen .retro-graphical-static-field {
+  min-height: 1.2em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.retro-gx-screen .retro-graphical-field.is-active::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: retro-graphical-caret 1s steps(1) infinite;
+}
+
+.retro-gx-screen .retro-graphical-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+/* Host application button styles must not leak into the emulated dialogs. */
+.retro-gx-screen .retro-graphical-actions button {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  border-radius: 0;
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.retro-gx-screen .retro-graphical-actions button:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.retro-gx-screen .retro-graphical-message:empty {
+  display: none;
+}
+
+/* RISC OS window: cream title bar for the input focus, grey work area. */
+.retro-gx-risc-os .retro-graphical-login {
+  top: 64px;
+  left: 176px;
+  gap: 5px;
+  width: 288px;
+  border: 1px solid #000;
+  background: #ddd;
+  padding: 0 0 6px;
+  --retro-login-label: 96px;
+}
+
+.retro-gx-risc-os .retro-graphical-login-title {
+  height: 10px;
+  border-bottom: 1px solid #000;
+  background: #eeeebb;
+  padding-top: 1px;
+  text-align: center;
+}
+
+.retro-gx-risc-os .retro-graphical-field-row,
+.retro-gx-risc-os .retro-graphical-message,
+.retro-gx-risc-os .retro-graphical-actions {
+  margin: 0 8px;
+}
+
+.retro-gx-risc-os .retro-graphical-field,
+.retro-gx-risc-os .retro-graphical-static-field {
+  height: 10px;
+  border: 1px solid #000;
+  background: #fff;
+  padding: 1px 2px 0;
+}
+
+.retro-gx-risc-os .retro-graphical-actions button {
+  border: 1px solid #000;
+  box-shadow: 0 0 0 1px #ddd, 0 0 0 2px #000;
+  background: #ddd;
+  padding: 2px 8px;
+}
+
+/* GEM dialog: outlined white box; editable fields underline each template character. */
+.retro-gx-atari-st .retro-graphical-login {
+  top: 54px;
+  left: 40px;
+  gap: 6px;
+  width: 240px;
+  border: 1px solid #000;
+  outline: 1px solid #fff;
+  box-shadow: 0 0 0 2px #000;
+  background: #fff;
+  padding: 6px 8px;
+  --retro-login-label: 88px;
+}
+
+.retro-gx-atari-st .retro-graphical-login-title {
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+.retro-gx-atari-st .retro-graphical-field {
+  height: 9px;
+  background: repeating-linear-gradient(90deg, #000 0 7px, transparent 7px 8px) bottom / 100% 1px no-repeat;
+}
+
+.retro-gx-atari-st .retro-graphical-actions {
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.retro-gx-atari-st .retro-graphical-actions > * {
+  border: 1px solid #000;
+  background: #fff;
+  padding: 2px 6px;
+}
+
+.retro-gx-atari-st .retro-graphical-actions .is-default {
+  border-width: 2px;
+}
+
+/* Lisa window over the desktop pattern. */
+.retro-gx-lisa .retro-graphical-login {
+  top: 96px;
+  left: 220px;
+  gap: 8px;
+  width: 280px;
+  border: 2px solid #000;
+  background: #fff;
+  padding: 0 0 8px;
+  --retro-login-label: 90px;
+}
+
+.retro-gx-lisa .retro-graphical-login-title {
+  border-bottom: 2px solid #000;
+  padding: 4px 0;
+  text-align: center;
+}
+
+.retro-gx-lisa .retro-graphical-field-row,
+.retro-gx-lisa .retro-graphical-message,
+.retro-gx-lisa .retro-graphical-actions {
+  margin: 0 10px;
+}
+
+.retro-gx-lisa .retro-graphical-field {
+  border-bottom: 1px solid #000;
+  padding-bottom: 2px;
+}
+
+.retro-gx-lisa .retro-graphical-actions button {
+  border: 2px solid #000;
+  border-radius: 6px;
+  background: #fff;
+  padding: 3px 10px;
+}
+
+/* clogin: grey 4Dwm window with the user icon pane above the name field. */
+.retro-gx-irix .retro-graphical-login {
+  top: 300px;
+  left: 400px;
+  gap: 14px;
+  width: 480px;
+  border: 4px solid;
+  border-color: #ddd #555 #555 #ddd;
+  background: #c4c4c4;
+  padding: 0 0 18px;
+  --retro-login-label: 130px;
+}
+
+.retro-gx-irix .retro-graphical-login-title {
+  background: #8a8aa8;
+  padding: 4px 0;
+  color: #fff;
+  text-align: center;
+}
+
+.retro-gx-irix .retro-graphical-field-row,
+.retro-gx-irix .retro-graphical-message,
+.retro-gx-irix .retro-graphical-actions {
+  margin: 0 20px;
+}
+
+.retro-irix-users {
+  display: flex;
+  gap: 40px;
+  margin: 0 20px;
+  border: 2px solid;
+  border-color: #555 #eee #eee #555;
+  background: #aaa;
+  padding: 14px 24px;
+}
+
+.retro-irix-users span {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  font-size: 15px;
+}
+
+.retro-irix-users i {
+  width: 52px;
+  height: 52px;
+  border: 1px solid #333;
+  background: #e8d6b0;
+}
+
+.retro-irix-user-ezsetup i {
+  background: radial-gradient(circle, #fff 0 2px, transparent 3px) 0 0 / 13px 13px, #112;
+}
+
+.retro-gx-irix .retro-graphical-field {
+  border: 2px solid;
+  border-color: #555 #eee #eee #555;
+  background: #fff;
+  padding: 3px 6px;
+}
+
+.retro-irix-hostname {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  font: italic bold 22px/1 Helvetica, Arial, sans-serif;
+}
+
+.retro-gx-irix .retro-graphical-actions {
+  gap: 12px;
+}
+
+.retro-gx-irix .retro-graphical-actions > * {
+  border: 2px solid;
+  border-color: #eee #555 #555 #eee;
+  background: #c4c4c4;
+  padding: 4px 14px;
+}
+
+/* loginwindow: NEXTSTEP wordmark, fields, then the cube and power controls. */
+.retro-gx-nextstep .retro-graphical-login {
+  --retro-login-label: 110px;
+  justify-items: stretch;
+}
+
+.retro-gx-nextstep .retro-next-wordmark {
+  justify-self: center;
+}
+
+.retro-gx-nextstep .retro-graphical-field {
+  border: 1px solid;
+  border-color: #555 #fff #fff #555;
+  background: #fff;
+  padding: 3px 6px;
+}
+
+.retro-gx-nextstep .retro-graphical-actions {
+  gap: 14px;
+  border-top: 1px solid #555;
+  padding-top: 12px;
+}
+
+.retro-gx-nextstep .retro-graphical-actions img {
+  margin-right: auto;
+}
+
+.retro-gx-nextstep .retro-graphical-actions span {
+  border: 1px solid;
+  border-color: #fff #000 #000 #fff;
+  background: #aaa;
+  padding: 3px 12px;
+}
+
+/* OS/2 LAN Logon dialog. */
+.retro-gx-os2 .retro-graphical-login {
+  top: 150px;
+  left: 190px;
+  gap: 8px;
+  width: 260px;
+  border: 2px solid;
+  border-color: #fff #555 #555 #fff;
+  background: #ccc;
+  padding: 0 0 8px;
+  --retro-login-label: 70px;
+}
+
+.retro-gx-os2 .retro-graphical-login-title {
+  background: #000080;
+  padding: 3px 0;
+  color: #fff;
+  text-align: center;
+}
+
+.retro-gx-os2 .retro-graphical-field-row,
+.retro-gx-os2 .retro-graphical-note,
+.retro-gx-os2 .retro-graphical-message,
+.retro-gx-os2 .retro-graphical-actions {
+  margin: 0 10px;
+}
+
+.retro-gx-os2 .retro-graphical-field,
+.retro-gx-os2 .retro-graphical-static-field {
+  border: 1px solid;
+  border-color: #555 #fff #fff #555;
+  background: #fff;
+  padding: 2px 4px;
+}
+
+.retro-gx-os2 .retro-graphical-actions {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.retro-gx-os2 .retro-graphical-actions .is-default {
+  order: -1;
+}
+
+.retro-gx-os2 .retro-graphical-actions > * {
+  border: 2px solid;
+  border-color: #fff #555 #555 #fff;
+  background: #ccc;
+  padding: 2px 10px;
+}
+
+@keyframes retro-graphical-caret {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retro-gx-screen .retro-graphical-field.is-active::after {
+    animation: none;
+  }
+}
+
+/* Amiga Guru Meditation, drawn by exec on a 640x200 hires screen. */
+
+.retro-amiga-guru-screen {
+  background: #000;
+  color: #f22;
+  font: 8px/8px "Retro Amiga Topaz", monospace;
+}
+
+.retro-amiga-guru-alert {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 640px;
+  height: 40px;
+  box-sizing: border-box;
+  border: solid #f22;
+  border-width: 3px 6px;
+  animation: retro-amiga-guru-flash 1.2s steps(1) infinite;
+}
+
+.retro-amiga-guru-alert > span {
+  position: absolute;
+  white-space: pre;
+}
+
+.retro-amiga-guru-failure { top: 9px; left: 38px; }
+.retro-amiga-guru-press { top: 9px; left: 234px; }
+.retro-amiga-guru-number { top: 24px; left: 142px; }
+
+@keyframes retro-amiga-guru-flash {
+  50% { border-color: #000; }
+}
+
+/* MSX2 title screen (256x212), V9938 blue. */
+
+.retro-msx2-title {
+  background: #0000ff;
+  color: #fff;
+  font: 8px/8px "Retro MSX", monospace;
+}
+
+.retro-msx2-title img {
+  position: absolute;
+  top: 56px;
+  left: 64px;
+  width: 128px;
+  animation: retro-msx2-logo-scroll 900ms steps(18) both;
+}
+
+.retro-msx2-title span {
+  position: absolute;
+  top: 132px;
+  left: 72px;
+  animation: retro-msx2-reveal 900ms steps(1) both;
+}
+
+@keyframes retro-msx2-reveal {
+  from { visibility: hidden; }
+}
+
+@keyframes retro-msx2-logo-scroll {
+  from { transform: translateY(54px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retro-amiga-guru-alert,
+  .retro-msx2-title img,
+  .retro-msx2-title span {
+    animation: none;
+  }
+}

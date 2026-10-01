@@ -3,12 +3,9 @@ import { api } from "./api";
 import { playRetroPostSound } from "./retro-boot-audio";
 import { retroFramebufferStyle, useRetroFramebuffer } from "./retro-framebuffer";
 import type { RetroBootProfile } from "./retro-boot-profiles";
+import { GRAPHICAL_BOOT_STAGES, GRAPHICAL_DESKTOP_STAGE, GraphicalScene } from "./RetroGraphicalDesktop";
 import { setToken } from "./token";
-
-const nextLogo = new URL("./assets/retro/logos/next.svg", import.meta.url).href;
-const os2Logo = new URL("./assets/retro/logos/os2-warp.png", import.meta.url).href;
-const sgiLogo = new URL("./assets/retro/logos/sgi.svg", import.meta.url).href;
-const tosStartupFrame = new URL("./assets/retro/tos-1.04-desktop.png", import.meta.url).href;
+import "./retro-graphical-desktop.css";
 
 interface RetroGraphicalBootScreenProps {
   profile: RetroBootProfile;
@@ -19,15 +16,6 @@ interface RetroGraphicalBootScreenProps {
 }
 
 type GraphicalPhase = "boot" | "username" | "password" | "verifying" | "failed" | "token" | "ready";
-
-const shellCopy = {
-  "risc-os": { title: "WMUX Logon", user: "User name", password: "Password", action: "Log on" },
-  "atari-st": { title: "WMUX REMOTE ACCESS", user: "User name:", password: "Password:", action: "OK" },
-  lisa: { title: "LisaTerminal — Remote System", user: "Name", password: "Password", action: "Log On" },
-  irix: { title: "Welcome to the WMUX network", user: "Login name:", password: "Password:", action: "Login" },
-  nextstep: { title: "WMUX Network Login", user: "Name:", password: "Password:", action: "Log In" },
-  os2: { title: "Logon to WMUX", user: "User ID:", password: "Password:", action: "Logon" },
-} as const;
 
 export function RetroGraphicalBootScreen({
   profile,
@@ -42,6 +30,7 @@ export function RetroGraphicalBootScreen({
   const hostRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [phase, setPhase] = useState<GraphicalPhase>("boot");
+  const [bootStage, setBootStage] = useState(GRAPHICAL_BOOT_STAGES[shell][0]?.id ?? GRAPHICAL_DESKTOP_STAGE);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState(profile.bootStatus);
@@ -55,7 +44,12 @@ export function RetroGraphicalBootScreen({
       new Promise<void>((resolve) => window.setTimeout(resolve, reducedMotion ? 0 : milliseconds));
 
     const start = async () => {
-      await pause(1_100);
+      for (const stage of GRAPHICAL_BOOT_STAGES[shell]) {
+        if (reducedMotion) break;
+        setBootStage(stage.id);
+        await pause(stage.duration);
+        if (cancelled) return;
+      }
       if (cancelled) return;
       if (!authRequired) {
         setPhase("ready");
@@ -148,7 +142,6 @@ export function RetroGraphicalBootScreen({
     "--retro-background": profile.colors.background,
     "--retro-foreground": profile.colors.foreground,
   } as CSSProperties;
-  const copy = shellCopy[shell];
 
   return (
     <main
@@ -163,31 +156,24 @@ export function RetroGraphicalBootScreen({
     >
       <section className="retro-graphical-display" aria-label={`${profile.name} graphical startup`}>
         <div className="retro-graphical-framebuffer">
-          <GraphicalDesktop shell={shell} booting={phase === "boot"} />
-          {phase !== "boot" ? (
-            <div className="retro-graphical-login" role="group" aria-label={copy.title}>
-              <div className="retro-graphical-login-title">{copy.title}</div>
-              {shell === "irix" ? <img className="retro-graphical-login-logo retro-graphical-sgi-logo" src={sgiLogo} alt="SGI" /> : null}
-              <div className="retro-graphical-field-row">
-                <span>{copy.user}</span>
-                <span className={`retro-graphical-field ${phase === "username" ? "is-active" : ""}`}>{username}</span>
-              </div>
-              <div className="retro-graphical-field-row">
-                <span>{copy.password}</span>
-                <span className={`retro-graphical-field ${phase === "password" ? "is-active" : ""}`}>{"•".repeat(password.length)}</span>
-              </div>
-              <div className="retro-graphical-message">
-                {phase === "verifying" ? "Checking credentials…" : null}
-                {phase === "failed" ? "Name or password not recognized." : null}
-                {phase === "token" ? "This server requires an access token. Open its startup URL with ?token=…" : null}
-                {phase === "ready" ? "WMUX READY" : null}
-              </div>
-              <div className="retro-graphical-actions" aria-hidden="true">
-                <span>Cancel</span>
-                <span className="is-default">{copy.action}</span>
-              </div>
-            </div>
-          ) : null}
+          <GraphicalScene
+            shell={shell}
+            stage={phase === "boot" ? bootStage : GRAPHICAL_DESKTOP_STAGE}
+            login={phase === "boot" ? undefined : {
+              field: phase === "username" ? "username" : phase === "password" ? "password" : null,
+              username,
+              secretLength: password.length,
+              message: phase === "verifying"
+                ? "Checking credentials…"
+                : phase === "failed"
+                  ? "Name or password not recognized."
+                  : phase === "token"
+                    ? "This server requires an access token. Open its startup URL with ?token=…"
+                    : phase === "ready" ? "WMUX READY" : "",
+              submitDisabled: phase !== "username" && phase !== "password",
+              onSubmit: () => void submit(),
+            }}
+          />
           <textarea
             ref={inputRef}
             className="retro-graphical-input"
@@ -211,29 +197,4 @@ export function RetroGraphicalBootScreen({
       </section>
     </main>
   );
-}
-
-function GraphicalDesktop({ shell, booting }: { shell: NonNullable<RetroBootProfile["graphicalShell"]>; booting: boolean }) {
-  if (booting) {
-    if (shell === "atari-st") return <img className="retro-graphical-full-frame" src={tosStartupFrame} alt="Atari TOS 1.04 startup" />;
-    if (shell === "irix") return <div className="retro-graphical-logo-boot"><img src={sgiLogo} alt="Silicon Graphics" /><span>Starting up the system…</span></div>;
-    if (shell === "nextstep") return <div className="retro-graphical-logo-boot retro-next-boot"><img src={nextLogo} alt="NeXT" /><span>Loading from SCSI disk</span></div>;
-    if (shell === "os2") return <div className="retro-graphical-logo-boot retro-os2-boot"><img src={os2Logo} alt="IBM OS/2 Warp" /></div>;
-    return <div className="retro-graphical-blank" />;
-  }
-
-  if (shell === "atari-st") return <div className="retro-atari-desktop"><div className="retro-atari-menu">Desk　 File　 View　 Options</div><span className="retro-atari-disk retro-atari-drive"><i /><small>Floppy A</small></span><span className="retro-atari-disk retro-atari-trash"><i /><small>Trash</small></span></div>;
-  if (shell === "risc-os") return <div className="retro-riscos-desktop"><div className="retro-riscos-iconbar"><span className="retro-riscos-apps"><i />Apps</span><span className="retro-riscos-drive"><i />4</span><span className="retro-riscos-acorn" aria-label="Acorn system"><i /></span></div></div>;
-  if (shell === "lisa") return <div className="retro-lisa-desktop"><div className="retro-lisa-menu">Desk　File/Print　Edit　Housekeeping</div><div className="retro-lisa-icons"><span className="retro-lisa-icon retro-lisa-clock"><i />Clock</span><span className="retro-lisa-icon retro-lisa-calculator"><i />Calculator</span><span className="retro-lisa-icon retro-lisa-terminal"><i />LisaTerminal</span><span className="retro-lisa-icon retro-lisa-wastebasket"><i />Wastebasket</span></div></div>;
-  if (shell === "irix") return <div className="retro-irix-desktop"><div className="retro-irix-toolchest">Toolchest</div></div>;
-  if (shell === "nextstep") return (
-    <div className="retro-next-desktop">
-      <div className="retro-next-menu" aria-hidden="true">
-        <strong>Workspace</strong>
-        {["Info", "File", "Edit", "Disk", "View"].map((label) => <span key={label}>{label}<i>▸</i></span>)}
-      </div>
-      <div className="retro-next-dock"><img src={nextLogo} alt="NeXT" /></div>
-    </div>
-  );
-  return <div className="retro-os2-desktop"><div className="retro-os2-icon retro-os2-system"><i />OS/2 System</div><div className="retro-os2-icon retro-os2-connections"><i />Connections</div><div className="retro-os2-launchpad"><img src={os2Logo} alt="IBM OS/2 Warp" /><span className="retro-os2-launch-icons"><i className="retro-os2-window-icon" /><i className="retro-os2-folder-icon" /><i className="retro-os2-help-icon">?</i></span></div></div>;
 }

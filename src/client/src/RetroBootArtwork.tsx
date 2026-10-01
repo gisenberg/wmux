@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
+import { Msx2Title } from "./RetroGraphicalDesktop";
 
 const msxLogo = new URL("./assets/retro/logos/msx.svg", import.meta.url).href;
 const nextLogo = new URL("./assets/retro/logos/next.svg", import.meta.url).href;
-const sgiLogo = new URL("./assets/retro/logos/sgi.svg", import.meta.url).href;
 const workbench13Bootscreen = new URL("./assets/retro/workbench13-bootscreen.gif", import.meta.url).href;
 
 export type RetroBootArtworkKind =
@@ -23,7 +23,9 @@ export interface RetroBootArtworkDefinition {
   label: string;
   asset?: string;
   framebuffer: readonly [width: number, height: number];
-  lightAssetBackdrop?: boolean;
+  // The visible picture's shape when the machine's pixels are not square, as
+  // in 80-column text and double-height raster modes on a 4:3 monitor.
+  displayAspect?: readonly [width: number, height: number];
   fullFrame?: boolean;
   hardEdges?: boolean;
   rasterPalette?: readonly string[];
@@ -53,6 +55,7 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
     kind: "chip",
     label: "386",
     framebuffer: [720, 400],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "bbc-micro": { kind: "disk", label: "BBC", framebuffer: [320, 256], hardEdges: true },
@@ -60,11 +63,13 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
     kind: "workstation",
     label: "ARM",
     framebuffer: [640, 256],
+    displayAspect: [5, 4],
   },
   "trs-80-model-4": {
     kind: "disk",
     label: "TRS",
     framebuffer: [512, 192],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "zx-spectrum": {
@@ -84,6 +89,7 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
     label: "Workbench 1.3",
     asset: workbench13Bootscreen,
     framebuffer: [640, 400],
+    displayAspect: [4, 3],
     fullFrame: true,
   },
   "amiga-guru-meditation": {
@@ -91,13 +97,15 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
     label: "Workbench 1.3",
     asset: workbench13Bootscreen,
     framebuffer: [640, 400],
+    displayAspect: [4, 3],
     fullFrame: true,
   },
-  "osborne-1": { kind: "portable", label: "O1", framebuffer: [416, 240], hardEdges: true },
+  "osborne-1": { kind: "portable", label: "O1", framebuffer: [416, 240], displayAspect: [4, 3], hardEdges: true },
   "sinclair-ql": {
     kind: "cassette",
     label: "QL",
     framebuffer: [512, 256],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "amstrad-cpc": {
@@ -111,23 +119,24 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
     label: "MSX2",
     asset: msxLogo,
     framebuffer: [256, 212],
-    lightAssetBackdrop: true,
     hardEdges: true,
   },
   "apple-lisa": {
     kind: "window",
     label: "LISA",
     framebuffer: [720, 364],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "vax-vms": {
     kind: "rack",
     label: "VAX",
     framebuffer: [800, 240],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "sun-sparcstation": { kind: "workstation", label: "SUN", framebuffer: [1152, 900] },
-  "sgi-irix": { kind: "workstation", label: "SGI", asset: sgiLogo, framebuffer: [1280, 1024] },
+  "sgi-irix": { kind: "workstation", label: "SGI", framebuffer: [1280, 1024] },
   nextcube: {
     kind: "workstation",
     label: "NeXT",
@@ -139,19 +148,21 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
     kind: "rack",
     label: "PDP-11",
     framebuffer: [800, 240],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "ibm-3270-mvs": {
     kind: "terminal",
     label: "3270",
     framebuffer: [720, 350],
+    displayAspect: [4, 3],
     hardEdges: true,
   },
   "ti-99-4a": { kind: "cartridge", label: "TI", framebuffer: [256, 192], hardEdges: true },
   "trs-80-coco": { kind: "cassette", label: "COCO", framebuffer: [256, 192], hardEdges: true },
-  "amstrad-pcw": { kind: "disk", label: "PCW", framebuffer: [720, 256], hardEdges: true },
-  "sharp-x68000": { kind: "workstation", label: "X68K", framebuffer: [768, 512], hardEdges: true },
-  "nec-pc-9801": { kind: "chip", label: "PC-98", framebuffer: [640, 400], hardEdges: true },
+  "amstrad-pcw": { kind: "disk", label: "PCW", framebuffer: [720, 256], displayAspect: [4, 3], hardEdges: true },
+  "sharp-x68000": { kind: "workstation", label: "X68K", framebuffer: [768, 512], displayAspect: [4, 3], hardEdges: true },
+  "nec-pc-9801": { kind: "chip", label: "PC-98", framebuffer: [640, 400], displayAspect: [4, 3], hardEdges: true },
   "os2-warp": { kind: "window", label: "OS/2", framebuffer: [640, 480], hardEdges: true },
   "enterprise-128": { kind: "cartridge", label: "EP128", framebuffer: [320, 256], hardEdges: true },
   "oric-atmos": { kind: "cassette", label: "ORIC", framebuffer: [240, 224], hardEdges: true },
@@ -162,6 +173,9 @@ export const RETRO_BOOT_ARTWORK: Readonly<Record<string, RetroBootArtworkDefinit
   "tatung-einstein": { kind: "disk", label: "TC-01", framebuffer: [320, 192], hardEdges: true },
   "atari-8-bit": { kind: "cartridge", label: "ATARI", framebuffer: [320, 192], hardEdges: true },
 };
+
+export const retroDisplayAspect = (artwork: RetroBootArtworkDefinition): readonly [width: number, height: number] =>
+  artwork.displayAspect ?? artwork.framebuffer;
 
 interface RetroBootArtworkProps {
   profileId: string;
@@ -178,7 +192,9 @@ export function RetroBootArtwork({ profileId, profileName }: RetroBootArtworkPro
       role="img"
       aria-label={`${profileName} boot artwork`}
     >
-      {artwork.asset ? (
+      {profileId === "msx2" && artwork.asset ? (
+        <Msx2Title logo={artwork.asset} />
+      ) : artwork.asset ? (
         <RasterArtwork artwork={artwork} />
       ) : (
         <svg viewBox="0 0 112 84" role="img" aria-hidden="true">
@@ -221,11 +237,6 @@ function RasterArtwork({ artwork }: { artwork: RetroBootArtworkDefinition }) {
       const x = Math.round((width - drawWidth) / 2);
       const y = Math.round((height - drawHeight) / 2);
 
-      if (artwork.lightAssetBackdrop) {
-        const padding = Math.max(2, Math.round(Math.min(width, height) * 0.025));
-        context.fillStyle = "rgba(248, 246, 238, 0.94)";
-        context.fillRect(x - padding, y - padding, drawWidth + padding * 2, drawHeight + padding * 2);
-      }
       context.drawImage(source, x, y, drawWidth, drawHeight);
       quantizeFramebuffer(context, width, height, artwork.rasterPalette, artwork.hardEdges ?? false);
     };

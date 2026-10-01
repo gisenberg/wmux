@@ -2,6 +2,7 @@ import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Terminal } from "ghostty-web";
 import { api } from "./api";
 import { RetroBootArtwork } from "./RetroBootArtwork";
+import { AmigaGuruAlert } from "./RetroGraphicalDesktop";
 import { RetroGraphicalBootScreen } from "./RetroGraphicalBootScreen";
 import { playRetroFloppySound, playRetroPostSound } from "./retro-boot-audio";
 import { retroFramebufferStyle, useRetroFramebuffer } from "./retro-framebuffer";
@@ -14,6 +15,7 @@ import {
 import { ensureGhostty } from "./terminal-loader";
 import { configureTerminalInput } from "./terminal-input";
 import { setToken } from "./token";
+import "./retro-graphical-desktop.css";
 
 interface RetroBootScreenProps {
   authRequired: boolean;
@@ -394,10 +396,7 @@ function RetroTerminalBootScreen({
                 guruAcknowledgedRef.current = true;
                 acknowledgeGuruRef.current?.();
               }}>
-              <span className="retro-amiga-guru-alert">
-                <span>Software Failure. Press left mouse button to continue.</span>
-                <span>Guru Meditation #0000000B.00C01570</span>
-              </span>
+              <AmigaGuruAlert />
             </button>
           ) : null}
           {visualPhase === "artwork" ? <RetroBootArtwork profileId={profile.id} profileName={profile.name} /> : null}
