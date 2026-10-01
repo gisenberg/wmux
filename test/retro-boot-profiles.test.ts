@@ -151,11 +151,23 @@ test("historical boot details match the machines and operating-system eras", () 
   assert.match(profileById("pdp-11-rt11").boot.map((bootStep) => bootStep.text).join(""), /MACHIN\.DAT[\s\S]*SESSON\.DAT/);
   assert.match(profileById("vax-vms").auth.granted, /version V5\.5-2/);
   assert.match(profileById("sun-sparcstation").auth.granted, /PDT 1998/);
-  assert.match(profileById("ti-99-4a").boot.map((bootStep) => bootStep.text).join(""), /©1981[\s\S]*PRESS:/);
+  assert.match(
+    profileById("ti-99-4a").boot.map((bootStep) => bootStep.text).join(""),
+    /READY-PRESS ANY KEY TO BEGIN[\s\S]*©1981  TEXAS INSTRUMENTS[\s\S]* PRESS\n/,
+  );
   assert.match(
     profileById("trs-80-coco").boot.map((bootStep) => bootStep.text).join(""),
-    /COPR\. 1982 BY TANDY[\s\S]*UNDER LICENSE FROM MICROSOFT[\s\S]*CLOADM"WMUX"[\s\S]*EXEC/,
+    /COPYRIGHT \(C\) 1982 BY TANDY[\s\S]*UNDER LICENSE FROM MICROSOFT[\s\S]*CLOADM"WMUX"[\s\S]*F WMUX[\s\S]*EXEC/,
   );
+  assert.match(profileById("commodore-128").boot.map((bootStep) => bootStep.text).join(""), /SEARCHING FOR 0:WMUX/);
+  assert.match(profileById("commodore-vic-20").boot.map((bootStep) => bootStep.text).join(""), /SEARCHING FOR WMUX/);
+  assert.match(profileById("bbc-micro").boot.map((bootStep) => bootStep.text).join(""), /WMUX \(07\)\nDrive 0/);
+  assert.match(profileById("msx2").boot.map((bootStep) => bootStep.text).join(""), /Disk BASIC version 1\.0[\s\S]*WMUX    \.BAS/);
+  assert.match(profileById("oric-atmos").boot.map((bootStep) => bootStep.text).join(""), /37631 BYTES FREE[\s\S]*Loading \.\.  WMUX B/);
+  assert.match(profileById("vax-vms").boot[0].text, /^VAX\/VMS Version V5\.5-2   Major version id = 1/);
+  assert.equal(profileById("vax-vms").auth.failed, "User authorization failure\n");
+  assert.equal(profileById("sun-sparcstation").auth.usernamePrompt, "wmux-sun login: ");
+  assert.match(profileById("ibm-3270-mvs").auth.failed, /^IKJ56421I PASSWORD NOT AUTHORIZED/);
   assert.match(
     profileById("amstrad-cpc").boot.map((bootStep) => bootStep.text).join(""),
     /Amstrad 64K Microcomputer  \(v1\)[\s\S]*Locomotive Software/,
@@ -227,6 +239,16 @@ test("boot text stays within each machine's native line width", () => {
   for (const profile of RETRO_BOOT_PROFILES) {
     const longestLine = Math.max(...profile.boot.flatMap((bootStep) => bootStep.text.split("\n").map((line) => line.length)));
     assert.ok(longestLine <= profile.columns, `${profile.id} emits ${longestLine} columns into ${profile.columns}`);
+  }
+});
+
+test("authentication text stays within each machine's native line width", () => {
+  for (const profile of RETRO_BOOT_PROFILES) {
+    const { auth } = profile;
+    const lines = [auth.required, auth.unavailable, ...auth.tokenRequired, auth.verifying, auth.failed, auth.granted, auth.ready]
+      .flatMap((text) => text.split("\n"));
+    for (const line of lines) assert.ok(line.length <= profile.columns, `${profile.id}: ${line}`);
+    for (const prompt of [auth.usernamePrompt, auth.passwordPrompt]) assert.ok(prompt.length < profile.columns, `${profile.id}: ${prompt}`);
   }
 });
 

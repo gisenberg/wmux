@@ -10,7 +10,21 @@ They must not be described as original firmware output.
 | Scene | Behavior reproduced | Reference and limits |
 | --- | --- | --- |
 | Commodore 64 / 1541 | BASIC V2 banner, matching light-blue text and border, reverse-video directory heading, first program named WMUX, 624 blocks remaining after the four listed files allocate 40 blocks | [Commodore 64 setup guide](https://www.commodore.ca/manuals/c64_users_guide/c64-users_guide-01-setup.pdf) and [Commodore drive capacity comparison](https://www.commodore.ca/manuals/commodore_1541_4040_8050_8250_comparison-old.htm) establish the banner and 664-block usable disk capacity; the disk is invented |
-| Commodore 128 | Native BASIC 7 DLOAD/RUN flow, not CP/M startup | [Commodore 128 System Guide, section 2](https://www.commodore.ca/manuals/128_system_guide/sect-02.htm); directory contents remain illustrative |
+| Commodore 128 | Native BASIC 7 flow, with `DIRECTORY` in the 1541 listing layout and `DLOAD` searching for `0:WMUX` | [Commodore 128 System Guide, section 2](https://www.commodore.ca/manuals/128_system_guide/sect-02.htm) and the [Commodore ROM sources](https://github.com/mist64/cbmsrc) (`BASIC_C128_04/dos1.src`, `KERNAL_C128_06/load.src`); directory contents remain illustrative |
+| VIC-20, PET 2001 | Power-on banners with their ROM blank lines, `SEARCHING FOR` naming the file after a blank line, and the original PET's white phosphor | [VIC-20 ROM disassembly](https://gist.github.com/cbmeeks/65c0f2acc1f0ad041c236637732aac8c) and [PET BASIC 1 source](https://github.com/mist64/cbmsrc); later green-phosphor PETs are not represented |
+| Apple IIe | Unenhanced `Apple ][` banner at column 15, then the January 1, 1983 DOS 3.3 System Master HELLO layout, including the inverse CAPS LOCK reminder | [Unenhanced IIe F8 ROM](https://6502disassembly.com/a2-rom/Unenh_IIe_F8ROM.html) and [System Master images](https://github.com/cmosher01/Apple-II-System-Masters); the catalogue entries are invented |
+| BBC Micro DFS | `*CAT` title and cycle line, alphabetical seven-character names in columns 4 and 23, and no blank line before the prompt | [DFS 1.20 ROM](https://mdfs.net/System/ROMs/Filing/DNFS/DNFS300) and [MMFS source](https://github.com/hoglet67/MMFS) |
+| Amstrad CPC 464 | ROM sign-on starting with a blank row, `Press PLAY then any key:` and an in-place block number | [CPC 464 OS ROM](https://github.com/ColinPitrat/caprice32/tree/master/rom); timings are condensed |
+| MSX2 | MSX BASIC 2.0 and Disk BASIC 1.0 sign-on, 23430 bytes free as on the Sharp HB-3600 interface, 8.3 `FILES` entries and `RUN` of a BASIC file | [MSX system ROM sources](https://github.com/apoloval/msx-system); bytes free varies by disk interface |
+| Oric Atmos | ROM 1.1 sign-on after the two attribute cells, `CAPS` status, and `CLOAD` progress on the status line | [Oric Atmos ROM 1.1 listing](https://iss.sandacite.com/tools/oric-atmos-rom.html) |
+| Sinclair QL | Unechoed `F1...monitor` / `F2...TV` choice with the JM ROM copyright, then a cleared SuperBASIC screen | [JM ROM disassembly](https://archive.org/download/SinclairQLHomepage/docs/disassem/jmrom.zip); window colours and borders are not drawn |
+| TI-99/4A | Master title screen, then the unechoed `PRESS` selection list with double-spaced entries | [TI-99/4A Intern GROM listing](https://archive.org/details/tibook_ti994a-intern); the WMUX cartridge entry is invented |
+| TRS-80 Color Computer | Extended Color BASIC 1.1 banner and the `S` / `F WMUX` cassette search cell after `CLOADM` clears the screen | [Extended](https://colorcomputerarchive.com/repo/Documents/Books/Unravelled%20Series/extended-basic-unravelled.pdf) and [Color BASIC Unravelled](https://colorcomputerarchive.com/repo/Documents/Books/Unravelled%20Series/color-basic-unravelled.pdf); per-block inverse flicker is not animated |
+| Amstrad PCW 8256 | Textless boot ROM followed by the CP/M Plus 1.4 sign-on | [PCW8256/8512 User Manual](https://archive.org/details/pcw-8256-8512-user-manual-engacme); the loading stripe pattern is not drawn |
+| VAX/VMS | V5.5-2 version, `%STDRV`, `%SET` and `%MOUNT` startup lines, and `User authorization failure` | [V5.5-2 console logs](http://hb1bbs.com/VAX/VMS-on-a-Raspberry-Pi/); the site announcement and WMUX message are invented |
+| Sun SPARCstation 2 | OpenBoot 2.x banner, full boot device path, SunOS 4.1.4 GENERIC kernel and copyright, and the SunOS 4 `host login:` prompt | [SunOS 4.1.4 sun4c transcript](https://github.com/halfmanhalftaco/sunboot); the banner format is confirmed from other OpenBoot 2.x machines |
+| PDP-11 RT-11 | `RT-11SJ  V05.03` banner and the `DIR` date header, two-column size and date entries, and totals | [RT-11 V5 SIMH session](https://www.5volts.ch/pages/dcj11sbc/200-dcj11-rt11/) and the RT-11 Commands Manual; RT-11 has no login, so authentication is invented |
+| IBM 3270 MVS | VTAM logon to the TSO/E LOGON panel with `Userid ===>` and `Password ===>` fields, and IKJ56421I and IKJ56455I messages | [TSO/E logon panel listing](https://bit.listserv.ibm-main.narkive.com/5UM4Tvu8/tso-e-logon-panel); the USS welcome text is invented and the RACF fields are omitted |
 | BBC Micro | Default MODE 7 character grid, 40 columns by 25 rows, using the bundled SAA5050-style face | [BBC BASIC implementer's MODE 7 reference](https://www.bbcbasic.uk/bbcwin/manual/bbcwinh.html); the retained 320:256 presentation aspect is not a claim that teletext is a 320-pixel bitmap mode |
 | ZX Spectrum 48K | Copyright in the lower editor area, cleared on command entry; LOAD arrives as a keyword; red/cyan pilots, short header data, a quiet gap with program name, second pilot and blue/yellow program data | [Sinclair Introduction, chapter 1](https://worldofspectrum.org/ZXSpectrumIntroduction/chapter_one.html), [chapter 6](https://worldofspectrum.org/ZXSpectrumIntroduction/chapter_six.html) and [BASIC manual, chapter 20](https://worldofspectrum.org/ZXBasicManual/zxmanchap20.html); timings are condensed, bands are horizontal and move upward, one BASIC program is loaded rather than unexplained successive CODE files |
 | 386-class PC | Memory count rewrites one line from zero to 16 MiB, then a short POST cue precedes DOS startup | [GVC 386SX board manual](https://www.infania.net/misc/moboarchive/Systemax/Manuals/isa/gvc_386_sx.pdf) documents the power-on memory test; this is a generic period-compatible scene, not an exact AMI BIOS revision or diagnostic beep-code implementation |
@@ -39,7 +53,7 @@ It does not certify every ROM banner, font or boot sequence as an exact reproduc
 | Profiles | Remaining fidelity boundary |
 | --- | --- |
 | C64, C128 | Fictional disk listings; synthesized RGB palettes approximate analogue output |
-| Apple IIe | DOS 3.3-themed disk contents; ROM revision and enhanced/unenhanced banner differences need a selected hardware baseline |
+| Apple IIe | Unenhanced ROM baseline; DOS 3.3 catalogue contents are invented |
 | 386 PC | Generic BIOS/DOS composition; no vendor-exact logo, copyright, memory-test cadence or device detection |
 | BBC Micro | Teletext face and grid are selected, but control-code attributes and hardware cursor shape are not emulated |
 | Spectrum | No K/L cursor-state emulation, tape waveform decoding or SCREEN$ loading graphic; reduced motion skips artificial waits |
@@ -47,12 +61,14 @@ It does not certify every ROM banner, font or boot sequence as an exact reproduc
 | Amiga Workbench, Amiga Guru | Retained insert-disk image and stylized shell chrome; no model-specific diagnostic color sequence or ROM execution |
 | Acorn Archimedes, Apple Lisa | Simplified graphical desktops; exact ROM self-test graphics and model-specific disk startup remain unimplemented |
 | SGI IRIX, NeXTcube, OS/2 Warp | Existing logos and simplified graphical shells; hardware-specific startup animation and sound remain unverified |
-| TRS-80 Model 4, Osborne 1, Sinclair QL | Interpreter/OS-themed text rather than traced machine boot output |
-| Amstrad CPC, Oric Atmos, MSX2 | Loader/status placement, machine-specific logo animation and ROM display details need further reference captures |
-| VAX/VMS, Sun SPARCstation, PDP-11/RT-11, IBM 3270/MVS | Console/session fiction; terminal model, firmware version and host configuration affect actual startup |
-| TI-99/4A, TRS-80 CoCo, Amstrad PCW | Native-language themes; ROM menus, media bootstrap and several font choices remain approximate |
+| TRS-80 Model 4, Osborne 1 | Interpreter/OS-themed text rather than traced machine boot output |
+| Sinclair QL | Copyright and display-choice text are traced, but the QL windows, colours and font are not reproduced |
+| Amstrad CPC, Oric Atmos, MSX2 | Sign-on text is traced; machine-specific logo animation, palettes and loader timing remain approximate |
+| VAX/VMS, Sun SPARCstation, PDP-11/RT-11, IBM 3270/MVS | Message formats are traced; host names, devices, disk contents and the authentication exchange are fiction |
+| TI-99/4A, TRS-80 CoCo, Amstrad PCW | ROM text and menus are traced; title-screen colour bars, media bootstrap graphics and several font choices remain approximate |
 | Sharp X68000, NEC PC-9801, Enterprise 128 | OS-themed text; no complete hardware graphics, diagnostic or sound reproduction |
-| Commodore PET, VIC-20, SAM Coupe, Memotech MTX, Tatung Einstein, Atari 800XL | Interpreter-themed scenes; variant-specific banners, screen aspect and fonts require separate baselines |
+| Commodore PET, VIC-20 | Banners are traced; screen aspect and fonts remain approximate |
+| SAM Coupe, Memotech MTX, Tatung Einstein, Atari 800XL | Interpreter-themed scenes; variant-specific banners, screen aspect and fonts require separate baselines |
 
 Graphical profiles use `RetroGraphicalBootScreen`, not the `boot` text steps in the profile table.
 Changing those text steps alone cannot improve the visible graphical boot.
@@ -64,6 +80,9 @@ Reuse the existing assets and preserve [font/screenshot provenance](../src/clien
 No additional historical screenshots, ROMs, recordings or vendor artwork were imported for this fidelity pass.
 The retained Workbench insert-disk screenshot still has no identified source-redistribution license and remains outside MIT.
 Do not use its presence as permission to add more unlicensed screenshots.
+
+The Amstrad CPC and Tatung Einstein faces store a machine glyph in the U+00A9 slot instead of a copyright sign.
+Their font faces therefore exclude U+00A9 with `unicode-range`, and the profiles that use them fall back to the Spectrum face's copyright sign.
 
 Structured boot steps keep positioning, inverse video and in-place updates separate from text so line-width guards remain meaningful.
 Keep all positions inside the profile's declared grid and make animation completion independent of real bootstrap/authentication completion.

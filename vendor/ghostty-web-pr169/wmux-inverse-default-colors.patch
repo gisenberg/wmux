@@ -1,0 +1,35 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index a3bece4..dfb2360 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -802,8 +802,12 @@ export class CanvasRenderer {
+     // we cannot infer it from the RGB triple because (0,0,0) is a valid
+     // explicit color (programs emit it for "true black" backgrounds, e.g.
+     // letterboxed image renderings).
+-    const useThemeBg = cell.flags & CellFlags.INVERSE ? cell.fgIsDefault : cell.bgIsDefault;
+-    if (!useThemeBg) {
++    // An inverse cell with the default fg must still paint, using the theme
++    // foreground; only a non-inverse default bg can rely on the line fill.
++    if (cell.flags & CellFlags.INVERSE) {
++      this.ctx.fillStyle = cell.fgIsDefault ? this.theme.foreground : this.rgbToCSS(bg_r, bg_g, bg_b);
++      this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
++    } else if (!cell.bgIsDefault) {
+       this.ctx.fillStyle = this.rgbToCSS(bg_r, bg_g, bg_b);
+       this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
+     }
+@@ -874,8 +878,13 @@ export class CanvasRenderer {
+       // Same reasoning as the bg path: only fall back to theme.foreground
+       // when the cell has the default fg (tag NONE), not when its explicit
+       // RGB happens to be (0,0,0).
+-      const useThemeFg = cell.flags & CellFlags.INVERSE ? cell.bgIsDefault : cell.fgIsDefault;
+-      this.ctx.fillStyle = useThemeFg ? this.theme.foreground : this.rgbToCSS(fg_r, fg_g, fg_b);
++      // An inverse cell with the default bg draws its text in the theme
++      // background, matching the swapped default foreground fill.
++      if (cell.flags & CellFlags.INVERSE) {
++        this.ctx.fillStyle = cell.bgIsDefault ? this.theme.background : this.rgbToCSS(fg_r, fg_g, fg_b);
++      } else {
++        this.ctx.fillStyle = cell.fgIsDefault ? this.theme.foreground : this.rgbToCSS(fg_r, fg_g, fg_b);
++      }
+     }
+ 
+     // Apply faint effect
