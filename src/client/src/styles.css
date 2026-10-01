@@ -86,9 +86,11 @@
   font-display: block;
 }
 
+/* The upstream face stores a machine glyph in the U+00A9 slot, so the copyright sign falls back. */
 @font-face {
   font-family: "Retro Amstrad CPC";
   src: url("./assets/retro/Amstrad_CPC.woff2") format("woff2");
+  unicode-range: U+0020-007E, U+00A3;
   font-style: normal;
   font-weight: 400;
   font-display: block;
@@ -174,9 +176,11 @@
   font-display: block;
 }
 
+/* The upstream face stores a machine glyph in the U+00A9 slot, so the copyright sign falls back. */
 @font-face {
   font-family: "Retro Tatung Einstein";
   src: url("./assets/retro/Tatung_Einstein.woff2") format("woff2");
+  unicode-range: U+0020-007E, U+00A3;
   font-style: normal;
   font-weight: 400;
   font-display: block;

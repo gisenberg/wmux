@@ -214,7 +214,10 @@ function RetroTerminalBootScreen({
     const start = async () => {
       await Promise.all([
         ensureGhostty(),
-        "fonts" in document ? document.fonts.load(`400 16px ${profile.fontFamily}`) : Promise.resolve(),
+        // Loading the scene's own text also loads any fallback face its glyphs need.
+        "fonts" in document
+          ? document.fonts.load(`400 16px ${profile.fontFamily}`, profile.boot.map((step) => step.text).join(""))
+          : Promise.resolve(),
       ]);
       if (cancelled || !hostRef.current) return;
 

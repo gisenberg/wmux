@@ -336,6 +336,25 @@ test("PC POST advances its in-place memory count before loading DOS", async ({ b
   }
 });
 
+test("C64 directory header paints inverse video with the default colors", async ({ browser, page: currentPage }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "desktop inverse-video coverage");
+  const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("commodore-64") });
+  try {
+    const canvas = boot.page.locator('[data-boot-profile="commodore-64"] .retro-boot-terminal canvas');
+    await expect(canvas).toBeVisible({ timeout: 20_000 });
+    // Row 12 holds the reverse-video disk header; column 7 is the space after its disk name's first word.
+    await expect.poll(() => canvas.evaluate((element) => {
+      const canvas = element as HTMLCanvasElement;
+      const x = Math.floor((7.5 / 40) * canvas.width);
+      const y = Math.floor((12.5 / 25) * canvas.height);
+      return [...canvas.getContext("2d")!.getImageData(x, y, 1, 1).data];
+    }), { intervals: [10, 20, 50], timeout: 10_000 }).toEqual([0x78, 0x69, 0xc4, 255]);
+    await boot.page.screenshot({ path: testInfo.outputPath("c64-directory-header.png") });
+  } finally {
+    await boot.close();
+  }
+});
+
 test("BBC boot uses the teletext face and fits the framebuffer", async ({ browser, page: currentPage }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop teletext coverage");
   const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("bbc-micro") });
