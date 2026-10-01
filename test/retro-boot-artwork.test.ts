@@ -8,7 +8,6 @@ const ASSET_PROFILE_IDS = [
   "amiga-workbench",
   "amiga-guru-meditation",
   "msx2",
-  "sgi-irix",
   "nextcube",
 ];
 
@@ -33,7 +32,7 @@ test("every retro boot profile has an image placeholder", () => {
     assert.ok(artwork.framebuffer[0] > 0, `${profileId} framebuffer width`);
     assert.ok(artwork.framebuffer[1] > 0, `${profileId} framebuffer height`);
   }
-  assert.equal(Object.values(RETRO_BOOT_ARTWORK).filter((artwork) => artwork.asset).length, 5);
+  assert.equal(Object.values(RETRO_BOOT_ARTWORK).filter((artwork) => artwork.asset).length, 4);
   assert.equal(RETRO_BOOT_ARTWORK["commodore-64"].asset, undefined);
   assert.equal(RETRO_BOOT_ARTWORK["bbc-micro"].asset, undefined);
   assert.deepEqual(RETRO_BOOT_ARTWORK["commodore-64"].framebuffer, [320, 200]);
@@ -60,9 +59,17 @@ test("GUI systems stay graphical while native command consoles may use boot artw
   assert.deepEqual(artworkAssets, ASSET_PROFILE_IDS);
 });
 
-test("framebuffer styles use each profile's declared native aspect ratio", () => {
+test("framebuffer styles use each profile's displayed picture shape", () => {
   assert.deepEqual(retroFramebufferStyle("commodore-64"), { "--retro-framebuffer-aspect": "320 / 200" });
-  assert.deepEqual(retroFramebufferStyle("acorn-archimedes"), { "--retro-framebuffer-aspect": "640 / 256" });
+  // RISC OS 640x256 modes have double-height pixels, and 80-column text fills a 4:3 monitor.
+  assert.deepEqual(retroFramebufferStyle("acorn-archimedes"), { "--retro-framebuffer-aspect": "5 / 4" });
+  for (const profileId of ["ibm-pc-at", "trs-80-model-4", "vax-vms", "pdp-11-rt11", "amstrad-pcw", "amiga-workbench", "apple-lisa"]) {
+    assert.deepEqual(retroFramebufferStyle(profileId), { "--retro-framebuffer-aspect": "4 / 3" }, profileId);
+  }
+  for (const [profileId, artwork] of Object.entries(RETRO_BOOT_ARTWORK)) {
+    const [width, height] = artwork.displayAspect ?? artwork.framebuffer;
+    assert.ok(width / height >= 0.9 && width / height <= 1.7, `${profileId} displays at ${width}:${height}`);
+  }
 });
 
 test("framebuffer fitting preserves aspect ratio under both width and height constraints", () => {

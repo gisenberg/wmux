@@ -66,17 +66,11 @@ The directory contains public-domain identification marks and CC BY-SA artwork.
 Public-domain status and open-content licenses do not remove trademark rights
 or imply endorsement.
 
-The SGI logo adaptation remains under
-[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/). The Acorn
-Archimedes logo adaptation remains under
+The Acorn Archimedes logo adaptation remains under
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Other files
 retain the status recorded in the provenance table.
 
 ## Historical screenshots
-
-The Atari TOS 1.04 screenshot is by MJaap and remains available under
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) from its
-[Wikimedia Commons source](https://commons.wikimedia.org/wiki/File:TOS_1.04_(Rainbow_TOS).png).
 
 The Amiga Workbench raster reference is documented in
 [`src/client/src/assets/retro/UPSTREAM.md`](src/client/src/assets/retro/UPSTREAM.md).

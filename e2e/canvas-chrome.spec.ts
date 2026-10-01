@@ -369,21 +369,19 @@ test("BBC boot uses the teletext face and fits the framebuffer", async ({ browse
   }
 });
 
-test("NeXT desktop uses a vertical floating menu opposite the dock", async ({ browser, page: currentPage }, testInfo) => {
+test("NeXT login uses loginwindow without the post-login Workspace menu or dock", async ({ browser, page: currentPage }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "desktop NeXT layout coverage");
   const boot = await openDelayedRetroBoot({ browser, currentPage, mobile: false, randomValue: profileRandom("nextcube") });
   try {
-    const menu = boot.page.locator(".retro-next-menu");
-    await expect(menu).toBeVisible();
-    const title = await menu.locator("strong").boundingBox();
-    const info = await menu.locator(":scope > span").first().boundingBox();
-    const view = await menu.locator(":scope > span").last().boundingBox();
-    const dock = await boot.page.locator(".retro-next-dock").boundingBox();
-    expect(info!.y).toBeGreaterThan(title!.y);
-    expect(view!.y).toBeGreaterThan(info!.y);
-    expect(view!.x).toBe(info!.x);
-    expect(dock!.x).toBeGreaterThan(info!.x + info!.width);
-    await boot.page.screenshot({ path: testInfo.outputPath("next-workspace-menu.png") });
+    const screen = boot.page.locator('[data-boot-profile="nextcube"]');
+    await expect(screen.locator('[data-graphical-stage="rom-testing"]')).toBeAttached();
+    await expect(screen.locator(".retro-graphical-login .retro-next-wordmark")).toHaveText("NEXTSTEP", { timeout: 15_000 });
+    await expect(screen.locator(".retro-next-menu, .retro-next-dock")).toHaveCount(0);
+    const panel = await screen.locator(".retro-graphical-login").boundingBox();
+    const framebuffer = await screen.locator(".retro-graphical-framebuffer").boundingBox();
+    expect(panel!.x).toBeGreaterThan(framebuffer!.x);
+    expect(panel!.x + panel!.width).toBeLessThan(framebuffer!.x + framebuffer!.width);
+    await boot.page.screenshot({ path: testInfo.outputPath("next-loginwindow.png") });
   } finally {
     await boot.close();
   }
