@@ -16,8 +16,8 @@ import sys
 
 MAX = 8192
 
-def fail():
-    print(json.dumps({"ok": False}))
+def fail(reason=None):
+    print(json.dumps({"ok": False, **({"reason": reason} if reason else {})}))
     return 1
 
 def digest_file(p):
@@ -109,9 +109,24 @@ def inspect(data):
     status = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3, check=False, text=True)
     if status.returncode != 0:
         raise ValueError()
+    # The managed TUI can use the exact running server image even after a CLI
+    # package update unlinks it. Keep native version qualification in the guard.
+    native_path = f"/proc/{pid}/exe"
+    executable = os.stat(native_path)
+    qualified = subprocess.run([guard_python, "-I", "-c",
+        "import sys; from codex_usage_guard.launch import check_native; check_native(sys.argv[1])", native_path],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, check=False)
+    if qualified.returncode != 0:
+        raise ValueError("attachment_native_version_unqualified")
+    current_executable = os.stat(native_path)
+    if socket_peer(socket_path) != (sock, socket_dev, socket_ino, pid, start, exe) or any(
+        getattr(current_executable, key) != getattr(executable, key) for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+    ):
+        raise ValueError()
     generation = hashlib.sha256(f"{sock}\0{socket_dev}\0{socket_ino}\0{pid}\0{start}\0{exe}".encode()).hexdigest()
     return {"ready": True, "policy": "enforce", "account": os.getuid(), "socket": sock,
             "socketDev": socket_dev, "socketIno": socket_ino, "peerPid": pid, "peerStart": start, "peerExe": exe, "generation": generation,
+            "nativePath": native_path, "peerExeDev": executable.st_dev, "peerExeIno": executable.st_ino,
             "launcherHash": digest_file(launcher), "descriptorHash": digest_file(descriptor),
             "deploymentHash": digest_tree(deployment)}
 
@@ -129,6 +144,8 @@ def main():
         if sys.argv[1] == "attest" and (not isinstance(expected, dict) or expected != receipt): return fail()
         print(json.dumps({"ok": True, "receipt": receipt}, separators=(",", ":")))
         return 0
+    except ValueError as error:
+        return fail(str(error) if str(error) == "attachment_native_version_unqualified" else None)
     except Exception:
         return fail()
 

@@ -22,7 +22,11 @@ export const inspectManagedRoute: AttachmentInspector = async input => new Promi
   const timer = setTimeout(() => { child.kill(); reject(new Error("attachment_inspection_timeout")); }, 5_000);
   child.stdout.setEncoding("utf8").on("data", chunk => { output += chunk; if (output.length > 32 * 1024) child.kill(); });
   child.once("error", reject);
-  child.once("close", code => { clearTimeout(timer); try { const value = record(JSON.parse(output)); if (code !== 0 || value.ok !== true) throw new Error(); resolve(record(value.receipt)); } catch { reject(new Error("attachment_inspection_failed")); } });
+  child.once("close", code => { clearTimeout(timer); try {
+    const value = record(JSON.parse(output));
+    if (value.reason === "attachment_native_version_unqualified") { reject(new Error(value.reason)); return; }
+    if (code !== 0 || value.ok !== true) throw new Error(); resolve(record(value.receipt));
+  } catch { reject(new Error("attachment_inspection_failed")); } });
   child.stdin.end(JSON.stringify(input));
 });
 
@@ -68,9 +72,12 @@ export async function attestCodexAttachment(input: {
   if (!cwd) return disabled("attachment_cwd_unavailable");
   let receipt: Record<string, unknown>;
   try { receipt = await inspect({ socketPath: endpoint.socketPath, ...endpoint.managedLaunch, cwd }); }
-  catch { return disabled("attachment_route_unavailable"); }
+  catch (error) { return disabled(error instanceof Error && error.message === "attachment_native_version_unqualified" ? error.message : "attachment_route_unavailable"); }
   const generation = typeof receipt.generation === "string" && receipt.generation.length <= 256 ? receipt.generation : null;
   if (!generation || receipt.ready !== true || receipt.policy !== "enforce" || receipt.account !== process.getuid?.()) return disabled("attachment_route_untrusted");
+  if (!Number.isSafeInteger(receipt.peerPid) || Number(receipt.peerPid) <= 1
+    || receipt.nativePath !== `/proc/${receipt.peerPid}/exe`
+    || !Number.isSafeInteger(receipt.peerExeDev) || !Number.isSafeInteger(receipt.peerExeIno)) return disabled("attachment_route_untrusted");
   // Only the selected launch route needs managed-launch attestation. Other
   // configured servers still require a complete read-only ownership scan,
   // including SSH peers which cannot themselves launch an attached view.
@@ -99,6 +106,9 @@ export async function attestCodexAttachment(input: {
   const fingerprint = createHash("sha256").update(JSON.stringify([endpoint.id, threadId, routeGeneration])).digest("hex");
   return { public: { enabled: true, reason: null, generation: routeGeneration, mode: saved ? "resume" : "attach" }, private: { fingerprint, endpointId: endpoint.id, threadId, generation: routeGeneration, cwd, name: typeof thread.name === "string" ? thread.name : null,
     route: { launcherPath: endpoint.managedLaunch.launcherPath, deploymentPath: endpoint.managedLaunch.deploymentPath,
-      // Exact installed dispatcher route.  `--remote` is never present.
-      managedArgv: [endpoint.managedLaunch.launcherPath, "resume", threadId] }, receipt } };
+      // The existing guard still owns readiness, version policy and transport.
+      // Pin its CLI to the attested server image, independent of npm updates.
+      managedArgv: [path.join(endpoint.managedLaunch.deploymentPath, "venv/bin/python"), "-I", "-m", "codex_usage_guard", "managed-cli",
+        "--config", path.join(endpoint.managedLaunch.deploymentPath, "etc/enforce.json"), "--native", String(receipt.nativePath), "--",
+        "-c", "check_for_update_on_startup=false", "resume", threadId] }, receipt } };
 }

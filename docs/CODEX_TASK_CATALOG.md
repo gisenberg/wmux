@@ -178,6 +178,26 @@ SSH and other platform routes remain disabled. It uses only the helper paired
 with that source deployment. A managed launcher must preserve native trust and
 approval prompts without injecting responses.
 
+wmux invokes that deployment's supported `managed-cli` entry point with its
+enforced descriptor and the attested server executable at `/proc/<pid>/exe`.
+The guard still checks native version qualification and installation readiness,
+and owns the CLI transport. This lets a view use the same qualified runtime
+as the persistent server after a package upgrade replaces the installed CLI.
+Executable device/inode identity, process ancestry/start time, exact UUID and
+socket ownership remain mandatory; deleted executable paths are not treated as
+proof of failure. Restarting or replacing the owning server invalidates the
+route and requires fresh inspection. No native service restart or guard
+configuration change is performed by wmux.
+
+These managed views pass only the fixed cosmetic override
+`-c check_for_update_on_startup=false`, so a view cannot offer to upgrade its
+qualified runtime during attachment. This is a per-process argument, not a
+change to the user's Codex configuration; policy, trust, model and permission
+overrides remain forbidden. The setting is documented in the
+[native configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+Unsupported server versions are rejected before creating a pane. If startup
+still fails, the wrapper relays bounded native stderr before reporting failure.
+
 Active clients share the original task. Native input from any of those clients
 affects that same task; wmux does not claim exclusive ownership. Display
 associations, cwd matches, title matches and preview markers do not establish

@@ -85,17 +85,19 @@ function targetMatches(receipt: Receipt, target: CodexAttachmentTarget, attestat
   const proof = attestation.private;
   let nativeArgv: string[] = [];
   try { nativeArgv = fs.readFileSync(`/proc/${receipt.nativePid}/cmdline`).toString("utf8").split("\0").filter(Boolean); } catch { return false; }
-  let socket: fs.Stats;
-  try { socket = fs.lstatSync(receipt.cliSocket); } catch { return false; }
+  let socket: fs.Stats, executable: fs.Stats;
+  try { socket = fs.lstatSync(receipt.cliSocket); executable = fs.statSync(`/proc/${receipt.nativePid}/exe`); } catch { return false; }
   return !!proof && receipt.status === "startup-gated" && receipt.invalidated !== true
     && receipt.workspaceId === target.workspaceId && receipt.tabId === target.tabId && receipt.paneId === target.paneId && receipt.threadId === target.threadId && receipt.generation === target.generation
     && receipt.fingerprint === proof.fingerprint && receipt.endpointId === proof.endpointId
     && receipt.wrapperPid > 1 && receipt.managedPid > 1 && receipt.nativePid > 1
     && socket.isSocket() && socket.uid === process.getuid?.() && !(socket.mode & 0o077) && socket.dev === receipt.cliSocketDev && socket.ino === receipt.cliSocketIno
     && procStart(receipt.wrapperPid) === receipt.wrapperStart && procStart(receipt.managedPid) === receipt.managedStart && procStart(receipt.nativePid) === receipt.nativeStart
-    && fs.realpathSync(`/proc/${receipt.nativePid}/exe`) === String(proof.receipt.peerExe) && receipt.nativeExe === String(proof.receipt.peerExe)
+    && executable.dev === proof.receipt.peerExeDev && executable.ino === proof.receipt.peerExeIno
     && procStart(receipt.cliPeerPid) === receipt.cliPeerStart && descends(receipt.nativePid, receipt.managedPid) && descends(receipt.cliPeerPid, receipt.managedPid) && ownsSocket(receipt.cliPeerPid, receipt.cliListenerIno)
-    && nativeArgv.at(-4) === "--remote" && nativeArgv.at(-3) === `unix://${receipt.cliSocket}` && nativeArgv.at(-2) === "resume" && nativeArgv.at(-1) === target.threadId;
+    && nativeArgv.at(-6) === "--remote" && nativeArgv.at(-5) === `unix://${receipt.cliSocket}`
+    && nativeArgv.at(-4) === "-c" && nativeArgv.at(-3) === "check_for_update_on_startup=false"
+    && nativeArgv.at(-2) === "resume" && nativeArgv.at(-1) === target.threadId;
 }
 
 /**
