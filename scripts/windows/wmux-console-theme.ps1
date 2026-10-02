@@ -42,6 +42,8 @@ namespace WmuxConsoleTheme {
     static extern bool SetConsoleScreenBufferInfoEx(IntPtr output, ref ScreenBufferInfoEx info);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool SetConsoleTextAttribute(IntPtr output, ushort attributes);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetConsoleWindowInfo(IntPtr output, bool absolute, ref SmallRect window);
 
     public static bool Apply(uint[] colors) {
       if (colors == null || colors.Length != 16) return false;
@@ -54,7 +56,23 @@ namespace WmuxConsoleTheme {
       info.ColorTable = colors;
       info.Attributes = (ushort)((info.Attributes & 0xff00) | 0x07);
       info.PopupAttributes = (ushort)((info.PopupAttributes & 0xff00) | 0x07);
-      return SetConsoleScreenBufferInfoEx(output, ref info) && SetConsoleTextAttribute(output, info.Attributes);
+      var window = info.Window;
+      if (!SetConsoleScreenBufferInfoEx(output, ref info)) return false;
+      // SetConsoleScreenBufferInfoEx reads the window rectangle one cell
+      // smaller than GetConsoleScreenBufferInfoEx reports it, so writing the
+      // info back shrinks the console. Under ConPTY that leaves the console a
+      // row shorter than the terminal it renders into, and every absolute
+      // cursor move lands one row off. Restore the exact pane geometry.
+      var applied = new ScreenBufferInfoEx {
+        Size = (uint)Marshal.SizeOf<ScreenBufferInfoEx>(),
+        ColorTable = new uint[16],
+      };
+      if (GetConsoleScreenBufferInfoEx(output, ref applied)
+        && (applied.Window.Right - applied.Window.Left != window.Right - window.Left
+          || applied.Window.Bottom - applied.Window.Top != window.Bottom - window.Top)) {
+        SetConsoleWindowInfo(output, true, ref window);
+      }
+      return SetConsoleTextAttribute(output, info.Attributes);
     }
   }
 }

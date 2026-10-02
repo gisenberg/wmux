@@ -18,11 +18,11 @@ test("checkpoint snapshots keep semantic defaults and paint the ANSI palette exp
     assert.doesNotMatch(snapshot, /38;2;192;202;245/);
     assert.doesNotMatch(snapshot, /48;2;0;0;0/);
 
-    checkpoint.reframe(12, 4);
-    const reframed = checkpoint.snapshot();
-    assert.match(reframed, /\x1b\[0;39;49md/);
-    assert.match(reframed, /38;2;247;118;142;49mr/);
-    assert.doesNotMatch(reframed, /48;2;0;0;0/);
+    checkpoint.resize(12, 4, "conpty");
+    const resized = checkpoint.snapshot();
+    assert.match(resized, /\x1b\[0;39;49md/);
+    assert.match(resized, /38;2;247;118;142;49mr/);
+    assert.doesNotMatch(resized, /48;2;0;0;0/);
   } finally {
     checkpoint.dispose();
   }
@@ -191,32 +191,17 @@ test("live repaints never reset the attached terminal", () => {
   }
 });
 
-test("reframing inside the alternate screen keeps the primary screen for when the app exits", () => {
-  const checkpoint = new TerminalCheckpoint(12, 3);
-  try {
-    checkpoint.write("PS> vim\r\n\x1b[?1049h\x1b[2J\x1b[Heditor");
-    checkpoint.reframe(14, 4);
-    assert.equal(checkpoint.isAlternateScreen, true);
-    assert.deepEqual(checkpoint.dimensions, { cols: 14, rows: 4 });
-    assert.match(checkpoint.screenLines()[0], /^editor/);
-    checkpoint.write("\x1b[?1049l");
-    assert.match(checkpoint.screenLines().join("\n"), /PS> vim/);
-  } finally {
-    checkpoint.dispose();
-  }
-});
-
-test("checkpoint writes carry a split escape sequence across a reframe", () => {
+test("checkpoint writes carry a split escape sequence across a resize", () => {
   const checkpoint = new TerminalCheckpoint(20, 3);
   try {
     checkpoint.write("ok \x1b[38;2;12");
-    checkpoint.reframe(24, 4);
+    checkpoint.resize(24, 4, "conpty");
     checkpoint.write("0;34;56mcolored");
     assert.equal(checkpoint.screenLines()[0].trimEnd(), "ok colored");
     assert.match(checkpoint.snapshot(), /38;2;120;34;56/);
 
     checkpoint.write("\r\n\x1b]0;title");
-    checkpoint.reframe(20, 4);
+    checkpoint.resize(20, 4, "conpty");
     checkpoint.write(" more\x07after");
     assert.equal(checkpoint.screenLines()[1].trimEnd(), "after");
   } finally {
@@ -241,13 +226,13 @@ test("partial terminal sequence detection recognizes every unterminated tail", (
   assert.equal(partialTerminalSequenceLength(`\x1b]52;c;${"A".repeat(5000)}`), 0);
 });
 
-test("Windows-style reframing keeps the viewport and cursor anchored from the top", () => {
+test("ConPTY resizes keep the viewport and cursor anchored from the top", () => {
   const checkpoint = new TerminalCheckpoint(12, 3);
   try {
     checkpoint.write("one\r\ntwo\r\nPS> ");
     assert.deepEqual(checkpoint.cursor(), { x: 4, y: 2, visible: true });
 
-    checkpoint.reframe(12, 6);
+    checkpoint.resize(12, 6, "conpty");
 
     assert.deepEqual(checkpoint.cursor(), { x: 4, y: 2, visible: true });
     assert.match(checkpoint.screenLines()[2], /^PS> /);
@@ -257,13 +242,13 @@ test("Windows-style reframing keeps the viewport and cursor anchored from the to
   }
 });
 
-test("Windows-style reframing carries scrollback across resize boundaries without duplicating the viewport", () => {
+test("ConPTY resizes carry scrollback across resize boundaries without duplicating the viewport", () => {
   const checkpoint = new TerminalCheckpoint(12, 3);
   try {
     checkpoint.write(Array.from({ length: 12 }, (_, index) => `line-${String(index + 1).padStart(2, "0")}`)
       .join("\r\n"));
-    checkpoint.reframe(18, 5);
-    checkpoint.reframe(10, 4);
+    checkpoint.resize(18, 5, "conpty");
+    checkpoint.resize(10, 4, "conpty");
     const replay = checkpoint.snapshotWithScrollbackSeed();
     assert.match(replay, /line-01\r\nline-02\r\n/);
     assert.equal(replay.split("line-12").length - 1, 1);
@@ -273,40 +258,13 @@ test("Windows-style reframing carries scrollback across resize boundaries withou
   }
 });
 
-test("Windows-style reframing clips discarded rows and columns when shrinking", () => {
-  const checkpoint = new TerminalCheckpoint(12, 5);
-  try {
-    checkpoint.write([
-      "\x1b[1;1HABCDEFGHIJKL",
-      "\x1b[2;1Hsecond-row",
-      "\x1b[3;1Hthird-row",
-      "\x1b[4;1HDISCARD-FOUR",
-      "\x1b[5;1HDISCARD-FIVE",
-      "\x1b[5;12H",
-    ].join(""));
-
-    checkpoint.write("\x1b[3;10H");
-    checkpoint.reframe(7, 3);
-
-    assert.deepEqual(checkpoint.screenLines(), [
-      "ABCDEFG",
-      "second-",
-      "third-r",
-    ]);
-    assert.deepEqual(checkpoint.cursor(), { x: 6, y: 2, visible: true });
-    assert.doesNotMatch(checkpoint.screenLines().join("\n"), /DISCARD/);
-  } finally {
-    checkpoint.dispose();
-  }
-});
-
-test("Windows-style shrinking keeps the cursor row visible and scrolls the rows above into history", () => {
+test("ConPTY height shrinks keep the cursor row visible and scroll the rows above into history", () => {
   const checkpoint = new TerminalCheckpoint(12, 5);
   try {
     checkpoint.write("one\r\ntwo\r\nthree\r\nfour\r\nPS> ");
     assert.deepEqual(checkpoint.cursor(), { x: 4, y: 4, visible: true });
 
-    checkpoint.reframe(12, 3);
+    checkpoint.resize(12, 3, "conpty");
 
     assert.deepEqual(checkpoint.screenLines().map((line) => line.trimEnd()), ["three", "four", "PS>"]);
     assert.deepEqual(checkpoint.cursor(), { x: 4, y: 2, visible: true });
@@ -315,5 +273,70 @@ test("Windows-style shrinking keeps the cursor row visible and scrolls the rows 
     assert.equal(replay.split("three").length - 1, 1);
   } finally {
     checkpoint.dispose();
+  }
+});
+
+test("checkpoint snapshots keep whole graphemes rather than their first code point", () => {
+  const source = new TerminalCheckpoint(16, 2);
+  const restored = new TerminalCheckpoint(16, 2);
+  try {
+    source.write("a👍🏽b x\u0301 👨\u200d👩\u200d👧 羊");
+    const snapshot = source.snapshot();
+    assert.match(snapshot, /👍🏽/);
+    assert.match(snapshot, /x\u0301/);
+    assert.match(snapshot, /👨\u200d👩\u200d👧/);
+    restored.write(snapshot);
+    assert.deepEqual(restored.screenLines(), source.screenLines());
+    assert.deepEqual(restored.cursor(), source.cursor());
+  } finally {
+    source.dispose();
+    restored.dispose();
+  }
+});
+
+test("checkpoint snapshots keep soft wraps so a restored screen still reflows", () => {
+  const source = new TerminalCheckpoint(8, 4);
+  const restored = new TerminalCheckpoint(8, 4);
+  try {
+    source.write("PS> T:\\git\\gisenberg\r\n$ ");
+    restored.write(source.snapshot());
+    assert.deepEqual(restored.screenLines(), source.screenLines());
+    assert.deepEqual(restored.cursor(), source.cursor());
+    source.resize(24, 4, "conpty");
+    restored.resize(24, 4, "conpty");
+    assert.equal(restored.screenLines()[0].trimEnd(), "PS> T:\\git\\gisenberg");
+    assert.deepEqual(restored.screenLines(), source.screenLines());
+    assert.deepEqual(restored.cursor(), source.cursor());
+  } finally {
+    source.dispose();
+    restored.dispose();
+  }
+});
+
+test("checkpoint scrollback seeds keep whole non-ASCII graphemes", () => {
+  const checkpoint = new TerminalCheckpoint(12, 2);
+  try {
+    checkpoint.write("old 👍🏽 é\u0301\r\nnext\r\nlast");
+    const seed = checkpoint.snapshotWithScrollbackSeed();
+    assert.match(seed, /old 👍🏽 é\u0301\r\n/);
+  } finally {
+    checkpoint.dispose();
+  }
+});
+
+test("checkpoint resets restore grapheme clustering that RIS disables", () => {
+  const source = new TerminalCheckpoint(16, 2);
+  const restored = new TerminalCheckpoint(16, 2);
+  try {
+    source.write("👨\u200d👩\u200d👧 x");
+    const snapshot = source.snapshot();
+    assert.match(snapshot, /^\x1bc\x1b\[\?2027h/);
+    assert.match(snapshot, /\x1b\[\?2027h\x1b\[\d q/);
+    restored.write(snapshot);
+    assert.deepEqual(restored.cursor(), source.cursor());
+    assert.deepEqual(restored.screenLines(), source.screenLines());
+  } finally {
+    source.dispose();
+    restored.dispose();
   }
 });

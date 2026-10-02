@@ -59,8 +59,3 @@ The image depicts the copyrighted Amiga user interface and is included as an
 application-internal historical screenshot, not as project branding. No
 source-redistribution license has been identified for it, and it is not covered
 by wmux's MIT license.
-
-`tos-1.04-desktop.png` is the CC BY-SA 4.0
-[TOS 1.04 startup screenshot](https://commons.wikimedia.org/wiki/File:TOS_1.04_(Rainbow_TOS).png)
-by MJaap. It preserves the real Rainbow TOS startup mark and GEM disk/trash
-iconography instead of substituting generic browser glyphs.

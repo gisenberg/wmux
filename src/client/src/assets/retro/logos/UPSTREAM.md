@@ -2,10 +2,10 @@
 
 These SVG files are embedded only as identification artwork for wmux's
 historical boot-screen profiles. The source file description pages are the
-authoritative license records. The SGI counters and DEC tile field are locally
-normalized as transparent knockouts so the marks composite correctly on their
-simulated display backgrounds; their visible geometry and colors are otherwise
-unchanged.
+authoritative license records. The DEC tile field and the black surround of the
+OS/2 Warp raster are locally normalized as transparent knockouts so the marks
+composite correctly on their simulated display backgrounds; their visible
+geometry and colors are otherwise unchanged.
 
 | Local file | Source | Author | License recorded by source |
 | --- | --- | --- | --- |
@@ -22,7 +22,6 @@ unchanged.
 | `msx.svg` | [MSX logo](https://commons.wikimedia.org/wiki/File:MSX-Logo.svg) | Unknown | Public-domain text logo |
 | `dec.svg` | [1987 Digital Equipment Corporation logo](https://commons.wikimedia.org/wiki/File:Digital_Equipment_Corporation_1987_logo.svg) | Digital Equipment Corporation | Public-domain text logo |
 | `sun.svg` | [1980s Sun Microsystems logo](https://commons.wikimedia.org/wiki/File:Sun_Microsystems_1980s_logo.svg) | Sun Microsystems | Public-domain text/geometric logo |
-| `sgi.svg` | [Silicon Graphics cube logo](https://commons.wikimedia.org/wiki/File:SGI_Logo.svg) | Aonc | CC BY-SA 3.0 |
 | `next.svg` | [NeXT logo](https://commons.wikimedia.org/wiki/File:NeXT_logo.svg) | Paul Rand / NeXT | Public-domain text/geometric logo |
 | `os2-warp.png` | [IBM OS/2 Warp logo](https://commons.wikimedia.org/wiki/File:OS2warp.svg), rasterized by Wikimedia at 330 × 272 | IBM | Public-domain text/geometric logo |
 

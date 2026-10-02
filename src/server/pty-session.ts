@@ -8,6 +8,7 @@ import { appendBoundedReplay } from "./replay-buffer.js";
 import { captureOsc7 } from "./osc7.js";
 import type { BackendObservation } from "./backend-observation.js";
 import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./terminal-checkpoint.js";
+import { TERMINAL_RESET } from "../shared/terminal-protocol.js";
 
 interface PtyEvents {
   output: [string];
@@ -68,7 +69,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
       this.emit(
         "output",
         this.restoredCheckpoint && !this.liveResetEmitted
-          ? `\x1bc${data}`
+          ? `${TERMINAL_RESET}${data}`
           : data,
       );
       this.liveResetEmitted = true;
@@ -110,7 +111,7 @@ export class PtySession extends EventEmitter<PtyEvents> {
     this.restoredReplayConsumed = true;
     return {
       data: this.restoredCheckpoint.data
-        + (current.data ? `\x1bc${current.data}` : ""),
+        + (current.data ? `${TERMINAL_RESET}${current.data}` : ""),
       kind: "checkpoint",
     };
   }

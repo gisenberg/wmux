@@ -5,9 +5,13 @@ export const WINDOWS_AGENT_CAPABILITIES = [
   "registration-heartbeat-v1",
   "stream-supervision-v1",
   "posix-runtime-files-v1",
+  "console-screen-v1",
 ] as const;
 
 export const POSIX_AGENT_RUNTIME_FILE_CAPABILITY = "posix-runtime-files-v1" as const;
+// Advertised only by an agent whose sessions run on ConPTY and can report the
+// console's own screen buffer through ordered screen events.
+export const CONSOLE_SCREEN_CAPABILITY = "console-screen-v1" as const;
 
 export const WINDOWS_AGENT_PATHS = {
   health: "/health",
@@ -16,8 +20,10 @@ export const WINDOWS_AGENT_PATHS = {
   session: (sessionId: string): string => `/sessions/${encodeURIComponent(sessionId)}`,
   input: (sessionId: string): string => `/sessions/${encodeURIComponent(sessionId)}/input`,
   resize: (sessionId: string): string => `/sessions/${encodeURIComponent(sessionId)}/resize`,
-  output: (sessionId: string, cursor: number, timeoutMs: number): string =>
-    `/sessions/${encodeURIComponent(sessionId)}/output?cursor=${cursor}&timeoutMs=${timeoutMs}`,
+  output: (sessionId: string, cursor: number, timeoutMs: number, eventSeq?: number): string =>
+    `/sessions/${encodeURIComponent(sessionId)}/output?cursor=${cursor}&timeoutMs=${timeoutMs}`
+    + (eventSeq === undefined ? "" : `&eventSeq=${eventSeq}`),
+  screen: (sessionId: string): string => `/sessions/${encodeURIComponent(sessionId)}/screen`,
   pasteImage: (sessionId: string, stageId: string, extension?: string): string =>
     `/sessions/${encodeURIComponent(sessionId)}/paste-images/${encodeURIComponent(stageId)}`
     + (extension === undefined ? "" : `?extension=${encodeURIComponent(extension)}`),
@@ -86,6 +92,7 @@ export interface WindowsAgentSessionResponse {
   cursor?: number;
   cols?: number;
   rows?: number;
+  backend?: string;
 }
 
 export interface WindowsAgentSessionListResponse {
@@ -93,9 +100,43 @@ export interface WindowsAgentSessionListResponse {
 }
 
 export interface WindowsAgentResizeEvent {
+  // Shared with screen events; present from agents that sequence events.
+  seq?: number;
   cursor: number;
   cols: number;
   rows: number;
+}
+
+/**
+ * One row of the console screen buffer as ConPTY itself holds it.
+ * `text` has one UTF-16 unit per occupied cell run: a wide glyph appears once
+ * and starts at a column listed in `wide`, spanning that column and the next.
+ * ConPTY reports surrogate pairs and multi-codepoint graphemes as U+FFFD.
+ * `attrs` run-length encodes the legacy console attribute of every column.
+ */
+export interface WindowsAgentScreenLine {
+  text: string;
+  wide?: number[];
+  attrs?: Array<[attribute: number, columns: number]>;
+}
+
+export interface WindowsAgentConsoleScreen {
+  cols: number;
+  rows: number;
+  cursorX: number;
+  cursorY: number;
+  cursorVisible: boolean;
+  lines: WindowsAgentScreenLine[];
+}
+
+/**
+ * A console screen read that is exact at byte `cursor` of the session output:
+ * no output was produced between the read and that position.
+ */
+export interface WindowsAgentScreenEvent extends WindowsAgentConsoleScreen {
+  seq: number;
+  cursor: number;
+  reason: "resize" | "verify";
 }
 
 export interface WindowsAgentOutputResponse {
@@ -105,6 +146,12 @@ export interface WindowsAgentOutputResponse {
   cols?: number;
   rows?: number;
   resizes?: WindowsAgentResizeEvent[];
+  // With `eventSeq` in the request, `resizes` and `screens` hold every event
+  // newer than it, including events at the first returned byte, and
+  // `eventSeq` is the newest sequence number the agent has issued. Several
+  // resizes can share one byte position; each one changed ConPTY's buffer.
+  screens?: WindowsAgentScreenEvent[];
+  eventSeq?: number;
   dataBase64?: string;
   exited?: boolean;
   exitCode?: number | null;

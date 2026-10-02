@@ -11,6 +11,8 @@ import {
   type WindowsAgentHealth,
   type WindowsAgentOutputResponse as AgentOutputResponse,
   type WindowsAgentPasteImageResponse,
+  type WindowsAgentResizeEvent,
+  type WindowsAgentScreenEvent,
   type WindowsAgentSessionListResponse as AgentSessionListResponse,
   type WindowsAgentSessionResponse as AgentSessionResponse,
 } from "../shared/windows-agent-protocol.js";
@@ -30,12 +32,17 @@ import {
   sessionAgentOriginForEndpoint,
 } from "./session-agent-origin.js";
 import { selectAttachReplay, TerminalCheckpoint, type AttachReplay } from "./terminal-checkpoint.js";
+import { ConptyMeasurementPin } from "./conpty-output.js";
+import type { TerminalResizeMode } from "../shared/conpty-resize.js";
+import { TERMINAL_RESET } from "../shared/terminal-protocol.js";
 
 interface AgentEvents {
   output: [string];
   // Screen-shaped repaint for attached browsers only; never for textual
   // output watchers, whose line boundaries it would destroy.
   screen: [string];
+  // The agent applied a new geometry at this point of the output stream.
+  geometry: [number, number];
   title: [string];
   cwd: [string];
   agentPort: [number, string];
@@ -55,6 +62,13 @@ const SESSION_CREATE_TIMEOUT_MS = 30_000;
 const UPDATE_ACTIVATION_TIMEOUT_MS = 30_000;
 const UPDATE_RESTART_TIMEOUT_MS = 60_000;
 const LIVE_RESIZE_SETTLE_MS = 100;
+// After output settles, ask ConPTY for its own screen so a model that drifted
+// (a width disagreement, a resize race, an emulation gap) converges promptly.
+// Verification backs off while ConPTY keeps agreeing, so steady periodic
+// output does not start a console read every few seconds indefinitely.
+const SCREEN_VERIFY_QUIET_MS = 400;
+const SCREEN_VERIFY_MIN_INTERVAL_MS = 1500;
+const SCREEN_VERIFY_MAX_INTERVAL_MS = 60_000;
 
 export const windowsAgentUrl = (machine: MachineConfig): string | undefined => {
   return sessionAgentOriginForEndpoint(machine);
@@ -323,6 +337,16 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   private resizeInFlight: Promise<void> | undefined;
   private resizeSettleTimer: ReturnType<typeof setTimeout> | undefined;
   private agentSize?: { cols: number; rows: number };
+  // The geometry the agent has applied, which the checkpoint and every
+  // attached browser follow at the exact stream position it changed.
+  private appliedGeometry: { cols: number; rows: number };
+  private resizeMode: TerminalResizeMode = "native";
+  private readonly measurementPin = new ConptyMeasurementPin();
+  private eventSeq = 0;
+  private screenCapable = false;
+  private screenVerifyTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastScreenVerifyAt = 0;
+  private screenVerifyInterval = SCREEN_VERIFY_MIN_INTERVAL_MS;
   private readonly resizeRepaint = new ResizeRepaint(() => {
     if (this.stopped || this.exited || this.pendingResize || this.resizeInFlight) return;
     if (!this.checkpoint.isAlternateScreen) return;
@@ -356,6 +380,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
   ) {
     super();
     this.checkpoint = new TerminalCheckpoint(cols, rows, extraEnv);
+    this.appliedGeometry = { cols, rows };
     this.attachReady = new Promise((resolve) => {
       this.resolveAttachReady = resolve;
     });
@@ -376,6 +401,11 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
 
   get replayOutput(): string {
     return this.replay.join("");
+  }
+
+  /** The applied geometry and the reflow a browser model must reproduce. */
+  get geometry(): { cols: number; rows: number; mode: TerminalResizeMode } {
+    return { ...this.appliedGeometry, mode: this.resizeMode };
   }
 
   get attachReplay(): AttachReplay {
@@ -416,6 +446,9 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.pendingInput.push({ data, terminalResponse });
       return;
     }
+    // What the user types next is where a drifted model shows; verify
+    // promptly after interaction.
+    if (!terminalResponse) this.screenVerifyInterval = SCREEN_VERIFY_MIN_INTERVAL_MS;
     this.inputQueue = this.inputQueue.then(async () => {
       if (this.exited || this.stopped) return;
       await this.flushPendingResize();
@@ -434,12 +467,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     this.resizeRepaint.cancel();
     this.desiredCols = cols;
     this.desiredRows = rows;
-    if (!sameSize(this.checkpoint.dimensions, cols, rows)) {
-      this.checkpoint.reframe(cols, rows);
-    }
-    // The browser has already resized its renderer. Keep this checkpoint for
-    // later attaches only: emitting its RIS-based snapshot here would clear
-    // live scrollback and flash a full-screen repaint for every drag step.
+    // The checkpoint and browsers keep the applied geometry until the agent
+    // reports the byte where the pseudoconsole actually changed size.
     this.pendingResize = { cols, rows };
     if (!this.ready) {
       return;
@@ -455,6 +484,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     if (this.disposal) return this.disposal;
     this.stopped = true;
     this.cancelResizeSettle();
+    this.cancelScreenVerify();
     this.resizeRepaint.cancel();
     this.checkpoint.dispose();
     this.resolveAttachReady();
@@ -476,6 +506,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     if (this.stopped) return;
     this.stopped = true;
     this.cancelResizeSettle();
+    this.cancelScreenVerify();
     this.resizeRepaint.cancel();
     this.checkpoint.dispose();
     this.resolveAttachReady();
@@ -612,7 +643,13 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     recreated: boolean,
   ): Promise<void> {
     this.resizeRepaint.cancel();
+    this.cancelScreenVerify();
     this.agentSize = response.cols && response.rows ? { cols: response.cols, rows: response.rows } : undefined;
+    // ConPTY reflows its own buffer on resize; an ordinary PTY leaves that to
+    // the application's redraw.
+    this.resizeMode = response.backend === "conpty" ? "conpty" : "native";
+    this.eventSeq = 0;
+    this.measurementPin.reset();
     if (recreated) {
       this.checkpoint.dispose();
       this.checkpoint = new TerminalCheckpoint(fallbackCols, fallbackRows, this.extraEnv);
@@ -626,7 +663,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.liveOutputObserved = true;
       this.liveResetEmitted = true;
       this.appendAndEmit(
-        `\x1bc\r\n[wmux] Session agent restarted; opened a new shell for this pane.\r\n`,
+        `${TERMINAL_RESET}\r\n[wmux] Session agent restarted; opened a new shell for this pane.\r\n`,
       );
     }
     this.pidValue = response.pid ?? 0;
@@ -636,11 +673,15 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.emit("cwd", response.cwd);
     }
     const historyBytes = Math.max(0, (response.cursor ?? this.cursor) - this.cursor);
-    const replayCols = response.cols ?? (historyBytes > 0 ? 80 : fallbackCols);
-    const replayRows = response.rows ?? (historyBytes > 0 ? 24 : fallbackRows);
-    this.checkpoint.reframe(replayCols, replayRows);
+    // Replay starts from the geometry of its first byte, which the first
+    // output response reports; only a history without that report falls
+    // back to the agent's historical 80x24 default.
+    // A first attach restores browsers from the finished checkpoint, while a
+    // recreated session already has live browsers that need its output.
+    if (historyBytes > 0 && !(response.cols && response.rows)) this.applyGeometry(80, 24, recreated);
     if (historyBytes > 0) this.reportPhase("replaying", "Restoring terminal state…");
-    await this.hydrateReplay(response.cursor ?? this.cursor);
+    await this.hydrateReplay(response.cursor ?? this.cursor, recreated);
+    if (this.agentSize) this.applyGeometry(this.agentSize.cols, this.agentSize.rows, recreated);
     if (historyBytes > 0 && response.cols && response.rows) {
       this.liveOutputObserved = true;
     }
@@ -661,7 +702,8 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const request = this.post<void>(WINDOWS_AGENT_PATHS.resize(this.pane.id), next)
       .then(() => {
         this.agentSize = next;
-        if (!this.stopped && !this.exited && !this.pendingResize) this.resizeRepaint.arm();
+        // An agent that reports ConPTY's screen verifies every resize itself.
+        if (!this.screenCapable && !this.stopped && !this.exited && !this.pendingResize) this.resizeRepaint.arm();
       })
       .catch((error) => this.reportTransportFailure("resize", error));
     // The agent accepts requests concurrently, so permit only one resize on
@@ -1013,14 +1055,14 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     );
   }
 
-  private async hydrateReplay(targetCursor: number): Promise<void> {
+  private async hydrateReplay(targetCursor: number, emit: boolean): Promise<void> {
     while (!this.stopped && !this.exited && this.cursor < targetCursor) {
       const before = this.cursor;
       const response = await this.get<AgentOutputResponse>(
-        WINDOWS_AGENT_PATHS.output(this.pane.id, this.cursor, 0),
+        WINDOWS_AGENT_PATHS.output(this.pane.id, this.cursor, 0, this.eventSeq),
         5000,
       );
-      this.applyOutputResponse(response, false);
+      this.applyOutputResponse(response, emit);
       if (this.cursor <= before) break;
     }
   }
@@ -1037,6 +1079,7 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
             this.pane.id,
             this.cursor,
             WINDOWS_AGENT_LONG_POLL.defaultTimeoutMs,
+            this.eventSeq,
           ),
           WINDOWS_AGENT_LONG_POLL.requestTimeoutMs,
         );
@@ -1078,6 +1121,12 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
     const base = typeof response.base === "number" ? response.base : requestedCursor;
     const startCursor = typeof response.startCursor === "number" ? response.startCursor : Math.max(requestedCursor, base);
     const endCursor = typeof response.cursor === "number" ? response.cursor : startCursor;
+    const sequenced = typeof response.eventSeq === "number";
+    if (sequenced) {
+      // Only ConPTY sessions can report their console screen.
+      this.screenCapable = this.resizeMode === "conpty";
+      this.eventSeq = Math.max(this.eventSeq, response.eventSeq ?? 0);
+    }
     if (base > requestedCursor) this.replayTruncated = true;
     if (endCursor < startCursor) {
       // The agent's replay restarted under the same pane id. Never walk the
@@ -1086,35 +1135,89 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.replayTruncated = true;
       this.cursor = base;
       this.outputDecoder = new StringDecoder("utf8");
-      this.appendAndEmit("\x1bc", emit);
+      this.measurementPin.reset();
+      this.appendAndEmit(TERMINAL_RESET, emit);
       return;
     }
 
-    if (response.cols && response.rows && !sameSize(this.checkpoint.dimensions, response.cols, response.rows)) {
-      this.checkpoint.reframe(response.cols, response.rows);
-    }
+    // The geometry in effect at the first returned byte.
+    if (response.cols && response.rows) this.applyGeometry(response.cols, response.rows, emit);
 
     const data = response.dataBase64 ? Buffer.from(response.dataBase64, "base64") : Buffer.alloc(0);
+    // Resizes and console screens apply at exact byte positions, in the
+    // agent's event order within one position. Without event sequences an
+    // agent reports only resizes after the first returned byte.
+    const events: Array<
+      | { cursor: number; seq: number; resize: WindowsAgentResizeEvent }
+      | { cursor: number; seq: number; screen: WindowsAgentScreenEvent }
+    > = [
+      ...(response.resizes ?? [])
+        .filter((event) => (sequenced ? event.cursor >= startCursor : event.cursor > startCursor) && event.cursor <= endCursor)
+        .map((resize, index) => ({ cursor: resize.cursor, seq: resize.seq ?? index, resize })),
+      ...(response.screens ?? [])
+        .filter((event) => event.cursor >= startCursor && event.cursor <= endCursor)
+        .map((screen) => ({ cursor: screen.cursor, seq: screen.seq, screen })),
+    ];
+    events.sort((left, right) => left.cursor - right.cursor || left.seq - right.seq);
     let offset = 0;
-    const resizes = (response.resizes ?? [])
-      .filter((event) => event.cursor > startCursor && event.cursor <= endCursor)
-      .sort((left, right) => left.cursor - right.cursor);
-    // Poll and resize boundaries fall on arbitrary byte offsets, so one
+    // Poll and event boundaries fall on arbitrary byte offsets, so one
     // decoder carries split UTF-8 sequences across every slice in order.
-    for (const event of resizes) {
+    for (const event of events) {
       const nextOffset = Math.min(data.length, Math.max(offset, event.cursor - startCursor));
-      this.appendAndEmit(this.outputDecoder.write(data.subarray(offset, nextOffset)), emit);
-      this.checkpoint.reframe(event.cols, event.rows);
+      this.appendDecodedOutput(data.subarray(offset, nextOffset), emit);
       offset = nextOffset;
+      if ("resize" in event) this.applyGeometry(event.resize.cols, event.resize.rows, emit);
+      else this.applyConsoleScreen(event.screen, emit);
     }
-    this.appendAndEmit(this.outputDecoder.write(data.subarray(offset)), emit);
+    this.appendDecodedOutput(data.subarray(offset), emit);
     this.cursor = endCursor;
-    // A long poll can describe geometry captured before a newer browser
-    // resize. Preserve its byte-boundary replay above, then converge the
-    // attach checkpoint on the latest requested viewport.
-    if (!sameSize(this.checkpoint.dimensions, this.desiredCols, this.desiredRows)) {
-      this.checkpoint.reframe(this.desiredCols, this.desiredRows);
+  }
+
+  private appendDecodedOutput(data: Buffer, emit: boolean): void {
+    const text = this.outputDecoder.write(data);
+    this.appendAndEmit(this.resizeMode === "conpty" ? this.measurementPin.push(text) : text, emit);
+  }
+
+  /** Follow a geometry the agent applied, at the current stream position. */
+  private applyGeometry(cols: number, rows: number, emit: boolean): void {
+    if (!sameSize(this.checkpoint.dimensions, cols, rows)) this.checkpoint.resize(cols, rows, this.resizeMode);
+    if (sameSize(this.appliedGeometry, cols, rows)) return;
+    this.appliedGeometry = { cols, rows };
+    if (emit) this.emit("geometry", cols, rows);
+  }
+
+  private applyConsoleScreen(screen: WindowsAgentScreenEvent, emit: boolean): void {
+    const repaint = this.checkpoint.reconcileConsoleScreen(screen);
+    if (!repaint) {
+      if (screen.reason === "verify") {
+        this.screenVerifyInterval = Math.min(SCREEN_VERIFY_MAX_INTERVAL_MS, this.screenVerifyInterval * 2);
+      }
+      return;
     }
+    this.screenVerifyInterval = SCREEN_VERIFY_MIN_INTERVAL_MS;
+    console.warn(
+      `wmux: reconciled ${this.pane.id} with its console screen after ${screen.reason} (${repaint.length} bytes)`,
+    );
+    if (emit) this.emit("screen", repaint);
+  }
+
+  private scheduleScreenVerify(): void {
+    if (!this.screenCapable || this.stopped || this.exited) return;
+    if (this.screenVerifyTimer) clearTimeout(this.screenVerifyTimer);
+    const wait = Math.max(SCREEN_VERIFY_QUIET_MS, this.lastScreenVerifyAt + this.screenVerifyInterval - Date.now());
+    this.screenVerifyTimer = setTimeout(() => {
+      this.screenVerifyTimer = undefined;
+      if (!this.ready || this.stopped || this.exited || this.pendingResize || this.resizeInFlight) return;
+      this.lastScreenVerifyAt = Date.now();
+      void this.post(WINDOWS_AGENT_PATHS.screen(this.pane.id), {})
+        .catch((error) => this.reportTransportFailure("screen verification", error, false));
+    }, wait);
+    this.screenVerifyTimer.unref?.();
+  }
+
+  private cancelScreenVerify(): void {
+    if (this.screenVerifyTimer) clearTimeout(this.screenVerifyTimer);
+    this.screenVerifyTimer = undefined;
   }
 
   private async get<T>(path: string, timeoutMs = 5000): Promise<T> {
@@ -1144,11 +1247,12 @@ export class WindowsAgentSession extends EventEmitter<AgentEvents> {
       this.emit(
         "output",
         this.restoredCheckpoint && !this.liveResetEmitted
-          ? `\x1bc${data}`
+          ? `${TERMINAL_RESET}${data}`
           : data,
       );
       this.liveResetEmitted = true;
       this.liveOutputObserved = true;
+      this.scheduleScreenVerify();
     }
     this.resizeRepaint.output();
   }
