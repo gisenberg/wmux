@@ -1,0 +1,37 @@
+diff --git a/lib/ghostty.ts b/lib/ghostty.ts
+index cb7f150..fdca6eb 100644
+--- a/lib/ghostty.ts
++++ b/lib/ghostty.ts
+@@ -647,6 +647,8 @@ export class GhosttyTerminal {
+ 
+   write(data: string | Uint8Array): void {
+     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
++    // A zero-length allocation has no valid offset to copy into; an empty write is a no-op.
++    if (bytes.length === 0) return;
+     const ptr = this.exports.ghostty_wasm_alloc_u8_array(bytes.length);
+     new Uint8Array(this.memory.buffer).set(bytes, ptr);
+     this.exports.ghostty_terminal_vt_write(this.handle, ptr, bytes.length);
+diff --git a/lib/terminal.test.ts b/lib/terminal.test.ts
+index ffd75ab..d3f146c 100644
+--- a/lib/terminal.test.ts
++++ b/lib/terminal.test.ts
+@@ -615,6 +615,19 @@ describe('input()', () => {
+       term.dispose();
+     });
+ 
++    test('should treat an empty write as a no-op that still completes', async () => {
++      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
++      if (!container) return;
++      term.open(container!);
++
++      let completed = false;
++      expect(() => term.write('', () => (completed = true))).not.toThrow();
++      expect(() => term.write(new Uint8Array(0))).not.toThrow();
++      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
++      expect(completed).toBe(true);
++      term.dispose();
++    });
++
+     test('should fire onData when wasUserInput is true', async () => {
+       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
+       // Using shared container from beforeEach

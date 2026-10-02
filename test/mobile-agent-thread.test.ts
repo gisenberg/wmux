@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentResponseMessage, buildMobileThreadItems, sendMobileComposerInput } from "../src/client/src/MobileAgentSurface";
+import { agentResponseMessage, buildMobileThreadItems, formatComposerTextInput, sendMobileComposerInput } from "../src/client/src/MobileAgentSurface";
 import type { AgentActivity } from "../src/client/src/types";
 
 const event = (input: Partial<AgentActivity> & Pick<AgentActivity, "id" | "status" | "createdAt">): AgentActivity => ({
@@ -76,4 +76,10 @@ test("mobile composer sends Enter as a distinct sequential terminal input", asyn
     { paneId: "pane-1", data: "hello agent" },
     { paneId: "pane-1", data: "\r", timelinePrompt: "hello agent" },
   ]);
+});
+
+test("composer text cannot close its bracketed paste or send line-discipline controls", () => {
+  assert.equal(formatComposerTextInput("ls\n\x1b[201~id\x03"), "\x1b[200~ls\n [201~id \x1b[201~");
+  assert.equal(formatComposerTextInput("one\x15line"), "one line");
+  assert.equal(formatComposerTextInput("tab\there\r\nnext"), "\x1b[200~tab\there\nnext\x1b[201~");
 });

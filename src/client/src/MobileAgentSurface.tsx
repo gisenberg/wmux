@@ -31,6 +31,7 @@ import type {
 } from "./types";
 import { imagesFromClipboard } from "./clipboard-images";
 import { mobileAgentLaunchCommand, type MobileAgentLauncher } from "./mobile-agent-launch";
+import { bracketPastedText, sanitizePastedText } from "./paste-encoding";
 
 interface MobileAgentSurfaceProps {
   state: BootstrapPayload;
@@ -1192,9 +1193,9 @@ const agentLabel = (agent: AgentLauncher): string => ({
   "prime-agent": "Prime Agent",
 }[agent]);
 
-const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[] = []): string => {
+export const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[] = []): string => {
   const messageParts: string[] = [];
-  const normalizedText = text.replace(/\r\n?/g, "\n");
+  const normalizedText = sanitizePastedText(text.replace(/\r\n?/g, "\n"));
   if (normalizedText.trim()) messageParts.push(normalizedText);
   if (attachments.length) {
     if (messageParts.length) messageParts.push("");
@@ -1204,7 +1205,7 @@ const formatComposerTextInput = (text: string, attachments: LocalSentAttachment[
     }
   }
   const normalized = messageParts.join("\n");
-  return normalized.includes("\n") ? `\x1b[200~${normalized}\x1b[201~` : normalized;
+  return normalized.includes("\n") ? bracketPastedText(normalized) : normalized;
 };
 
 export const sendMobileComposerInput = async (

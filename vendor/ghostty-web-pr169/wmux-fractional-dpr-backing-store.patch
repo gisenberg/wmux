@@ -1,0 +1,128 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index dfb2360..cdaf150 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -403,6 +403,10 @@ export class CanvasRenderer {
+   // Canvas Sizing
+   // ==========================================================================
+ 
++  private backingStoreSize(cssPixels: number): number {
++    return Math.round(cssPixels * this.devicePixelRatio);
++  }
++
+   /**
+    * Resize canvas to fit terminal dimensions
+    */
+@@ -414,9 +418,12 @@ export class CanvasRenderer {
+     this.canvas.style.width = `${cssWidth}px`;
+     this.canvas.style.height = `${cssHeight}px`;
+ 
+-    // Set actual canvas size (scaled for DPI)
+-    this.canvas.width = cssWidth * this.devicePixelRatio;
+-    this.canvas.height = cssHeight * this.devicePixelRatio;
++    // Set actual canvas size (scaled for DPI). The backing store holds whole
++    // pixels, so round here and in render()'s comparison; at a fractional DPR
++    // the raw product never equals the truncated canvas size and every frame
++    // would resize and repaint the whole terminal.
++    this.canvas.width = this.backingStoreSize(cssWidth);
++    this.canvas.height = this.backingStoreSize(cssHeight);
+ 
+     // Scale context to match DPI (setting canvas.width/height resets the context)
+     this.ctx.scale(this.devicePixelRatio, this.devicePixelRatio);
+@@ -477,8 +484,8 @@ export class CanvasRenderer {
+ 
+     // Resize canvas if dimensions changed
+     const needsResize =
+-      this.canvas.width !== dims.cols * this.metrics.width * this.devicePixelRatio ||
+-      this.canvas.height !== dims.rows * this.metrics.height * this.devicePixelRatio;
++      this.canvas.width !== this.backingStoreSize(dims.cols * this.metrics.width) ||
++      this.canvas.height !== this.backingStoreSize(dims.rows * this.metrics.height);
+ 
+     if (needsResize) {
+       this.resize(dims.cols, dims.rows);
+diff --git a/lib/terminal.ts b/lib/terminal.ts
+index 4366e1b..52d23a5 100644
+--- a/lib/terminal.ts
++++ b/lib/terminal.ts
+@@ -690,12 +690,8 @@ export class Terminal extends TerminalCore {
+       this.wasmTerm.resize(cols, rows);
+ 
+       if (this.renderer && this.canvas) {
++        // The renderer sizes both the CSS box and the device-scaled backing store.
+         this.renderer.resize(cols, rows);
+-        const metrics = this.renderer.getMetrics();
+-        this.canvas.width = metrics.width * cols;
+-        this.canvas.height = metrics.height * rows;
+-        this.canvas.style.width = `${metrics.width * cols}px`;
+-        this.canvas.style.height = `${metrics.height * rows}px`;
+         this.updateWasmPixelSize();
+         this.renderer.render(this.wasmTerm, true, this.viewportY, this);
+       }
+diff --git a/lib/renderer-fractional-dpr.test.ts b/lib/renderer-fractional-dpr.test.ts
+new file mode 100644
+index 0000000..2ade65c
+--- /dev/null
++++ b/lib/renderer-fractional-dpr.test.ts
+@@ -0,0 +1,62 @@
++/**
++ * Renderer backing-store sizing at fractional device pixel ratios.
++ *
++ * BUG: render() compared canvas.width, which the browser truncates to an
++ * integer, with the unrounded product cols * cellWidth * devicePixelRatio.
++ * At a fractional ratio such as 1.1 the two never matched, so every frame
++ * resized the canvas and repainted the whole terminal.
++ */
++
++import { describe, expect, test } from 'bun:test';
++import { CanvasRenderer } from './renderer';
++import type { IRenderable } from './renderer';
++import type { GhosttyCell } from './types';
++
++function line(cols: number): GhosttyCell[] {
++  return Array.from({ length: cols }, () => ({
++    codepoint: 0x41,
++    fg_r: 200,
++    fg_g: 200,
++    fg_b: 200,
++    bg_r: 0,
++    bg_g: 0,
++    bg_b: 0,
++    flags: 0,
++    width: 1,
++    hyperlink_id: 0,
++    grapheme_len: 0,
++  }));
++}
++
++function buffer(cols: number, rows: number): IRenderable {
++  return {
++    getLine: (y) => (y >= 0 && y < rows ? line(cols) : null),
++    getCursor: () => ({ x: 0, y: 0, visible: false }),
++    getDimensions: () => ({ cols, rows }),
++    isRowDirty: () => false,
++    clearDirty() {},
++    getGraphemeString: () => 'A',
++  };
++}
++
++describe('Renderer fractional device pixel ratio', () => {
++  for (const devicePixelRatio of [1, 1.1, 1.25, 1.36, 2.2, 2.5]) {
++    test(`does not resize again on an idle render at ${devicePixelRatio}`, () => {
++      const canvas = document.createElement('canvas');
++      const renderer = new CanvasRenderer(canvas, { devicePixelRatio });
++      let resizes = 0;
++      const resize = renderer.resize.bind(renderer);
++      renderer.resize = (cols: number, rows: number) => {
++        resizes++;
++        resize(cols, rows);
++      };
++      const source = buffer(83, 29);
++      renderer.render(source, true);
++      renderer.render(source, false);
++      renderer.render(source, false);
++      expect(resizes).toBe(1);
++      expect(Number.isInteger(canvas.width)).toBe(true);
++      expect(canvas.width).toBe(Math.round(83 * renderer.getMetrics().width * devicePixelRatio));
++    });
++  }
++});
