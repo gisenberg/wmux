@@ -1,0 +1,182 @@
+diff --git a/lib/input-handler.ts b/lib/input-handler.ts
+index 2de9c01..9fdb7eb 100644
+--- a/lib/input-handler.ts
++++ b/lib/input-handler.ts
+@@ -15,6 +15,7 @@
+ 
+ import type { Ghostty, KeyEncoder } from './ghostty';
+ import type { IKeyEvent } from './interfaces';
++import { encodePaste } from './paste';
+ import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
+ 
+ /**
+@@ -916,12 +917,7 @@ export class InputHandler {
+    */
+   private emitPasteData(text: string): void {
+     const hasBracketedPaste = this.getModeCallback?.(2004) ?? false;
+-
+-    if (hasBracketedPaste) {
+-      this.onDataCallback('\x1b[200~' + text + '\x1b[201~');
+-    } else {
+-      this.onDataCallback(text);
+-    }
++    this.onDataCallback(encodePaste(text, hasBracketedPaste));
+   }
+ 
+   /**
+diff --git a/lib/paste.test.ts b/lib/paste.test.ts
+new file mode 100644
+index 0000000..c0ee353
+--- /dev/null
++++ b/lib/paste.test.ts
+@@ -0,0 +1,50 @@
++/**
++ * Paste Encoding Tests
++ *
++ * Tests for encodePaste, which mirrors native Ghostty's paste encoder:
++ * unsafe control bytes become spaces and bracketed pastes are fenced.
++ */
++
++import { describe, expect, test } from 'bun:test';
++import { encodePaste, sanitizePaste } from './paste';
++
++describe('encodePaste', () => {
++  test('passes plain text through unchanged without bracketed paste', () => {
++    expect(encodePaste('ls -la', false)).toBe('ls -la');
++  });
++
++  test('fences text in bracketed paste mode', () => {
++    expect(encodePaste('hello', true)).toBe('\x1b[200~hello\x1b[201~');
++  });
++
++  test('neutralises an end marker hidden in the pasted text', () => {
++    expect(encodePaste('ls\x1b[201~id\r', true)).toBe('\x1b[200~ls [201~id\r\x1b[201~');
++  });
++
++  // Cases ported from Ghostty's src/input/paste.zig
++  test('replaces unsafe bytes in a bracketed paste', () => {
++    expect(encodePaste('hel\x1blo\x00world', true)).toBe('\x1b[200~hel lo world\x1b[201~');
++  });
++
++  test('replaces unsafe bytes without bracketed paste', () => {
++    expect(encodePaste('hel\x03lo', false)).toBe('hel lo');
++  });
++});
++
++describe('sanitizePaste', () => {
++  test('replaces multiple unsafe bytes', () => {
++    expect(sanitizePaste('\x00\x08\x7f')).toBe('   ');
++  });
++
++  test('replaces every line-discipline control character', () => {
++    expect(sanitizePaste('\x03\x1c\x15\x1a\x11\x13\x17\x16\x12\x0f')).toBe(' '.repeat(10));
++  });
++
++  test('keeps tabs, newlines and carriage returns', () => {
++    expect(sanitizePaste('a\tb\nc\rd')).toBe('a\tb\nc\rd');
++  });
++
++  test('keeps non-ASCII text', () => {
++    expect(sanitizePaste('ünïcödé 👋')).toBe('ünïcödé 👋');
++  });
++});
+diff --git a/lib/paste.ts b/lib/paste.ts
+new file mode 100644
+index 0000000..aa8a93d
+--- /dev/null
++++ b/lib/paste.ts
+@@ -0,0 +1,68 @@
++/**
++ * Paste encoding
++ *
++ * Mirrors native Ghostty's paste encoder (src/input/paste.zig as of v1.3.0):
++ * unsafe control bytes are replaced with spaces, and bracketed pastes are
++ * fenced between ESC[200~ and ESC[201~.
++ */
++
++const PASTE_START = '\x1b[200~';
++const PASTE_END = '\x1b[201~';
++
++/**
++ * Control bytes replaced by a space in pasted text, whatever the paste mode.
++ * The list is Ghostty's, which it copied from xterm.
++ *
++ * Pasted control characters can run commands in bash and zsh
++ * (CVE-2026-26982): the pty line discipline acts on the termios characters
++ * even inside a bracketed paste, and ESC could close the bracket early with
++ * ESC[201~ so that the rest of the paste is read as typed input.
++ */
++const UNSAFE_PASTE_BYTES = new Set([
++  0x00, // NUL
++  0x08, // BS
++  0x05, // ENQ
++  0x04, // EOT
++  0x1b, // ESC
++  0x7f, // DEL
++
++  // Line-discipline characters. A program can change these with tcsetattr,
++  // but in practice they are the defaults, which Ghostty also assumes.
++  0x03, // VINTR (Ctrl+C)
++  0x1c, // VQUIT (Ctrl+\)
++  0x15, // VKILL (Ctrl+U)
++  0x1a, // VSUSP (Ctrl+Z)
++  0x11, // VSTART (Ctrl+Q)
++  0x13, // VSTOP (Ctrl+S)
++  0x17, // VWERASE (Ctrl+W)
++  0x16, // VLNEXT (Ctrl+V)
++  0x12, // VREPRINT (Ctrl+R)
++  0x0f, // VDISCARD (Ctrl+O)
++]);
++
++/**
++ * Replace every unsafe control byte in pasted text with a space. Tabs,
++ * newlines and carriage returns are kept, as in Ghostty and xterm.
++ */
++export function sanitizePaste(text: string): string {
++  let result = '';
++  for (const char of text) {
++    result += UNSAFE_PASTE_BYTES.has(char.codePointAt(0) ?? 0) ? ' ' : char;
++  }
++  return result;
++}
++
++/**
++ * Encode text for pasting into the PTY.
++ *
++ * Unlike Ghostty, newlines outside bracketed paste are passed through
++ * unchanged rather than converted to carriage returns; that conversion is
++ * not a security measure and is left as it was.
++ *
++ * @param text - The pasted text
++ * @param bracketed - Whether the application enabled bracketed paste mode
++ */
++export function encodePaste(text: string, bracketed: boolean): string {
++  const clean = sanitizePaste(text);
++  return bracketed ? PASTE_START + clean + PASTE_END : clean;
++}
+diff --git a/lib/terminal.ts b/lib/terminal.ts
+index ce91f3a..4366e1b 100644
+--- a/lib/terminal.ts
++++ b/lib/terminal.ts
+@@ -24,6 +24,7 @@ import type {
+   IUnicodeVersionProvider,
+ } from './interfaces';
+ import { LinkDetector } from './link-detector';
++import { encodePaste } from './paste';
+ import { OSC8LinkProvider } from './providers/osc8-link-provider';
+ import { UrlRegexProvider } from './providers/url-regex-provider';
+ import { CanvasRenderer, DEFAULT_THEME, type IRenderable } from './renderer';
+@@ -652,11 +653,8 @@ export class Terminal extends TerminalCore {
+     if (this.options.disableStdin) return;
+ 
+     this.awaitingEcho = true;
+-    if (this.wasmTerm!.hasBracketedPaste()) {
+-      this.dataEmitter.fire('\x1b[200~' + data + '\x1b[201~');
+-    } else {
+-      this.dataEmitter.fire(data);
+-    }
++    // Wrap with bracketed paste sequences (DEC mode 2004) if enabled
++    this.dataEmitter.fire(encodePaste(data, this.wasmTerm!.hasBracketedPaste()));
+   }
+ 
+   override input(data: string, wasUserInput: boolean = false): void {
