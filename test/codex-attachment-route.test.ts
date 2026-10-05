@@ -9,9 +9,22 @@ const endpoint = (id = "one", socketPath = "/private/native.sock") => ({ id, lab
 const receipt = (socket = "/private/native.sock", generation = "gen-a") => ({ ready: true, policy: "enforce", account: process.getuid?.(), socket, generation, launcherHash: "l", deploymentHash: "d", peerPid: 123, nativePath: "/proc/123/exe", peerExeDev: 1, peerExeIno: 2 });
 const managedArgv = ["/release/venv/bin/python", "-I", "-m", "codex_usage_guard", "managed-cli", "--config", "/release/etc/enforce.json", "--native", "/proc/123/exe", "--", "-c", "check_for_update_on_startup=false", "resume", "thread_a"];
 const native = (id = "thread_a", status = "idle", queued: unknown[] = []) => ({ thread: { id, cwd: "/work", status: { type: status }, canAcceptDirectInput: true }, queue: { data: queued, nextCursor: null }, loaded: { data: [id], nextCursor: null } });
+// Existing-task attachment is qualified only on Linux; elsewhere the route
+// refuses before any probe, so attestation behavior is only observable there.
+const linuxOnly = { skip: process.platform !== "linux" ? "existing-task attachment is qualified only on Linux" : false };
+const posixOnly = { skip: process.platform === "win32" ? "requires POSIX pty and socket facilities" : false };
 const saved = () => ({ ...native(), thread: { ...native().thread, status: { type: "notLoaded" }, canAcceptDirectInput: null }, loaded: { data: [] as string[], nextCursor: null } });
 
-test("rejects unqualified server versions and receipts without an exact server executable", async () => {
+test("refuses attachment before probing on platforms other than Linux", { skip: process.platform === "linux" ? "covered by the Linux attestation tests" : false }, async () => {
+  const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",
+    inspect: async () => { throw new Error("route inspected on an unqualified platform"); },
+    probe: async () => { throw new Error("native probed on an unqualified platform"); } });
+  assert.equal(result.public.enabled, false);
+  assert.equal(result.public.reason, "attachment_platform_unsupported");
+  assert.equal(result.private, null);
+});
+
+test("rejects unqualified server versions and receipts without an exact server executable", linuxOnly, async () => {
   for (const inspected of [null, { ...receipt(), nativePath: "/new/installed/codex" }, { ...receipt(), peerExeIno: undefined }]) {
     const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a", probe: async () => native(),
       inspect: async () => { if (!inspected) throw new Error("attachment_native_version_unqualified"); return inspected; } });
@@ -20,7 +33,7 @@ test("rejects unqualified server versions and receipts without an exact server e
   }
 });
 
-test("startup attestation failure preserves the child's PTY diagnostic", () => {
+test("startup attestation failure preserves the child's PTY diagnostic", posixOnly, () => {
   const script = fileURLToPath(new URL("../scripts/wmux-agent-run", import.meta.url));
   const result = spawnSync("python3", ["-c", `
 import importlib.machinery,importlib.util,os,pty,sys
@@ -47,7 +60,7 @@ assert b'EXPECTED_FAILURE' in output,repr(output)
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("saved tasks can resume through the exact managed route without changing route generation", async () => {
+test("saved tasks can resume through the exact managed route without changing route generation", linuxOnly, async () => {
   const attest = (response: unknown) => attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",
     inspect: async () => receipt(), probe: async () => response });
   const result = await attest(saved());
@@ -62,7 +75,7 @@ test("saved tasks can resume through the exact managed route without changing ro
   assert.equal((await attest({ ...saved(), loaded: native().loaded })).public.mode, "resume");
 });
 
-test("saved resume refuses queued or unknown input, malformed inventory and unknown capabilities", async () => {
+test("saved resume refuses queued or unknown input, malformed inventory and unknown capabilities", linuxOnly, async () => {
   const responses = [
     { ...saved(), queue: { data: [{}], nextCursor: null } },
     { ...saved(), queue: { data: [], nextCursor: "more" } },
@@ -83,7 +96,7 @@ test("saved resume refuses queued or unknown input, malformed inventory and unkn
   }
 });
 
-test("saved resume checks other servers and never takes over their loaded task", async () => {
+test("saved resume checks other servers and never takes over their loaded task", linuxOnly, async () => {
   const remote = { ...endpoint("remote"), transport: "ssh" as const, managedLaunch: undefined };
   for (const [page, reason] of [
     [{ data: [], nextCursor: null }, null],
@@ -117,7 +130,7 @@ for value in [b'/resume another-task',b'hello',b'\\r',reply+b'/resume other',byt
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("native attestation refuses a socket replaced between stat and connect", () => {
+test("native attestation refuses a socket replaced between stat and connect", posixOnly, () => {
   const script = fileURLToPath(new URL("../scripts/wmux_codex_attach.py", import.meta.url));
   const result = spawnSync("python3", ["-c", `
 import importlib.util,sys,types,stat,os
@@ -140,7 +153,7 @@ else: raise AssertionError('replacement accepted')
   assert.equal(result.stdout.trim(), "refused");
 });
 
-test("attests an exact loaded local task and keeps route proof private", async () => {
+test("attests an exact loaded local task and keeps route proof private", linuxOnly, async () => {
   const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a",
     inspect: async () => receipt(), probe: async () => native() });
   assert.equal(result.public.enabled, true);
@@ -151,7 +164,7 @@ test("attests an exact loaded local task and keeps route proof private", async (
   assert.equal(result.private?.fingerprint.length, 64);
 });
 
-test("fails closed for a queue, wrong loaded UUID, and non-direct input", async () => {
+test("fails closed for a queue, wrong loaded UUID, and non-direct input", linuxOnly, async () => {
   for (const response of [native("thread_a", "idle", [{}]), native("other"), { ...native(), thread: { ...native().thread, canAcceptDirectInput: false } }]) {
     const result = await attestCodexAttachment({ endpoint: endpoint(), endpoints: [endpoint()], threadId: "thread_a", inspect: async () => receipt(), probe: async () => response });
     assert.equal(result.public.enabled, false);
@@ -159,13 +172,13 @@ test("fails closed for a queue, wrong loaded UUID, and non-direct input", async 
   }
 });
 
-test("does not count aliases of the same socket generation as competing owners", async () => {
+test("does not count aliases of the same socket generation as competing owners", linuxOnly, async () => {
   const first = endpoint("one"), alias = endpoint("alias");
   const result = await attestCodexAttachment({ endpoint: first, endpoints: [first, alias], threadId: "thread_a", inspect: async () => receipt(), probe: async () => native() });
   assert.equal(result.public.enabled, true);
 });
 
-test("requires a complete loaded-owner page and does not mistake stored metadata for ownership", async () => {
+test("requires a complete loaded-owner page and does not mistake stored metadata for ownership", linuxOnly, async () => {
   const first = endpoint("one"), other = endpoint("other", "/private/other.sock");
   const partial = { ...native(), loaded: { data: ["thread_a"], nextCursor: "more" } };
   const incomplete = await attestCodexAttachment({ endpoint: first, endpoints: [first], threadId: "thread_a", inspect: async () => receipt(), probe: async () => partial });
@@ -176,7 +189,7 @@ test("requires a complete loaded-owner page and does not mistake stored metadata
   assert.equal(storedElsewhere.public.enabled, true);
 });
 
-test("fails closed when another configured endpoint is unavailable or owns the loaded task", async () => {
+test("fails closed when another configured endpoint is unavailable or owns the loaded task", linuxOnly, async () => {
   const first = endpoint("one"), other = endpoint("other", "/private/other.sock");
   const unavailable = await attestCodexAttachment({ endpoint: first, endpoints: [first, other], threadId: "thread_a",
     inspect: async input => input.socketPath.includes("other") ? Promise.reject(new Error()) : receipt(), probe: async () => native() });
@@ -187,14 +200,14 @@ test("fails closed when another configured endpoint is unavailable or owns the l
   assert.equal(ambiguous.public.reason, "attachment_owner_ambiguous");
 });
 
-test("never attests SSH or a route without managed launch material", async () => {
+test("never attests SSH or a route without managed launch material", linuxOnly, async () => {
   const ssh = await attestCodexAttachment({ endpoint: { ...endpoint(), transport: "ssh" }, endpoints: [], threadId: "thread_a" });
   const missing = await attestCodexAttachment({ endpoint: { ...endpoint(), managedLaunch: undefined }, endpoints: [], threadId: "thread_a" });
   assert.equal(ssh.public.reason, "attachment_ssh_unsupported");
   assert.equal(missing.public.reason, "attachment_unconfigured");
 });
 
-test("requires an exact empty queue cursor and a concrete task cwd", async () => {
+test("requires an exact empty queue cursor and a concrete task cwd", linuxOnly, async () => {
   const noCursor = { ...native(), queue: { data: [], nextCursor: undefined } };
   const noCwd = { ...native(), thread: { ...native().thread, cwd: null } };
   for (const response of [noCursor, noCwd]) {
@@ -203,7 +216,7 @@ test("requires an exact empty queue cursor and a concrete task cwd", async () =>
   }
 });
 
-test("checks SSH peer ownership without requiring a remote managed launcher", async () => {
+test("checks SSH peer ownership without requiring a remote managed launcher", linuxOnly, async () => {
   const first = endpoint(), remote = { ...endpoint("remote"), transport: "ssh" as const, managedLaunch: undefined };
   const outcomes = [
     { page: { data: [], nextCursor: null }, reason: null },

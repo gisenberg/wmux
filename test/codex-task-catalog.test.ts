@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CodexCatalogError, CodexTaskCatalog, loadCodexCatalogConfig } from "../src/server/codex-task-catalog.js";
+import { makeFilePublic, privateTempDirectory, setDirectoryPrivate } from "./private-fixture.js";
 
 const machine = (overrides: Record<string, unknown> = {}) => ({
   id: "local_fixture", label: "Local fixture", kind: "local", source: "static", host: "127.0.0.1", ...overrides,
@@ -18,18 +19,31 @@ const catalog = (query: (input: any) => Promise<unknown>, machines = () => [mach
   new CodexTaskCatalog(machines, [endpoint], query as any);
 
 test("loads only a private, bounded, canonical catalog JSON file", t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-catalog-config-"));
-  const file = path.join(directory, "catalog.json");
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-catalog-config-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, endpoints: [endpoint] }), { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  const writeConfig = (name: string): string => {
+    const file = path.join(directory, name);
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, endpoints: [endpoint] }), { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+    return file;
+  };
+  const file = writeConfig("catalog.json");
   assert.deepEqual(loadCodexCatalogConfig(file), [endpoint]);
-  fs.chmodSync(file, 0o644);
+  const exposed = writeConfig("exposed.json");
+  makeFilePublic(exposed);
+  assert.throws(() => loadCodexCatalogConfig(exposed), /private owned/);
+  setDirectoryPrivate(directory, false);
   assert.throws(() => loadCodexCatalogConfig(file), /private owned/);
-  fs.chmodSync(file, 0o600);
-  fs.chmodSync(directory, 0o755);
-  assert.throws(() => loadCodexCatalogConfig(file), /private owned/);
-  fs.chmodSync(directory, 0o700);
+  setDirectoryPrivate(directory, true);
+  assert.deepEqual(loadCodexCatalogConfig(file), [endpoint]);
+  if (process.platform === "win32") {
+    // Unprivileged Windows accounts cannot create file symlinks; a junction
+    // exercises the same non-canonical path rejection.
+    const junction = path.join(directory, "junction");
+    fs.symlinkSync(directory, junction, "junction");
+    assert.throws(() => loadCodexCatalogConfig(path.join(junction, "catalog.json")), /private owned/);
+    return;
+  }
   const linked = path.join(directory, "linked.json");
   fs.symlinkSync(file, linked);
   assert.throws(() => loadCodexCatalogConfig(linked), /private owned/);

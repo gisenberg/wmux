@@ -82,6 +82,27 @@ AGENT_RESTART_EXIT_CODE = 75
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30
 DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 15
 DEFAULT_STREAM_RESTART_MAX_SECONDS = 30
+# Managed agents run for weeks, so their own log is size-capped and rotated,
+# and the shared log directory is pruned by age, run count, and total bytes.
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
+LOG_RETENTION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
+LOG_RETENTION_MAX_RUN_FILES = 40
+LOG_RETENTION_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+LOG_RETENTION_INTERVAL_SECONDS = 6 * 60 * 60
+MANAGED_LOG_NAME_PATTERN = re.compile(r"^(?:windows|session|stream)-agent[A-Za-z0-9._-]*\.log$")
+RUN_LOG_NAME_PATTERN = re.compile(r"-\d+-\d+\.(?:out|err)\.log$")
+CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+# The agent is the remote control plane for its host, so it schedules ahead of
+# ordinary work. Children of an above-normal process default to normal CPU
+# priority on Windows, so panes and the stream worker are not boosted.
+NORMAL_PRIORITY_CLASS = 0x00000020
+ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+PROCESS_PRIORITY_CLASSES = {"abovenormal": ABOVE_NORMAL_PRIORITY_CLASS, "normal": NORMAL_PRIORITY_CLASS}
+PROCESS_MEMORY_PRIORITY_INFORMATION = 0
+MEMORY_PRIORITY_NORMAL = 5
+PROCESS_IO_PRIORITY_INFORMATION = 33
+IO_PRIORITY_NORMAL = 2
 POSIX_RUNTIME_FILE_CAPABILITY = "posix-runtime-files-v1"
 CONSOLE_SCREEN_CAPABILITY = "console-screen-v1"
 
@@ -463,6 +484,207 @@ def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+class RotatingLog:
+    """Thread-safe, timestamped, size-capped text sink used as sys.stderr."""
+
+    def __init__(self, path: str, max_bytes: int = LOG_MAX_BYTES, backup_count: int = LOG_BACKUP_COUNT):
+        self.path = path
+        self.max_bytes = max(1, max_bytes)
+        self.backup_count = max(0, backup_count)
+        self.lock = threading.Lock()
+        self.at_line_start = True
+        self.next_rotation_at = self.max_bytes
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.file = open(path, "ab")
+        self.size = self.file.tell()
+
+    def backup_path(self, index: int) -> str:
+        stem, extension = os.path.splitext(self.path)
+        return f"{stem}.{index}{extension}"
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with self.lock:
+            if self.file.closed:
+                return len(text)
+            pieces: list[str] = []
+            for line in text.splitlines(keepends=True):
+                if self.at_line_start:
+                    pieces.append(f"{timestamp} ")
+                pieces.append(line)
+                self.at_line_start = line.endswith(("\n", "\r"))
+            data = "".join(pieces).encode("utf-8", errors="replace")
+            if self.size > 0 and self.size + len(data) > self.next_rotation_at:
+                self._rotate()
+            try:
+                self.file.write(data)
+                self.file.flush()
+                self.size += len(data)
+            except OSError:
+                pass
+        return len(text)
+
+    def _rotate(self) -> None:
+        self.file.close()
+        try:
+            for index in range(self.backup_count - 1, 0, -1):
+                source = self.backup_path(index)
+                if os.path.exists(source):
+                    os.replace(source, self.backup_path(index + 1))
+            if self.backup_count > 0:
+                os.replace(self.path, self.backup_path(1))
+            self.file = open(self.path, "wb")
+        except OSError:
+            # Another process may hold a backup open (for example an editor on
+            # Windows). Truncating still enforces the cap; if even that fails,
+            # keep appending and retry after a further fraction of the cap.
+            try:
+                self.file = open(self.path, "wb")
+            except OSError:
+                self.file = open(self.path, "ab")
+                self.size = self.file.tell()
+                self.next_rotation_at = self.size + max(1, self.max_bytes // 8)
+                return
+        self.size = 0
+        self.next_rotation_at = self.max_bytes
+
+    def flush(self) -> None:
+        with self.lock:
+            if not self.file.closed:
+                try:
+                    self.file.flush()
+                except OSError:
+                    pass
+
+    def isatty(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        with self.lock:
+            if not self.file.closed:
+                self.file.close()
+
+
+def prune_agent_logs(log_dir: str, protected: set[str], now: float | None = None) -> tuple[int, int]:
+    """Apply the managed log retention policy; return (files removed, bytes removed).
+
+    Only wmux agent log names are candidates. Files another process still has
+    open fail to delete on Windows and are skipped until a later sweep.
+    """
+    now = time.time() if now is None else now
+    protected_paths = {os.path.normcase(os.path.abspath(path)) for path in protected if path}
+    candidates: list[tuple[float, int, str, bool]] = []
+    try:
+        entries = list(os.scandir(log_dir))
+    except OSError:
+        return 0, 0
+    for entry in entries:
+        if not MANAGED_LOG_NAME_PATTERN.match(entry.name):
+            continue
+        path = os.path.abspath(entry.path)
+        if os.path.normcase(path) in protected_paths:
+            continue
+        try:
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            stat = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        candidates.append((stat.st_mtime, stat.st_size, path, bool(RUN_LOG_NAME_PATTERN.search(entry.name))))
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+
+    expired: list[tuple[float, int, str, bool]] = []
+    retained: list[tuple[float, int, str, bool]] = []
+    run_files = 0
+    for candidate in candidates:
+        modified, _size, _path, is_run_file = candidate
+        run_files += 1 if is_run_file else 0
+        if now - modified > LOG_RETENTION_MAX_AGE_SECONDS or (is_run_file and run_files > LOG_RETENTION_MAX_RUN_FILES):
+            expired.append(candidate)
+        else:
+            retained.append(candidate)
+
+    removed_files = 0
+    removed_bytes = 0
+
+    def remove(candidate: tuple[float, int, str, bool]) -> bool:
+        nonlocal removed_files, removed_bytes
+        try:
+            os.remove(candidate[2])
+        except OSError:
+            return False
+        removed_files += 1
+        removed_bytes += candidate[1]
+        return True
+
+    for candidate in expired:
+        remove(candidate)
+    total = sum(candidate[1] for candidate in retained)
+    for candidate in reversed(retained):
+        if total <= LOG_RETENTION_MAX_TOTAL_BYTES:
+            break
+        if remove(candidate):
+            total -= candidate[1]
+    return removed_files, removed_bytes
+
+
+class LogRetention:
+    def __init__(self, log_dir: str, protected: set[str]):
+        self.log_dir = log_dir
+        self.protected = protected
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def sweep(self) -> None:
+        removed_files, removed_bytes = prune_agent_logs(self.log_dir, self.protected)
+        if removed_files:
+            print(
+                f"{agent_program_name()}: log retention removed {removed_files} file(s), {removed_bytes} bytes",
+                file=sys.stderr,
+            )
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, name="wmux-log-retention", daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(LOG_RETENTION_INTERVAL_SECONDS):
+            self.sweep()
+
+
+def agent_log_path(explicit: str, config_path: str) -> str:
+    if explicit:
+        return os.path.abspath(os.path.expandvars(os.path.expanduser(explicit)))
+    # Scheduled-task wrappers written before --log-file existed still export
+    # their per-run console capture path; place the managed log beside it so
+    # an agent update gains retention without reinstalling the task.
+    legacy_capture = os.environ.get("WMUX_AGENT_ERR", "")
+    if not legacy_capture:
+        return ""
+    stem = os.path.splitext(os.path.basename(config_path))[0] or agent_program_name()
+    return os.path.join(os.path.dirname(os.path.abspath(legacy_capture)), f"{stem}.log")
+
+
+def forward_child_output(stream: Any) -> None:
+    try:
+        for raw in iter(stream.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if line:
+                print(line, file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
 def read_trimmed_file(path: str) -> str:
     if not os.path.isfile(path):
         return ""
@@ -756,7 +978,16 @@ class StreamSupervisor:
             command, _config_path = resolved
             started_at = time.monotonic()
             try:
-                process = subprocess.Popen(command)
+                # Pipe worker output through the agent's own log sink so it is
+                # timestamped and size-capped instead of growing an inherited
+                # file handle for the lifetime of the agent.
+                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                threading.Thread(
+                    target=forward_child_output,
+                    args=(process.stdout,),
+                    name="wmux-stream-worker-output",
+                    daemon=True,
+                ).start()
                 with self.lock:
                     self.process = process
                     self.status.update({
@@ -845,6 +1076,54 @@ def retire_legacy_heartbeat_task(config: dict[str, Any]) -> None:
                 os.remove(os.path.join(helper_dir, name))
             except OSError:
                 pass
+
+
+def apply_process_priority(config: dict[str, Any]) -> str:
+    """Raise the agent's CPU priority and restore normal I/O and memory priority.
+
+    Scheduled Tasks default to priority 7, which starts the agent with
+    below-normal CPU, low I/O, and low memory priority; under host load that
+    starves the control plane and every pane process inherits the penalty.
+    Returns a log line, or "" when the configuration leaves priority alone.
+    """
+    if os.name != "nt":
+        return ""
+    requested = config_string(config, "processPriority", "aboveNormal").strip().lower()
+    if requested == "inherit":
+        return ""
+    notes: list[str] = []
+    if requested not in PROCESS_PRIORITY_CLASSES:
+        notes.append(f"unknown processPriority {requested!r}; using aboveNormal")
+        requested = "abovenormal"
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.SetPriorityClass.restype = wintypes.BOOL
+    kernel32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetProcessInformation.restype = wintypes.BOOL
+    ntdll.NtSetInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG]
+    ntdll.NtSetInformationProcess.restype = ctypes.c_long
+    process = kernel32.GetCurrentProcess()
+    applied: list[str] = []
+    if kernel32.SetPriorityClass(process, PROCESS_PRIORITY_CLASSES[requested]):
+        applied.append("cpu=" + ("aboveNormal" if requested == "abovenormal" else "normal"))
+    else:
+        notes.append(f"cpu priority unchanged: {ctypes.WinError(ctypes.get_last_error())}")
+    memory = wintypes.ULONG(MEMORY_PRIORITY_NORMAL)
+    if kernel32.SetProcessInformation(process, PROCESS_MEMORY_PRIORITY_INFORMATION, ctypes.byref(memory), ctypes.sizeof(memory)):
+        applied.append("memory=normal")
+    else:
+        notes.append(f"memory priority unchanged: {ctypes.WinError(ctypes.get_last_error())}")
+    io_priority = wintypes.ULONG(IO_PRIORITY_NORMAL)
+    status = ntdll.NtSetInformationProcess(process, PROCESS_IO_PRIORITY_INFORMATION, ctypes.byref(io_priority), ctypes.sizeof(io_priority))
+    if status == 0:
+        applied.append("io=normal")
+    else:
+        notes.append(f"io priority unchanged: NTSTATUS 0x{status & 0xFFFFFFFF:08x}")
+    return f"{agent_program_name()}: process priority {' '.join(applied) or 'unchanged'}" + (f" ({'; '.join(notes)})" if notes else "")
 
 
 def pywinpty_available() -> bool:
@@ -2345,11 +2624,29 @@ class AgentState:
             callback()
 
 
+class AgentHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        error = sys.exc_info()[1]
+        if isinstance(error, CLIENT_DISCONNECT_ERRORS):
+            peer = client_address[0] if isinstance(client_address, tuple) and client_address else client_address
+            print(f"{agent_program_name()}: {peer} disconnected before the response completed: {error}", file=sys.stderr)
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     state: AgentState
 
     def log_message(self, message: str, *args: Any) -> None:
         print(f"{agent_program_name()}: {self.address_string()} {message % args}", file=sys.stderr)
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        # Health probes, output long-polls, and keystroke input arrive many
+        # times per second; only failed requests are worth a log line.
+        status = getattr(code, "value", code)
+        if isinstance(status, int) and status < 400:
+            return
+        super().log_request(code, size)
 
     def authorized(self) -> bool:
         expected = str(self.state.config.get("token") or os.environ.get("WMUX_AGENT_TOKEN") or "")
@@ -2558,19 +2855,35 @@ def main() -> int:
     parser.add_argument("--host", default="")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument("--log-file", default="", help="write a rotated, size-capped log here instead of stderr")
     parser.add_argument("--read-console-screen", type=int, metavar="PID", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.read_console_screen is not None:
         sys.stdout.write(json.dumps(read_console_screen(args.read_console_screen), separators=(",", ":")))
         sys.stdout.flush()
         return 0
+    log_retention: LogRetention | None = None
+    log_path = agent_log_path(args.log_file, args.config)
+    if log_path:
+        log = RotatingLog(log_path)
+        sys.stdout = log  # type: ignore[assignment]
+        sys.stderr = log  # type: ignore[assignment]
+        log_retention = LogRetention(
+            os.path.dirname(log_path),
+            {log_path, os.environ.get("WMUX_AGENT_OUT", ""), os.environ.get("WMUX_AGENT_ERR", "")},
+        )
+        log_retention.sweep()
+        log_retention.start()
     config = load_config(args.config)
+    priority_report = apply_process_priority(config)
+    if priority_report:
+        print(priority_report, file=sys.stderr)
     host = args.host or config_string(config, "host", "127.0.0.1")
     port = args.port or config_int(config, "port", 3481)
     if not args.allow_public_bind and not is_private_bind_host(host):
         raise SystemExit(f"{program}: refusing to bind non-private host {host}")
     Handler.state = AgentState(config)
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = AgentHTTPServer((host, port), Handler)
     registration_heartbeat = RegistrationHeartbeat(config, args.config, int(server.server_address[1]))
     stream_supervisor = StreamSupervisor(config, args.config)
     Handler.state.set_registration_heartbeat(registration_heartbeat)
@@ -2589,6 +2902,8 @@ def main() -> int:
     finally:
         stream_supervisor.stop()
         registration_heartbeat.stop()
+        if log_retention:
+            log_retention.stop()
         server.server_close()
     return AGENT_RESTART_EXIT_CODE if Handler.state.restart_requested else 0
 

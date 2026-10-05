@@ -295,6 +295,34 @@ wmux-windows-setup agent-status
 wmux-windows-setup agent-logs
 ```
 
+Each agent generation writes a timestamped log named after its config, such as
+`~\.wmux\logs\windows-agent.log` or `windows-agent-3482.log`.
+The log rotates at 10 MiB and keeps three backups.
+Successful requests are not logged; failed requests, client disconnects, and
+stream-worker output are.
+The per-run `windows-agent-<run>.err.log` and `.out.log` files only capture
+interpreter-level output such as a startup crash.
+At startup and every six hours the agent prunes wmux agent logs in that
+directory: files older than 14 days, run captures beyond the newest 40, and then
+the oldest files until the directory holds at most 256 MiB.
+Files another process still has open are skipped until a later sweep.
+Agents started by task wrappers that predate `--log-file` derive the same log
+path, so an agent update gains retention without reinstalling the task.
+
+The agent is the host's remote control plane, so it must stay responsive while
+the machine is under heavy load.
+wmux registers its Scheduled Tasks at Task Scheduler priority 4 (normal) rather
+than the default 7, which starts processes with below-normal CPU, low I/O, and
+low memory priority.
+At startup the agent also sets its own CPU priority to above normal and its I/O
+and memory priority to normal, so tasks registered before this change are
+corrected as soon as the agent updates.
+Processes the agent starts, including pane shells and the stream worker, run at
+normal priority because Windows does not pass an above-normal class to child
+processes.
+Set `processPriority` in the agent config to `normal` to keep the agent at
+normal CPU priority, or `inherit` to leave the task-assigned priorities alone.
+
 When rotating the registration token, update `~\.wmux\registration-token`; the
 running agent reloads it on the next heartbeat. Address changes are accepted for
 idle persisted panes, but any referenced pane pins the connection descriptor and

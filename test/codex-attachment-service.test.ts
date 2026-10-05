@@ -9,9 +9,10 @@ import { CodexTasksService } from "../src/server/codex-tasks.js";
 import { CodexCliViewUncertainError } from "../src/server/codex-task-launches.js";
 import { StateStore } from "../src/server/state.js";
 import type { MachineConfig } from "../src/server/types.js";
+import { privateTempDirectory } from "./private-fixture.js";
 
-test("saved opening rechecks queues and verifies loaded state before reusing the terminal", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-saved-service-"));
+test("saved opening rechecks queues and verifies loaded state before reusing the terminal", { skip: process.platform !== "linux" ? "existing-task attachment is qualified only on Linux" : false }, async () => {
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-saved-service-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const endpoint = { id: "native", label: "Native", machineId: "local", transport: "local" as const, socketPath: "/private/native.sock",
@@ -54,7 +55,7 @@ test("saved opening rechecks queues and verifies loaded state before reusing the
 });
 
 test("live attachment rechecks route and exact pane; deleting the pane cannot reuse its launch receipt", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attach-service-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attach-service-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const workspace = state.createWorkspace("local");
@@ -102,7 +103,7 @@ test("requested attachment names preserve independent pins and unnamed views wit
     { workspacePin: false, tabPin: false, name: null, verified: true },
     { workspacePin: false, tabPin: false, name: "Native 日本語", verified: false },
   ]) {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attach-name-"));
+    const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attach-name-"));
     const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
     const state = new StateStore(machines, path.join(directory, "state.json"));
     const workspace = state.createWorkspace("local"), tab = workspace.tabs[0]!;
@@ -131,7 +132,7 @@ test("requested attachment names preserve independent pins and unnamed views wit
 });
 
 test("uncertain startup and recovered attempts initialize only default titles, including after restart", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attach-recover-name-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attach-recover-name-"));
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const unrelated = state.createWorkspace("local", undefined, "agent");

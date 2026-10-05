@@ -2265,7 +2265,7 @@ const startTuiFixture = async (options: TuiFixtureOptions = {}) => {
   };
 };
 
-test("catalog attachment workspaces are user-created even when startup fails", async () => {
+test("catalog attachment workspaces are user-created even when startup fails", { skip: process.platform === "win32" ? "Codex attachment descriptors require POSIX owner checks" : false }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-user-attachment-"));
   const descriptor = path.join(directory, "attachment.json");
   // Stop at descriptor binding, after the real workspace creation request.
@@ -2276,6 +2276,21 @@ test("catalog attachment workspaces are user-created even when startup fails", a
       "--no-prompt", "--user-created", "--codex-attach-file", descriptor], parentEnvironment()));
     assert.deepEqual(fixture.workspaceRequests, [{ machineId: "linux-box", createdBy: "user" }]);
     assert.equal(fixture.inputs.length, 0);
+  } finally { await fixture.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("catalog attachment descriptors are refused before workspace creation without POSIX owner checks", { skip: process.platform !== "win32" ? "POSIX hosts validate the descriptor owner" : false }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmuxctl-windows-attachment-"));
+  const descriptor = path.join(directory, "attachment.json");
+  fs.writeFileSync(descriptor, "{}");
+  const fixture = await startTuiFixture();
+  try {
+    const completed = await cliProcess(fixture.url, ["tui", "codex", "linux-box", "--directory", "/srv/project",
+      "--no-prompt", "--user-created", "--codex-attach-file", descriptor], "", parentEnvironment());
+    assert.notEqual(completed.code, 0);
+    assert.match(completed.stderr, /--codex-attach-file requires a POSIX host/);
+    assert.doesNotMatch(completed.stderr, /Traceback/);
+    assert.deepEqual(fixture.workspaceRequests, []);
   } finally { await fixture.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
