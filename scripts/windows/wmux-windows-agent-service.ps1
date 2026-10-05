@@ -64,6 +64,13 @@ function Get-PythonLaunch {
   return $null
 }
 
+# The agent writes its own rotated, size-capped log here and prunes old agent
+# logs; the per-run console capture only receives interpreter-level output.
+function Get-AgentLogPath {
+  param([string]$TargetConfig = $Config)
+  return Join-Path $LogDir "$([System.IO.Path]::GetFileNameWithoutExtension($TargetConfig)).log"
+}
+
 function Write-Wrapper {
   param(
     [string]$TargetConfig = $Config,
@@ -89,6 +96,8 @@ function Write-Wrapper {
     (ConvertTo-CmdArgument $Agent)
     '--config'
     (ConvertTo-CmdArgument $TargetConfig)
+    '--log-file'
+    (ConvertTo-CmdArgument (Get-AgentLogPath $TargetConfig))
     '>>'
     '"%WMUX_AGENT_OUT%"'
     '2>>'
@@ -1070,6 +1079,8 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
   'logs' {
     $Files = @()
     $Files += Get-Item -LiteralPath $OutLog, $ErrLog -ErrorAction SilentlyContinue
+    $Files += Get-ChildItem -LiteralPath $LogDir -Filter 'windows-agent*.log' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^windows-agent(-\d+)?\.log$' }
     $Files += Get-ChildItem -LiteralPath $LogDir -Filter 'windows-agent-*.out.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2
     $Files += Get-ChildItem -LiteralPath $LogDir -Filter 'windows-agent-*.err.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2
     foreach ($File in @($Files | Sort-Object FullName -Unique)) {

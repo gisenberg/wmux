@@ -295,6 +295,20 @@ wmux-windows-setup agent-status
 wmux-windows-setup agent-logs
 ```
 
+Each agent generation writes a timestamped log named after its config, such as
+`~\.wmux\logs\windows-agent.log` or `windows-agent-3482.log`.
+The log rotates at 10 MiB and keeps three backups.
+Successful requests are not logged; failed requests, client disconnects, and
+stream-worker output are.
+The per-run `windows-agent-<run>.err.log` and `.out.log` files only capture
+interpreter-level output such as a startup crash.
+At startup and every six hours the agent prunes wmux agent logs in that
+directory: files older than 14 days, run captures beyond the newest 40, and then
+the oldest files until the directory holds at most 256 MiB.
+Files another process still has open are skipped until a later sweep.
+Agents started by task wrappers that predate `--log-file` derive the same log
+path, so an agent update gains retention without reinstalling the task.
+
 When rotating the registration token, update `~\.wmux\registration-token`; the
 running agent reloads it on the next heartbeat. Address changes are accepted for
 idle persisted panes, but any referenced pane pins the connection descriptor and

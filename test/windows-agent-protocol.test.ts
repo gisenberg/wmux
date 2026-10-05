@@ -818,6 +818,7 @@ with tempfile.TemporaryDirectory() as root:
         "unauthorized": unauthorized_status,
         "accepted": accepted_status,
         "capabilities": health["capabilities"],
+        "backend": health["backend"],
         "protocol": health["protocolVersion"],
         "deleted": deleted["removed"],
         "remains": remains,
@@ -825,10 +826,17 @@ with tempfile.TemporaryDirectory() as root:
 `;
   const result = spawnSync("python3", ["-c", source], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {
+  const observed = JSON.parse(result.stdout);
+  // console-screen-v1 is advertised only by Windows agents running ConPTY,
+  // which depends on whether pywinpty is installed on the test host.
+  const platformCapabilities = process.platform === "win32"
+    ? (observed.backend === "conpty" ? ["console-screen-v1"] : [])
+    : ["posix-runtime-files-v1"];
+  assert.deepEqual(observed, {
     unauthorized: 401,
     accepted: 201,
-    capabilities: ["paste-images-v1", "registration-heartbeat-v1", "stream-supervision-v1", ...(process.platform === "win32" ? [] : ["posix-runtime-files-v1"])],
+    capabilities: ["paste-images-v1", "registration-heartbeat-v1", "stream-supervision-v1", ...platformCapabilities],
+    backend: observed.backend,
     protocol: 7,
     deleted: true,
     remains: false,
