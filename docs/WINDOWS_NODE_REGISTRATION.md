@@ -309,6 +309,20 @@ Files another process still has open are skipped until a later sweep.
 Agents started by task wrappers that predate `--log-file` derive the same log
 path, so an agent update gains retention without reinstalling the task.
 
+The agent is the host's remote control plane, so it must stay responsive while
+the machine is under heavy load.
+wmux registers its Scheduled Tasks at Task Scheduler priority 4 (normal) rather
+than the default 7, which starts processes with below-normal CPU, low I/O, and
+low memory priority.
+At startup the agent also sets its own CPU priority to above normal and its I/O
+and memory priority to normal, so tasks registered before this change are
+corrected as soon as the agent updates.
+Processes the agent starts, including pane shells and the stream worker, run at
+normal priority because Windows does not pass an above-normal class to child
+processes.
+Set `processPriority` in the agent config to `normal` to keep the agent at
+normal CPU priority, or `inherit` to leave the task-assigned priorities alone.
+
 When rotating the registration token, update `~\.wmux\registration-token`; the
 running agent reloads it on the next heartbeat. Address changes are accepted for
 idle persisted panes, but any referenced pane pins the connection descriptor and

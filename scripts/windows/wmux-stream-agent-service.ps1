@@ -56,6 +56,7 @@ function New-HiddenPowerShellAction {
 
 function New-WmuxTaskSettings {
   New-ScheduledTaskSettingsSet `
+    -Priority 4 `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `

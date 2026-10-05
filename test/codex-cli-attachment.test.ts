@@ -7,10 +7,12 @@ import net from "node:net";
 import test from "node:test";
 import { isCodexAttachmentPane, recoverCodexAttachmentTarget, verifyCodexAttachment } from "../src/server/codex-cli-attachment.js";
 
-const start = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8").trim().split(" ")[21]!;
+// Existing-task attachment is qualified only on Linux and reads process identity from /proc.
+const linuxOnly = { skip: process.platform !== "linux" ? "existing-task attachment is qualified only on Linux" : false };
+const processStart = (pid: number) => fs.readFileSync(`/proc/${pid}/stat`, "utf8").trim().split(" ")[21]!;
 const proof = (generation = "generation", peerExe = "") => ({ public: { enabled: true, reason: null, generation }, private: { fingerprint: "fingerprint", endpointId: "endpoint", threadId: "thread", generation, cwd: "/work", route: { launcherPath: "/launcher", deploymentPath: "/deploy", managedArgv: ["/launcher", "resume", "thread"] }, receipt: { peerExe, ...(peerExe ? { peerExeDev: fs.statSync(peerExe).dev, peerExeIno: fs.statSync(peerExe).ino } : {}) } } });
 
-test("marks only private bound descriptors as attachment panes and fails closed for a malformed store", () => {
+test("marks only private bound descriptors as attachment panes and fails closed for a malformed store", linuxOnly, () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attachment-registry-"));
   const store = path.join(directory, "codex-attachments"); fs.mkdirSync(store, { mode: 0o700 });
   const descriptor = path.join(store, "123e4567-e89b-12d3-a456-426614174000.json");
@@ -29,7 +31,7 @@ test("marks only private bound descriptors as attachment panes and fails closed 
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("recovers only the exact private bound descriptor tuple after lost controller output", () => {
+test("recovers only the exact private bound descriptor tuple after lost controller output", linuxOnly, () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attachment-recover-"));
   const store = path.join(directory, "codex-attachments"); fs.mkdirSync(store, { mode: 0o700 });
   const request = { requestId: "123e4567-e89b-12d3-a456-426614174000", endpointId: "endpoint", threadId: "thread", generation: "generation" };
@@ -43,7 +45,7 @@ test("recovers only the exact private bound descriptor tuple after lost controll
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("verifies a target-keyed owner-only receipt across coalesced request aliases", async () => {
+test("verifies a target-keyed owner-only receipt across coalesced request aliases", linuxOnly, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attachment-proof-"));
   fs.chmodSync(directory, 0o700);
   const receipts = path.join(directory, "codex-attachments"); fs.mkdirSync(receipts, { mode: 0o700 });
@@ -56,7 +58,7 @@ test("verifies a target-keyed owner-only receipt across coalesced request aliase
   const nativeStart = fs.readFileSync(`/proc/${native.pid}/stat`, "utf8").trim().split(" ")[21]!;
   const nativeExe = fs.realpathSync(`/proc/${native.pid}/exe`); const socket = fs.lstatSync(cliSocket);
   const listener = Number(fs.readFileSync("/proc/net/unix", "utf8").split("\n").find(line => line.endsWith(cliSocket))!.trim().split(/\s+/).at(-2));
-  fs.writeFileSync(file, JSON.stringify({ ...target, fingerprint: "fingerprint", endpointId: "endpoint", wrapperPid: process.pid, wrapperStart: start, managedPid: native.pid, managedStart: nativeStart, nativePid: native.pid, nativeStart, nativeExe, cliSocket, cliSocketDev: socket.dev, cliSocketIno: socket.ino, cliListenerIno: listener, cliPeerPid: native.pid, cliPeerStart: nativeStart, status: "startup-gated" }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...target, fingerprint: "fingerprint", endpointId: "endpoint", wrapperPid: process.pid, wrapperStart: processStart(process.pid), managedPid: native.pid, managedStart: nativeStart, nativePid: native.pid, nativeStart, nativeExe, cliSocket, cliSocketDev: socket.dev, cliSocketIno: socket.ino, cliListenerIno: listener, cliPeerPid: native.pid, cliPeerStart: nativeStart, status: "startup-gated" }), { mode: 0o600 });
   try {
     assert.equal(await verifyCodexAttachment({ request: { endpointId: "endpoint", threadId: "thread" }, target: { ...target, requestId: "coalesced-request" }, storageDirectory: directory, attestation: proof("generation", nativeExe) }), true);
     const movedImage = proof("generation", nativeExe);

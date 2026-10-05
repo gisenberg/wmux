@@ -125,7 +125,7 @@ test("workspace and tab title resets are independent, strict, and idempotent", a
 
 test("authenticated title mutations report deleted workspace and tab targets as not found", async () => {
   const machines: MachineConfig[] = [{ id: "local", name: "Local", kind: "local" }];
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-title-target-auth-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-title-target-auth-"));
   const state = new StateStore(machines, path.join(directory, "state.json"));
   const settings = new SettingsStore(path.join(directory, "settings.json"));
   const token = "T".repeat(43);

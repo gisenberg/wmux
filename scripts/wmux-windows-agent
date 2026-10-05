@@ -93,6 +93,16 @@ LOG_RETENTION_INTERVAL_SECONDS = 6 * 60 * 60
 MANAGED_LOG_NAME_PATTERN = re.compile(r"^(?:windows|session|stream)-agent[A-Za-z0-9._-]*\.log$")
 RUN_LOG_NAME_PATTERN = re.compile(r"-\d+-\d+\.(?:out|err)\.log$")
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+# The agent is the remote control plane for its host, so it schedules ahead of
+# ordinary work. Children of an above-normal process default to normal CPU
+# priority on Windows, so panes and the stream worker are not boosted.
+NORMAL_PRIORITY_CLASS = 0x00000020
+ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+PROCESS_PRIORITY_CLASSES = {"abovenormal": ABOVE_NORMAL_PRIORITY_CLASS, "normal": NORMAL_PRIORITY_CLASS}
+PROCESS_MEMORY_PRIORITY_INFORMATION = 0
+MEMORY_PRIORITY_NORMAL = 5
+PROCESS_IO_PRIORITY_INFORMATION = 33
+IO_PRIORITY_NORMAL = 2
 POSIX_RUNTIME_FILE_CAPABILITY = "posix-runtime-files-v1"
 CONSOLE_SCREEN_CAPABILITY = "console-screen-v1"
 
@@ -1066,6 +1076,54 @@ def retire_legacy_heartbeat_task(config: dict[str, Any]) -> None:
                 os.remove(os.path.join(helper_dir, name))
             except OSError:
                 pass
+
+
+def apply_process_priority(config: dict[str, Any]) -> str:
+    """Raise the agent's CPU priority and restore normal I/O and memory priority.
+
+    Scheduled Tasks default to priority 7, which starts the agent with
+    below-normal CPU, low I/O, and low memory priority; under host load that
+    starves the control plane and every pane process inherits the penalty.
+    Returns a log line, or "" when the configuration leaves priority alone.
+    """
+    if os.name != "nt":
+        return ""
+    requested = config_string(config, "processPriority", "aboveNormal").strip().lower()
+    if requested == "inherit":
+        return ""
+    notes: list[str] = []
+    if requested not in PROCESS_PRIORITY_CLASSES:
+        notes.append(f"unknown processPriority {requested!r}; using aboveNormal")
+        requested = "abovenormal"
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.SetPriorityClass.restype = wintypes.BOOL
+    kernel32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetProcessInformation.restype = wintypes.BOOL
+    ntdll.NtSetInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG]
+    ntdll.NtSetInformationProcess.restype = ctypes.c_long
+    process = kernel32.GetCurrentProcess()
+    applied: list[str] = []
+    if kernel32.SetPriorityClass(process, PROCESS_PRIORITY_CLASSES[requested]):
+        applied.append("cpu=" + ("aboveNormal" if requested == "abovenormal" else "normal"))
+    else:
+        notes.append(f"cpu priority unchanged: {ctypes.WinError(ctypes.get_last_error())}")
+    memory = wintypes.ULONG(MEMORY_PRIORITY_NORMAL)
+    if kernel32.SetProcessInformation(process, PROCESS_MEMORY_PRIORITY_INFORMATION, ctypes.byref(memory), ctypes.sizeof(memory)):
+        applied.append("memory=normal")
+    else:
+        notes.append(f"memory priority unchanged: {ctypes.WinError(ctypes.get_last_error())}")
+    io_priority = wintypes.ULONG(IO_PRIORITY_NORMAL)
+    status = ntdll.NtSetInformationProcess(process, PROCESS_IO_PRIORITY_INFORMATION, ctypes.byref(io_priority), ctypes.sizeof(io_priority))
+    if status == 0:
+        applied.append("io=normal")
+    else:
+        notes.append(f"io priority unchanged: NTSTATUS 0x{status & 0xFFFFFFFF:08x}")
+    return f"{agent_program_name()}: process priority {' '.join(applied) or 'unchanged'}" + (f" ({'; '.join(notes)})" if notes else "")
 
 
 def pywinpty_available() -> bool:
@@ -2817,6 +2875,9 @@ def main() -> int:
         log_retention.sweep()
         log_retention.start()
     config = load_config(args.config)
+    priority_report = apply_process_priority(config)
+    if priority_report:
+        print(priority_report, file=sys.stderr)
     host = args.host or config_string(config, "host", "127.0.0.1")
     port = args.port or config_int(config, "port", 3481)
     if not args.allow_public_bind and not is_private_bind_host(host):

@@ -1158,6 +1158,8 @@ def validate_tui_args(args: argparse.Namespace) -> None:
             raise SystemExit("wmuxctl: --codex-attach-file is only valid for Codex")
         if args.codex_remote or args.model or args.opencode_agent:
             raise SystemExit("wmuxctl: --codex-attach-file forbids remote, model, and agent overrides")
+        if not hasattr(os, "getuid"):
+            raise SystemExit("wmuxctl: --codex-attach-file requires a POSIX host with owner-checked descriptors")
         attachment = Path(args.codex_attach_file)
         try:
             entry = attachment.lstat()
@@ -2863,7 +2865,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def use_utf8_streams() -> None:
+    # Pane output and JSON carry arbitrary Unicode. Windows defaults redirected
+    # standard streams to the ANSI code page, which cannot encode most of it.
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", "") or "").replace("-", "").lower()
+        if encoding != "utf8" and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    use_utf8_streams()
     parser = build_parser()
     args = parser.parse_args()
     client = WmuxClient(

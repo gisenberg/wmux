@@ -234,6 +234,7 @@ function Get-ActiveSessionCount {
 
 function New-WmuxTaskSettings {
   New-ScheduledTaskSettingsSet `
+    -Priority 4 `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
@@ -795,6 +796,7 @@ while ($true) {
     $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
     $RestartAction = New-HiddenPowerShellAction -ScriptPath $RestartScript
     $RestartSettings = New-ScheduledTaskSettingsSet `
+      -Priority 4 `
       -AllowStartIfOnBatteries `
       -DontStopIfGoingOnBatteries `
       -ExecutionTimeLimit ([TimeSpan]::Zero) `
@@ -954,6 +956,7 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
       $MainTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
       $RestartAction = New-HiddenPowerShellAction -ScriptPath $RestartScript
       $RestartSettings = New-ScheduledTaskSettingsSet `
+        -Priority 4 `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `

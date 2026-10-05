@@ -10,12 +10,13 @@ import { CodexTasksService } from "../src/server/codex-tasks.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
 import type { SessionManager } from "../src/server/session-manager.js";
+import { privateTempDirectory } from "./private-fixture.js";
 
 const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
 const task = (id: string) => ({ id, name: "same title", preview: "private", cwd: "/repo", modelProvider: "openai", source: "cli", parentThreadId: null, status: { type: "idle" }, updatedAt: 1 });
 
 test("Codex task HTTP routes are user-only, strict, metadata-only, and preserve exact association identity", async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-task-routes-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-codex-task-routes-"));
   fs.chmodSync(directory, 0o700);
   const machines = [{ id: "local", name: "Local", kind: "local", source: "static" }] as any[];
   let stale = false, mismatch = false, opens = 0, uncertain = false;

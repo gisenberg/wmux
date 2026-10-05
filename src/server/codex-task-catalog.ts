@@ -7,6 +7,7 @@ import type { CodexTask, CodexTaskDetail, CodexTaskEndpoint, CodexTaskPage, Code
 import type { MachineConfig } from "./types.js";
 import { queryCodexCatalog } from "./codex-catalog-rpc.js";
 import { attestCodexAttachment, type AttachmentAttestation } from "./codex-attachment-route.js";
+import { hasPrivatePermissions } from "./private-permissions.js";
 
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/);
 const absolute = z.string().min(1).max(4096).refine(value => value.startsWith("/") && !/[\x00-\x1f\x7f]/.test(value));
@@ -38,7 +39,10 @@ export function loadCodexCatalogConfig(file = process.env.WMUX_CODEX_CATALOG_CON
   if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== path.normalize(file)
     || !parent.isDirectory() || parent.isSymbolicLink()
     || stat.size > 64 * 1024 || (process.getuid && (stat.uid !== process.getuid() || (stat.mode & 0o077)
-      || parent.uid !== process.getuid() || (parent.mode & 0o077)))) {
+      || parent.uid !== process.getuid() || (parent.mode & 0o077)))
+    // Windows has no uid or mode bits; enforce the same privacy through the owner and DACL.
+    || (process.platform === "win32"
+      && (!hasPrivatePermissions(file, stat) || !hasPrivatePermissions(path.dirname(file), parent, true)))) {
     throw new Error("Codex catalog config must be a private owned regular file");
   }
   const result = z.object({ schemaVersion: z.literal(1), endpoints: z.array(endpointSchema).max(8) }).strict()

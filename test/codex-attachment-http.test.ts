@@ -9,13 +9,14 @@ import { CodexCatalogError } from "../src/server/codex-task-catalog.js";
 import { SettingsStore } from "../src/server/settings.js";
 import { StateStore } from "../src/server/state.js";
 import type { SessionManager } from "../src/server/session-manager.js";
+import { privateTempDirectory } from "./private-fixture.js";
 
 const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
 const threadId = "01a0accb-8c1b-7230-abe4-d42ea8e64a1b";
 const generation = "a".repeat(64), identity = "b".repeat(64);
 
 test("existing-task HTTP launch is user-only, strict, and passes only an eligible exact request", async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-attachment-http-"));
+  const directory = privateTempDirectory(path.join(os.tmpdir(), "wmux-attachment-http-"));
   const machines = [{ id: "local", name: "Local", kind: "local", source: "static" }] as any[];
   const state = new StateStore(machines, path.join(directory, "state.json"));
   let attestations = 0, launches = 0, identityCurrent = identity, generationCurrent = generation, enabled = true;
