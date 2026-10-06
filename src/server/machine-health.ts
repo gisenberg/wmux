@@ -180,6 +180,27 @@ const parseWindowsHealth = (stdout: string): Record<string, unknown> | undefined
   return undefined;
 };
 
+// An agent task without crash supervision stays down after its process is
+// killed, which strands every pane routed to it, so name the gap explicitly.
+export const windowsAgentSupervisionDetail = (health: Record<string, unknown>): string => {
+  const stringList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  const gaps: string[] = [];
+  if (health.agentTaskSupervised === false) {
+    const issues = stringList(health.agentTaskSupervisionIssues);
+    gaps.push(`base${issues.length ? ` (${issues.join(", ")})` : ""}`);
+  }
+  const generations = stringList(health.agentGenerationTasksUnsupervised)
+    .map((name) => /-(\d+)$/.exec(name)?.[1] ?? name);
+  if (generations.length) gaps.push(`ports ${generations.join(" ")}`);
+  const executable = typeof health.agentExecutable === "string" ? health.agentExecutable : undefined;
+  const image = executable && executable.toLowerCase() !== "wmux-windows-agent.exe" ? ` as ${executable}` : "";
+  const warning = gaps.length
+    ? ` [WARN] no crash supervision for ${gaps.join(" and ")} (run wmux-windows-setup repair-agent-supervision)`
+    : "";
+  return `${image}${warning}`;
+};
+
 const windowsBackendDetail = (health: Record<string, unknown>): string => {
   const version = typeof health.powerShellVersion === "string" ? `pwsh ${health.powerShellVersion}` : "pwsh";
   const helpers =
@@ -189,7 +210,7 @@ const windowsBackendDetail = (health: Record<string, unknown>): string => {
         ? "helpers stale (respawn a pane to restage)"
         : "helpers ready";
   const streamTask = typeof health.streamTaskState === "string" ? `stream supervisor ${health.streamTaskState}` : "stream supervisor unknown";
-  const agentTask = typeof health.agentTaskState === "string" ? `agent task ${health.agentTaskState}` : "agent task unknown";
+  const agentTask = `${typeof health.agentTaskState === "string" ? `agent task ${health.agentTaskState}` : "agent task unknown"}${windowsAgentSupervisionDetail(health)}`;
   const sunshine =
     health.sunshine === true
       ? health.sunshineApiReachable === true

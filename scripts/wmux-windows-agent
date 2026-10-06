@@ -2676,6 +2676,9 @@ class Handler(BaseHTTPRequestHandler):
                                      if agent_capability_available(capability, self.state.backend)],
                     "machine": config_string(self.state.config, "machine", "windows"),
                     "pid": os.getpid(),
+                    # Interpreter image name. Windows task wrappers stage
+                    # wmux-windows-agent.exe and fall back to python.exe.
+                    "executable": os.path.basename(sys.executable),
                     **lifecycle,
                     "backend": self.state.backend,
                     "processTree": "windows-job" if os.name == "nt" else "posix-session",

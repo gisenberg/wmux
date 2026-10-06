@@ -324,7 +324,12 @@ wmux-windows-setup install-stream
 wmux-windows-setup stream-status
 wmux-windows-setup install-agent
 wmux-windows-setup agent-status
+wmux-windows-setup repair-agent-supervision
 ```
+
+`repair-agent-supervision` restores the once-per-minute restart trigger on agent tasks registered by older helpers without stopping running agents.
+Run it over SSH or from an elevated shell, because those tasks are owned by Administrators.
+Never kill `python.exe` or `wmux-windows-agent.exe` by image name on a wmux Windows host; stop only the processes you started, by PID.
 
 For agent 0.7 and later, stage new helpers normally and activate them without killing live panes:
 
