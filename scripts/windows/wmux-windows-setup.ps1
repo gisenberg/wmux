@@ -167,11 +167,14 @@ function Get-WindowsAgentFirewallReport {
   $RemoteAddresses = if ($AddressFilter) { @($AddressFilter.RemoteAddress) } else { @() }
   # Dismissing Windows' first-listen prompt for the agent image creates
   # program block rules, and a block rule overrides the port allow rule.
+  # Narrow to effective inbound block rules first; enumerating every
+  # application filter takes several seconds on a typical desktop.
   $BlockingRules = @(
-    Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
-      Where-Object { $_.Program -and [System.IO.Path]::GetFileName([string]$_.Program) -ieq 'wmux-windows-agent.exe' } |
-      Get-NetFirewallRule -ErrorAction SilentlyContinue |
-      Where-Object { [string]$_.Enabled -eq 'True' -and [string]$_.Direction -eq 'Inbound' -and [string]$_.Action -eq 'Block' } |
+    Get-NetFirewallRule -PolicyStore ActiveStore -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
+      Where-Object {
+        $Program = [string]($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+        $Program -and [System.IO.Path]::GetFileName($Program) -ieq 'wmux-windows-agent.exe'
+      } |
       ForEach-Object { [string]$_.DisplayName }
   )
   [ordered]@{
