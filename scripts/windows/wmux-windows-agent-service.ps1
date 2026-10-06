@@ -1,6 +1,12 @@
 $ErrorActionPreference = 'Stop'
+# The ScheduledTasks cmdlets are CDXML module functions. When a caller merges
+# this script's error stream (2>&1), they ignore the Stop preference and keep
+# going after an access-denied registration, so make Stop their explicit
+# default. Calls that pass -ErrorAction SilentlyContinue still opt out.
+$PSDefaultParameterValues['*-ScheduledTask*:ErrorAction'] = 'Stop'
+. (Join-Path $PSScriptRoot 'wmux-agent-task-supervision.ps1')
 
-$ActionName = if ($args.Count -gt 0) { [string]$args[0] } else { 'install' }
+$ActionName =if ($args.Count -gt 0) { [string]$args[0] } else { 'install' }
 $TaskName = if ($env:WMUX_WINDOWS_AGENT_TASK) { $env:WMUX_WINDOWS_AGENT_TASK } else { 'wmux-windows-agent' }
 $StateDir = if ($env:WMUX_WINDOWS_AGENT_STATE_DIR) { $env:WMUX_WINDOWS_AGENT_STATE_DIR } else { Join-Path $HOME '.wmux' }
 $LogDir = Join-Path $StateDir 'logs'
@@ -71,6 +77,82 @@ function Get-AgentLogPath {
   return Join-Path $LogDir "$([System.IO.Path]::GetFileNameWithoutExtension($TargetConfig)).log"
 }
 
+# Embedded verbatim in every task wrapper, which runs it at each agent start.
+# The agent and every pane it owns share one kill-on-close Job Object, so a
+# `taskkill /IM python.exe` aimed at unrelated work used to end every pane on
+# the host. Running a byte-identical copy of the interpreter under its own
+# image name keeps those image-name kills away from the agent. The copy sits
+# beside the real interpreter so DLL and standard-library discovery are
+# unchanged, and any failure falls back to the interpreter itself.
+$AgentImageResolver = @'
+# .NET hashing avoids module autoloading, which a PowerShell 7 parent's
+# PSModulePath can break for Windows PowerShell 5.1.
+function Get-WmuxFileSha256([string]$Path) {
+  $Stream = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite, Delete')
+  $Sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return [System.BitConverter]::ToString($Sha.ComputeHash($Stream))
+  } finally {
+    $Sha.Dispose()
+    $Stream.Dispose()
+  }
+}
+
+function Resolve-WmuxAgentInterpreter {
+  param([string]$Launcher, [string[]]$LauncherArgs)
+  $Fallback = @{ exe = $Launcher; args = $LauncherArgs }
+  # Windows PowerShell 5.1 strips embedded double quotes from native
+  # arguments, so the probe must only use single quotes.
+  $Probe = "import sys; print(getattr(sys, '_base_executable', None) or sys.executable)"
+  $Source = $null
+  try {
+    $Source = & $Launcher @LauncherArgs -c $Probe 2>$null | Select-Object -Last 1
+  } catch {}
+  if (-not $Source -or -not (Test-Path -LiteralPath ([string]$Source) -PathType Leaf)) {
+    if ($env:WMUX_AGENT_ERR) {
+      Add-Content -LiteralPath $env:WMUX_AGENT_ERR -Value "wmux-windows-agent: running through $Launcher; could not resolve its interpreter" -ErrorAction SilentlyContinue
+    }
+    return $Fallback
+  }
+  $Source = [string]$Source
+  $Directory = Split-Path -Parent $Source
+  $ImageName = 'wmux-windows-agent.exe'
+  $Image = Join-Path $Directory $ImageName
+  $Staged = "$Image.$PID.new"
+  # The base agent and its rollout generations start together at logon.
+  $Mutex = [System.Threading.Mutex]::new($false, 'Local\wmux-windows-agent-image')
+  $Owned = $false
+  try {
+    try { $Owned = $Mutex.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $Owned = $true }
+    if (-not $Owned) { throw 'timed out waiting for the agent image lock' }
+    $SourceHash = Get-WmuxFileSha256 $Source
+    $ImageHash = if (Test-Path -LiteralPath $Image -PathType Leaf) { Get-WmuxFileSha256 $Image } else { '' }
+    if ($ImageHash -ne $SourceHash) {
+      Copy-Item -LiteralPath $Source -Destination $Staged -Force -ErrorAction Stop
+      # Running agents keep the old image mapped, which forbids overwriting
+      # it but still allows a rename, so retire it aside before the swap.
+      if (Test-Path -LiteralPath $Image -PathType Leaf) {
+        Move-Item -LiteralPath $Image -Destination "$Image.$PID.old" -Force -ErrorAction Stop
+      }
+      Move-Item -LiteralPath $Staged -Destination $Image -ErrorAction Stop
+    }
+    Get-ChildItem -LiteralPath $Directory -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^wmux-windows-agent\.exe\.\d+\.(new|old)$' } |
+      Remove-Item -Force -ErrorAction SilentlyContinue
+    return @{ exe = $Image; args = @() }
+  } catch {
+    Remove-Item -LiteralPath $Staged -Force -ErrorAction SilentlyContinue
+    if ($env:WMUX_AGENT_ERR) {
+      Add-Content -LiteralPath $env:WMUX_AGENT_ERR -Value "wmux-windows-agent: running as $([System.IO.Path]::GetFileName($Source)); could not stage $Image`: $($_.Exception.Message)" -ErrorAction SilentlyContinue
+    }
+    return @{ exe = $Source; args = @() }
+  } finally {
+    if ($Owned) { $Mutex.ReleaseMutex() }
+    $Mutex.Dispose()
+  }
+}
+'@
+
 function Write-Wrapper {
   param(
     [string]$TargetConfig = $Config,
@@ -86,13 +168,8 @@ function Write-Wrapper {
   $HelperDirLiteral = ConvertTo-PowerShellLiteral $HelperDir
   $LogDirLiteral = ConvertTo-PowerShellLiteral $LogDir
   $PythonArgText = $Python.prefix.Trim()
-  $PythonArgs = @()
-  if ($PythonArgText) { $PythonArgs += $PythonArgText }
-  $CommandParts = @(
-    (ConvertTo-CmdArgument $Python.exe)
-  )
-  $CommandParts += $PythonArgs
-  $CommandParts += @(
+  $LauncherArgsLiteral = '@(' + ((@($PythonArgText) | Where-Object { $_ } | ForEach-Object { ConvertTo-PowerShellLiteral $_ }) -join ', ') + ')'
+  $AgentArguments = @(
     (ConvertTo-CmdArgument $Agent)
     '--config'
     (ConvertTo-CmdArgument $TargetConfig)
@@ -102,9 +179,8 @@ function Write-Wrapper {
     '"%WMUX_AGENT_OUT%"'
     '2>>'
     '"%WMUX_AGENT_ERR%"'
-  )
-  $Command = $CommandParts -join ' '
-  $CommandLiteral = ConvertTo-PowerShellLiteral $Command
+  ) -join ' '
+  $AgentArgumentsLiteral = ConvertTo-PowerShellLiteral $AgentArguments
   $ConfigGuard = if ($RequireConfig) {
     "if (-not (Test-Path -LiteralPath $(ConvertTo-PowerShellLiteral $TargetConfig) -PathType Leaf)) { exit 0 }"
   } else {
@@ -117,7 +193,10 @@ $ConfigGuard
 `$env:WMUX_AGENT_RUN = "`$(Get-Random)-`$(Get-Random)"
 `$env:WMUX_AGENT_OUT = Join-Path $LogDirLiteral "windows-agent-`$(`$env:WMUX_AGENT_RUN).out.log"
 `$env:WMUX_AGENT_ERR = Join-Path $LogDirLiteral "windows-agent-`$(`$env:WMUX_AGENT_RUN).err.log"
-`$Command = $CommandLiteral
+$AgentImageResolver
+`$Interpreter = Resolve-WmuxAgentInterpreter -Launcher $(ConvertTo-PowerShellLiteral $Python.exe) -LauncherArgs $LauncherArgsLiteral
+`$CommandParts = @('"' + (`$Interpreter.exe -replace '"', '\"') + '"') + @(`$Interpreter.args) + @($AgentArgumentsLiteral)
+`$Command = `$CommandParts -join ' '
 & `$env:ComSpec /d /s /c `$Command
 exit `$LASTEXITCODE
 "@
@@ -259,6 +338,50 @@ function Get-AgentGenerationTasks {
   $GenerationPattern = '^' + [regex]::Escape($TaskName) + '-\d+$'
   @(Get-ScheduledTask -TaskName "$TaskName-*" -ErrorAction SilentlyContinue |
     Where-Object { $_.TaskName -match $GenerationPattern })
+}
+
+function Get-AgentSupervisedTasks {
+  @(Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) + @(Get-AgentGenerationTasks) |
+    Where-Object { $_ }
+}
+
+# Tasks registered by older helpers can lack the once-per-minute restart
+# trigger, so a killed agent stays down until the next logon. Agent updates
+# replace the agent code without re-registering its task, so they reconcile
+# the definitions here. Updating a definition in place keeps the running
+# agent and its panes, and preserves a deliberate `stop` (disabled task).
+function Repair-AgentTaskSupervision {
+  foreach ($Task in Get-AgentSupervisedTasks) {
+    $Report = Get-WmuxAgentTaskSupervision $Task
+    if ($Report.supervised) { continue }
+    $Issues = $Report.issues -join ', '
+    if ([string]$Task.Principal.LogonType -eq 'Password') {
+      Write-Warning "$($Task.TaskName) lacks crash supervision ($Issues). Run wmux-windows-setup refresh-agent-credentials from an interactive shell to re-register it."
+      continue
+    }
+    $Settings = New-WmuxTaskSettings
+    $Settings.Enabled = $Task.Settings.Enabled
+    $Task.Triggers = New-WmuxTaskTriggers
+    $Task.Settings = $Settings
+    try {
+      $Task | Set-ScheduledTask -ErrorAction Stop | Out-Null
+      Write-Output "Restored crash supervision for $($Task.TaskName) ($Issues)"
+    } catch {
+      Write-Warning "$($Task.TaskName) lacks crash supervision ($Issues) and could not be updated: $($_.Exception.Message) Tasks registered over SSH or from an elevated shell are owned by Administrators; rerun wmux-windows-setup repair-agent-supervision over SSH or from an elevated PowerShell."
+    }
+  }
+}
+
+# Wrappers are read only when a task starts, so rewriting them is safe while
+# agents run; it moves every slot onto the current launch path at its next start.
+function Update-AgentWrappers {
+  Write-Wrapper
+  foreach ($GenerationTask in Get-AgentGenerationTasks) {
+    $PortText = $GenerationTask.TaskName.Substring($TaskName.Length + 1)
+    $GenerationConfig = Join-Path $StateDir "windows-agent-$PortText.json"
+    $GenerationWrapper = Join-Path $HelperDir "wmux-windows-agent-task-$PortText.ps1"
+    Write-Wrapper -TargetConfig $GenerationConfig -TargetWrapper $GenerationWrapper -RequireConfig
+  }
 }
 
 function Get-AgentBasePort {
@@ -441,7 +564,7 @@ function Install-PasswordTaskPool {
 }
 
 function Show-Usage {
-  Write-Error 'usage: wmux-windows-agent-service [install [--logon-type Interactive|S4U|Password]|refresh-credentials|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|restart [--force]|stop|uninstall|status|logs|diagnose]'
+  Write-Error 'usage: wmux-windows-agent-service [install [--logon-type Interactive|S4U|Password]|refresh-credentials|rollout-update --port PORT|retire-generation --port PORT|activate-update|cancel-update|repair-supervision|restart [--force]|stop|uninstall|status|logs|diagnose]'
 }
 
 function Open-GenerationLock {
@@ -828,7 +951,7 @@ switch ($ActionName) {
       exit 127
     }
     Remove-LegacyStreamTask
-    Write-Wrapper
+    Update-AgentWrappers
     $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $LogonType = Get-AgentLogonType
     $ExistingLogonType = Get-TaskLogonType
@@ -857,7 +980,14 @@ switch ($ActionName) {
       $TaskPrincipal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType $LogonType
       $TaskSettings = New-WmuxTaskSettings
       $Task = New-ScheduledTask -Action $TaskAction -Trigger $TaskTrigger -Principal $TaskPrincipal -Settings $TaskSettings
-      Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+      try {
+        Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+      } catch {
+        if ($_.FullyQualifiedErrorId -notlike 'HRESULT 0x80070005,*') { throw }
+        $Host.UI.WriteErrorLine("Windows denied re-registering $TaskName. Tasks registered over SSH or from an elevated shell are owned by Administrators; rerun install-agent over SSH or from an elevated PowerShell. ($($_.Exception.Message.Trim()))")
+        exit 5
+      }
+      Repair-AgentTaskSupervision
     }
     Enable-ScheduledTask -TaskName $TaskName | Out-Null
     Start-ScheduledTask -TaskName $TaskName
@@ -968,6 +1098,8 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
     Write-Output "Restarting $TaskName through the independent $RestartTaskName task"
   }
   'activate-update' {
+    Update-AgentWrappers
+    Repair-AgentTaskSupervision
     $Health = Invoke-AgentRequest -Method GET -Path '/health'
     $SupportsPending = $Health.PSObject.Properties.Name -contains 'updatePending'
     $ActiveSessions = Get-ActiveSessionCount $Health
@@ -1003,7 +1135,23 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
     }
   }
   'rollout-update' {
+    Update-AgentWrappers
+    Repair-AgentTaskSupervision
     Start-AgentGeneration -Port $GenerationPort
+  }
+  'repair-supervision' {
+    Update-AgentWrappers
+    Repair-AgentTaskSupervision
+    $Unsupervised = @(Get-AgentSupervisedTasks | Where-Object { -not (Get-WmuxAgentTaskSupervision $_).supervised })
+    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+      $Host.UI.WriteErrorLine("$TaskName is not installed. Run wmux-windows-setup install-agent.")
+      exit 6
+    }
+    if ($Unsupervised.Count -gt 0) {
+      $Host.UI.WriteErrorLine("Crash supervision is still missing for: $(($Unsupervised | ForEach-Object TaskName) -join ', ')")
+      exit 6
+    }
+    Write-Output 'Every wmux agent task has crash supervision.'
   }
   'retire-generation' {
     Remove-AgentGeneration -Port $GenerationPort
@@ -1058,9 +1206,14 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
       }
     }
     $UpdateTask = Get-ScheduledTask -TaskName $RestartTaskName -ErrorAction SilentlyContinue
+    $Supervision = Get-WmuxAgentTaskSupervision $MainTask
+    $UnsupervisedSlots = @(Get-AgentGenerationTasks | Where-Object { -not (Get-WmuxAgentTaskSupervision $_).supervised } | ForEach-Object TaskName)
     [pscustomobject]@{
       taskName = $TaskName
       state = [string]$MainTask.State
+      crashSupervised = $Supervision.supervised
+      supervisionIssues = $Supervision.issues -join ', '
+      unsupervisedGenerationTasks = $UnsupervisedSlots -join ', '
       userId = [string]$MainTask.Principal.UserId
       logonType = $LogonType
       startsWithoutLogin = $LogonType -in @('Password', 'S4U')
@@ -1074,7 +1227,7 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
     $MainTask | Format-List *
     Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List *
     try {
-      Invoke-AgentRequest -Method GET -Path '/health' | Select-Object version, releaseVersion, protocolVersion, backend, processTree, activeSessions, draining, restartWhenIdle, heartbeat, stream | Format-List
+      Invoke-AgentRequest -Method GET -Path '/health' | Select-Object version, releaseVersion, protocolVersion, backend, executable, processTree, activeSessions, draining, restartWhenIdle, heartbeat, stream | Format-List
     } catch {
       Write-Warning "Agent health unavailable: $($_.Exception.Message)"
     }
@@ -1104,7 +1257,7 @@ Start-ScheduledTask -TaskName '$($TaskName -replace "'", "''")'
     Write-Output '--- task ---'
     Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List *
     Write-Output '--- processes ---'
-    Get-Process | Where-Object { $_.ProcessName -match 'python|py|pwsh' } | Select-Object Id, ProcessName, Path
+    Get-Process | Where-Object { $_.ProcessName -match 'wmux-windows-agent|python|py|pwsh' } | Select-Object Id, ProcessName, Path
     Write-Output '--- logs ---'
     & $PSCommandPath logs
   }

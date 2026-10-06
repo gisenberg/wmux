@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,14 +11,26 @@ process.env.WMUX_CODEX_PLUGIN_RUNTIME_DIR = runtime;
 const bindings = await import("../plugins/wmux/scripts/wmux-binding.mjs");
 const receipt = "r".repeat(43), sessionId = "one_session";
 function binding(index: number, turn = `turn-${index}`, createdAt = Date.now()) {
-  return { schemaVersion: 2, sessionId, bindingId: index.toString(36).padStart(22, "a"), receipt, expiresAt: new Date(createdAt + 86_400_000).toISOString(), createdAt, promptTurnId: turn, lastName: null };
+  return { schemaVersion: 2, sessionId, bindingId: index.toString(36).padStart(22, "0"), receipt, expiresAt: new Date(createdAt + 86_400_000).toISOString(), createdAt, promptTurnId: turn, lastName: null };
+}
+function recordPath(record: { sessionId: string; bindingId: string }) {
+  return path.join(runtime, `${createHash("sha256").update(`${record.sessionId}\0${record.bindingId}`).digest("hex")}.json`);
 }
 test.after(() => { delete process.env.WMUX_CODEX_PLUGIN_RUNTIME_DIR; fs.rmSync(runtime, { recursive: true, force: true }); });
 
 test("binding store caps valid records, removes expired records, and selects only an exact turn", () => {
-  for (let index = 0; index < 513; index++) bindings.saveBinding(binding(index));
+  // Seed a full store directly: every saveBinding rescans all records, so 513
+  // saves cost over 100k file opens and take minutes on Windows.
+  const seededAt = Date.now() - 60_000;
+  for (let index = 0; index < 512; index++) {
+    const record = binding(index, `turn-${index}`, seededAt + index);
+    fs.writeFileSync(recordPath(record), JSON.stringify(record), { mode: 0o600 });
+  }
+  bindings.saveBinding(binding(512));
   const files = fs.readdirSync(runtime).filter(name => name.endsWith(".json"));
-  assert.ok(files.length <= 512);
+  assert.equal(files.length, 512);
+  assert.equal(fs.existsSync(recordPath(binding(0))), false, "the oldest record makes room for the new one");
+  assert.equal(fs.existsSync(recordPath(binding(1))), true);
   const exact = bindings.promptBinding(sessionId, "turn-512");
   assert.equal(exact?.bindingId, binding(512).bindingId);
   assert.equal(bindings.promptBinding(sessionId, "missing"), null);

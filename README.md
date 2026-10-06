@@ -833,6 +833,9 @@ wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>
 wmux-windows-setup agent-status
 ```
 
+The agent runs as `wmux-windows-agent.exe`, a copy of the Python interpreter, so killing `python.exe` by image name does not take down every pane.
+Its Scheduled Tasks restart a killed agent within a minute; agent updates restore that supervision on tasks registered by older helpers, and `wmux-windows-setup repair-agent-supervision` does so on demand over SSH or from an elevated shell.
+
 The default task uses `Interactive` logon when a desktop session exists and `S4U` on a headless host.
 To start before UI login while retaining the user's authenticated network credentials, opt into Task Scheduler password logon from an interactive private shell:
 

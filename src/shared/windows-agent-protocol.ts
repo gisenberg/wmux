@@ -67,6 +67,8 @@ export interface WindowsAgentHealth {
   version?: string;
   machine?: string;
   pid?: number;
+  /** Interpreter image file name, such as wmux-windows-agent.exe or python.exe. */
+  executable?: string;
   sessions?: number;
   activeSessions?: number;
   draining?: boolean;

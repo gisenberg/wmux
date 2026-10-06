@@ -1,6 +1,12 @@
 $ErrorActionPreference = 'Stop'
+# ScheduledTasks and NetSecurity cmdlets are CDXML module functions that ignore
+# the Stop preference when a caller merges this script's error stream.
+$PSDefaultParameterValues['*-ScheduledTask*:ErrorAction'] = 'Stop'
+$PSDefaultParameterValues['*-NetFirewall*:ErrorAction'] = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $global:ProgressPreference = 'SilentlyContinue'
+$AgentTaskSupervisionPolicy = Join-Path $PSScriptRoot 'wmux-agent-task-supervision.ps1'
+if (Test-Path -LiteralPath $AgentTaskSupervisionPolicy -PathType Leaf) { . $AgentTaskSupervisionPolicy }
 $AgentFirewallRuleName = 'wmux-windows-agent-from-server'
 $AgentRolloutPortCount = 8
 
@@ -159,6 +165,18 @@ function Get-WindowsAgentFirewallReport {
   $PortFilter = if ($Rule) { $Rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
   $AddressFilter = if ($Rule) { $Rule | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
   $RemoteAddresses = if ($AddressFilter) { @($AddressFilter.RemoteAddress) } else { @() }
+  # Dismissing Windows' first-listen prompt for the agent image creates
+  # program block rules, and a block rule overrides the port allow rule.
+  # Narrow to effective inbound block rules first; enumerating every
+  # application filter takes several seconds on a typical desktop.
+  $BlockingRules = @(
+    Get-NetFirewallRule -PolicyStore ActiveStore -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
+      Where-Object {
+        $Program = [string]($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+        $Program -and [System.IO.Path]::GetFileName($Program) -ieq 'wmux-windows-agent.exe'
+      } |
+      ForEach-Object { [string]$_.DisplayName }
+  )
   [ordered]@{
     ruleName = $AgentFirewallRuleName
     expectedLocalPort = $PortRange.localPort
@@ -174,6 +192,7 @@ function Get-WindowsAgentFirewallReport {
     enabled = if ($Rule) { [string]$Rule.Enabled } else { $null }
     localPort = if ($PortFilter) { [string]$PortFilter.LocalPort } else { $null }
     remoteAddress = $RemoteAddresses
+    blockingRules = $BlockingRules
   }
 }
 
@@ -339,6 +358,16 @@ function Get-WindowsWmuxReport {
     }
   }
   $AgentUpdateTask = Get-ScheduledTask -TaskName 'wmux-windows-agent-update' -ErrorAction SilentlyContinue
+  $SupervisionAvailable = [bool](Get-Command Get-WmuxAgentTaskSupervision -ErrorAction SilentlyContinue)
+  $AgentTaskSupervision = if ($AgentTask -and $SupervisionAvailable) { Get-WmuxAgentTaskSupervision $AgentTask } else { $null }
+  $AgentGenerationTasksUnsupervised = @()
+  if ($SupervisionAvailable) {
+    $AgentGenerationTasksUnsupervised = @(
+      Get-ScheduledTask -TaskName 'wmux-windows-agent-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.TaskName -match '^wmux-windows-agent-\d+$' -and -not (Get-WmuxAgentTaskSupervision $_).supervised } |
+        ForEach-Object { [string]$_.TaskName }
+    )
+  }
   $AgentFirewall = Get-WindowsAgentFirewallReport
   $SunshineCommand = Get-SunshineCommand
   $SunshineUrl = if ($env:WMUX_SUNSHINE_URL) { $env:WMUX_SUNSHINE_URL } else { 'https://127.0.0.1:47990' }
@@ -377,6 +406,10 @@ function Get-WindowsWmuxReport {
     }
     agentTaskLastRunTime = if ($AgentTaskInfo) { $AgentTaskInfo.LastRunTime.ToString('o') } else { $null }
     agentTaskLastTaskResult = if ($AgentTaskInfo) { $AgentTaskInfo.LastTaskResult } else { $null }
+    agentTaskSupervised = if ($AgentTaskSupervision) { $AgentTaskSupervision.supervised } else { $null }
+    agentTaskSupervisionIssues = if ($AgentTaskSupervision) { @($AgentTaskSupervision.issues) } else { @() }
+    agentGenerationTasksUnsupervised = $AgentGenerationTasksUnsupervised
+    agentExecutable = if ($AgentHealth -and $AgentHealth.executable) { [string]$AgentHealth.executable } else { $null }
     agentFirewall = $AgentFirewall
     commands = [ordered]@{
       ffmpeg = Get-CommandPath 'ffmpeg.exe'
@@ -499,7 +532,7 @@ function Start-Sunshine {
 
 function Show-Usage {
   Write-Error @'
-usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-stream|stream-status|install-agent [--logon-type Interactive|S4U|Password]|refresh-agent-credentials|configure-agent-firewall|agent-firewall-status|agent-status|agent-logs|install-hooks|status]
+usage: wmux-windows-setup [validate|persist-path|install-deps|install-sunshine|configure-sunshine|start-sunshine|sunshine-status|install-stream|stream-status|install-agent [--logon-type Interactive|S4U|Password]|refresh-agent-credentials|configure-agent-firewall|agent-firewall-status|agent-status|repair-agent-supervision|agent-logs|install-hooks|status]
 
 validate       Print a JSON report for Windows wmux prerequisites and helper state.
 persist-path   Add %LOCALAPPDATA%\wmux\bin to the persistent user PATH.
@@ -515,6 +548,7 @@ refresh-agent-credentials Refresh every Password-mode agent task after the Windo
 configure-agent-firewall IP... Allow the base and eight rollout ports from exact internal wmux server IPs (requires elevation).
 agent-firewall-status Show the managed Windows agent firewall rule as JSON.
 agent-status   Show the wmux Windows session agent Scheduled Task status.
+repair-agent-supervision Restore the once-per-minute restart trigger and task settings on every agent task without stopping running agents.
 agent-logs     Show the wmux Windows session agent logs.
 install-hooks  Install Claude and Codex hooks using wmux-hooks.
 status         Alias for validate.
@@ -562,6 +596,9 @@ switch ($Action) {
     if (-not $Firewall.configured) {
       Write-Warning "Windows agent rollouts require inbound TCP $($Firewall.expectedLocalPort). From an elevated shell, run: wmux-windows-setup configure-agent-firewall <wmux-server-internal-ip>"
     }
+    if ($Firewall.blockingRules.Count -gt 0) {
+      Write-Warning "Windows Firewall rules block wmux-windows-agent.exe and override the port rule: $($Firewall.blockingRules -join ', '). Remove them in Windows Defender Firewall from an elevated shell."
+    }
   }
   'refresh-agent-credentials' {
     Invoke-WmuxHelper 'wmux-windows-agent-service' (@('refresh-credentials') + $ActionArgs)
@@ -574,6 +611,9 @@ switch ($Action) {
   }
   'agent-status' {
     Invoke-WmuxHelper 'wmux-windows-agent-service' @('status')
+  }
+  'repair-agent-supervision' {
+    Invoke-WmuxHelper 'wmux-windows-agent-service' @('repair-supervision')
   }
   'agent-logs' {
     Invoke-WmuxHelper 'wmux-windows-agent-service' @('logs')

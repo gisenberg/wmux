@@ -1,4 +1,6 @@
 $ErrorActionPreference = 'Stop'
+# CDXML ScheduledTasks cmdlets ignore the Stop preference under 2>&1.
+$PSDefaultParameterValues['*-ScheduledTask*:ErrorAction'] = 'Stop'
 
 $ActionName = if ($args.Count -gt 0) { [string]$args[0] } else { 'install' }
 $TaskName = if ($env:WMUX_STREAM_AGENT_TASK) { $env:WMUX_STREAM_AGENT_TASK } else { 'wmux-stream-agent' }

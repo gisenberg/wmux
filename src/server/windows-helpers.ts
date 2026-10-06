@@ -36,8 +36,11 @@ const windowsPowerShellHelperBaseNames = [
   "wmux-windows-agent-service",
   "wmux-windows-setup",
 ];
+// Dot-sourced by the agent service and setup helpers; it has no command shim.
+const windowsAgentTaskSupervisionFile = "wmux-agent-task-supervision.ps1";
 const windowsRequiredHelperFiles = [
   ...windowsPowerShellHelperBaseNames.map((name) => `${name}.ps1`),
+  windowsAgentTaskSupervisionFile,
   "wmux-agent-run.cmd",
   "wmux-agent-run.py",
   "wmux_agent_contract.py",
@@ -328,12 +331,21 @@ $Task = Get-ScheduledTask -TaskName 'wmux-stream-agent' -ErrorAction SilentlyCon
 $TaskInfo = if ($Task) { Get-ScheduledTaskInfo -TaskName 'wmux-stream-agent' -ErrorAction SilentlyContinue } else { $null }
 $AgentTask = Get-ScheduledTask -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue
 $AgentTaskInfo = if ($AgentTask) { Get-ScheduledTaskInfo -TaskName 'wmux-windows-agent' -ErrorAction SilentlyContinue } else { $null }
+${localWindowsHelperScript(windowsAgentTaskSupervisionFile)}
+$AgentTaskSupervision = if ($AgentTask) { Get-WmuxAgentTaskSupervision $AgentTask } else { $null }
+$AgentGenerationTasksUnsupervised = @(
+  Get-ScheduledTask -TaskName 'wmux-windows-agent-*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.TaskName -match '^wmux-windows-agent-\\d+$' -and -not (Get-WmuxAgentTaskSupervision $_).supervised } |
+    ForEach-Object { [string]$_.TaskName }
+)
 $AgentHealth = $null
 try {
   $AgentConfig = Get-Content -LiteralPath (Join-Path $HOME '.wmux\\windows-agent.json') -Raw | ConvertFrom-Json
   $AgentHost = if ($AgentConfig.host -and $AgentConfig.host -notin @('0.0.0.0', '::')) { [string]$AgentConfig.host } else { '127.0.0.1' }
   $AgentPort = if ($AgentConfig.port) { [int]$AgentConfig.port } else { 3481 }
-  $AgentHealth = Invoke-RestMethod -Method Get -Uri "http://\${AgentHost}:\${AgentPort}/health" -TimeoutSec 3
+  $AgentHeaders = @{}
+  if ($AgentConfig.token) { $AgentHeaders.Authorization = "Bearer $($AgentConfig.token)" }
+  $AgentHealth = Invoke-RestMethod -Method Get -Uri "http://\${AgentHost}:\${AgentPort}/health" -Headers $AgentHeaders -TimeoutSec 3
 } catch {}
 $LegacyHeartbeatTask = Get-ScheduledTask -TaskName 'wmux-heartbeat' -ErrorAction SilentlyContinue
 $RegistrationStateDir = Join-Path $HOME '.wmux'
@@ -410,6 +422,10 @@ try {
   agentTaskState = $(if ($AgentTask) { [string]$AgentTask.State } else { 'missing' })
   agentTaskLastRunTime = $(if ($AgentTaskInfo) { $AgentTaskInfo.LastRunTime.ToString('o') } else { $null })
   agentTaskLastTaskResult = $(if ($AgentTaskInfo) { $AgentTaskInfo.LastTaskResult } else { $null })
+  agentTaskSupervised = $(if ($AgentTaskSupervision) { $AgentTaskSupervision.supervised } else { $null })
+  agentTaskSupervisionIssues = $(if ($AgentTaskSupervision) { @($AgentTaskSupervision.issues) } else { @() })
+  agentGenerationTasksUnsupervised = $AgentGenerationTasksUnsupervised
+  agentExecutable = $(if ($AgentHealth -and $AgentHealth.executable) { [string]$AgentHealth.executable } else { $null })
   heartbeatManagedByAgent = $true
   heartbeatConfigExists = [bool](Test-Path -LiteralPath (Join-Path $RegistrationStateDir 'heartbeat.json') -PathType Leaf)
   heartbeatUrlExists = [bool](Test-Path -LiteralPath (Join-Path $RegistrationStateDir 'url') -PathType Leaf)
@@ -434,6 +450,10 @@ const windowsHelperFiles = (): Array<{ name: string; content: string }> => [
     name: `${name}.cmd`,
     content: powerShellCmdShim(`${name}.ps1`),
   })),
+  {
+    name: windowsAgentTaskSupervisionFile,
+    content: localWindowsHelperScript(windowsAgentTaskSupervisionFile),
+  },
   {
     name: "wmux-stream-agent.py",
     content: localScript("wmux-stream-agent"),

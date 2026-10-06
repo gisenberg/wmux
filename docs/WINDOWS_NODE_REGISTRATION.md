@@ -415,6 +415,13 @@ Notes:
 - `agent-firewall-status` prints the expected range and current managed-rule state as JSON. If you manage Windows Firewall separately, create an equivalent exact-source rule for the same nine-port range; opening only the base port prevents safe side-by-side updates.
 - The Windows agent task has user-logon and once-per-minute triggers, starts when available, restarts after failure, has no fixed execution-time cutoff, and launches through a hidden PowerShell wrapper instead of a visible `cmd.exe` window.
   `S4U` and `Password` modes can therefore start without a UI login.
+- Without the once-per-minute trigger, an agent that exits or is killed stays down until the next logon, and every pane routed to it times out.
+  `agent-status`, `validate`, and the wmux host tooltip flag base or rollout tasks that lack the trigger or the expected task settings.
+  Every agent update reconciles those definitions in place without stopping running agents, and `repair-agent-supervision` does the same on demand.
+  Tasks registered over SSH or from an elevated shell are owned by Administrators, so a repair or `install-agent` from an unelevated desktop shell is refused; run it over SSH or from an elevated PowerShell.
+- The task wrapper runs the agent as `wmux-windows-agent.exe`, a byte-identical copy of the resolved Python interpreter kept beside it, so `taskkill /IM python.exe` aimed at unrelated work cannot end the agent and the panes in its Job Object.
+  The wrapper refreshes the copy when Python is updated and falls back to the interpreter itself, with a line in the per-run error log, when the Python directory is not writable.
+  Windows may show a one-time firewall prompt for the new image name; dismissing it creates block rules that override the port rule, and `agent-firewall-status` lists them under `blockingRules`.
 
 If you are running setup from plain SSH before the helper directory is on PATH, invoke the staged script by path:
 
