@@ -74,13 +74,78 @@ test("read-only Codex transport rejects unsafe socket and parent permissions wit
   fs.chmodSync(f.directory, 0o755);
   await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: f.socketPath }));
   fs.chmodSync(f.directory, 0o700);
-  const link = path.join(f.directory, "link.sock");
-  fs.symlinkSync(f.socketPath, link);
-  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: link }));
   const ancestor = path.join(f.directory, "ancestor-link");
   fs.symlinkSync(f.directory, ancestor);
   await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: path.join(ancestor, "native.sock") }));
   assert.deepEqual(f.messages, []);
+});
+
+test("read-only Codex transport accepts a private native socket alias and follows replacement on reconnect", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
+  const first = await fixture(t, () => ({ endpoint: "first" }));
+  const second = await fixture(t, () => ({ endpoint: "second" }));
+  const control = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-control-"));
+  t.after(() => fs.rmSync(control, { recursive: true, force: true }));
+  const alias = path.join(control, "control.sock");
+  fs.symlinkSync(first.socketPath, alias);
+  const a = await connectCodexObserver({ threadId: "root", socketPath: alias });
+  t.after(() => a.close());
+  assert.deepEqual(await a.request("thread/read", { threadId: "root" }), { endpoint: "first" });
+  fs.unlinkSync(alias);
+  fs.symlinkSync(second.socketPath, alias);
+  const b = await connectCodexObservationBatch({ threadIds: ["root"], socketPath: alias });
+  t.after(() => b.close());
+  assert.deepEqual(await b.request("thread/read", { threadId: "root" }), { endpoint: "second" });
+  assert.deepEqual(await a.request("thread/read", { threadId: "root" }), { endpoint: "first" });
+});
+
+test("socket aliases cannot bypass private parents, socket permissions or direct-target validation", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
+  const target = await fixture(t);
+  const control = fs.mkdtempSync(path.join(os.tmpdir(), "wmux-codex-control-"));
+  t.after(() => fs.rmSync(control, { recursive: true, force: true }));
+  const alias = path.join(control, "control.sock");
+  fs.symlinkSync(target.socketPath, alias);
+  fs.chmodSync(control, 0o755);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  fs.chmodSync(control, 0o700);
+  fs.chmodSync(target.directory, 0o755);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  fs.chmodSync(target.directory, 0o700);
+  fs.chmodSync(target.socketPath, 0o666);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  fs.chmodSync(target.socketPath, 0o600);
+  const intermediate = path.join(target.directory, "intermediate.sock");
+  fs.symlinkSync(target.socketPath, intermediate);
+  fs.unlinkSync(alias);
+  fs.symlinkSync(intermediate, alias);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  fs.unlinkSync(alias);
+  fs.symlinkSync(path.join(target.directory, "missing.sock"), alias);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  fs.unlinkSync(alias);
+  const file = path.join(target.directory, "file");
+  fs.writeFileSync(file, "not a socket", { mode: 0o600 });
+  fs.symlinkSync(file, alias);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  fs.unlinkSync(alias);
+  const linkedParent = path.join(control, "linked-parent");
+  fs.symlinkSync(target.directory, linkedParent);
+  fs.symlinkSync(path.join(linkedParent, "native.sock"), alias);
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  assert.deepEqual(target.messages, []);
+});
+
+test("an alias replaced during connection sends no native RPC", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
+  const first = await fixture(t);
+  const second = await fixture(t);
+  const alias = path.join(first.directory, "control.sock");
+  fs.symlinkSync(first.socketPath, alias);
+  first.wss.on("connection", () => {
+    fs.unlinkSync(alias);
+    fs.symlinkSync(second.socketPath, alias);
+  });
+  await assert.rejects(connectCodexObserver({ threadId: "root", socketPath: alias }));
+  assert.deepEqual(first.messages, []);
+  assert.deepEqual(second.messages, []);
 });
 
 test("unsupported native metadata capability remains a sanitized endpoint reason", { skip: process.platform === "win32" ? "requires POSIX host facilities" : false }, async t => {
