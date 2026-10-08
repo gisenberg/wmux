@@ -10,12 +10,26 @@ const unavailable = (reason = "socket_unavailable") => Object.assign(new Error("
 
 function privateSocket(socketPath) {
   if (process.platform === "win32" || !path.isAbsolute(socketPath) || /[\x00-\x1f\x7f:?#]/.test(socketPath)) throw unavailable();
-  const parent = path.dirname(socketPath);
-  const directory = fs.lstatSync(parent);
-  const socket = fs.lstatSync(socketPath);
+  const owned = stat => !process.getuid || stat.uid === process.getuid();
   const privateOwned = stat => !process.getuid || (stat.uid === process.getuid() && !(stat.mode & 0o077));
-  if (fs.realpathSync.native(parent) !== path.normalize(parent) || !directory.isDirectory() || directory.isSymbolicLink() || !privateOwned(directory)
-    || !socket.isSocket() || socket.isSymbolicLink() || !privateOwned(socket)) throw unavailable();
+  const privateParent = target => {
+    const parent = path.dirname(target), directory = fs.lstatSync(parent);
+    if (fs.realpathSync.native(parent) !== path.normalize(parent) || !directory.isDirectory() || directory.isSymbolicLink() || !privateOwned(directory)) throw unavailable();
+  };
+  privateParent(socketPath);
+  const entry = fs.lstatSync(socketPath);
+  let resolved = socketPath;
+  // Newer native daemons publish one socket alias from their private control
+  // directory. Dial its validated target, never an unchecked symlink chain.
+  if (entry.isSymbolicLink()) {
+    if (!owned(entry)) throw unavailable();
+    resolved = path.resolve(path.dirname(socketPath), fs.readlinkSync(socketPath));
+    if (/[\x00-\x1f\x7f:?#]/.test(resolved)) throw unavailable();
+    privateParent(resolved);
+  }
+  const socket = fs.lstatSync(resolved);
+  if (!socket.isSocket() || socket.isSymbolicLink() || !privateOwned(socket)) throw unavailable();
+  return { path: resolved, dev: socket.dev, ino: socket.ino };
 }
 
 /** Connect only to an existing local daemon, scoped to one explicit thread.
@@ -25,10 +39,11 @@ function privateSocket(socketPath) {
 async function connectReadonly({ threadIds, socketPath }) {
   const allowedThreadIds = new Set(threadIds);
   if (!allowedThreadIds.size || allowedThreadIds.size > 20 || [...allowedThreadIds].some(threadId => !ID.test(threadId))) throw unavailable();
-  try { privateSocket(socketPath); } catch { throw unavailable(); }
+  let endpoint;
+  try { endpoint = privateSocket(socketPath); } catch { throw unavailable(); }
   const pending = new Map();
   let sequence = 0, ended = false;
-  const socket = new WebSocket(`ws+unix://${socketPath}:/`, { perMessageDeflate: false, maxPayload: MAX_MESSAGE, handshakeTimeout: REQUEST_TIMEOUT, followRedirects: false });
+  const socket = new WebSocket(`ws+unix://${endpoint.path}:/`, { perMessageDeflate: false, maxPayload: MAX_MESSAGE, handshakeTimeout: REQUEST_TIMEOUT, followRedirects: false });
   const shutdown = () => {
     if (ended) return;
     ended = true;
@@ -69,6 +84,8 @@ async function connectReadonly({ threadIds, socketPath }) {
       const failed = () => { cleanup(); reject(unavailable()); };
       socket.once("open", opened); socket.once("error", failed); socket.once("close", failed);
     });
+    const current = privateSocket(socketPath);
+    if (current.path !== endpoint.path || current.dev !== endpoint.dev || current.ino !== endpoint.ino) throw unavailable();
     await send("initialize", { clientInfo: { name: "wmux_readonly_observer", version: "0.4.0" }, capabilities: { experimentalApi: true } });
     socket.send(JSON.stringify({ jsonrpc: "2.0", method: "initialized" }));
     return {
