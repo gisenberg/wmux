@@ -1,5 +1,31 @@
 # Codex plain-start conformance matrix
 
+## Native socket-alias recovery — 2026-10-08 UTC
+
+Runtime `c4f07c5` restores observation when a native daemon publishes a private
+control-socket symlink. The external full check passed 1,264 tests / 15 skips
+at that exact revision (run `261ab08f1a383afd`); 24 focused transport, naming
+and supervisor tests also passed. Coverage includes alias replacement,
+connection-time retargeting, unsafe permissions, linked parents, chained or
+missing targets, and non-sockets. Read-only request restrictions remain intact.
+
+The updated observer and installed plugin transport were deployed on the
+qualified Linux hosts. The existing live CLI binding recovered its native
+workspace and tab names without another prompt; both surfaces reported `auto`
+ownership and naming/activity sampling returned healthy results. The wmux
+server and native server PIDs, native configuration, hook commands/trust, pane
+identities and manual pins were preserved. Only the wmux-owned observer service
+was restarted; this is a component deployment, not a new server/UI release.
+Installed file hashes, backups, full-check results and exact-name comparison
+are recorded privately under `test-results/socket-alias/`. Direct user visual
+acceptance is separate from these automated state checks.
+
+The preceding expired-helper incident was repaired through authenticated
+browser credential rotation and secure distribution of the matching remote
+helper copy. Restored API authentication alone did not qualify name syncing:
+the native socket-alias rejection was a second independent failure. See the
+[plugin operations guide](CODEX_PLUGIN.md#installation-and-operations).
+
 ## CLI package-update correction — 2026-09-23
 
 Runtime `2e3a146` is deployed on the qualified Haswell route. Managed CLI views
