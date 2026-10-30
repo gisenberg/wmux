@@ -5163,7 +5163,7 @@ button.active-tool {
     --wmux-mobile-right-inset: max(0px, env(safe-area-inset-right));
     --wmux-mobile-drawer-width: min(
       324px,
-      calc(var(--wmux-viewport-width, 100vw) - var(--wmux-mobile-left-inset) - 48px)
+      calc(var(--wmux-viewport-width, 100vw) - var(--wmux-mobile-left-inset) - var(--wmux-mobile-right-inset) - 48px)
     );
   }
 
@@ -5714,7 +5714,7 @@ button.active-tool {
 
   .mobile-sidebar-close {
     position: fixed;
-    left: calc(var(--wmux-mobile-left-inset) + var(--wmux-mobile-drawer-width) - 52px);
+    left: calc(var(--wmux-mobile-left-inset) + var(--wmux-mobile-drawer-width) + 4px);
     top: calc(var(--wmux-mobile-top-inset) + 8px);
     z-index: 55;
     display: inline-flex;
