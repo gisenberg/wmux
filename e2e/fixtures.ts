@@ -113,7 +113,10 @@ export const test = base.extend<WmuxFixtures>({
     const externalToken = resolveExternalE2eToken(externalBaseURL);
     const api = externalToken
       ? createExternalApiRequestContext(baseURL, externalToken)
-      : await playwright.request.newContext({ baseURL });
+      // Playwright's request agent ignores the server's Keep-Alive timeout
+      // hint, so a reused idle socket can race the server closing it and
+      // reset. Loopback connections are cheap; never reuse them.
+      : await playwright.request.newContext({ baseURL, extraHTTPHeaders: { connection: "close" } });
     try {
       await use(api);
     } finally {
