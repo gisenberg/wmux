@@ -162,6 +162,26 @@ verified metadata endpoint. Do not assume updating the wmux service updates
 already cached Codex plugins or existing hook processes. No service restart is
 performed by this implementation.
 
+The observer accepts a native control-socket alias when the alias is owned by
+the current user, its containing directory is private and canonical, and its
+direct target is a private, same-user Unix socket in a private canonical
+directory. It connects to the validated target and rechecks path/device/inode
+identity before initialization. Symlink chains, linked parent directories,
+public permissions, missing targets and non-socket targets remain rejected.
+This supports native daemons that move the actual socket to a private runtime
+directory without pinning that transient path in wmux configuration. Update
+the supervised observer as well as the installed plugin; changing only one
+leaves older processes using the previous transport.
+
+For a title that does not update after a fresh prompt, check the live binding
+and naming reason in `wmux-doctor`. A live binding with `socket_unavailable`
+can indicate an older observer rejecting a native socket alias. Separately,
+HTTP 401 means helper authentication needs attention: scoped credentials
+expire after 30 days by default. Rotate expired credentials through Settings
+while signed in, then securely update existing remote copies. Do not replace
+a rejected helper credential with a broader token or clear manual title pins
+to work around either failure.
+
 The supported profile uses the plugin alone for Codex naming and lifecycle.
 After installing and trusting the plugin, run `wmux-hooks uninstall codex` on
 each executing host. This removes only the old generated `wmux-agent-event
